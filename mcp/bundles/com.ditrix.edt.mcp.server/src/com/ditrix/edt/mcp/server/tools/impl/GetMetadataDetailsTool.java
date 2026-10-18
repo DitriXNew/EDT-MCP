@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.ExcludedCommandsSupport;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
@@ -966,11 +967,13 @@ public class GetMetadataDetailsTool implements IMcpTool
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
         {
             // A field list offers every lockable field of the object for data locking - several KB on an
-            // ERP-size document - so its Allowed cell is bounded (issue #740); every other list is short.
+            // ERP-size document - so its Allowed cell is bounded (issue #740), as are form commands.
             String allowed = p.allowedValues.isEmpty() ? null
                 : p.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST
                     ? Pagination.boundedListing(p.allowedValues, FieldListSupport.MAX_LISTED)
-                    : String.join(", ", p.allowedValues); //$NON-NLS-1$
+                    : p.valueKind == MetadataPropertyIntrospector.ValueKind.EXCLUDED_COMMANDS
+                        ? Pagination.boundedListing(p.allowedValues, ExcludedCommandsSupport.MAX_LISTED)
+                        : String.join(", ", p.allowedValues); //$NON-NLS-1$
             sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
         }
         return sb.toString();

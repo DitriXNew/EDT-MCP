@@ -27,6 +27,10 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - A predefined ITEM FQN (`Catalog.X.Predefined.ItemName`) renders that single item's properties instead of an mdclass object section, headed `## Predefined item: <fqn>`.
 - Per-object failures (malformed FQN or object not found) do NOT fail the whole call. They are collected into a dedicated `## Errors` table at the end with an `ERROR` status row carrying the FQN and reason, so a client can tell a failed object from data.
 
+## Form standard command exclusions
+
+For a table FQN such as `Catalog.Products.Form.ItemForm.Table.Rows`, pass `assignable:true`. The `excludedCommands` row has kind `EXCLUDED_COMMANDS`, a JSON array of canonical English names in `Current` (including `[]` when cleared), and this item's allowed standard command names in `Allowed values`. Up to 25 allowed names are shown, then the rest are counted. The same row appears on other addressable form standard-command sources, including fields and the form content root. Set the whole array with `modify_metadata`; English/Russian platform names are accepted and duplicate commands are refused. If the allowed list is empty, wait for the project to be ready and retry before writing exclusions.
+
 ## External-objects projects
 An external data processor / report is addressed exactly like a configuration object -
 `ExternalDataProcessor.<Name>`, its members as `....Attribute.<Name>`, its form as
