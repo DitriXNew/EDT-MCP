@@ -95,6 +95,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.ExcludedCommandsSupport;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
@@ -493,6 +494,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "skipped where the export state cannot be observed") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
+            .stringArrayProperty(ExcludedCommandsSupport.PROPERTY,
+                "For an excludedCommands write: the stored exclusion set as canonical English names") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
@@ -4364,6 +4367,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // so the tx rolls back with no partial mutation), then apply. A member is re-navigated by name
         // inside the tx; the root is the re-fetched content form itself. Building the change values
         // and setting them in the SAME tx avoids any cross-transaction detached-object concern.
+        final List<String> writtenExcludedCommands = new ArrayList<>();
         final boolean persisted = FormElementWriter.writeEditableForm(fctx, taskName,
             (formModel, tx) ->
             {
@@ -4390,6 +4394,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
+                    if (hc.change.scalarValue instanceof ExcludedCommandsSupport.Plan plan)
+                    {
+                        writtenExcludedCommands.clear();
+                        writtenExcludedCommands.addAll(plan.names());
+                    }
                     applied.add(hc.change.featureName());
                     if (syncExtInfoAfter(hc, formModel, target, removedHandlers))
                     {
@@ -4445,6 +4454,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        if (applied.contains(ExcludedCommandsSupport.PROPERTY))
+        {
+            result.put(ExcludedCommandsSupport.PROPERTY, writtenExcludedCommands);
+        }
         localizedReport.addTo(result);
         normReport.addTo(result);
         if (!demotedMains.isEmpty())
@@ -4828,7 +4841,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Reject a classifier `type` change batched with a nested-extInfo layout prop BEFORE building any
         // change: the extInfo props are validated against the pre-change type's extInfo EClass, so
         // applying both in one tx is order-dependent and unsafe (see formTypeExtInfoComboError).
-        String comboErr = formTypeExtInfoComboError(member, properties);
+        String excludedBatchErr = ExcludedCommandsSupport.isFeature(
+            member.eClass().getEStructuralFeature(ExcludedCommandsSupport.PROPERTY))
+                ? ExcludedCommandsSupport.batchError(properties) : null;
+        String comboErr = excludedBatchErr == null ? null : ToolResult.error(excludedBatchErr).toJson();
+        if (comboErr == null)
+        {
+            comboErr = formTypeExtInfoComboError(member, properties);
+        }
         if (comboErr == null)
         {
             comboErr = useAlwaysWithRetypeError(properties);
@@ -6517,6 +6537,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareUseAlways(target, prop, info, out);
             case FIELD_LIST:
                 return prepareFieldList(target, name, prop, info, out);
+            case EXCLUDED_COMMANDS:
+                ExcludedCommandsSupport.Plan plan = ExcludedCommandsSupport.plan(target, prop.get(KEY_VALUE));
+                if (plan.error() != null)
+                {
+                    return ToolResult.error(plan.error()).toJson();
+                }
+                out.add(PreparedChange.excludedCommands(info.feature, plan));
+                return null;
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -7837,7 +7865,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             /** A Field/Table dataPath validated by the same planner as creation (#728). */
             FORM_DATA_PATH,
             /** A field list (issue #740); the value is the list of field ids. */
-            FIELD_LIST
+            FIELD_LIST, EXCLUDED_COMMANDS
         }
 
         /**
@@ -7916,6 +7944,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return new PreparedChange(feature, Kind.USE_ALWAYS, java.util.Collections.unmodifiableList(
                 new ArrayList<>(plans)), null, null, null, null, false);
+        }
+
+        /** A validated standard-command replacement carrying canonical names only. */
+        static PreparedChange excludedCommands(EStructuralFeature feature, ExcludedCommandsSupport.Plan plan)
+        {
+            return new PreparedChange(feature, Kind.EXCLUDED_COMMANDS, plan, null, null, null, null, false);
         }
 
         /**
@@ -8287,6 +8321,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         (List<UseAlwaysSupport.Plan>)scalarValue);
                     return TypeChangeDefaults.Reset.NONE;
                 }
+                case EXCLUDED_COMMANDS:
+                    ((ExcludedCommandsSupport.Plan)scalarValue).apply(target, feature);
+                    return TypeChangeDefaults.Reset.NONE;
                 case FIELD_LIST:
                 {
                     // Proxies by field id on the re-fetched top object, through change notifications

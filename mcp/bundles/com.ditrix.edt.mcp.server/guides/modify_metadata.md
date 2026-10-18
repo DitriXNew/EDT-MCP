@@ -52,6 +52,10 @@ Two properties are written where EDT's own editors keep them - pass ONLY what to
 
 A property with no state in the extension block is written to the extension's `.mdo` as given, but EDT's property editor offers few of those on an adopted object (`comment` is one), and such a value may not reach the infobase. Every property of an object the extension owns is written as usual.
 
+## Excluding a form table's standard commands
+
+`excludedCommands` (a table, field or form root) takes a JSON array of standard command names, e.g. `["Copy"]`: it replaces the whole set, `[]` clears it. Use English or Russian names from the item's inferred commands (`get_metadata_details` with `assignable:true`); the response echoes English. Change `dataPath` / `type` / `changeRowSet` in a separate, earlier call.
+
 ## Setting an object reference
 A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister, or a command's `group`) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). Most targets are a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. Two kinds of reference are member-addressed rather than top-level:
 - A **default/auxiliary FORM reference** (e.g. a DataProcessor's / Catalog's `defaultForm`) takes the member FQN `Type.Name.Form.FormName` - the same shape create_metadata uses to create the form - or, when the form is owned by the SAME object being modified, just its bare Name (e.g. `value:'ItemForm'` on `Catalog.Products`).

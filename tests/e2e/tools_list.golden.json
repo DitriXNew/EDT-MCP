@@ -3845,6 +3845,12 @@
         "destination": {
           "type": "string"
         },
+        "excludedCommands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "fqn": {
           "type": "string"
         },

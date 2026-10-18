@@ -61,9 +61,9 @@ import com.google.gson.JsonObject;
  * <p>A feature is considered assignable when it is changeable and not derived / transient / volatile,
  * and is not a containment reference (those are normally child collections - attributes / tabular
  * sections / forms / commands - created via {@code create_metadata}, not set as a scalar value).
- * Small containment value shapes with an explicit wire grammar are admitted separately, and so is the
- * one non-containment list whose targets are not metadata objects: a BasicDbObject's own field list
- * ({@link ValueKind#FIELD_LIST}).</p>
+ * Small containment value shapes with an explicit wire grammar are admitted separately, as are the
+ * non-containment lists of inferred fields and standard form commands
+ * ({@link ValueKind#FIELD_LIST} and {@link ValueKind#EXCLUDED_COMMANDS}).</p>
  */
 public final class MetadataPropertyIntrospector
 {
@@ -180,7 +180,9 @@ public final class MetadataPropertyIntrospector
          * {@link PropertyInfo#allowedValues} are the addresses EDT offers for that list - per object,
          * read from the model's source types (see {@link FieldListSupport}).</p>
          */
-        FIELD_LIST
+        FIELD_LIST,
+        /** A form source's standard command names; the whole exclusion set is replaced. */
+        EXCLUDED_COMMANDS
     }
 
     /** The introspected schema of one assignable property. */
@@ -748,6 +750,10 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.MCORE_VALUE_LIST;
         }
+        if (ExcludedCommandsSupport.isFeature(ref))
+        {
+            return ValueKind.EXCLUDED_COMMANDS;
+        }
         // A list of the object's OWN derived fields (inputByString / dataLockFields, issue #740): a
         // non-containment many-valued reference to mcore Field, gated by a measured table. A Field is
         // no MdObject, so this never overlaps the object-reference branch below.
@@ -909,11 +915,15 @@ public final class MetadataPropertyIntrospector
 
     /**
      * The "allowed values" column for a property of {@code holder}: what EDT offers for a
-     * {@link ValueKind#FIELD_LIST} depends on the OBJECT (its derived fields), every other kind's
-     * values on the feature alone.
+     * {@link ValueKind#FIELD_LIST} or {@link ValueKind#EXCLUDED_COMMANDS} depends on the OBJECT
+     * (its inferred fields or commands), every other kind's values on the feature alone.
      */
     private static List<String> allowedValuesFor(EObject holder, EStructuralFeature feature, ValueKind kind)
     {
+        if (kind == ValueKind.EXCLUDED_COMMANDS)
+        {
+            return ExcludedCommandsSupport.allowedValues(holder);
+        }
         return kind == ValueKind.FIELD_LIST ? FieldListSupport.allowedValues(holder, feature)
             : allowedValuesFor(feature, kind);
     }
@@ -1057,6 +1067,8 @@ public final class MetadataPropertyIntrospector
                     return renderReferenceList(value);
                 case FIELD_LIST:
                     return renderFieldList(value);
+                case EXCLUDED_COMMANDS:
+                    return Rendered.of(ExcludedCommandsSupport.render(value));
                 case MCORE_VALUE_LIST:
                     // The one kind here that answers with a Rendered of its own, because it is the
                     // one whose "no text" does not mean "no value": eGet already handed back a
