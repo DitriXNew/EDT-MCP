@@ -585,7 +585,7 @@ public final class InfobaseAccessSupport
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
         synchronized (writeLockFor(ref))
         {
-            synchronized (InfobaseMutationCoordinator.LOCK)
+            try (var coordination = InfobaseMutationCoordinator.acquire())
             {
                 // This check deliberately lives INSIDE the same serialization as the write. A bounded
                 // worker that waited for an earlier write must re-read its deadline state after it
@@ -622,6 +622,10 @@ public final class InfobaseAccessSupport
                 {
                     writeCommitted.run();
                 }
+            }
+            catch (InfobaseMutationCoordinator.Unavailable unavailable)
+            {
+                return StoreResult.failed(unavailable.getMessage(), ref);
             }
         }
 
@@ -809,7 +813,7 @@ public final class InfobaseAccessSupport
                 }
                 synchronized (writeLockFor(ref))
                 {
-                    synchronized (InfobaseMutationCoordinator.LOCK)
+                    try (var coordination = InfobaseMutationCoordinator.acquire())
                     {
                         guard.run(current -> {
                             // The guard can itself wait for a launcher lock: check the deadline last.
@@ -835,7 +839,7 @@ public final class InfobaseAccessSupport
      * Selects a stable write stripe from the infobase UUID, falling back to its non-secret name and
      * finally object identity for incomplete test/provisional references.
      */
-    private static Object writeLockFor(InfobaseReference ref)
+    static Object writeLockFor(InfobaseReference ref)
     {
         int hash = System.identityHashCode(ref);
         try

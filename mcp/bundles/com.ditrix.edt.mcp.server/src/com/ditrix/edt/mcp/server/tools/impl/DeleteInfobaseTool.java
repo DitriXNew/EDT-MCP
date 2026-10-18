@@ -403,7 +403,7 @@ public class DeleteInfobaseTool implements IMcpTool
         try
         {
             InfobaseReference reference = InfobaseRegistration.findRegistration(manager, registrationId, name);
-            String connection = reference.getConnectionString().asConnectionString();
+            InfobaseReference captured = org.eclipse.emf.ecore.util.EcoreUtil.copy(reference);
             if (!confirm)
             {
                 return registrationResult(projectName, name, registrationId, false).toJson();
@@ -414,7 +414,7 @@ public class DeleteInfobaseTool implements IMcpTool
                 () -> {
                     try
                     {
-                        InfobaseRegistration.cleanupRegistration(manager, registrationId, name, connection,
+                        InfobaseRegistration.cleanupRegistration(manager, captured,
                             InfobaseAccessSupport::clearCredentials, () -> {
                                 if (!contextMatches(context, () -> InfobaseRegistration.currentContext(project)))
                                 {
@@ -601,8 +601,7 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 try
                 {
-                    InfobaseRegistration.cleanupRegistration(ibManager, ibRef.getUuid(), ibRef.getName(),
-                        ibRef.getConnectionString().asConnectionString(), this::clearRegistrationCredentials,
+                    InfobaseRegistration.cleanupRegistration(ibManager, ibRef, this::clearRegistrationCredentials,
                         contextGuard);
                 }
                 catch (Exception e)

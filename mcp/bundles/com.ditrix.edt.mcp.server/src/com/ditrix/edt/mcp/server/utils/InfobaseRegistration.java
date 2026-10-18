@@ -68,7 +68,7 @@ public final class InfobaseRegistration
     /** Check the entire launcher tree, serializing this tool's check/add pairs. */
     public static String add(IInfobaseManager manager, InfobaseReference reference)
     {
-        synchronized (InfobaseMutationCoordinator.LOCK)
+        try (var coordination = InfobaseMutationCoordinator.acquire())
         {
             try
             {
@@ -113,6 +113,10 @@ public final class InfobaseRegistration
                     + (removed ? "removed." : "could NOT be removed; inspect EDT settings before retrying."); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
+        catch (InfobaseMutationCoordinator.Unavailable unavailable)
+        {
+            return unavailable.getMessage() + " No registration was added."; //$NON-NLS-1$
+        }
     }
 
     /** EDT save swallows write errors; reloading and checking status proves the on-disk state. */
@@ -138,14 +142,21 @@ public final class InfobaseRegistration
     private static void remove(IInfobaseManager manager, Identity expected, Runnable contextGuard,
             InfobaseMutationCoordinator.Deletion deletion) throws Exception
     {
-        synchronized (InfobaseMutationCoordinator.LOCK)
+        try (var coordination = InfobaseMutationCoordinator.acquire())
         {
             reload(manager);
             var current = manager.findInfobaseByUuid(expected.id());
+            if (current.isEmpty())
+            {
+                deletion.observedAbsence();
+            }
             if (current.isPresent())
             {
                 expected.requireMatch(current.get());
-                contextGuard.run();
+            }
+            contextGuard.run();
+            if (current.isPresent())
+            {
                 deletion.beforeRemoval();
                 manager.delete(current.get());
             }
@@ -201,7 +212,7 @@ public final class InfobaseRegistration
     public static InfobaseReference findRegistration(IInfobaseManager manager, UUID registrationId,
             String name) throws Exception
     {
-        synchronized (InfobaseMutationCoordinator.LOCK)
+        try (var coordination = InfobaseMutationCoordinator.acquire())
         {
             reload(manager);
             InfobaseReference reference = manager.findInfobaseByUuid(registrationId).orElseThrow(() ->
@@ -222,29 +233,66 @@ public final class InfobaseRegistration
     public static void cleanupRegistration(IInfobaseManager manager, UUID registrationId, String name,
             String connection, CredentialCleanup credentials, Runnable contextGuard) throws Exception
     {
-        Identity expected = new Identity(registrationId, name, connection);
-        try (var deletion = InfobaseMutationCoordinator.beginDeletion(registrationId))
+        cleanupRegistration(manager, new Identity(registrationId, name, connection), null, credentials, contextGuard);
+    }
+
+    /** A captured target also permits credential cleanup after concurrent launcher disappearance. */
+    public static void cleanupRegistration(IInfobaseManager manager, InfobaseReference captured,
+            CredentialCleanup credentials, Runnable contextGuard) throws Exception
+    {
+        cleanupRegistration(manager, Identity.of(captured),
+            org.eclipse.emf.ecore.util.EcoreUtil.copy(captured), credentials, contextGuard);
+    }
+
+    private static void cleanupRegistration(IInfobaseManager manager, Identity expected,
+            InfobaseReference captured, CredentialCleanup credentials, Runnable contextGuard) throws Exception
+    {
+        try (var deletion = InfobaseMutationCoordinator.beginDeletion(expected.id()))
         {
-            InfobaseReference reference = findRegistration(manager, registrationId, name);
-            expected.requireMatch(reference);
-            credentials.clear(reference, credentialGuard(manager, expected, contextGuard, deletion));
+            InfobaseReference reference = findForCleanup(manager, expected, captured, deletion);
+            InfobaseReference snapshot = org.eclipse.emf.ecore.util.EcoreUtil.copy(reference);
+            credentials.clear(reference, credentialGuard(manager, expected, snapshot, contextGuard, deletion));
             remove(manager, expected, contextGuard, deletion);
+        }
+    }
+
+    private static InfobaseReference findForCleanup(IInfobaseManager manager, Identity expected,
+            InfobaseReference captured, InfobaseMutationCoordinator.Deletion deletion) throws Exception
+    {
+        try (var coordination = InfobaseMutationCoordinator.acquire())
+        {
+            reload(manager);
+            InfobaseReference current = manager.findInfobaseByUuid(expected.id()).orElse(null);
+            if (current == null)
+            {
+                // Absence makes this UUID unreachable just as surely as our own native delete.
+                // Keep the tombstone even if credential cleanup/verification subsequently fails.
+                deletion.observedAbsence();
+                if (captured == null)
+                {
+                    throw new IllegalArgumentException("registrationId was not found; inspect the EDT launcher list. Do not substitute a same-named registration."); //$NON-NLS-1$
+                }
+                current = captured;
+            }
+            expected.requireMatch(current);
+            return current;
         }
     }
 
     /** Runs in the credential worker, under its UUID stripe and our private coordinator. */
     private static InfobaseAccessSupport.CredentialWriteGuard credentialGuard(IInfobaseManager manager,
-            Identity expected, Runnable contextGuard, InfobaseMutationCoordinator.Deletion deletion)
+            Identity expected, InfobaseReference captured, Runnable contextGuard,
+            InfobaseMutationCoordinator.Deletion deletion)
     {
         return write -> {
-            synchronized (InfobaseMutationCoordinator.LOCK)
+            try (var coordination = InfobaseMutationCoordinator.acquire())
             {
                 deletion.requireActive();
-                InfobaseReference current = findRegistration(manager, expected.id(), expected.name());
-                expected.requireMatch(current);
+                InfobaseReference current = findForCleanup(manager, expected, captured, deletion);
                 contextGuard.run();
-                // Our launcher calls cannot replace this reference before the native write.
-                // Independent GUI edits remain subject to the SDK's lack of a conditional write.
+                // SDK updateSettings falls back to the captured reference when its UUID is absent;
+                // native manager.update then skips the missing entry rather than registering it.
+                // Independent GUI edits still have no conditional secure-storage write in the SDK.
                 write.run(current);
             }
         };
@@ -285,7 +333,7 @@ public final class InfobaseRegistration
                 + ", connection credentials " + outcome(credentialsRemoved) //$NON-NLS-1$
                 + (registrationRemoved ? "." : credentialsRemoved //$NON-NLS-1$
                     ? ". Launcher removal could not be verified; inspect the launcher and retry delete_infobase with its registrationId and infobaseName if still present." //$NON-NLS-1$
-                    : ". The registration is retained: retry delete_infobase with its registrationId and infobaseName after fixing cleanup.") //$NON-NLS-1$
+                    : ". Inspect the launcher and secure storage; if the entry is still present, retry delete_infobase with its registrationId and infobaseName after fixing cleanup.") //$NON-NLS-1$
                 + " The existing database is untouched."; //$NON-NLS-1$
         }
 
@@ -324,8 +372,7 @@ public final class InfobaseRegistration
         boolean[] cleared = {credentialsRemoved};
         try
         {
-            cleanupRegistration(infobases, expected.id(), expected.name(), expected.connection(),
-                (target, guard) -> {
+            cleanupRegistration(infobases, expected, org.eclipse.emf.ecore.util.EcoreUtil.copy(reference), (target, guard) -> {
                     CredentialCleanup cleanup = credentials == null ? InfobaseAccessSupport::clearCredentials : credentials;
                     cleanup.clear(target, guard);
                     cleared[0] = true;

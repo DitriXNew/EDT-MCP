@@ -495,6 +495,328 @@ public class InfobaseRegistrationTest
     }
 
     @Test
+    public void disappearanceAtInitialWorkerOrFinalReloadRetainsTombstoneEvenWhenClearFails() throws Exception
+    {
+        for (int disappearOn : new int[] {1, 2, 3})
+        {
+            for (boolean failClear : new boolean[] {false, true})
+            {
+                if (failClear && disappearOn == 3)
+                {
+                    continue; // A failed clear never reaches the final reload.
+                }
+                var manager = mock(IInfobaseManager.class);
+                var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+                when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+                var captured = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                var record = new java.util.concurrent.atomic.AtomicReference<>(captured);
+                var reloads = new java.util.concurrent.atomic.AtomicInteger();
+                when(manager.findInfobaseByUuid(captured.getUuid())).thenAnswer(call -> java.util.Optional.ofNullable(record.get()));
+                int stage = disappearOn;
+                doAnswer(call -> {
+                    if (reloads.incrementAndGet() == stage)
+                    {
+                        record.set(null);
+                    }
+                    return null;
+                }).when(manager).reload(null);
+                var cleared = new java.util.concurrent.atomic.AtomicBoolean();
+                doAnswer(call -> {
+                    var actual = (com._1c.g5.v8.dt.platform.services.model.InfobaseReference)call.getArgument(0);
+                    assertEquals(captured.getUuid(), actual.getUuid());
+                    assertEquals(captured.getConnectionString().asConnectionString(), actual.getConnectionString().asConnectionString());
+                    assertSame(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED, call.getArgument(1));
+                    if (failClear)
+                    {
+                        throw new IllegalStateException("secure storage locked"); //$NON-NLS-1$
+                    }
+                    cleared.set(true);
+                    return null;
+                }).when(access).updateSettings(any(), any());
+                try
+                {
+                    InfobaseRegistration.cleanupRegistration(manager, captured,
+                        (target, guard) -> InfobaseAccessSupport.clearCredentials(target, guard, () -> access, 5_000L), () -> { });
+                    assertFalse("only successful clear may report cleanup complete", failClear); //$NON-NLS-1$
+                }
+                catch (IllegalStateException expected)
+                {
+                    assertTrue(failClear);
+                }
+                assertEquals(!failClear, cleared.get());
+                assertNull(record.get());
+                assertNotNull(InfobaseAccessSupport.storeCredentials(captured, "late", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                    com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+                verify(access, times(1)).updateSettings(any(), any());
+                verify(manager, never()).delete(any());
+                verify(manager, never()).add(any(), any());
+            }
+        }
+    }
+
+    @Test
+    public void absenceDiscoveredAfterTheBoundedCallerTimesOutStillPreventsStaleStores() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var captured = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var record = new java.util.concurrent.atomic.AtomicReference<>(captured);
+        when(manager.findInfobaseByUuid(captured.getUuid())).thenAnswer(call -> java.util.Optional.ofNullable(record.get()));
+        var reloads = new java.util.concurrent.atomic.AtomicInteger();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var workerFinished = new java.util.concurrent.CountDownLatch(1);
+        doAnswer(call -> {
+            if (reloads.incrementAndGet() == 2)
+            {
+                entered.countDown();
+                while (release.getCount() != 0)
+                {
+                    try
+                    {
+                        assertTrue(release.await(20, java.util.concurrent.TimeUnit.SECONDS));
+                    }
+                    catch (InterruptedException ignored)
+                    {
+                        // Native reload can finish only after its bounded caller returned.
+                    }
+                }
+                record.set(null);
+            }
+            return null;
+        }).when(manager).reload(null);
+        try
+        {
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, captured,
+                    (target, guard) -> InfobaseAccessSupport.clearCredentials(target, write -> {
+                        try
+                        {
+                            guard.run(write);
+                        }
+                        finally
+                        {
+                            workerFinished.countDown();
+                        }
+                    }, () -> access, 1_000L), () -> { });
+                fail("the blocked reload must time out"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertEquals(0, entered.getCount());
+                assertEquals(1, workerFinished.getCount());
+            }
+            release.countDown();
+            assertTrue(workerFinished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            assertNull(record.get());
+            assertNotNull(InfobaseAccessSupport.storeCredentials(captured, "stale", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            assertTrue(InfobaseMutationCoordinator.isDeleting(captured.getUuid()));
+            verify(access, never()).updateSettings(any(), any());
+            verify(manager, never()).delete(any());
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(workerFinished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void aLateAbsenceObservationSurvivesAReplacementCleanupClaim() throws Exception
+    {
+        for (boolean observeBeforeNewClose : new boolean[] {true, false})
+        {
+            var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+            var old = InfobaseMutationCoordinator.beginDeletion(ref.getUuid());
+            old.close();
+            var retry = InfobaseMutationCoordinator.beginDeletion(ref.getUuid());
+            if (observeBeforeNewClose)
+            {
+                old.observedAbsence();
+                retry.close();
+            }
+            else
+            {
+                retry.close();
+                old.observedAbsence();
+            }
+            assertNotNull(InfobaseAccessSupport.storeCredentials(ref, "stale", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            verify(access, never()).updateSettings(any(), any());
+        }
+    }
+
+    @Test
+    public void failedLauncherReadIsNotTreatedAsVerifiedAbsence() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.CANCEL_STATUS);
+        var captured = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        try
+        {
+            InfobaseRegistration.cleanupRegistration(manager, captured,
+                (target, guard) -> InfobaseAccessSupport.clearCredentials(target, guard, () -> access, 5_000L), () -> { });
+            fail();
+        }
+        catch (IllegalStateException expected)
+        {
+            assertFalse(InfobaseMutationCoordinator.isDeleting(captured.getUuid()));
+        }
+        verify(access, never()).updateSettings(any(), any());
+        verify(manager, never()).findInfobaseByUuid(any());
+        verify(manager, never()).delete(any());
+    }
+
+    @Test
+    public void aNativeWriteOutlivingItsDeadlineCannotHangOtherLauncherRequests() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        var blocked = new ServerInfobaseTarget("host", "blocked").reference("blocked"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var other = new ServerInfobaseTarget("host", "other").reference("other"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Different UUIDs and different write stripes: the shared coordinator alone blocks them.
+        while (InfobaseAccessSupport.writeLockFor(blocked) == InfobaseAccessSupport.writeLockFor(other))
+        {
+            other.setUuid(java.util.UUID.randomUUID());
+        }
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        doAnswer(call -> {
+            assertEquals(blocked.getUuid(), ((com._1c.g5.v8.dt.platform.services.model.InfobaseReference)call.getArgument(0)).getUuid());
+            entered.countDown();
+            while (release.getCount() != 0)
+            {
+                try
+                {
+                    assertTrue(release.await(20, java.util.concurrent.TimeUnit.SECONDS));
+                }
+                catch (InterruptedException ignored)
+                {
+                    // Model a native call that cannot honor cooperative cancellation.
+                }
+            }
+            return null;
+        }).when(access).updateSettings(any(), any());
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try
+        {
+            var timedOut = InfobaseAccessSupport.runBoundedCredentialStore("blocked native SDK", 1_000L, //$NON-NLS-1$
+                (publish, committed, allowed) -> {
+                    try
+                    {
+                        publish.accept(InfobaseAccessSupport.storeCredentials(blocked, "blocked", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                            com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access, committed, allowed));
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                });
+            assertTrue(entered.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(BoundedJob.Outcome.TIMED_OUT, timedOut.boundedResult().getOutcome());
+            var add = pool.submit(() -> InfobaseRegistration.add(manager, other));
+            var lookup = pool.submit(() -> {
+                try
+                {
+                    InfobaseRegistration.findRegistration(manager, other.getUuid(), other.getName());
+                    return "unexpected success"; //$NON-NLS-1$
+                }
+                catch (InfobaseMutationCoordinator.Unavailable expected)
+                {
+                    return expected.getMessage();
+                }
+            });
+            var remove = pool.submit(() -> {
+                try
+                {
+                    InfobaseRegistration.remove(manager, other);
+                    return "unexpected success"; //$NON-NLS-1$
+                }
+                catch (InfobaseMutationCoordinator.Unavailable expected)
+                {
+                    return expected.getMessage();
+                }
+            });
+            var store = pool.submit(() -> InfobaseAccessSupport.storeCredentials(other, "other", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            for (var result : List.of(add, lookup, remove, store))
+            {
+                assertTrue(result.get(15, java.util.concurrent.TimeUnit.SECONDS).contains("busy")); //$NON-NLS-1$
+            }
+            assertEquals("native operation must still be blocked while other requests return", 1, finished.getCount()); //$NON-NLS-1$
+            assertFalse(InfobaseMutationCoordinator.isDeleting(other.getUuid()));
+            verify(manager, never()).reload(any());
+            verify(manager, never()).add(any(), any());
+            verify(manager, never()).delete(any());
+            verify(access, times(1)).updateSettings(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            pool.shutdownNow();
+            assertTrue(pool.awaitTermination(20, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void coordinatorLeasesAreBoundedInterruptibleAndReentrant() throws Exception
+    {
+        var interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        var refused = new java.util.concurrent.atomic.AtomicBoolean();
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        Thread waiting = new Thread(() -> {
+            Thread.currentThread().interrupt();
+            try (var ignored = InfobaseMutationCoordinator.acquire(100L))
+            {
+                fail("interrupted acquisition must not enter the protected operation"); //$NON-NLS-1$
+            }
+            catch (InfobaseMutationCoordinator.Unavailable expected)
+            {
+                interrupted.set(Thread.currentThread().isInterrupted());
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+        try (var outer = InfobaseMutationCoordinator.acquire())
+        {
+            try (var inner = InfobaseMutationCoordinator.acquire())
+            {
+                assertNotNull(inner);
+            }
+            Thread contender = new Thread(() -> {
+                try (var ignored = InfobaseMutationCoordinator.acquire(50L))
+                {
+                    // A broken inner close could release the outer lease.
+                }
+                catch (InfobaseMutationCoordinator.Unavailable expected)
+                {
+                    refused.set(true);
+                }
+            });
+            contender.start();
+            contender.join(20_000L);
+            assertFalse(contender.isAlive());
+            assertTrue("inner close must leave outer ownership intact", refused.get()); //$NON-NLS-1$
+            waiting.start();
+            assertTrue(finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(interrupted.get());
+        }
+        try (var after = InfobaseMutationCoordinator.acquire(50L))
+        {
+            assertNotNull(after);
+        }
+    }
+
+    @Test
     public void fileDuplicateDetectionUsesTheActualFilesystemCaseRules() throws Exception
     {
         var root = java.nio.file.Files.createTempDirectory("registration-case"); //$NON-NLS-1$

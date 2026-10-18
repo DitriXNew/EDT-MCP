@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Coordinates MCP launcher mutations and native credential writes without owning an SDK monitor.
@@ -16,11 +18,54 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class InfobaseMutationCoordinator
 {
-    static final Object LOCK = new Object();
+    private static final ReentrantLock LOCK = new ReentrantLock();
+    private static final long WAIT_TIMEOUT_MS = 5_000L;
     private static final ConcurrentHashMap<UUID, Deletion> DELETIONS = new ConcurrentHashMap<>();
 
     private InfobaseMutationCoordinator()
     {
+    }
+
+    /** A native operation may outlive its caller; other requests must fail instead of queue forever. */
+    static Lease acquire()
+    {
+        return acquire(WAIT_TIMEOUT_MS);
+    }
+
+    static Lease acquire(long timeoutMs)
+    {
+        try
+        {
+            if (!LOCK.tryLock(timeoutMs, TimeUnit.MILLISECONDS))
+            {
+                throw new Unavailable("EDT launcher/credential operations are busy; retry after the active SDK operation finishes."); //$NON-NLS-1$
+            }
+            return new Lease();
+        }
+        catch (InterruptedException interrupted)
+        {
+            Thread.currentThread().interrupt();
+            throw new Unavailable("Waiting for EDT launcher/credential operations was cancelled; retry with a fresh application lookup."); //$NON-NLS-1$
+        }
+    }
+
+    static final class Lease implements AutoCloseable
+    {
+        @Override
+        public void close()
+        {
+            LOCK.unlock();
+        }
+    }
+
+    static final class Unavailable extends IllegalStateException
+    {
+        private static final long serialVersionUID = 1L;
+
+        private Unavailable(String message)
+        {
+            super(message);
+        }
     }
 
     static boolean isDeleting(UUID id)
@@ -76,16 +121,29 @@ final class InfobaseMutationCoordinator
             removalStarted = true;
         }
 
+        /** Successful late reloads must preserve absence even after the bounded caller closed. */
+        void observedAbsence()
+        {
+            DELETIONS.compute(id, (key, current) -> {
+                removalStarted = true;
+                if (current != null)
+                {
+                    current.removalStarted = true;
+                }
+                return current == null ? this : current;
+            });
+        }
+
         @Override
         public void close()
         {
             // Do not acquire LOCK here: a timed-out native worker may still hold it. Its stripe
             // ensures a later intentional credential write follows any already-entered clear.
             active.set(false);
-            if (!removalStarted)
-            {
-                DELETIONS.remove(id, this);
-            }
+            // Check and removal share the same map operation as observedAbsence: a late reload
+            // either seals this claim before close, or reinstates an inactive tombstone afterward.
+            DELETIONS.computeIfPresent(id, (key, current) ->
+                current == this && !removalStarted ? null : current);
             // Once deletion was attempted, retain a process-lifetime tombstone even if read-back
             // failed. Stale resolved applications must never recreate unreachable secure settings.
             // A new explicit cleanup may replace an inactive claim and verify/retry the same UUID.
