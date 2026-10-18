@@ -103,6 +103,7 @@ public class InfobaseRegistrationTest
         assertFalse(result.registrationRemoved());
         assertFalse(result.credentialsRemoved());
         verify(associations).dissociate(project, reference, context);
+        verify(infobases, never()).delete(any());
         assertFalse(result.message().contains("secret")); //$NON-NLS-1$
     }
 
@@ -160,28 +161,126 @@ public class InfobaseRegistrationTest
     }
 
     @Test
-    public void launcherOnlyCleanupSelectsOnlyAUniqueServerEntry() throws Exception
+    public void launcherCleanupNeverSelectsASameNamedReplacementForAStaleUuid() throws Exception
     {
         var manager = mock(IInfobaseManager.class);
         when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
         var server = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        when(manager.getAll()).thenReturn(List.of(server));
-        assertSame(server, InfobaseRegistration.findUniqueServer(manager, "probe").orElseThrow()); //$NON-NLS-1$
-        assertTrue(InfobaseRegistration.findUniqueServer(manager, "missing").isEmpty()); //$NON-NLS-1$
-        var file = new InfobaseTarget(java.nio.file.Path.of("test"), null).reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$
-        when(manager.getAll()).thenReturn(List.of(file));
-        assertTrue(InfobaseRegistration.findUniqueServer(manager, "probe").isEmpty()); //$NON-NLS-1$
-        when(manager.getAll()).thenReturn(List.of(file, server));
+        when(manager.findInfobaseByUuid(server.getUuid())).thenReturn(java.util.Optional.of(server));
+        assertSame(server, InfobaseRegistration.findRegistration(manager, server.getUuid(), "probe")); //$NON-NLS-1$
+        var replacement = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(manager.getAll()).thenReturn(List.of(replacement));
+        when(manager.findInfobaseByUuid(server.getUuid())).thenReturn(java.util.Optional.empty());
         try
         {
-            InfobaseRegistration.findUniqueServer(manager, "probe"); //$NON-NLS-1$
-            fail("an ambiguous launcher name must never select an arbitrary entry"); //$NON-NLS-1$
+            InfobaseRegistration.cleanupRegistration(manager, server.getUuid(), "probe", //$NON-NLS-1$
+                server.getConnectionString().asConnectionString(), ref -> fail("stale UUID must not clear credentials")); //$NON-NLS-1$
+            fail("a stale UUID must never select a same-name replacement"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException expected)
         {
-            assertTrue(expected.getMessage().contains("Multiple launcher entries")); //$NON-NLS-1$
+            assertTrue(expected.getMessage().contains("registrationId")); //$NON-NLS-1$
         }
         verify(manager, never()).delete(any());
+    }
+
+    @Test
+    public void failedCredentialCleanupRetainsTheUuidAndSuccessfulRetryRemovesIt() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var reference = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var record = new java.util.concurrent.atomic.AtomicReference<>(reference);
+        when(manager.findInfobaseByUuid(reference.getUuid())).thenAnswer(call -> java.util.Optional.ofNullable(record.get()));
+        boolean[] credentialsPresent = {true};
+        doAnswer(call -> {
+            assertFalse("remove must follow successful credential cleanup", credentialsPresent[0]); //$NON-NLS-1$
+            assertEquals(reference.getUuid(), ((com._1c.g5.v8.dt.platform.services.model.InfobaseReference)call.getArgument(0)).getUuid());
+            record.set(null);
+            return null;
+        }).when(manager).delete(any());
+        String connection = reference.getConnectionString().asConnectionString();
+        try
+        {
+            InfobaseRegistration.cleanupRegistration(manager, reference.getUuid(), "probe", connection, //$NON-NLS-1$
+                ref -> { throw new IllegalStateException("secure storage locked"); }); //$NON-NLS-1$
+            fail("credential failure must retain the registration"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertSame(reference, record.get());
+            assertTrue(credentialsPresent[0]);
+            verify(manager, never()).delete(any());
+        }
+        InfobaseRegistration.cleanupRegistration(manager, reference.getUuid(), "probe", connection, //$NON-NLS-1$
+            ref -> credentialsPresent[0] = false);
+        assertNull(record.get());
+        verify(manager).delete(reference);
+    }
+
+    @Test
+    public void changedNameOrConnectionNeverRemovesTheSelectedRegistration() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(manager.findInfobaseByUuid(ref.getUuid())).thenReturn(java.util.Optional.of(ref));
+        try
+        {
+            InfobaseRegistration.findRegistration(manager, ref.getUuid(), "other"); //$NON-NLS-1$
+            fail("a different name must be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue(expected.getMessage().contains("infobaseName")); //$NON-NLS-1$
+        }
+        String original = ref.getConnectionString().asConnectionString();
+        try
+        {
+            InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), "probe", original, //$NON-NLS-1$
+                target -> target.setConnectionString(new ServerInfobaseTarget("other-host", "base") //$NON-NLS-1$ //$NON-NLS-2$
+                    .reference("probe").getConnectionString())); //$NON-NLS-1$
+            fail("an address changed while cleanup waited must require a new preview"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("changed after preview")); //$NON-NLS-1$
+        }
+        verify(manager, never()).delete(any());
+    }
+
+    @Test
+    public void fileDuplicateDetectionUsesTheActualFilesystemCaseRules() throws Exception
+    {
+        var root = java.nio.file.Files.createTempDirectory("registration-case"); //$NON-NLS-1$
+        var upper = java.nio.file.Files.createDirectories(root.resolve("Base")); //$NON-NLS-1$
+        var lower = java.nio.file.Files.createDirectories(root.resolve("base")); //$NON-NLS-1$
+        try
+        {
+            var manager = mock(IInfobaseManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var existing = new InfobaseTarget(upper, null).reference("existing"); //$NON-NLS-1$
+            var fresh = new InfobaseTarget(lower, null).reference("fresh"); //$NON-NLS-1$
+            when(manager.getAll()).thenReturn(List.of(existing));
+            when(manager.findInfobaseByUuid(fresh.getUuid())).thenReturn(java.util.Optional.of(fresh));
+            String result = InfobaseRegistration.add(manager, fresh);
+            if (java.nio.file.Files.isSameFile(upper, lower))
+            {
+                assertTrue(result, result.contains("already registered")); //$NON-NLS-1$
+                verify(manager, never()).add(any(), any());
+            }
+            else
+            {
+                assertNull(result);
+                verify(manager).add(fresh, null);
+            }
+        }
+        finally
+        {
+            java.nio.file.Files.deleteIfExists(lower);
+            java.nio.file.Files.deleteIfExists(upper);
+            java.nio.file.Files.delete(root);
+        }
     }
 
     @Test

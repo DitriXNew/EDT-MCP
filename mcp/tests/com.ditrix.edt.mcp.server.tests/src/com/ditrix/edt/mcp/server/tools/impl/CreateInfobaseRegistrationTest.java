@@ -77,6 +77,9 @@ public class CreateInfobaseRegistrationTest
                     new CreateInfobaseTool.Credentials(null, null, null))).getAsJsonObject();
                 assertTrue(result.toString(), result.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
                 assertEquals("fresh-app", result.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+                var registered = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
+                verify(infobases).add(registered.capture(), isNull());
+                assertEquals(registered.getValue().getUuid().toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$
             }
         }
         finally
@@ -109,6 +112,7 @@ public class CreateInfobaseRegistrationTest
             assertTrue(result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
             var ref = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
             verify(infobases).add(ref.capture(), isNull());
+            assertEquals(ref.getValue().getUuid().toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$
             var order = inOrder(associations, infobases);
             order.verify(associations).dissociate(project, ref.getValue(), context);
             var deleted = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
@@ -117,6 +121,50 @@ public class CreateInfobaseRegistrationTest
             assertEquals(ref.getValue().getUuid(), deleted.getValue().getUuid());
             verify(applications, never()).setDefaultApplication(any(), any());
         }
+    }
+
+    @Test
+    public void failedCredentialRollbackReturnsTheGeneratedNameAndRetainedUuid() throws Exception
+    {
+        var project = mock(IProject.class);
+        var applications = mock(IApplicationManager.class);
+        var infobases = recordingInfobases();
+        var associations = mock(IInfobaseAssociationManager.class);
+        when(infobases.generateInfobaseName()).thenReturn("generated-retained"); //$NON-NLS-1$
+        doThrow(new IllegalStateException("refused")).when(associations).associate(any(), any(), any()); //$NON-NLS-1$
+        var tool = new CreateInfobaseTool()
+        {
+            @Override
+            CredentialStoreReport storeCredentialsIfRequested(InfobaseReference reference,
+                    Credentials credentials, boolean register)
+            {
+                return null;
+            }
+
+            @Override
+            void clearRegistrationCredentials(InfobaseReference reference)
+            {
+                throw new IllegalStateException("secure storage unavailable"); //$NON-NLS-1$
+            }
+        };
+        var result = JsonParser.parseString(tool.prepareInfobase(
+            CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
+            BranchContexts.toContext("feat/test"), "project", //$NON-NLS-1$ //$NON-NLS-2$
+            new InfobaseTarget(null, new ServerInfobaseTarget("host", "base")), //$NON-NLS-1$ //$NON-NLS-2$
+            " ", null, false, true, new CreateInfobaseTool.Credentials("Admin", "secret", null))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("credentialsRemoved").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("registrationRemoved").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("generated-retained", result.get("infobaseName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("project", result.get("project").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("host", result.get("infobaseServer").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("base", result.get("infobaseRef").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        var registered = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
+        verify(infobases).add(registered.capture(), isNull());
+        assertEquals(registered.getValue().getUuid().toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$
+        assertTrue(infobases.findInfobaseByUuid(registered.getValue().getUuid()).isPresent());
+        verify(infobases, never()).delete(any());
     }
 
     @Test
@@ -146,6 +194,8 @@ public class CreateInfobaseRegistrationTest
             .getAsJsonObject();
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue(result.get("error").getAsString().contains("already registered")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("duplicate", result.get("infobaseName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(result.get("registrationId")); //$NON-NLS-1$
         verifyZeroInteractions(associations, applications);
         verify(infobases, never()).add(any(), any());
     }

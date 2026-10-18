@@ -15,6 +15,8 @@ Server results carry `infobaseServer` and `infobaseRef` instead of `infobaseFile
 
 ## Application kind: infobase vs standalone server
 
+File/cluster results include the fresh global launcher UUID as `registrationId`, distinct from the application handle. Failed-registration results also return that UUID. If rollback cannot clear credentials, the launcher entry is retained so the settings remain reachable. After unlocking/fixing secure storage, preview `delete_infobase` with that `registrationId`, the exact `infobaseName`, `deleteRegistration=true` and `deleteDatabaseFiles=false`, then repeat the same UUID/name with `confirm=true`. This explicit global-list cleanup clears credentials before removing the entry; it never selects a replacement by name and never removes database files. File duplicate checks use filesystem identity/case rules, so case-distinct directories on a case-sensitive volume remain distinct.
+
 `applicationKind` selects what is created:
 
 - **`applicationKind='infobase'` (default)** — a plain file infobase via the 1C configurator, exactly as described above (this is the original behaviour; omitting `applicationKind` is byte-identical to before). Surfaces as `com.e1c.g5.dt.applications.type.infobase`.

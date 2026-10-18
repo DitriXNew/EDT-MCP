@@ -485,6 +485,9 @@
         "project": {
           "type": "string"
         },
+        "registrationId": {
+          "type": "string"
+        },
         "success": {
           "type": "boolean"
         },
@@ -1228,6 +1231,10 @@
         },
         "projectName": {
           "type": "string"
+        },
+        "registrationId": {
+          "description": "Explicit GLOBAL launcher-entry UUID returned by create_infobase. Requires exact infobaseName, deleteRegistration=true, deleteDatabaseFiles=false and no applicationId. Clears credentials before removal; never selects a registration by name alone. Repeat this same UUID on confirm.",
+          "type": "string"
         }
       },
       "required": [
@@ -1274,6 +1281,9 @@
           "type": "string"
         },
         "project": {
+          "type": "string"
+        },
+        "registrationId": {
           "type": "string"
         },
         "success": {

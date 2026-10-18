@@ -6,8 +6,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
-import java.util.ArrayList;
 import java.util.Optional;
+import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
@@ -20,6 +22,7 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSett
 import com._1c.g5.v8.dt.platform.services.model.Group;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com._1c.g5.v8.dt.platform.services.model.Section;
+import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.ServerConnectionString;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -144,12 +147,11 @@ public final class InfobaseRegistration
 
     private static boolean containsAddress(List<Section> sections, InfobaseReference reference)
     {
-        String connection = reference.getConnectionString().asConnectionString();
         for (Section section : sections)
         {
             if (section instanceof InfobaseReference existing
                 && existing.getConnectionString() != null
-                && connection.equalsIgnoreCase(existing.getConnectionString().asConnectionString()))
+                && sameAddress(reference, existing))
             {
                 return true;
             }
@@ -161,34 +163,69 @@ public final class InfobaseRegistration
         return false;
     }
 
-    /** Resolve an explicit launcher-only server deletion without relying on application visibility. */
-    public static Optional<InfobaseReference> findUniqueServer(IInfobaseManager manager, String name)
-            throws Exception
+    private static boolean sameAddress(InfobaseReference first, InfobaseReference second)
     {
-        reload(manager);
-        List<InfobaseReference> matches = new ArrayList<>();
-        collectNamed(manager.getAll(), name, matches);
-        if (matches.size() > 1)
+        if (first.getConnectionString() instanceof FileConnectionString left
+            && second.getConnectionString() instanceof FileConnectionString right)
         {
-            throw new IllegalArgumentException("Multiple launcher entries have this infobaseName; " //$NON-NLS-1$
-                + "select and remove the intended entry in EDT instead."); //$NON-NLS-1$
+            Path leftPath = Path.of(left.getFile()).toAbsolutePath().normalize();
+            Path rightPath = Path.of(right.getFile()).toAbsolutePath().normalize();
+            try
+            {
+                return Files.isSameFile(leftPath, rightPath);
+            }
+            catch (java.io.IOException e)
+            {
+                return leftPath.equals(rightPath);
+            }
         }
-        return matches.isEmpty() || !(matches.get(0).getConnectionString() instanceof ServerConnectionString)
-            ? Optional.empty() : Optional.of(matches.get(0));
+        return first.getConnectionString() instanceof ServerConnectionString
+            && second.getConnectionString() instanceof ServerConnectionString
+            && first.getConnectionString().asConnectionString().equalsIgnoreCase(
+                second.getConnectionString().asConnectionString());
     }
 
-    private static void collectNamed(List<Section> sections, String name, List<InfobaseReference> matches)
+    /** Explicit global-list target: UUID and name must both match; never fall back to a name. */
+    public static InfobaseReference findRegistration(IInfobaseManager manager, UUID registrationId,
+            String name) throws Exception
     {
-        for (Section section : sections)
+        synchronized (manager)
         {
-            if (section instanceof InfobaseReference reference && name.equals(reference.getName()))
+            reload(manager);
+            InfobaseReference reference = manager.findInfobaseByUuid(registrationId).orElseThrow(() ->
+                new IllegalArgumentException("registrationId was not found; inspect the EDT launcher list. " //$NON-NLS-1$
+                    + "Do not substitute a same-named registration.")); //$NON-NLS-1$
+            if (!name.equals(reference.getName())
+                || !(reference.getConnectionString() instanceof FileConnectionString
+                    || reference.getConnectionString() instanceof ServerConnectionString))
             {
-                matches.add(reference);
+                throw new IllegalArgumentException("registrationId does not match infobaseName or a file/cluster entry; " //$NON-NLS-1$
+                    + "inspect the EDT launcher list before retrying."); //$NON-NLS-1$
             }
-            if (section instanceof Group group)
-            {
-                collectNamed(group.getSubsections(), name, matches);
-            }
+            return reference;
+        }
+    }
+
+    /** Preserve the UUID handle if credential removal fails, or the selected entry changes. */
+    public static void cleanupRegistration(IInfobaseManager manager, UUID registrationId, String name,
+            String connection, CredentialCleanup credentials) throws Exception
+    {
+        InfobaseReference reference = findRegistration(manager, registrationId, name);
+        requireConnection(reference, connection);
+        credentials.clear(reference);
+        synchronized (manager)
+        {
+            reference = findRegistration(manager, registrationId, name);
+            requireConnection(reference, connection);
+            remove(manager, reference);
+        }
+    }
+
+    private static void requireConnection(InfobaseReference reference, String connection)
+    {
+        if (!connection.equals(reference.getConnectionString().asConnectionString()))
+        {
+            throw new IllegalStateException("The registration changed after preview; request a new preview. Nothing was removed."); //$NON-NLS-1$
         }
     }
 
@@ -206,7 +243,10 @@ public final class InfobaseRegistration
             return "Rollback: project association " + outcome(associationRemoved) //$NON-NLS-1$
                 + ", launcher registration " + outcome(registrationRemoved) //$NON-NLS-1$
                 + ", connection credentials " + outcome(credentialsRemoved) //$NON-NLS-1$
-                + ". The existing database is untouched."; //$NON-NLS-1$
+                + (registrationRemoved ? "." : credentialsRemoved //$NON-NLS-1$
+                    ? ". Launcher removal could not be verified; inspect the launcher and retry delete_infobase with its registrationId and infobaseName if still present." //$NON-NLS-1$
+                    : ". The registration is retained: retry delete_infobase with its registrationId and infobaseName after fixing cleanup.") //$NON-NLS-1$
+                + " The existing database is untouched."; //$NON-NLS-1$
         }
 
         public ToolResult put(ToolResult result)
@@ -252,14 +292,17 @@ public final class InfobaseRegistration
                 Activator.logWarning("create_infobase: credential rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
             }
         }
-        try
+        if (credentialsRemoved)
         {
-            remove(infobases, reference);
-            registrationRemoved = true;
-        }
-        catch (Exception e)
-        {
-            Activator.logWarning("create_infobase: registration rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
+            try
+            {
+                remove(infobases, reference);
+                registrationRemoved = true;
+            }
+            catch (Exception e)
+            {
+                Activator.logWarning("create_infobase: registration rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
+            }
         }
         return new Rollback(associationRemoved, registrationRemoved, credentialsRemoved);
     }

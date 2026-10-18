@@ -1976,11 +1976,11 @@ public class CreateInfobaseToolTest
         params.put("projectName", "MissingProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("infobaseServer", ""); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("infobaseRef", "  "); //$NON-NLS-1$ //$NON-NLS-2$
-        params.put("infobaseFile", "https://host/file"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", Paths.get(System.getProperty("java.io.tmpdir"), //$NON-NLS-1$ //$NON-NLS-2$
+            "mcp-blank-server-fields-test").toString()); //$NON-NLS-1$
         String result = new CreateInfobaseTool().execute(params);
         assertFalse(result, result.contains("not both")); //$NON-NLS-1$
-        assertTrue(result, result.contains("infobaseFile")); //$NON-NLS-1$
-        assertTrue(result, result.contains("https://host/file")); //$NON-NLS-1$
+        assertTrue(result, result.contains("Project not found: MissingProject")); //$NON-NLS-1$
         assertFalse(result, result.contains("required together")); //$NON-NLS-1$
         params.remove("infobaseFile"); //$NON-NLS-1$
         result = new CreateInfobaseTool().execute(params);

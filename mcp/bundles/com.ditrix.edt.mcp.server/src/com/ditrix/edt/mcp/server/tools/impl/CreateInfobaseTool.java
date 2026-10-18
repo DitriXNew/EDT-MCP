@@ -325,6 +325,9 @@ public class CreateInfobaseTool implements IMcpTool
                 + "is unverified: call get_applications to confirm it.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "ID of the newly created application (for chaining into update_database).") //$NON-NLS-1$
+            .stringProperty("registrationId", //$NON-NLS-1$
+                "Fresh global launcher UUID for a file/cluster infobase, also returned on failed registration rollback. " //$NON-NLS-1$
+                + "Use with exact infobaseName for explicit delete_infobase registration cleanup; not an applicationId.") //$NON-NLS-1$
             .enumProperty(KEY_VERIFICATION,
                 "Credential read-back outcome when credentials were requested: verified, " //$NON-NLS-1$
                     + "mismatched, or not_verifiable.", //$NON-NLS-1$
@@ -627,27 +630,30 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
         InfobaseReference reference = target.reference(infobaseName);
+        ResultContext resultContext = new ResultContext(projectName, target.file(), infobaseName,
+            context.appManager, context.project, target.server());
         String databaseError = register
             ? registerExistingInfobase(context.ibManager, reference, target.location())
             : createNewInfobase(reference, platform, infobaseName, target.file());
         if (databaseError != null)
         {
-            return databaseError;
+            JsonObject failure = JsonParser.parseString(databaseError).getAsJsonObject();
+            resultContext.putRegistrationIdentity(failure, reference);
+            return failure.toString();
         }
         // EDT's association listener can open a Designer session: persist access settings first.
         CredentialStoreReport credentialStore = storeCredentialsIfRequested(reference, credentials, register);
         String error = associateInfobase(context.assocManager, context.project, reference,
             target.location(), projectName, register, associationContext);
-        ResultContext resultContext = new ResultContext(projectName, target.file(), infobaseName,
-            context.appManager, context.project, target.server());
         String result = error == null
             ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore) : error;
         JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        resultContext.putRegistrationIdentity(json, reference);
         if (register && !json.get("success").getAsBoolean()) //$NON-NLS-1$
         {
             InfobaseRegistration.Rollback rollback = InfobaseRegistration.rollback(
                 context.assocManager, context.ibManager, context.project, reference,
-                associationContext, credentials.any() ? InfobaseAccessSupport::clearCredentials : null);
+                associationContext, credentials.any() ? this::clearRegistrationCredentials : null);
             String message = json.get("error").getAsString() + " " + rollback.message(); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult failed = ToolResult.error(message);
             for (var entry : json.entrySet())
@@ -660,7 +666,13 @@ public class CreateInfobaseTool implements IMcpTool
             resultContext.putLocation(failed);
             return rollback.put(failed).toJson();
         }
-        return result;
+        return json.toString();
+    }
+
+    /** Clear through the shared bounded credential operation before removing the UUID handle. */
+    void clearRegistrationCredentials(InfobaseReference reference) throws Exception
+    {
+        InfobaseAccessSupport.clearCredentials(reference);
     }
 
     /**
@@ -2431,6 +2443,23 @@ public class CreateInfobaseTool implements IMcpTool
             {
                 result.put(KEY_INFOBASE_SERVER, serverTarget.server())
                     .put(KEY_INFOBASE_REF, serverTarget.infobase());
+            }
+        }
+
+        /** Include the exact cleanup address even when registration or association failed. */
+        void putRegistrationIdentity(JsonObject result, InfobaseReference reference)
+        {
+            result.addProperty("registrationId", reference.getUuid().toString()); //$NON-NLS-1$
+            result.addProperty("project", projectName); //$NON-NLS-1$
+            result.addProperty(KEY_INFOBASE_NAME, infobaseName);
+            if (serverTarget == null)
+            {
+                result.addProperty(KEY_INFOBASE_FILE, infobaseDir.toAbsolutePath().toString());
+            }
+            else
+            {
+                result.addProperty(KEY_INFOBASE_SERVER, serverTarget.server());
+                result.addProperty(KEY_INFOBASE_REF, serverTarget.infobase());
             }
         }
     }

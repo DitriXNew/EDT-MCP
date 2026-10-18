@@ -312,8 +312,10 @@ def test_server_registration_application_roundtrip():
     assert_ok(before, "probe must be absent before registration")
     assert not any(app.get("name") == name for app in before.structured["applications"]), before.structured
     application_id = None
+    registration_id = None
     try:
         result = call("create_infobase", _cluster_params(infobaseName=name, infobaseRef=probe))
+        registration_id = (result.structured or {}).get("registrationId")
         assert_ok(result, "register cluster address")
         data = result.structured
         assert data["action"] == "registered", data
@@ -322,6 +324,7 @@ def test_server_registration_application_roundtrip():
         assert "infobaseFile" not in data, data
         assert data["boundToProject"] is True, data
         application_id = data["applicationId"]
+        assert registration_id, data
         apps = call("get_applications", {"projectName": PROJECT})
         assert_ok(apps, "read cluster binding")
         matches = [app for app in apps.structured["applications"] if app.get("id") == application_id]
@@ -345,7 +348,7 @@ def test_server_registration_application_roundtrip():
                                      "deleteRegistration": True, "confirm": True})
                     assert_ok(removed, "remove only synthetic cluster registration")
         finally:
-            leftovers = cleanup_cluster_registration_probe(name, "localhost:1541", probe)
+            leftovers = cleanup_cluster_registration_probe(name, "localhost:1541", probe, registration_id)
             assert leftovers == 0, "EDT leaked %d launcher registrations; removed by fallback cleanup" % leftovers
     apps = call("get_applications", {"projectName": PROJECT})
     assert_ok(apps, "verify cluster registration removal")

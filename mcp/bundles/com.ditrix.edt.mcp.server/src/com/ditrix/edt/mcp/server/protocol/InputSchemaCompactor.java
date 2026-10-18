@@ -177,7 +177,7 @@ public final class InputSchemaCompactor
         // and the only place that says a force-export overwrites on-disk edits. Both were
         // caught by InputSchemaCompactorRiskTest, not by review.
         keep.put("delete_infobase", //$NON-NLS-1$
-            asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
+            asSet("deleteRegistration", "deleteDatabaseFiles", "registrationId")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
         // The one parameter of the three-way comparison family whose prose warns about an effect
         // of THAT parameter: in write mode the named file is REPLACED at the same path, and only when

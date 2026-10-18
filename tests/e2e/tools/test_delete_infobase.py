@@ -68,8 +68,10 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
     name = "McpServerRegistration_" + probe
     params = {"projectName": PROJECT, "mode": "register", "infobaseServer": "localhost:1541",
               "infobaseRef": probe, "infobaseName": name}
+    registration_id = None
     try:
         created = call("create_infobase", params)
+        registration_id = (created.structured or {}).get("registrationId")
         assert_ok(created, "register the cleanup probe")
         original_id = created.structured["applicationId"]
         detached = call("delete_infobase", {"projectName": PROJECT, "applicationId": original_id,
@@ -78,13 +80,20 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
         apps = call("get_applications", {"projectName": PROJECT})
         assert_ok(apps, "probe must no longer be visible")
         assert not any(app.get("name") == name for app in apps.structured["applications"])
-        cleanup = {"projectName": PROJECT, "infobaseName": name, "deleteRegistration": True,
+        name_only = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name, "confirm": True})
+        error = assert_error(name_only, "name alone must never delete a global launcher entry")
+        assert_error_quality(error, names=[name], suggests=["get_applications"])
+        cleanup = {"projectName": PROJECT, "infobaseName": name, "registrationId": registration_id,
+                   "deleteRegistration": True,
                    "deleteDatabaseFiles": False}
         for overrides in ({"applicationId": original_id}, {"applicationId": "  "},
-                          {"deleteRegistration": False}, {"deleteDatabaseFiles": True}):
+                          {"deleteRegistration": False}, {"deleteDatabaseFiles": True},
+                          {"registrationId": "not-a-uuid"},
+                          {"registrationId": "00000000-0000-0000-0000-000000000000"},
+                          {"infobaseName": name + "_wrong"}):
             refused = call("delete_infobase", dict(cleanup, confirm=True, **overrides))
             error = assert_error(refused, "orphan deletion must keep its narrow flag guards")
-            assert_error_quality(error, names=[overrides.get("applicationId", name)], suggests=["get_applications"])
+            assert_error_quality(error, names=["registrationId"], suggests=["get_applications", "create_infobase", "launcher"])
             duplicate = call("create_infobase", params)
             error = assert_error(duplicate, "a refused orphan deletion must retain the launcher record")
             assert_error_quality(error, names=["address"], suggests=["get_applications"])
@@ -92,6 +101,8 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
         assert_ok(preview, "preview an invisible launcher entry")
         assert preview.structured["action"] == "preview", preview.structured
         assert preview.structured["confirmationRequired"] is True, preview.structured
+        assert preview.structured["registrationId"] == registration_id, preview.structured
+        assert "applicationId" not in preview.structured, preview.structured
         duplicate = call("create_infobase", params)
         error = assert_error(duplicate, "preview must retain the launcher record")
         assert_error_quality(error, names=["address"], suggests=["get_applications"])
@@ -100,16 +111,27 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
         assert removed.structured["action"] == "deleted", removed.structured
         assert removed.structured["databaseFilesDeleted"] is False, removed.structured
         recreated = call("create_infobase", params)
+        previous_id = registration_id
+        registration_id = (recreated.structured or {}).get("registrationId")
         assert_ok(recreated, "registration can succeed only if the previous launcher record was removed")
         assert recreated.structured["boundToProject"] is True, recreated.structured
         assert recreated.structured["applicationId"] != original_id, recreated.structured
+        assert registration_id and registration_id != previous_id, recreated.structured
+        stale = call("delete_infobase", dict(cleanup, confirm=True))
+        error = assert_error(stale, "a stale confirm must not delete a same-named replacement")
+        assert_error_quality(error, names=["registrationId"], suggests=["create_infobase", "launcher"])
+        duplicate = call("create_infobase", params)
+        error = assert_error(duplicate, "stale confirmation must retain the replacement")
+        assert_error_quality(error, names=["address"], suggests=["get_applications"])
     finally:
         try:
-            removed = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name,
-                           "deleteRegistration": True, "deleteDatabaseFiles": False, "confirm": True})
-            assert_ok(removed, "remove the uniquely named cleanup probe")
+            if registration_id:
+                removed = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name,
+                               "registrationId": registration_id,
+                               "deleteRegistration": True, "deleteDatabaseFiles": False, "confirm": True})
+                assert_ok(removed, "remove the exact UUID of the cleanup probe")
         finally:
-            assert cleanup_cluster_registration_probe(name, "localhost:1541", probe) == 0
+            assert cleanup_cluster_registration_probe(name, "localhost:1541", probe, registration_id) == 0
     assert_no_diff()
 
 

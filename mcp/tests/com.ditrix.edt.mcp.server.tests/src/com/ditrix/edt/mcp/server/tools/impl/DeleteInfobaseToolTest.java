@@ -938,6 +938,73 @@ public class DeleteInfobaseToolTest
             "Project", "  ", "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    @Test
+    public void testRegistrationCleanupRequiresExactUuidNameAndSafeFlags()
+    {
+        String id = java.util.UUID.randomUUID().toString();
+        assertNull(DeleteInfobaseTool.registrationArgumentError(id, null, "probe", true, false)); //$NON-NLS-1$
+        for (Map<String, String> invalid : List.of(
+            Map.of("registrationId", "1-1-1-1-1", "infobaseName", "probe"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Map.of("registrationId", "not-a-uuid", "infobaseName", "probe"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Map.of("registrationId", id), //$NON-NLS-1$
+            Map.of("registrationId", id, "infobaseName", "probe", "applicationId", "old"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Map.of("registrationId", id, "infobaseName", "probe", "deleteRegistration", "false"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Map.of("registrationId", id, "infobaseName", "probe", "deleteDatabaseFiles", "true"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            var params = new HashMap<>(invalid);
+            params.put("projectName", "MissingProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject result = JsonParser.parseString(new DeleteInfobaseTool().execute(params)).getAsJsonObject();
+            assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(result.toString(), result.get("error").getAsString().contains("registrationId")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testRegistrationPreviewAndDeletionReturnTheSameRegistrationIdNotAnApplicationId()
+    {
+        var id = java.util.UUID.randomUUID();
+        for (boolean deleted : List.of(false, true))
+        {
+            var result = JsonParser.parseString(DeleteInfobaseTool.registrationResult(
+                "project", "probe", id, deleted).toJson()).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(id.toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$
+            assertFalse(result.has("applicationId")); //$NON-NLS-1$
+            assertEquals(deleted ? "deleted" : "preview", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertFalse(result.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testContextSwitchWhileConsentWaitsPreventsEveryMutation()
+    {
+        var expected = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/original"); //$NON-NLS-1$
+        var current = new java.util.concurrent.atomic.AtomicReference<>(expected);
+        var mutation = mock(Runnable.class);
+        String result = DeleteInfobaseTool.afterConsent(expected, current::get, () -> {
+            current.set(com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/other")); //$NON-NLS-1$
+            return null;
+        }, () -> { mutation.run(); return "unexpected deletion"; }); //$NON-NLS-1$
+        var json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, result.contains("context changed")); //$NON-NLS-1$
+        org.mockito.Mockito.verify(mutation, org.mockito.Mockito.never()).run();
+    }
+
+    @Test
+    public void testStableContextAllowsMutationAndDeclinedConsentDoesNot()
+    {
+        var context = com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext.empty();
+        var writes = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<String> mutation = () -> { writes.incrementAndGet(); return "done"; }; //$NON-NLS-1$
+        assertEquals("done", DeleteInfobaseTool.afterConsent(context, () -> context, () -> null, mutation)); //$NON-NLS-1$
+        assertEquals("declined", DeleteInfobaseTool.afterConsent(context, () -> context, () -> "declined", mutation)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, writes.get());
+        String result = DeleteInfobaseTool.afterConsent(context,
+            () -> { throw new IllegalStateException("provider unavailable"); }, () -> null, mutation); //$NON-NLS-1$
+        assertFalse(JsonParser.parseString(result).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, writes.get());
+    }
+
     private static IApplication app(String id)
     {
         IApplication application = mock(IApplication.class);
