@@ -133,6 +133,7 @@ public final class ApplicationDefaultChange
         NOT_CHANGED,
         RESTORED,
         PRESERVED_OTHER,
+        PENDING,
         UNVERIFIED
     }
 
@@ -152,7 +153,8 @@ public final class ApplicationDefaultChange
         // The worker serializes explicit default/launcher writes and revalidates liveness.
         // Association changes and GUI edits still have no atomic public SDK boundary here.
         var restored = new AtomicReference<>(Restoration.UNVERIFIED);
-        try (var admission = new CredentialWriteControl())
+        var admission = new CredentialWriteControl();
+        try (admission)
         {
             var result = BoundedJob.runWithCancellation("Restore explicit EDT application default", //$NON-NLS-1$
                 timeoutMs, monitor -> {
@@ -207,11 +209,18 @@ public final class ApplicationDefaultChange
                         }
                     }
                 }, admission::close);
+            // Close admission before reading pending, as with bounded credential writes. A
+            // native call that already owns a permit can still commit after this response.
+            admission.close();
+            if (admission.writeInProgress())
+            {
+                return Restoration.PENDING;
+            }
             return result.isSuccess() ? restored.get() : Restoration.UNVERIFIED;
         }
         catch (Exception failure)
         {
-            return Restoration.UNVERIFIED;
+            return admission.writeInProgress() ? Restoration.PENDING : Restoration.UNVERIFIED;
         }
     }
 }

@@ -334,9 +334,9 @@ public class CreateInfobaseRegistrationTest
         {
             for (boolean hadExplicitDefault : new boolean[] {false, true})
             {
-                for (int choice : new int[] {0, 1, 2, 3, 4})
+                for (int choice : new int[] {0, 1, 2, 3, 4, 5})
                 {
-                    if (!hadExplicitDefault && choice >= 3)
+                    if ((!hadExplicitDefault && choice >= 3) || (choice == 5 && !register))
                     {
                         continue;
                     }
@@ -344,7 +344,10 @@ public class CreateInfobaseRegistrationTest
                     boolean unavailable = choice == 2;
                     boolean priorRemoved = choice == 3;
                     boolean priorLookupFailed = choice == 4;
-                    boolean retain = unavailable || priorRemoved || priorLookupFailed;
+                    boolean pending = choice == 5;
+                    boolean retain = unavailable || priorRemoved || priorLookupFailed || pending;
+                    var releaseRestore = new java.util.concurrent.CompletableFuture<Void>();
+                    var nativeReturned = new java.util.concurrent.CompletableFuture<Void>();
                     var file = Files.createTempDirectory("mcp-default-rollback"); //$NON-NLS-1$
                     var database = file.resolve("1Cv8.1CD"); //$NON-NLS-1$
                     if (register)
@@ -436,7 +439,15 @@ public class CreateInfobaseRegistrationTest
                         }).when(associations).associate(any(), any(), any());
                         doAnswer(call -> {
                             com.e1c.g5.dt.applications.IApplication app = call.getArgument(1);
+                            if (pending && app == prior)
+                            {
+                                releaseRestore.join(); // The admitted native write ignores cancellation.
+                            }
                             rawDefault.set(app == null ? null : app.getId());
+                            if (pending && app == prior)
+                            {
+                                nativeReturned.complete(null);
+                            }
                             if (app != null && "owned-app".equals(app.getId())) //$NON-NLS-1$
                             {
                                 current.set(changed);
@@ -458,20 +469,33 @@ public class CreateInfobaseRegistrationTest
                             register, new CreateInfobaseTool.Credentials(null, null, null), current::get)).getAsJsonObject();
                         assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
                         assertEquals(result.toString(), !retain, result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
-                        assertEquals(retain ? "UNVERIFIED" : newerChoice ? "PRESERVED_OTHER" : "RESTORED", result.get("defaultRollback").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        assertEquals(pending ? "PENDING" : retain ? "UNVERIFIED" : newerChoice ? "PRESERVED_OTHER" : "RESTORED", result.get("defaultRollback").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                        assertEquals(pending, result.get("defaultWriteInProgress").getAsBoolean()); //$NON-NLS-1$
                         assertEquals(expectedDefault, rawDefault.get());
                         verify(applications, never()).getDefaultApplication(any());
-                        verify(applications, times(newerChoice || retain ? 1 : 2)).setDefaultApplication(eq(project), any());
+                        verify(applications, times(pending ? 2 : newerChoice || retain ? 1 : 2)).setDefaultApplication(eq(project), any());
                         verify(infobases, times(retain ? 0 : 1)).delete(any());
                         verify(associations, times(retain ? 0 : 1)).dissociate(any(), any(), any());
                         if (retain)
                         {
                             assertTrue(result.get("error").getAsString().contains("retained")); //$NON-NLS-1$ //$NON-NLS-2$
                         }
+                        if (pending)
+                        {
+                            assertFalse(nativeReturned.isDone());
+                            String error = result.get("error").getAsString(); //$NON-NLS-1$
+                            assertTrue(error, error.contains("native write may complete after this response")); //$NON-NLS-1$
+                            assertTrue(error, error.contains("Wait") && error.contains("before inspecting/changing")); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
                         assertEquals(register ? "existing default sentinel" : "new default sentinel", Files.readString(database)); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     finally
                     {
+                        releaseRestore.complete(null);
+                        if (pending)
+                        {
+                            nativeReturned.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                        }
                         Files.deleteIfExists(database);
                         Files.delete(file);
                     }

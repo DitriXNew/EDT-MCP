@@ -696,9 +696,11 @@ public class CreateInfobaseTool implements IMcpTool
         {
             ApplicationDefaultChange.Restoration defaultRestoration = defaultChange == null
                 ? ApplicationDefaultChange.Restoration.NOT_CHANGED : defaultChange.restore();
+            boolean retainDefault = defaultRestoration == ApplicationDefaultChange.Restoration.UNVERIFIED
+                || defaultRestoration == ApplicationDefaultChange.Restoration.PENDING;
             // Retain the application handle if we cannot establish whether it is still default.
             // Removing it now would create the very stale-default pointer compensation must avoid.
-            InfobaseRegistration.Rollback rollback = defaultRestoration == ApplicationDefaultChange.Restoration.UNVERIFIED
+            InfobaseRegistration.Rollback rollback = retainDefault
                 ? new InfobaseRegistration.Rollback(false, false, false)
                 : InfobaseRegistration.rollback(context.assocManager, context.ibManager, context.project,
                     reference, associationContext, this::clearRegistrationCredentials);
@@ -717,11 +719,15 @@ public class CreateInfobaseTool implements IMcpTool
             if (defaultRestoration != ApplicationDefaultChange.Restoration.NOT_CHANGED)
             {
                 failed.put("defaultRollback", defaultRestoration.name()); //$NON-NLS-1$
-                if (defaultRestoration == ApplicationDefaultChange.Restoration.UNVERIFIED)
+                failed.put("defaultWriteInProgress", //$NON-NLS-1$
+                    defaultRestoration == ApplicationDefaultChange.Restoration.PENDING);
+                if (retainDefault)
                 {
                     failed.put("rollbackCompleted", false); //$NON-NLS-1$
                     failed.put("error", json.get("error").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
-                        + " Default restoration could not be verified. The owned application, association, registration and database files were retained; inspect the project's default in EDT, then retry cleanup from the original branch."); //$NON-NLS-1$ //$NON-NLS-2$
+                        + (defaultRestoration == ApplicationDefaultChange.Restoration.PENDING
+                            ? " Default restoration is still in progress: an admitted native write may complete after this response. The owned application, association, registration and database files were retained. Wait for EDT's default-restoration operation to finish, or restart EDT if it is stuck, before inspecting/changing the default or retrying cleanup from the original branch." //$NON-NLS-1$
+                            : " Default restoration could not be verified. The owned application, association, registration and database files were retained; inspect the project's default in EDT, then retry cleanup from the original branch.")); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
             return failed.toJson();

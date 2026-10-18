@@ -169,6 +169,53 @@ public class ApplicationDefaultChangeTest
     }
 
     @Test
+    public void anAdmittedNativeRestorationReportsPendingAndCanStillFinishLater() throws Exception
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var previous = mock(IApplication.class);
+        var next = mock(IApplication.class);
+        when(previous.getId()).thenReturn("prior"); //$NON-NLS-1$
+        when(next.getId()).thenReturn("owned"); //$NON-NLS-1$
+        when(manager.getApplication(project, "prior")).thenReturn(Optional.of(previous)); //$NON-NLS-1$
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CompletableFuture<Void>();
+        var raw = new AtomicReference<String>("prior"); //$NON-NLS-1$
+        doAnswer(call -> {
+            IApplication application = call.getArgument(1);
+            if (application == previous)
+            {
+                entered.countDown();
+                release.join(); // Native code has its permit and does not poll cancellation.
+            }
+            raw.set(application.getId());
+            return null;
+        }).when(manager).setDefaultApplication(eq(project), any());
+        var change = ApplicationDefaultChange.capture(manager, project, raw::get);
+        assertNull(change.apply(next, () -> { }));
+        var caller = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try
+        {
+            var result = caller.submit(() -> change.restore(1000));
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(ApplicationDefaultChange.Restoration.PENDING,
+                result.get(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals("owned", raw.get()); //$NON-NLS-1$
+            release.complete(null);
+            try (var coordination = InfobaseMutationCoordinator.acquire(3000))
+            {
+                assertEquals("prior", raw.get()); //$NON-NLS-1$
+                verify(manager, times(2)).setDefaultApplication(any(), any());
+            }
+        }
+        finally
+        {
+            release.complete(null);
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
     public void timedOutPriorResolutionCannotRestoreLater() throws Exception
     {
         var project = mock(IProject.class);
