@@ -7029,7 +7029,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         // The catalogue is fetched only for a command-group reference, so no other property pays a
         // platform lookup for it.
-        return prepareReferenceWith(isCommandGroupReference(info.feature)
+        return prepareReferenceWith(MetadataPropertyIntrospector.isCommandGroupReference(info.feature)
             ? StandardCommandGroupResolver.providerFor(ctx.version) : null,
             ctx.scope, owner, name, value, info, out);
     }
@@ -7099,7 +7099,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IEObjectProvider catalogue, List<PreparedChange> out)
     {
         if (catalogue == null || value == null || value.indexOf('.') >= 0
-            || !isCommandGroupReference(feature))
+            || !MetadataPropertyIntrospector.isCommandGroupReference(feature))
         {
             return false;
         }
@@ -7110,17 +7110,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         out.add(PreparedChange.scalar(feature, group));
         return true;
-    }
-
-    /**
-     * Whether a reference feature's declared target is the mcore {@code CommandGroup} interface - the
-     * base both a configuration {@code CommandGroup} (an {@code MdObject}, FQN-addressed) and a
-     * platform {@code StandardCommandGroup} (name-addressed) implement.
-     */
-    private static boolean isCommandGroupReference(EStructuralFeature feature)
-    {
-        return feature instanceof EReference
-            && ((EReference)feature).getEReferenceType() == McorePackage.Literals.COMMAND_GROUP;
     }
 
     /**
@@ -7593,7 +7582,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String referenceNotFoundHint(EStructuralFeature feature,
         IEObjectProvider groupCatalogue)
     {
-        if (isCommandGroupReference(feature))
+        if (MetadataPropertyIntrospector.isCommandGroupReference(feature))
         {
             return StandardCommandGroupResolver.addressingHint(groupCatalogue);
         }

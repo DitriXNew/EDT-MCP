@@ -73,6 +73,15 @@ public final class MetadataPropertyIntrospector
      */
     public static final String COMMON_FEATURE = "common"; //$NON-NLS-1$
 
+    /**
+     * The "allowed values" cell of a command's {@code group}: both forms {@code modify_metadata} takes.
+     * The standard names themselves depend on the platform version; an unknown one is refused with the
+     * full list. The forms are inline code: a bare {@code <Name>} is an HTML tag to a Markdown renderer,
+     * which would show the cell as just {@code CommandGroup.}.
+     */
+    static final String COMMAND_GROUP_ALLOWED =
+        "`CommandGroup.<Name>` or a standard group name (e.g. `ActionsPanelTools`)"; //$NON-NLS-1$
+
     /** The kind of value an assignable property takes - drives validation and rendering. */
     public enum ValueKind
     {
@@ -780,6 +789,17 @@ public final class MetadataPropertyIntrospector
         return MdClassPackage.Literals.MD_OBJECT == target ? "metadata object" : target.getName(); //$NON-NLS-1$
     }
 
+    /**
+     * Whether a reference feature's declared target is the mcore {@code CommandGroup} interface - the
+     * base both a configuration {@code CommandGroup} (an {@code MdObject}, FQN-addressed) and a
+     * platform {@code StandardCommandGroup} (name-addressed) implement.
+     */
+    public static boolean isCommandGroupReference(EStructuralFeature feature)
+    {
+        return feature instanceof EReference
+            && ((EReference)feature).getEReferenceType() == McorePackage.Literals.COMMAND_GROUP;
+    }
+
     /** A localized-string map feature (e.g. the synonym) is a containment ref to a *MapEntry EClass. */
     private static boolean isMapEntry(EReference reference)
     {
@@ -907,6 +927,11 @@ public final class MetadataPropertyIntrospector
         }
         if (kind == ValueKind.REFERENCE || kind == ValueKind.MANY_REFERENCE)
         {
+            if (isCommandGroupReference(feature))
+            {
+                // Both forms modify_metadata takes, not the bare interface name (issue #733).
+                return Collections.singletonList(COMMAND_GROUP_ALLOWED);
+            }
             String target = referenceTargetTypeName(feature);
             return target != null ? Collections.singletonList(target) : null;
         }
@@ -1263,6 +1288,14 @@ public final class MetadataPropertyIntrospector
         {
             return ((MdObject)value).getName();
         }
+        if (value instanceof StandardCommandGroup && ((EObject)value).eIsProxy())
+        {
+            // The platform's unresolved proxy - what modify_metadata writes (issue #508). None of its
+            // attributes is loaded: the name is null and the category its default literal, which is
+            // another group's. The platform keys each group by name in the proxy URI's fragment
+            // (StdCommandGroupLoader appends "/" + name), so that is where its name is read.
+            return standardCommandGroupNameFromProxyUri(((InternalEObject)value).eProxyURI());
+        }
         if (value instanceof NamedElement)
         {
             String name = ((NamedElement)value).getName();
@@ -1278,6 +1311,36 @@ public final class MetadataPropertyIntrospector
             }
         }
         return null;
+    }
+
+    /**
+     * How a command's {@code group} is printed wherever it is read back (issue #733): a configuration
+     * group as its {@code CommandGroup.<Name>} FQN, a platform standard group by the name
+     * {@code modify_metadata} takes ({@code ActionsPanelTools}), its category only when it has no name -
+     * the {@link #referenceTargetName} rule, qualified for an {@link MdObject}.
+     *
+     * <p>The formatter's generic "first enum attribute" rendering answers neither: it reads a
+     * configuration group's {@code objectBelonging} ({@code Native}) and a standard group's
+     * {@code category}, which every group of one panel shares.</p>
+     *
+     * <p>An unresolved proxy whose URI names no group is printed as that URI: its attributes are
+     * not loaded, so the generic rendering would print a default category as if it were real.</p>
+     *
+     * @param group the group, may be {@code null}
+     * @return the label, or {@code null} when the platform gives the group no name or category
+     */
+    public static String commandGroupLabel(EObject group)
+    {
+        if (group == null)
+        {
+            return null;
+        }
+        String name = referenceTargetName(group);
+        if (name == null && group.eIsProxy())
+        {
+            return String.valueOf(((InternalEObject)group).eProxyURI());
+        }
+        return group instanceof MdObject && name != null ? qualifiedName(group, name) : name;
     }
 
     /**
@@ -1581,6 +1644,29 @@ public final class MetadataPropertyIntrospector
         }
         return proxyUri == null ? "Unresolved CommonPicture reference" //$NON-NLS-1$
             : "Unresolved CommonPicture reference: " + proxyUri; //$NON-NLS-1$
+    }
+
+    /**
+     * The name of a platform standard command group, read off its proxy URI - but only a URI of the
+     * platform's own catalogue. The versioned {@code CommandGroupProvider} roots it at
+     * {@code v8:/CommandGroup/Std/<version>} and {@code StdCommandGroupLoader} appends
+     * {@code "/" + name}; a fragment of any other URI (a BM object path, another catalogue's key) is
+     * not a group name and is not offered as one.
+     */
+    private static String standardCommandGroupNameFromProxyUri(URI proxyUri)
+    {
+        if (proxyUri == null || !"v8".equals(proxyUri.scheme()) || proxyUri.segmentCount() < 2 //$NON-NLS-1$
+            || !"CommandGroup".equals(proxyUri.segment(0)) || !"Std".equals(proxyUri.segment(1))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return null;
+        }
+        String fragment = proxyUri.fragment();
+        if (fragment == null || !fragment.startsWith("/")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String name = fragment.substring(1);
+        return name.isEmpty() || name.indexOf('/') >= 0 ? null : name;
     }
 
     private static String platformPictureNameFromProxyUri(URI proxyUri)

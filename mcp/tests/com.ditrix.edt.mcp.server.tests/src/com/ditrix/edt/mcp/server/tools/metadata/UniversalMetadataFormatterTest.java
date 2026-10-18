@@ -12,7 +12,9 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -20,9 +22,11 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeContentItem;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeUse;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.FormType;
 import com._1c.g5.v8.dt.metadata.mdclass.Indexing;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
@@ -254,6 +258,102 @@ public class UniversalMetadataFormatterTest
             md.contains("| Name | Synonym | Group |")); //$NON-NLS-1$
         assertTrue("an unset command group renders as a dash, got:\n" + md, //$NON-NLS-1$
             md.contains("| Refill | Refill | - |")); //$NON-NLS-1$
+    }
+
+    // A command's group is printed as modify_metadata takes it (issue #733), not as the group's first
+    // enum attribute: that is a configuration group's objectBelonging (Native) and a standard group's
+    // category, which every group of one panel shares.
+
+    /** A catalog with one command {@code Refill} placed in {@code group}. */
+    private static Catalog catalogWithCommandIn(com._1c.g5.v8.dt.mcore.CommandGroup group)
+    {
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Cat"); //$NON-NLS-1$
+        CatalogCommand cmd = MdClassFactory.eINSTANCE.createCatalogCommand();
+        cmd.setName("Refill"); //$NON-NLS-1$
+        cmd.getSynonym().put(EN, "Refill"); //$NON-NLS-1$
+        cmd.setGroup(group);
+        cat.getCommands().add(cmd);
+        return cat;
+    }
+
+    private static StandardCommandGroup standardGroup(String name, CommandGroupCategory category)
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setName(name);
+        group.setCategory(category);
+        return group;
+    }
+
+    @Test
+    public void testCommandsTablePrintsAConfigurationGroupByItsFqn()
+    {
+        CommandGroup sales = MdClassFactory.eINSTANCE.createCommandGroup();
+        sales.setName("Sales"); //$NON-NLS-1$
+
+        for (boolean full : new boolean[] { false, true })
+        {
+            String md = f.format(catalogWithCommandIn(sales), full, EN);
+            assertTrue("a configuration group is its CommandGroup.<Name> FQN (full=" + full + "):\n" + md, //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("| Refill | Refill | CommandGroup.Sales |")); //$NON-NLS-1$
+            assertFalse("not the group's objectBelonging (full=" + full + "):\n" + md, //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("| Refill | Refill | Native |")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testCommandsTablePrintsAStandardGroupByItsName()
+    {
+        // ActionsPanelTools and ActionsPanelCreate share the ActionsPanel category: only the name
+        // tells them apart.
+        String tools = f.format(catalogWithCommandIn(
+            standardGroup("ActionsPanelTools", CommandGroupCategory.ACTIONS_PANEL)), false, EN); //$NON-NLS-1$
+        String create = f.format(catalogWithCommandIn(
+            standardGroup("ActionsPanelCreate", CommandGroupCategory.ACTIONS_PANEL)), true, EN); //$NON-NLS-1$
+
+        assertTrue(tools, tools.contains("| Refill | Refill | ActionsPanelTools |")); //$NON-NLS-1$
+        assertTrue(create, create.contains("| Refill | Refill | ActionsPanelCreate |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandsTablePrintsAnUnresolvedStandardGroupByTheNameInItsUri()
+    {
+        // modify_metadata writes the platform's unresolved proxy; its category is the default
+        // literal, so only the URI fragment (the loader's "/" + name) says which group it is.
+        StandardCommandGroup proxy = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        ((org.eclipse.emf.ecore.InternalEObject)proxy).eSetProxyURI(org.eclipse.emf.common.util.URI
+            .createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (boolean full : new boolean[] { false, true })
+        {
+            String md = f.format(catalogWithCommandIn(proxy), full, EN);
+            assertTrue("full=" + full + ":\n" + md, //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("| Refill | Refill | ActionsPanelTools |")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testCommandsTablePrintsTheCategoryOfANamelessStandardGroup()
+    {
+        String md = f.format(catalogWithCommandIn(
+            standardGroup(null, CommandGroupCategory.NAVIGATION_PANEL)), false, EN);
+
+        assertTrue("a group with no name still says its category:\n" + md, //$NON-NLS-1$
+            md.contains("| Refill | Refill | " + CommandGroupCategory.NAVIGATION_PANEL.getName() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFullModePrintsACommonCommandsStandardGroupByItsName()
+    {
+        CommonCommand command = MdClassFactory.eINSTANCE.createCommonCommand();
+        command.setName("Refill"); //$NON-NLS-1$
+        command.setGroup(standardGroup("ActionsPanelTools", CommandGroupCategory.ACTIONS_PANEL)); //$NON-NLS-1$
+
+        String md = f.format(command, true, EN);
+        assertTrue("the group property is the standard group's name:\n" + md, //$NON-NLS-1$
+            md.contains("| Group | ActionsPanelTools |")); //$NON-NLS-1$
+        assertFalse("not its category:\n" + md, //$NON-NLS-1$
+            md.contains("| Group | " + CommandGroupCategory.ACTIONS_PANEL.getName() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== CommonAttribute content ====================

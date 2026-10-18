@@ -1061,8 +1061,117 @@ public class MetadataPropertyIntrospectorTest
             MdClassFactory.eINSTANCE.createDataProcessorCommand(), "group"); //$NON-NLS-1$
         assertNotNull("a DataProcessorCommand's group must be assignable", group); //$NON-NLS-1$
         assertTrue("group must be a single REFERENCE", group.valueKind == ValueKind.REFERENCE); //$NON-NLS-1$
-        assertTrue("group must report its CommandGroup target type", //$NON-NLS-1$
-            group.allowedValues.contains("CommandGroup")); //$NON-NLS-1$
+        // Both forms modify_metadata takes, not the bare mcore interface name (issue #733).
+        assertEquals(Collections.singletonList(MetadataPropertyIntrospector.COMMAND_GROUP_ALLOWED),
+            group.allowedValues);
+        String allowed = group.allowedValues.get(0);
+        // Inline code, so a Markdown renderer does not swallow <Name> as an HTML tag.
+        assertTrue(allowed, allowed.contains("`CommandGroup.<Name>`")); //$NON-NLS-1$
+        assertTrue("the standard-group form is named too: " + allowed, //$NON-NLS-1$
+            allowed.contains("ActionsPanelTools")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnOrdinaryReferenceStillReportsItsTargetType()
+    {
+        // The command-group cell is scoped to that one target type.
+        PropertyInfo coa = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createAccountingRegister(), "chartOfAccounts"); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("ChartOfAccounts"), coa.allowedValues); //$NON-NLS-1$
+    }
+
+    // ---- commandGroupLabel (issue #733) -----------------------------------------------------
+
+    @Test
+    public void testCommandGroupLabelOfAConfigurationGroupIsItsFqn()
+    {
+        CommandGroup sales = MdClassFactory.eINSTANCE.createCommandGroup();
+        sales.setName("Sales"); //$NON-NLS-1$
+        assertEquals("CommandGroup.Sales", MetadataPropertyIntrospector.commandGroupLabel(sales)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupLabelOfAStandardGroupIsItsName()
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setName("ActionsPanelTools"); //$NON-NLS-1$
+        group.setCategory(CommandGroupCategory.ACTIONS_PANEL);
+        assertEquals("ActionsPanelTools", MetadataPropertyIntrospector.commandGroupLabel(group)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupLabelOfANamelessStandardGroupIsItsCategory()
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setCategory(CommandGroupCategory.NAVIGATION_PANEL);
+        assertEquals(CommandGroupCategory.NAVIGATION_PANEL.getName(),
+            MetadataPropertyIntrospector.commandGroupLabel(group));
+    }
+
+    /**
+     * The platform's unresolved proxy for a standard group, URI shaped as StdCommandGroupLoader
+     * builds it ({@code appendFragment("/" + name)}); none of its attributes is loaded.
+     */
+    private static StandardCommandGroup standardGroupProxy(URI uri)
+    {
+        StandardCommandGroup proxy = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        ((InternalEObject)proxy).eSetProxyURI(uri);
+        return proxy;
+    }
+
+    @Test
+    public void testCommandGroupLabelOfAnUnresolvedStandardGroupIsTheNameInItsUri()
+    {
+        StandardCommandGroup proxy = standardGroupProxy(
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("precondition: a proxy carries no loaded name", proxy.getName()); //$NON-NLS-1$
+
+        assertEquals("ActionsPanelTools", MetadataPropertyIntrospector.commandGroupLabel(proxy)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvedStandardGroupIsReadBackByNameNotByItsDefaultCategory()
+    {
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(standardGroupProxy(
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("ActionsPanelTools", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(command, "group").currentValue); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvedStandardGroupWithoutANameIsItsUriNotACategory()
+    {
+        URI uri = URI.createURI("v8:/CommandGroup/Std/v8.3.15"); //$NON-NLS-1$
+        String label = MetadataPropertyIntrospector.commandGroupLabel(standardGroupProxy(uri));
+
+        assertEquals("a proxy that names no group says what it points at", uri.toString(), label); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFragmentOutsideTheStandardGroupCatalogueIsNotAGroupName()
+    {
+        // Only the platform's own catalogue keys a group by name; any other fragment - a BM object
+        // path, another catalogue's key - is printed as the URI, never offered as a bare group name.
+        URI[] foreign = {
+            URI.createURI("bm://TestConfiguration/CommandGroup.Sales").appendFragment("/ActionsPanelTools"), //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/Pictures/Std/v8.3.15").appendFragment("/ActionsPanelTools"), //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("//@groups.3"), //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (URI uri : foreign)
+        {
+            String label = MetadataPropertyIntrospector.commandGroupLabel(standardGroupProxy(uri));
+            assertEquals("not a standard group name: " + uri, uri.toString(), label); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testCommandGroupLabelOfNothingIsNull()
+    {
+        assertNull(MetadataPropertyIntrospector.commandGroupLabel(null));
+        assertNull("an object the platform names nothing has no label", //$NON-NLS-1$
+            MetadataPropertyIntrospector.commandGroupLabel(McoreFactory.eINSTANCE.createStringValue()));
     }
 
     @Test
