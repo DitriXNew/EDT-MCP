@@ -552,8 +552,14 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
         // partial-failure JSON returned as-is (the database files are then KEPT); null = continue.
-        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration);
+        String deregisterFailed = deregisterFileInfobase(ibManager, plan.registrationSnapshot, id,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration,
+            () -> {
+                if (!contextMatches(associationContext, () -> InfobaseRegistration.currentContext(project)))
+                {
+                    throw new IllegalStateException("The project's infobase context changed; request a new preview."); //$NON-NLS-1$
+                }
+            });
         if (deregisterFailed != null)
         {
             return deregisterFailed;
@@ -576,19 +582,11 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Step 2 of the file-infobase deletion: optionally deregister the infobase from the global EDT
-     * infobases list. The {@code ibManager.delete} destructive call stays INLINE here under the same
-     * {@code deleteRegistration && ibRef != null} guard. A missing {@code IInfobaseManager} is logged
-     * and treated as non-fatal (the dissociation already succeeded). Returns the partial-failure JSON
-     * (which the caller returns as-is — the database files are then KEPT) when the delete throws, or
-     * {@code null} to continue.
-     *
-     * <p>Takes the whole {@link DbFileOutcome} rather than the {@code deleteDatabaseFiles} flag
-     * alone: the shared-database check has already run by this point, and the partial-failure
-     * payload must report what it MEASURED rather than overwrite it with its own branch.
+     * Clear credentials and verify launcher removal before permitting database-file deletion.
+     * Failures retain a retry handle and preserve the previously measured shared-file outcome.
      */
-    private String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
-            IbIdentity id, DbFileOutcome db, boolean deleteRegistration)
+    String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
+            IbIdentity id, DbFileOutcome db, boolean deleteRegistration, Runnable contextGuard)
     {
         if (deleteRegistration && ibRef != null)
         {
@@ -596,26 +594,36 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 Activator.logError("delete_infobase: IInfobaseManager not available; " //$NON-NLS-1$
                     + "infobase was dissociated but NOT deregistered from the list", null); //$NON-NLS-1$
-                // Non-fatal: the dissociation succeeded.
+                return buildDeregisterFailedResult(id, db,
+                    new IllegalStateException("IInfobaseManager unavailable"), ibRef); //$NON-NLS-1$
             }
             else
             {
                 try
                 {
-                    InfobaseRegistration.remove(ibManager, ibRef);
+                    InfobaseRegistration.cleanupRegistration(ibManager, ibRef.getUuid(), ibRef.getName(),
+                        ibRef.getConnectionString().asConnectionString(), this::clearRegistrationCredentials,
+                        contextGuard);
                 }
                 catch (Exception e)
                 {
-                    Activator.logError("delete_infobase: IInfobaseManager.delete failed " //$NON-NLS-1$
-                        + "(non-fatal — dissociation already succeeded)", e); //$NON-NLS-1$
+                    Activator.logWarning("delete_infobase: registration cleanup failed after dissociation: " //$NON-NLS-1$
+                        + e.getClass().getSimpleName());
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return buildDeregisterFailedResult(id, db, e);
+                    return buildDeregisterFailedResult(id, db, e, ibRef);
                 }
             }
         }
         return null;
+    }
+
+    /** Native bounded cleanup; overridden only by tests that provide a controlled access manager. */
+    protected void clearRegistrationCredentials(InfobaseReference reference,
+            InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+    {
+        InfobaseAccessSupport.clearCredentials(reference, guard);
     }
 
     /**
@@ -958,9 +966,15 @@ public class DeleteInfobaseTool implements IMcpTool
      */
     static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e)
     {
+        return buildDeregisterFailedResult(id, db, e, null);
+    }
+
+    private static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e,
+            InfobaseReference registration)
+    {
         String measured = prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
         boolean deregistrationIsTheReason = measured == null;
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
@@ -972,10 +986,15 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
-                + e.getMessage()
-                + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
-                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason))
-            .toJson();
+                + e.getClass().getSimpleName()
+                + ". Inspect the launcher and secure storage, then retry delete_infobase with registrationId and exact infobaseName; database files were kept." //$NON-NLS-1$
+                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason));
+        if (registration != null)
+        {
+            result.put(KEY_REGISTRATION_ID, registration.getUuid().toString())
+                .put(KEY_INFOBASE_NAME, registration.getName());
+        }
+        return result.toJson();
     }
 
     /**
@@ -1109,6 +1128,7 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         final String error;
         final InfobaseReference ibRef;
+        final InfobaseReference registrationSnapshot;
         final String resolvedName;
         final String resolvedId;
         final Path dbDir;
@@ -1120,6 +1140,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             this.error = error;
             this.ibRef = ibRef;
+            this.registrationSnapshot = ibRef == null ? null : org.eclipse.emf.ecore.util.EcoreUtil.copy(ibRef);
             this.resolvedName = resolvedName;
             this.resolvedId = resolvedId;
             this.dbDir = dbDir;

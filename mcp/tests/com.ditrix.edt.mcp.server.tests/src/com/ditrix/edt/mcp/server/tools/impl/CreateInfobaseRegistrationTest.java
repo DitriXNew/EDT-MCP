@@ -104,12 +104,22 @@ public class CreateInfobaseRegistrationTest
                 doThrow(new IllegalStateException("refused")).when(associations).associate(any(), any(), any()); //$NON-NLS-1$
             }
             var context = BranchContexts.toContext("feat/test"); //$NON-NLS-1$
-            var result = JsonParser.parseString(new CreateInfobaseTool().prepareInfobase(
+            boolean[] cleared = {false};
+            var tool = new CreateInfobaseTool() {
+                @Override
+                void clearRegistrationCredentials(InfobaseReference ref,
+                        com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+                {
+                    guard.run(current -> cleared[0] = true);
+                }
+            };
+            var result = JsonParser.parseString(tool.prepareInfobase(
                 CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
                 context, "project", new InfobaseTarget(null, new ServerInfobaseTarget("host", "base")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "test", null, false, true, new CreateInfobaseTool.Credentials(null, null, null))).getAsJsonObject(); //$NON-NLS-1$
             assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
-            assertTrue(result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(result.get("rollbackCompleted").getAsBoolean());
+            assertTrue("rollback must clear credentials even when create supplied none", cleared[0]); //$NON-NLS-1$
             var ref = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
             verify(infobases).add(ref.capture(), isNull());
             assertEquals(ref.getValue().getUuid().toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$

@@ -585,36 +585,43 @@ public final class InfobaseAccessSupport
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
         synchronized (writeLockFor(ref))
         {
-            // This check deliberately lives INSIDE the same serialization as the write. A bounded
-            // worker that waited for an earlier write must re-read its deadline state after it
-            // acquires the lock; a worker already writing when its caller times out keeps the lock,
-            // so a later intentional write necessarily runs after it and wins.
-            if (writeAllowed != null && !writeAllowed.getAsBoolean())
+            synchronized (InfobaseMutationCoordinator.LOCK)
             {
-                return StoreResult.failed(
-                    "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
-            }
-            try
-            {
-                manager.updateSettings(ref, new InfobaseAccessSettings(access,
-                    requestedUser, requestedPassword, "")); //$NON-NLS-1$
-            }
-            catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
-            {
-                String diagnostic = scrubCredentialText(
-                    PlatformFailures.describeWithRootCause(e), requestedPassword);
-                String message = "Failed to store infobase access settings: " //$NON-NLS-1$
-                    + diagnostic;
-                // Keep the platform diagnosis, cause chain and original stack frames in the EDT
-                // log. A scrubbed copy is attached because logging the original throwable would
-                // render its unsanitized messages again after the log line itself was scrubbed.
-                Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
-                    + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
-                return StoreResult.failed(message, ref);
-            }
-            if (writeCommitted != null)
-            {
-                writeCommitted.run();
+                // This check deliberately lives INSIDE the same serialization as the write. A bounded
+                // worker that waited for an earlier write must re-read its deadline state after it
+                // acquires the lock; a worker already writing when its caller times out keeps the lock,
+                // so a later intentional write necessarily runs after it and wins.
+                if (writeAllowed != null && !writeAllowed.getAsBoolean())
+                {
+                    return StoreResult.failed(
+                        "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+                }
+                if (InfobaseMutationCoordinator.isDeleting(ref.getUuid()))
+                {
+                    return StoreResult.failed("The registration is being removed or was removed; refresh get_applications before storing credentials.", ref); //$NON-NLS-1$
+                }
+                try
+                {
+                    manager.updateSettings(ref, new InfobaseAccessSettings(access,
+                        requestedUser, requestedPassword, "")); //$NON-NLS-1$
+                }
+                catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
+                {
+                    String diagnostic = scrubCredentialText(
+                        PlatformFailures.describeWithRootCause(e), requestedPassword);
+                    String message = "Failed to store infobase access settings: " //$NON-NLS-1$
+                        + diagnostic;
+                    // Keep the platform diagnosis, cause chain and original stack frames in the EDT
+                    // log. A scrubbed copy is attached because logging the original throwable would
+                    // render its unsanitized messages again after the log line itself was scrubbed.
+                    Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
+                        + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
+                    return StoreResult.failed(message, ref);
+                }
+                if (writeCommitted != null)
+                {
+                    writeCommitted.run();
+                }
             }
         }
 
@@ -778,7 +785,10 @@ public final class InfobaseAccessSupport
     /** Clears this reference's settings, after any in-flight bounded store write. */
     public static void clearCredentials(InfobaseReference ref) throws Exception
     {
-        clearCredentials(ref, write -> write.run(ref));
+        clearCredentials(ref, write -> {
+            InfobaseMutationCoordinator.requireWritable(ref.getUuid());
+            write.run(ref);
+        });
     }
 
     /** The guard runs inside the worker's UUID write stripe, immediately around updateSettings. */
@@ -799,15 +809,18 @@ public final class InfobaseAccessSupport
                 }
                 synchronized (writeLockFor(ref))
                 {
-                    guard.run(current -> {
-                        // The guard can itself wait for a launcher lock: check the deadline last.
-                        if (!allowed.getAsBoolean())
-                        {
-                            throw new IllegalStateException("Credential cleanup was cancelled before the settings write."); //$NON-NLS-1$
-                        }
-                        manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
-                        committed.run();
-                    });
+                    synchronized (InfobaseMutationCoordinator.LOCK)
+                    {
+                        guard.run(current -> {
+                            // The guard can itself wait for a launcher lock: check the deadline last.
+                            if (!allowed.getAsBoolean())
+                            {
+                                throw new IllegalStateException("Credential cleanup was cancelled before the settings write."); //$NON-NLS-1$
+                            }
+                            manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
+                            committed.run();
+                        });
+                    }
                 }
                 publish.accept(Boolean.TRUE);
             });

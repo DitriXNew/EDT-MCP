@@ -72,7 +72,8 @@ public class InfobaseRegistrationTest
         var context = BranchContexts.toContext("feat/original"); //$NON-NLS-1$
         when(infobases.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
         when(infobases.findInfobaseByUuid(reference.getUuid())).thenReturn(
-            java.util.Optional.of(reference), java.util.Optional.of(reference), java.util.Optional.empty());
+            java.util.Optional.of(reference), java.util.Optional.of(reference),
+            java.util.Optional.of(reference), java.util.Optional.empty());
         doThrow(new IllegalStateException("secret")).when(associations).dissociate(project, reference, context); //$NON-NLS-1$
         boolean[] cleared = {false};
         var result = InfobaseRegistration.rollback(associations, infobases, project, reference, context,
@@ -377,6 +378,7 @@ public class InfobaseRegistrationTest
             return null;
         }).when(access).updateSettings(any(), any());
         doAnswer(call -> {
+            assertFalse("native deletion must not hold the SDK monitor while waiting for EDT's domain", Thread.holdsLock(manager)); //$NON-NLS-1$
             assertSame(record.get(), call.getArgument(0));
             record.set(null);
             return null;
@@ -389,6 +391,107 @@ public class InfobaseRegistrationTest
         order.verify(access).updateSettings(any(),
             eq(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED));
         order.verify(manager).delete(any());
+    }
+
+    @Test
+    public void queuedCredentialStoreCannotRepopulateTheClearDeleteGapOrDeletedUuid() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var record = new java.util.concurrent.atomic.AtomicReference<>(ref);
+        when(manager.findInfobaseByUuid(ref.getUuid())).thenAnswer(call -> java.util.Optional.ofNullable(record.get()));
+        var enteredClear = new java.util.concurrent.CountDownLatch(1);
+        var releaseClear = new java.util.concurrent.CountDownLatch(1);
+        var storeResult = new java.util.concurrent.atomic.AtomicReference<InfobaseAccessSupport.StoreResult>();
+        var cleanupFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        doAnswer(call -> {
+            assertSame(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED,
+                call.getArgument(1));
+            enteredClear.countDown();
+            assertTrue(releaseClear.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            return null;
+        }).when(access).updateSettings(any(), any());
+        doAnswer(call -> { record.set(null); return null; }).when(manager).delete(any());
+        Thread setter = new Thread(() -> storeResult.set(InfobaseAccessSupport.storeCredentials(ref,
+            "late-user", "late-password", com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access))); //$NON-NLS-1$ //$NON-NLS-2$
+        Thread cleanup = new Thread(() -> {
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), ref.getName(),
+                    ref.getConnectionString().asConnectionString(), (target, guard) -> {
+                        InfobaseAccessSupport.clearCredentials(target, guard, () -> access, 10_000L);
+                        // Force the pending writer to finish in the previously unprotected gap.
+                        setter.join(20_000L);
+                        assertFalse(setter.isAlive());
+                        assertNotNull(storeResult.get().error());
+                        assertSame(ref, record.get());
+                    }, () -> { });
+            }
+            catch (Throwable failure)
+            {
+                cleanupFailure.set(failure);
+            }
+        });
+        cleanup.start();
+        try
+        {
+            assertTrue(enteredClear.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            setter.start();
+            releaseClear.countDown();
+            cleanup.join(20_000L);
+            assertFalse(cleanup.isAlive());
+            if (cleanupFailure.get() != null)
+            {
+                throw new AssertionError(cleanupFailure.get());
+            }
+            assertNull(record.get());
+            assertNotNull(InfobaseAccessSupport.storeCredentials(ref, "stale", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), ref.getName(),
+                    ref.getConnectionString().asConnectionString(), (target, guard) -> fail(), () -> { });
+                fail("retry of an absent UUID must fail"); //$NON-NLS-1$
+            }
+            catch (IllegalArgumentException expected)
+            {
+                assertNotNull(InfobaseAccessSupport.storeCredentials(ref, "stale", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                    com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            }
+            verify(access, times(1)).updateSettings(any(), any());
+        }
+        finally
+        {
+            releaseClear.countDown();
+            cleanup.join(20_000L);
+            setter.join(20_000L);
+        }
+    }
+
+    @Test
+    public void failedClearReleasesTheClaimForAnIntentionalCredentialRepair() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(manager.findInfobaseByUuid(ref.getUuid())).thenReturn(java.util.Optional.of(ref));
+        try
+        {
+            InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), ref.getName(),
+                ref.getConnectionString().asConnectionString(),
+                (target, guard) -> { throw new IllegalStateException("locked storage"); }, () -> { }); //$NON-NLS-1$
+            fail();
+        }
+        catch (IllegalStateException expected)
+        {
+            assertNull(InfobaseAccessSupport.storeCredentials(ref, "repair", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
+            verify(access).updateSettings(eq(ref), any());
+            verify(manager, never()).delete(any());
+        }
     }
 
     @Test

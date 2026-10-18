@@ -50,6 +50,61 @@ import com.google.gson.JsonParser;
 public class DeleteInfobaseToolTest
 {
     @Test
+    public void normalApplicationDeregistrationClearsCredentialsAndRetainsRetryHandleOnFailure() throws Exception
+    {
+        for (boolean failClear : new boolean[] {false, true})
+        {
+            var manager = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("launcher-name"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            var record = new java.util.concurrent.atomic.AtomicReference<>(ref);
+            when(manager.findInfobaseByUuid(ref.getUuid())).thenAnswer(call -> Optional.ofNullable(record.get()));
+            var cleared = new java.util.concurrent.atomic.AtomicBoolean();
+            org.mockito.Mockito.doAnswer(call -> {
+                assertTrue("native removal must follow credential clearing", cleared.get()); //$NON-NLS-1$
+                assertFalse(Thread.holdsLock(manager));
+                record.set(null);
+                return null;
+            }).when(manager).delete(org.mockito.ArgumentMatchers.any());
+            DeleteInfobaseTool tool = new DeleteInfobaseTool() {
+                @Override
+                protected void clearRegistrationCredentials(InfobaseReference reference,
+                        com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+                {
+                    guard.run(current -> {
+                        assertEquals(ref.getUuid(), current.getUuid());
+                        if (failClear)
+                        {
+                            throw new IllegalStateException("password-do-not-echo"); //$NON-NLS-1$
+                        }
+                        cleared.set(true);
+                    });
+                }
+            };
+            String result = tool.deregisterFileInfobase(manager, ref, ibId(),
+                new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                    DeleteInfobaseTool.SharedDatabase.NOT_SHARED), true, () -> { });
+            if (failClear)
+            {
+                JsonObject data = parse(result);
+                assertFalse(data.get("deleteRegistration").getAsBoolean()); //$NON-NLS-1$
+                assertFalse(data.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+                assertEquals(ref.getUuid().toString(), data.get("registrationId").getAsString()); //$NON-NLS-1$
+                assertEquals(ref.getName(), data.get("infobaseName").getAsString()); //$NON-NLS-1$
+                assertFalse(result.contains("password-do-not-echo")); //$NON-NLS-1$
+                assertNotNull(record.get());
+                org.mockito.Mockito.verify(manager, org.mockito.Mockito.never()).delete(org.mockito.ArgumentMatchers.any());
+            }
+            else
+            {
+                assertNull(result);
+                assertNull(record.get());
+                assertTrue(cleared.get());
+            }
+        }
+    }
+
+    @Test
     public void testName()
     {
         assertEquals("delete_infobase", new DeleteInfobaseTool().getName()); //$NON-NLS-1$

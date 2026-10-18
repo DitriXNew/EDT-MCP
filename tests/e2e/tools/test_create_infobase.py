@@ -314,10 +314,17 @@ def test_server_registration_application_roundtrip():
     application_id = None
     registration_id = None
     try:
-        result = call("create_infobase", _cluster_params(infobaseName=name, infobaseRef=probe))
+        params = _cluster_params(infobaseName=name, infobaseRef=probe)
+        # A real secure-storage provider is required for the credential variant, like the
+        # other live credential tests; CI still exercises normal launcher deregistration.
+        if os.environ.get("EDT_MCP_LIVE_INFOBASE") == "1":
+            params.update(user="CleanupProbe", password="synthetic-cleanup-password")
+        result = call("create_infobase", params)
         registration_id = (result.structured or {}).get("registrationId")
         assert_ok(result, "register cluster address")
         data = result.structured
+        if "user" in params:
+            assert data["verification"] == "verified", data
         assert data["action"] == "registered", data
         assert data["infobaseServer"] == "localhost:1541", data
         assert data["infobaseRef"] == probe, data
@@ -347,6 +354,8 @@ def test_server_registration_application_roundtrip():
                     removed = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"],
                                      "deleteRegistration": True, "confirm": True})
                     assert_ok(removed, "remove only synthetic cluster registration")
+                    assert removed.structured["deleteRegistration"] is True, removed.structured
+                    assert removed.structured["databaseFilesDeleted"] is False, removed.structured
         finally:
             leftovers = cleanup_cluster_registration_probe(name, "localhost:1541", probe, registration_id)
             assert leftovers == 0, "EDT leaked %d launcher registrations; removed by fallback cleanup" % leftovers

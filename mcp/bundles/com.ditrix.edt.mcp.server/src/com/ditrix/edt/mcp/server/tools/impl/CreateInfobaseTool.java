@@ -653,7 +653,7 @@ public class CreateInfobaseTool implements IMcpTool
         {
             InfobaseRegistration.Rollback rollback = InfobaseRegistration.rollback(
                 context.assocManager, context.ibManager, context.project, reference,
-                associationContext, credentials.any() ? this::clearRegistrationCredentials : null);
+                associationContext, this::clearRegistrationCredentials);
             String message = json.get("error").getAsString() + " " + rollback.message(); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult failed = ToolResult.error(message);
             for (var entry : json.entrySet())

@@ -68,7 +68,7 @@ public final class InfobaseRegistration
     /** Check the entire launcher tree, serializing this tool's check/add pairs. */
     public static String add(IInfobaseManager manager, InfobaseReference reference)
     {
-        synchronized (manager)
+        synchronized (InfobaseMutationCoordinator.LOCK)
         {
             try
             {
@@ -129,12 +129,16 @@ public final class InfobaseRegistration
     /** Delete the reloaded object with the requested UUID, then verify persistence. */
     public static void remove(IInfobaseManager manager, InfobaseReference reference) throws Exception
     {
-        remove(manager, Identity.of(reference), () -> { });
+        try (var deletion = InfobaseMutationCoordinator.beginDeletion(reference.getUuid()))
+        {
+            remove(manager, Identity.of(reference), () -> { }, deletion);
+        }
     }
 
-    private static void remove(IInfobaseManager manager, Identity expected, Runnable contextGuard) throws Exception
+    private static void remove(IInfobaseManager manager, Identity expected, Runnable contextGuard,
+            InfobaseMutationCoordinator.Deletion deletion) throws Exception
     {
-        synchronized (manager)
+        synchronized (InfobaseMutationCoordinator.LOCK)
         {
             reload(manager);
             var current = manager.findInfobaseByUuid(expected.id());
@@ -142,6 +146,7 @@ public final class InfobaseRegistration
             {
                 expected.requireMatch(current.get());
                 contextGuard.run();
+                deletion.beforeRemoval();
                 manager.delete(current.get());
             }
             reload(manager);
@@ -196,7 +201,7 @@ public final class InfobaseRegistration
     public static InfobaseReference findRegistration(IInfobaseManager manager, UUID registrationId,
             String name) throws Exception
     {
-        synchronized (manager)
+        synchronized (InfobaseMutationCoordinator.LOCK)
         {
             reload(manager);
             InfobaseReference reference = manager.findInfobaseByUuid(registrationId).orElseThrow(() ->
@@ -218,29 +223,30 @@ public final class InfobaseRegistration
             String connection, CredentialCleanup credentials, Runnable contextGuard) throws Exception
     {
         Identity expected = new Identity(registrationId, name, connection);
-        InfobaseReference reference = findRegistration(manager, registrationId, name);
-        expected.requireMatch(reference);
-        credentials.clear(reference, credentialGuard(manager, expected, contextGuard));
-        remove(manager, expected, contextGuard);
+        try (var deletion = InfobaseMutationCoordinator.beginDeletion(registrationId))
+        {
+            InfobaseReference reference = findRegistration(manager, registrationId, name);
+            expected.requireMatch(reference);
+            credentials.clear(reference, credentialGuard(manager, expected, contextGuard, deletion));
+            remove(manager, expected, contextGuard, deletion);
+        }
     }
 
-    /** No manager monitor is held while waiting for the bounded credentials worker. */
+    /** Runs in the credential worker, under its UUID stripe and our private coordinator. */
     private static InfobaseAccessSupport.CredentialWriteGuard credentialGuard(IInfobaseManager manager,
-            Identity expected, Runnable contextGuard)
+            Identity expected, Runnable contextGuard, InfobaseMutationCoordinator.Deletion deletion)
     {
         return write -> {
-            InfobaseReference current;
-            synchronized (manager)
+            synchronized (InfobaseMutationCoordinator.LOCK)
             {
-                current = findRegistration(manager, expected.id(), expected.name());
+                deletion.requireActive();
+                InfobaseReference current = findRegistration(manager, expected.id(), expected.name());
                 expected.requireMatch(current);
                 contextGuard.run();
+                // Our launcher calls cannot replace this reference before the native write.
+                // Independent GUI edits remain subject to the SDK's lack of a conditional write.
+                write.run(current);
             }
-            // Native updateSettings enters EDT's editing domain and calls back into the manager.
-            // Do not invert those locks by holding the manager during the native credential write.
-            expected.requireMatch(current);
-            contextGuard.run();
-            write.run(current);
         };
     }
 
@@ -304,7 +310,7 @@ public final class InfobaseRegistration
     {
         boolean associationRemoved = false;
         boolean registrationRemoved = false;
-        boolean credentialsRemoved = credentials == null;
+        boolean credentialsRemoved = false;
         Identity expected = Identity.of(reference);
         try
         {
@@ -315,30 +321,23 @@ public final class InfobaseRegistration
         {
             Activator.logWarning("create_infobase: association rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
         }
-        if (credentials != null)
+        boolean[] cleared = {credentialsRemoved};
+        try
         {
-            try
-            {
-                credentials.clear(reference, credentialGuard(infobases, expected, () -> { }));
-                credentialsRemoved = true;
-            }
-            catch (Exception e)
-            {
-                Activator.logWarning("create_infobase: credential rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
-            }
+            cleanupRegistration(infobases, expected.id(), expected.name(), expected.connection(),
+                (target, guard) -> {
+                    CredentialCleanup cleanup = credentials == null ? InfobaseAccessSupport::clearCredentials : credentials;
+                    cleanup.clear(target, guard);
+                    cleared[0] = true;
+                }, () -> { });
+            registrationRemoved = true;
         }
-        if (credentialsRemoved)
+        catch (Exception e)
         {
-            try
-            {
-                remove(infobases, expected, () -> { });
-                registrationRemoved = true;
-            }
-            catch (Exception e)
-            {
-                Activator.logWarning("create_infobase: registration rollback failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
-            }
+            Activator.logWarning("create_infobase: registration/credential rollback failed: " //$NON-NLS-1$
+                + e.getClass().getSimpleName());
         }
+        credentialsRemoved = cleared[0];
         return new Rollback(associationRemoved, registrationRemoved, credentialsRemoved);
     }
 }
