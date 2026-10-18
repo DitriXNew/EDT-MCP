@@ -5,7 +5,7 @@ Exports an EDT configuration project to a directory of XML source files - the ED
 - Producing a portable snapshot of the project's metadata as files.
 
 ## Parameter details
-- `projectName` (required) - the EDT configuration project to export.
+- `projectName` (required) - the EDT configuration project to export. An unknown project is refused up front (`Project not found`), before anything is created at `outputPath`; a closed project is opened by the export itself.
 - `outputPath` (required) - filesystem directory for the XML files. Relative paths are resolved to absolute; the directory is created if missing. If the path exists but is a file, the call errors.
 
 ## What you get
