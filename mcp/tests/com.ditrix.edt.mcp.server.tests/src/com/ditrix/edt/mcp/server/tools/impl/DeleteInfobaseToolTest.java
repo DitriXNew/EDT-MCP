@@ -11,6 +11,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -49,6 +50,75 @@ import com.google.gson.JsonParser;
  */
 public class DeleteInfobaseToolTest
 {
+    @Test
+    public void unavailableAssociationContextDoesNotBlockStandaloneDispatch() throws Exception
+    {
+        for (boolean standalone : new boolean[] {false, true})
+        {
+            for (boolean confirm : new boolean[] {false, true})
+            {
+                var project = mock(IProject.class);
+                var manager = mock(IApplicationManager.class);
+                var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+                var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+                var app = mock(IApplication.class);
+                var type = mock(IApplicationType.class);
+                when(type.getId()).thenReturn(standalone ? StandaloneServerSupport.WST_SERVER_APP_TYPE
+                    : "com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+                when(app.getType()).thenReturn(type);
+                var captureAttempts = new java.util.concurrent.atomic.AtomicInteger();
+                when(manager.getApplication(project, "target")).thenAnswer(call -> { //$NON-NLS-1$
+                    assertEquals("context capture must remain before file/application lookup", 1, captureAttempts.get()); //$NON-NLS-1$
+                    return Optional.of(app);
+                });
+                var dispatched = new java.util.concurrent.atomic.AtomicBoolean();
+                var tool = new DeleteInfobaseTool()
+                {
+                    @Override
+                    String deleteStandaloneServer(String name, IProject target,
+                            IApplicationManager applications, IApplication resolved,
+                            boolean deleteRegistration, boolean deleteFiles, boolean accepted)
+                    {
+                        assertTrue(standalone);
+                        assertEquals(confirm, accepted);
+                        assertSame(app, resolved);
+                        dispatched.set(true);
+                        return com.ditrix.edt.mcp.server.protocol.ToolResult.success().put("standaloneDispatched", true).toJson(); //$NON-NLS-1$
+                    }
+                };
+                var context = DeleteInfobaseTool.DeleteContext.of(project, manager, associations, infobases);
+                var response = JsonParser.parseString(tool.deleteInfobase(context, "project", "target", //$NON-NLS-1$ //$NON-NLS-2$
+                    null, null, true, false, confirm, () -> {
+                        captureAttempts.incrementAndGet();
+                        throw new IllegalStateException("provider temporarily unavailable"); //$NON-NLS-1$
+                    })).getAsJsonObject();
+                assertEquals(standalone, response.get("success").getAsBoolean()); //$NON-NLS-1$
+                assertEquals(standalone, dispatched.get());
+                if (!standalone)
+                {
+                    assertTrue(response.get("error").getAsString().contains("current infobase context")); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                org.mockito.Mockito.verifyZeroInteractions(associations, infobases);
+            }
+        }
+    }
+
+    @Test
+    public void explicitUuidCleanupStillRequiresCapturedContextBeforeAnyLookup()
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+        var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+        var result = JsonParser.parseString(new DeleteInfobaseTool().deleteInfobase(
+            DeleteInfobaseTool.DeleteContext.of(project, manager, associations, infobases),
+            "project", null, "exact-name", java.util.UUID.randomUUID().toString(), true, false, true, //$NON-NLS-1$ //$NON-NLS-2$
+            () -> null)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains("current infobase context")); //$NON-NLS-1$ //$NON-NLS-2$
+        org.mockito.Mockito.verifyZeroInteractions(manager, associations, infobases);
+    }
+
     @Test
     public void normalApplicationDeregistrationClearsCredentialsAndRetainsRetryHandleOnFailure() throws Exception
     {

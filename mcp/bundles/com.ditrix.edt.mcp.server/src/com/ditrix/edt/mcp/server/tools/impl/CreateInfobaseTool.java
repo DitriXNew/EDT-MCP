@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.ApplicationDefaultChange;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseTarget;
@@ -659,6 +660,8 @@ public class CreateInfobaseTool implements IMcpTool
         InfobaseReference reference = target.reference(infobaseName);
         ResultContext resultContext = new ResultContext(projectName, target.file(), infobaseName,
             context.appManager, context.project, target.server());
+        ApplicationDefaultChange defaultChange = setDefault
+            ? captureDefaultChange(context.appManager, context.project) : null;
         String databaseError = register
             ? registerExistingInfobase(context.ibManager, reference, target.location())
             : createNewInfobase(reference, platform, infobaseName, target.file());
@@ -678,7 +681,7 @@ public class CreateInfobaseTool implements IMcpTool
             String error = associateInfobase(context.assocManager, context.project, reference,
                 target.location(), projectName, register, associationContext);
             result = error == null
-                ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore, contextGuard)
+                ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore, contextGuard, defaultChange)
                 : error;
             contextGuard.run();
         }
@@ -691,9 +694,14 @@ public class CreateInfobaseTool implements IMcpTool
         resultContext.putRegistrationIdentity(json, reference);
         if (!json.get("success").getAsBoolean()) //$NON-NLS-1$
         {
-            InfobaseRegistration.Rollback rollback = InfobaseRegistration.rollback(
-                context.assocManager, context.ibManager, context.project, reference,
-                associationContext, this::clearRegistrationCredentials);
+            ApplicationDefaultChange.Restoration defaultRestoration = defaultChange == null
+                ? ApplicationDefaultChange.Restoration.NOT_CHANGED : defaultChange.restore();
+            // Retain the application handle if we cannot establish whether it is still default.
+            // Removing it now would create the very stale-default pointer compensation must avoid.
+            InfobaseRegistration.Rollback rollback = defaultRestoration == ApplicationDefaultChange.Restoration.UNVERIFIED
+                ? new InfobaseRegistration.Rollback(false, false, false)
+                : InfobaseRegistration.rollback(context.assocManager, context.ibManager, context.project,
+                    reference, associationContext, this::clearRegistrationCredentials);
             String message = json.get("error").getAsString() + " " + rollback.message() //$NON-NLS-1$ //$NON-NLS-2$
                 + (register ? "" : " The newly created database files were kept; inspect them before retrying create."); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult failed = ToolResult.error(message);
@@ -705,9 +713,25 @@ public class CreateInfobaseTool implements IMcpTool
                 }
             }
             resultContext.putLocation(failed);
-            return rollback.put(failed).toJson();
+            rollback.put(failed);
+            if (defaultRestoration != ApplicationDefaultChange.Restoration.NOT_CHANGED)
+            {
+                failed.put("defaultRollback", defaultRestoration.name()); //$NON-NLS-1$
+                if (defaultRestoration == ApplicationDefaultChange.Restoration.UNVERIFIED)
+                {
+                    failed.put("rollbackCompleted", false); //$NON-NLS-1$
+                    failed.put("error", json.get("error").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
+                        + " Default restoration could not be verified. The owned application, association, registration and database files were retained; inspect the project's default in EDT, then retry cleanup from the original branch."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            return failed.toJson();
         }
         return json.toString();
+    }
+
+    ApplicationDefaultChange captureDefaultChange(IApplicationManager manager, IProject project)
+    {
+        return ApplicationDefaultChange.capture(manager, project);
     }
 
     private static final class ContextChangedException extends IllegalStateException
@@ -1116,7 +1140,7 @@ public class CreateInfobaseTool implements IMcpTool
         }
         try
         {
-            appManager.setDefaultApplication(project, readBack.app);
+            ApplicationDefaultChange.write(appManager, project, readBack.app);
         }
         catch (Exception e)
         {
@@ -2757,18 +2781,23 @@ public class CreateInfobaseTool implements IMcpTool
     static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
             boolean register, CredentialStoreReport credentialStore)
     {
-        return buildSuccessResult(rc, ibRef, setDefault, register, credentialStore, () -> { });
+        return buildSuccessResult(rc, ibRef, setDefault, register, credentialStore, () -> { }, null);
     }
 
     private static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
-            boolean register, CredentialStoreReport credentialStore, Runnable contextGuard)
+            boolean register, CredentialStoreReport credentialStore, Runnable contextGuard,
+            ApplicationDefaultChange defaultChange)
     {
         contextGuard.run();
         ApplicationReadBack readBack = pollForNewApplication(rc.appManager, rc.project,
             app -> isMatchingNewInfobaseApp(app, ibRef));
 
         contextGuard.run();
-        String setDefaultNote = setDefault ? applySetDefault(rc.appManager, rc.project, readBack) : null;
+        String setDefaultNote = setDefault
+            ? defaultChange != null && readBack.app != null
+                ? defaultChange.apply(readBack.app, contextGuard)
+                : applySetDefault(rc.appManager, rc.project, readBack)
+            : null;
         contextGuard.run();
         String note = concatNotes(setDefaultNote,
             credentialStore == null ? null : credentialStore.note);

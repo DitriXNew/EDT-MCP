@@ -40,7 +40,7 @@ The tool is guarded by a two-phase workflow (mirroring `delete_project`):
 
 If a verified launcher entry disappears during failed credential cleanup, the same UUID and exact name can resume the pending cleanup in the current EDT session. The retained snapshot is never selected by name alone; successful cleanup retires that recovery handle. Wait for any reported in-flight native write to finish before retrying. A restart discards this session recovery state, so finish cleanup before restarting EDT.
 
-The project's association context is captured before target lookup and checked again after consent, immediately before mutation. A branch/context change requires a fresh lookup and preview; nothing is deleted in that case.
+The project's association context is captured before target lookup and checked again after consent, immediately before mutation. A branch/context change requires a fresh lookup and preview; nothing is deleted in that case. This requirement applies to file/cluster and explicit UUID cleanup. Standalone-server deletion uses WST bindings and remains available if the infobase-association context provider is temporarily unavailable.
 
 JSON with `action` ('preview'/'deleted'), `confirmationRequired` (preview only), `applicationKind` (standalone-server removals), `project`, `applicationId`, `infobaseName`, `deleteRegistration`, `databaseFilesDeleted` (whether the on-disk database was actually removed; deletions only), `databaseFilesKept` (WHY they were kept), and a `message`.
 

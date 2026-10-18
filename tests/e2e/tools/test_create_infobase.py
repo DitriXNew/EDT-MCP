@@ -300,6 +300,15 @@ def test_server_registration_nonexistent_project():
 
 @e2e_test(tool="create_infobase", kind="action")
 def test_server_registration_application_roundtrip():
+    _server_registration_roundtrip(set_default=False)
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_server_registration_sets_and_cleans_an_explicit_default():
+    _server_registration_roundtrip(set_default=True)
+
+
+def _server_registration_roundtrip(set_default):
     """Register a synthetic address, read its real EDT binding, remove ONLY registration.
 
     The tool never creates, updates or deletes this synthetic database. EDT may attempt a
@@ -311,10 +320,24 @@ def test_server_registration_application_roundtrip():
     before = call("get_applications", {"projectName": PROJECT})
     assert_ok(before, "probe must be absent before registration")
     assert not any(app.get("name") == name for app in before.structured["applications"]), before.structured
+    if set_default and before.structured["defaultApplication"] != "none":
+        from harness import E2ESkip
+        raise E2ESkip("default-write probe requires a measured absent default; preserve the fixture's existing/unknown preference")
     application_id = None
     registration_id = None
+    anchor_probe = "McpRegistrationProbe_" + os.urandom(8).hex()
+    anchor_name = "McpServerRegistration_" + anchor_probe
+    anchor_registration_id = None
     try:
-        params = _cluster_params(infobaseName=name, infobaseRef=probe)
+        if set_default and not before.structured["applications"]:
+            # With just one application EDT returns an implicit default even if setDefault
+            # is a no-op. Keep a second owned application so that defect MUST fail below.
+            anchor = call("create_infobase", _cluster_params(infobaseName=anchor_name,
+                          infobaseRef=anchor_probe, setDefault=False))
+            anchor_registration_id = (anchor.structured or {}).get("registrationId")
+            assert_ok(anchor, "register a second application to exclude EDT's implicit-default fallback")
+            assert anchor.structured["boundToProject"] is True, anchor.structured
+        params = _cluster_params(infobaseName=name, infobaseRef=probe, setDefault=set_default)
         # A real secure-storage provider is required for the credential variant, like the
         # other live credential tests; CI still exercises normal launcher deregistration.
         if os.environ.get("EDT_MCP_LIVE_INFOBASE") == "1":
@@ -338,6 +361,10 @@ def test_server_registration_application_roundtrip():
         assert len(matches) == 1, apps.structured
         assert matches[0]["type"] == "com.e1c.g5.dt.applications.type.infobase", matches
         assert matches[0]["name"] == name, matches
+        if set_default:
+            assert len(apps.structured["applications"]) >= 2, apps.structured
+            assert apps.structured["defaultApplication"] == "resolved", apps.structured
+            assert apps.structured["defaultApplicationId"] == application_id, apps.structured
         # A retry must refuse before adding a second UUID or changing the existing binding.
         duplicate = call("create_infobase", _cluster_params(infobaseName=name, infobaseRef=probe))
         duplicate_error = assert_error(duplicate, "duplicate cluster address")
@@ -350,18 +377,32 @@ def test_server_registration_application_roundtrip():
             cleanup_apps = call("get_applications", {"projectName": PROJECT})
             assert_ok(cleanup_apps, "read uniquely named probe for cleanup")
             for app in cleanup_apps.structured["applications"]:
-                if app.get("name") == name:
+                if app.get("name") in {name, anchor_name}:
                     removed = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"],
                                      "deleteRegistration": True, "confirm": True})
                     assert_ok(removed, "remove only synthetic cluster registration")
                     assert removed.structured["deleteRegistration"] is True, removed.structured
                     assert removed.structured["databaseFilesDeleted"] is False, removed.structured
         finally:
-            leftovers = cleanup_cluster_registration_probe(name, "localhost:1541", probe, registration_id)
+            leftovers = 0
+            cleanup_errors = []
+            for cleanup_name, cleanup_probe, cleanup_id in (
+                    (name, probe, registration_id),
+                    (anchor_name, anchor_probe, anchor_registration_id)):
+                try:
+                    leftovers += cleanup_cluster_registration_probe(
+                        cleanup_name, "localhost:1541", cleanup_probe, cleanup_id)
+                except Exception as exc:
+                    cleanup_errors.append(f"{cleanup_name}: {exc}")
+            assert not cleanup_errors, "Fallback cleanup errors: " + "; ".join(cleanup_errors)
             assert leftovers == 0, "EDT leaked %d launcher registrations; removed by fallback cleanup" % leftovers
     apps = call("get_applications", {"projectName": PROJECT})
     assert_ok(apps, "verify cluster registration removal")
     assert not any(app.get("id") == application_id for app in apps.structured["applications"]), apps.structured
+    assert not any(app.get("name") in {name, anchor_name} for app in apps.structured["applications"]), apps.structured
+    if set_default:
+        assert apps.structured["defaultApplication"] == "none", apps.structured
+        assert "defaultApplicationId" not in apps.structured, apps.structured
     assert_no_diff("cluster registration must not write source files")
 
 

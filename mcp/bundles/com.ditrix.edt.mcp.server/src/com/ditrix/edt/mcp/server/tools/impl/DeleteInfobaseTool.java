@@ -327,21 +327,36 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return context.error;
         }
+        return deleteInfobase(context, projectName, applicationId, infobaseName, registrationId,
+            deleteRegistration, deleteDatabaseFiles, confirm,
+            () -> InfobaseRegistration.currentContext(context.project));
+    }
+
+    String deleteInfobase(DeleteContext context, String projectName, String applicationId,
+            String infobaseName, String registrationId, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, boolean confirm,
+            Supplier<InfobaseAssociationContext> currentContext)
+    {
         IProject project = context.project;
         IApplicationManager appManager = context.appManager;
         IInfobaseAssociationManager assocManager = context.assocManager;
         IInfobaseManager ibManager = context.ibManager;
-        final InfobaseAssociationContext associationContext;
+        InfobaseAssociationContext capturedContext;
         try
         {
-            associationContext = InfobaseRegistration.currentContext(project);
+            capturedContext = currentContext.get();
         }
-        catch (Exception e)
+        catch (Exception unavailable)
         {
-            return ToolResult.error("Could not capture the current infobase context; retry get_applications. Nothing was deleted.").toJson(); //$NON-NLS-1$
+            capturedContext = null;
         }
+        final InfobaseAssociationContext associationContext = capturedContext;
         if (registrationId != null && !registrationId.isEmpty())
         {
+            if (associationContext == null)
+            {
+                return unavailableContextError();
+            }
             return deleteRegistration(projectName, infobaseName, UUID.fromString(registrationId), ibManager,
                 project, associationContext, confirm);
         }
@@ -364,6 +379,11 @@ public class DeleteInfobaseTool implements IMcpTool
                 deleteRegistration, deleteDatabaseFiles, confirm);
         }
 
+        if (associationContext == null)
+        {
+            return unavailableContextError();
+        }
+
         // Resolve the file-infobase target (cast-check, on-disk directory, shared-files guard) -
         // read-only. On a non-file/non-server application it carries the SAME refusal JSON.
         FileDeletionPlan ibPlan = resolveFileDeletionPlan(targetApp, project, appManager,
@@ -383,13 +403,18 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
         // deregistered / its files removed. On REJECT nothing is mutated.
-        return afterConsent(associationContext, () -> InfobaseRegistration.currentContext(project),
+        return afterConsent(associationContext, currentContext,
             () -> checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
             + ibPlan.resolvedName + MSG_FROM_PROJECT + projectName + "'" //$NON-NLS-1$
             + (deleteRegistration ? " and deregisters it from the EDT infobases list" : "") //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")), //$NON-NLS-1$
             () -> performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
                 deleteDatabaseFiles, ibPlan, associationContext));
+    }
+
+    private static String unavailableContextError()
+    {
+        return ToolResult.error("Could not capture the current infobase context; retry get_applications. Nothing was deleted.").toJson(); //$NON-NLS-1$
     }
 
     /** The UUID is an explicit global target, not an application ID or a project-ownership claim. */
@@ -1049,7 +1074,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code error} is non-null it carries a ready tool-result JSON and the other fields are unset;
      * otherwise {@code error} is {@code null} and the fields are populated (ibManager may be null).
      */
-    private static final class DeleteContext
+    static final class DeleteContext
     {
         final String error;
         final IProject project;
@@ -1172,7 +1197,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * <p><strong>Unattended-safety:</strong> {@code deleteServer} is non-modal and monitor-driven; it runs
      * inside a bounded background Job — never on the UI thread.
      */
-    private String deleteStandaloneServer(String projectName, IProject project,
+    String deleteStandaloneServer(String projectName, IProject project,
             IApplicationManager appManager, IApplication targetApp, boolean deleteRegistration,
             boolean deleteDatabaseFiles, boolean confirm)
     {

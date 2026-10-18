@@ -327,6 +327,139 @@ public class CreateInfobaseRegistrationTest
         }
     }
 
+    @Test
+    public void contextRollbackRestoresOnlyItsOwnDefaultBeforeRemovingTheApplication() throws Exception
+    {
+        for (boolean register : new boolean[] {false, true})
+        {
+            for (boolean hadExplicitDefault : new boolean[] {false, true})
+            {
+                for (int choice : new int[] {0, 1, 2})
+                {
+                    boolean newerChoice = choice == 1;
+                    boolean unavailable = choice == 2;
+                    var file = Files.createTempDirectory("mcp-default-rollback"); //$NON-NLS-1$
+                    var database = file.resolve("1Cv8.1CD"); //$NON-NLS-1$
+                    if (register)
+                    {
+                        Files.writeString(database, "existing default sentinel"); //$NON-NLS-1$
+                    }
+                    try
+                    {
+                        var project = mock(IProject.class);
+                        when(project.getName()).thenReturn("project"); //$NON-NLS-1$
+                        var applications = mock(IApplicationManager.class);
+                        var infobases = recordingInfobases();
+                        var associations = mock(IInfobaseAssociationManager.class);
+                        var original = BranchContexts.toContext("feat/original"); //$NON-NLS-1$
+                        var changed = BranchContexts.toContext("feat/changed"); //$NON-NLS-1$
+                        var current = new java.util.concurrent.atomic.AtomicReference<>(original);
+                        var prior = mock(com.e1c.g5.dt.applications.IApplication.class);
+                        when(prior.getId()).thenReturn("prior-app"); //$NON-NLS-1$
+                        when(applications.getApplication(project, "prior-app")).thenReturn(java.util.Optional.of(prior)); //$NON-NLS-1$
+                        var rawDefault = new java.util.concurrent.atomic.AtomicReference<String>(hadExplicitDefault ? "prior-app" : null); //$NON-NLS-1$
+                        // Emulate EDT's trap: resolving a default after a branch switch clears the
+                        // stale raw preference and may return an implicit, unrelated application.
+                        when(applications.getDefaultApplication(project)).thenAnswer(call -> {
+                            rawDefault.set(null);
+                            return java.util.Optional.of(prior);
+                        });
+                        var tool = new CreateInfobaseTool()
+                        {
+                            @Override
+                            com.ditrix.edt.mcp.server.utils.ApplicationDefaultChange captureDefaultChange(
+                                    IApplicationManager manager, IProject target)
+                            {
+                                return com.ditrix.edt.mcp.server.utils.ApplicationDefaultChange.capture(manager, target, () -> {
+                                    if (unavailable && current.get().equals(changed))
+                                    {
+                                        throw new IllegalStateException("preference unavailable"); //$NON-NLS-1$
+                                    }
+                                    return rawDefault.get();
+                                });
+                            }
+
+                            @Override
+                            String createNewInfobase(InfobaseReference ref, String platform,
+                                    String name, java.nio.file.Path directory)
+                            {
+                                try
+                                {
+                                    Files.writeString(database, "new default sentinel"); //$NON-NLS-1$
+                                    infobases.add(ref, null);
+                                    return null;
+                                }
+                                catch (Exception failure)
+                                {
+                                    throw new AssertionError(failure);
+                                }
+                            }
+
+                            @Override
+                            void clearRegistrationCredentials(InfobaseReference ref,
+                                    com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard)
+                                    throws Exception
+                            {
+                                guard.run(target -> { });
+                            }
+                        };
+                        doAnswer(call -> {
+                            var ref = (InfobaseReference)call.getArgument(1);
+                            var type = mock(IApplicationType.class);
+                            when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+                            var app = mock(IInfobaseApplication.class);
+                            when(app.getType()).thenReturn(type);
+                            when(app.getInfobase()).thenReturn(ref);
+                            when(app.getId()).thenReturn("owned-app"); //$NON-NLS-1$
+                            when(applications.getApplications(project)).thenReturn(List.of(app));
+                            return null;
+                        }).when(associations).associate(any(), any(), any());
+                        doAnswer(call -> {
+                            com.e1c.g5.dt.applications.IApplication app = call.getArgument(1);
+                            rawDefault.set(app == null ? null : app.getId());
+                            if (app != null && "owned-app".equals(app.getId())) //$NON-NLS-1$
+                            {
+                                current.set(changed);
+                                if (newerChoice)
+                                {
+                                    rawDefault.set("concurrent-choice"); //$NON-NLS-1$
+                                }
+                            }
+                            return null;
+                        }).when(applications).setDefaultApplication(eq(project), any());
+                        String expectedDefault = unavailable ? "owned-app" : newerChoice ? "concurrent-choice" : hadExplicitDefault ? "prior-app" : null; //$NON-NLS-1$ //$NON-NLS-2$
+                        doAnswer(call -> {
+                            assertEquals("restore must precede removal, without a stale-clearing default lookup", expectedDefault, rawDefault.get()); //$NON-NLS-1$
+                            return null;
+                        }).when(associations).dissociate(any(), any(), any());
+                        var result = JsonParser.parseString(tool.prepareInfobase(
+                            CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
+                            original, "project", new InfobaseTarget(file, null), "default-test", null, true, //$NON-NLS-1$ //$NON-NLS-2$
+                            register, new CreateInfobaseTool.Credentials(null, null, null), current::get)).getAsJsonObject();
+                        assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+                        assertEquals(result.toString(), !unavailable, result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
+                        assertEquals(unavailable ? "UNVERIFIED" : newerChoice ? "PRESERVED_OTHER" : "RESTORED", result.get("defaultRollback").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        assertEquals(expectedDefault, rawDefault.get());
+                        verify(applications, never()).getDefaultApplication(any());
+                        verify(applications, times(newerChoice || unavailable ? 1 : 2)).setDefaultApplication(eq(project), any());
+                        verify(infobases, times(unavailable ? 0 : 1)).delete(any());
+                        verify(associations, times(unavailable ? 0 : 1)).dissociate(any(), any(), any());
+                        if (unavailable)
+                        {
+                            assertTrue(result.get("error").getAsString().contains("retained")); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        assertEquals(register ? "existing default sentinel" : "new default sentinel", Files.readString(database)); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                    finally
+                    {
+                        Files.deleteIfExists(database);
+                        Files.delete(file);
+                    }
+                }
+            }
+        }
+    }
+
     private static IInfobaseManager recordingInfobases()
     {
         var manager = mock(IInfobaseManager.class);
