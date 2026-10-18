@@ -86,14 +86,18 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
         cleanup = {"projectName": PROJECT, "infobaseName": name, "registrationId": registration_id,
                    "deleteRegistration": True,
                    "deleteDatabaseFiles": False}
-        for overrides in ({"applicationId": original_id}, {"applicationId": "  "},
-                          {"deleteRegistration": False}, {"deleteDatabaseFiles": True},
-                          {"registrationId": "not-a-uuid"},
-                          {"registrationId": "00000000-0000-0000-0000-000000000000"},
-                          {"infobaseName": name + "_wrong"}):
+        for overrides, hints in (
+                ({"applicationId": original_id}, ["get_applications"]),
+                ({"applicationId": "  "}, ["get_applications"]),
+                ({"deleteRegistration": False}, ["deleteRegistration=true", "get_applications"]),
+                ({"deleteDatabaseFiles": True}, ["deleteDatabaseFiles=false", "get_applications"]),
+                ({"registrationId": "not-a-uuid"}, ["full UUID", "create_infobase"]),
+                ({"registrationId": "00000000-0000-0000-0000-000000000000"},
+                 ["create_infobase", "launcher"]),
+                ({"infobaseName": name + "_wrong"}, ["create_infobase", "launcher"])):
             refused = call("delete_infobase", dict(cleanup, confirm=True, **overrides))
             error = assert_error(refused, "orphan deletion must keep its narrow flag guards")
-            assert_error_quality(error, names=["registrationId"], suggests=["get_applications", "create_infobase", "launcher"])
+            assert_error_quality(error, names=["registrationId"], suggests=hints)
             duplicate = call("create_infobase", params)
             error = assert_error(duplicate, "a refused orphan deletion must retain the launcher record")
             assert_error_quality(error, names=["address"], suggests=["get_applications"])
