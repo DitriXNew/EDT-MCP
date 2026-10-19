@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Tool to list all BSL modules in a project or for a specific metadata object.
@@ -150,7 +151,7 @@ public class ListModulesTool implements IMcpTool
             }
             catch (Exception e)
             {
-                Activator.logError("Error listing modules", e); //$NON-NLS-1$
+                Refusals.log("Error listing modules", e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
@@ -604,7 +605,20 @@ public class ListModulesTool implements IMcpTool
             return;
         }
 
-        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
+        IFile file;
+        try
+        {
+            file = BslModuleUtils.resolveModuleFile(project, modulePath);
+        }
+        catch (RuntimeException e)
+        {
+            if (Refusals.messageOf(e) == null)
+            {
+                throw e;
+            }
+            Refusals.log("Skipped module candidate", e); //$NON-NLS-1$
+            return;
+        }
         if (file.exists())
         {
             ModuleInfo info = new ModuleInfo();

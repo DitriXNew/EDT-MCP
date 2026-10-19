@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
@@ -197,6 +198,7 @@ public class WriteModuleSourceTool implements IMcpTool
             {
                 return outside;
             }
+            req.modulePath = BslModuleUtils.sourceRelativePath(file);
             boolean fileExists = file.exists();
 
             // For non-replace modes, file must exist
@@ -225,12 +227,15 @@ public class WriteModuleSourceTool implements IMcpTool
         }
         catch (Exception e)
         {
+            String refusal = Refusals.messageOf(e);
+            String message = refusal != null && !mutationEntered.get() ? refusal
+                : (mutationEntered.get() ? "Failed to write file: " : "Failed to prepare module write: ") //$NON-NLS-1$ //$NON-NLS-2$
+                    + e.getMessage();
             ToolResult error = mutationCommitted.get()
-                ? ToolResult.errorAfterMutation("Failed to write file: " + e.getMessage()) //$NON-NLS-1$
+                ? ToolResult.errorAfterMutation(message)
                 : mutationEntered.get()
-                    ? ToolResult.errorWithUnknownMutationOutcome(
-                        "Failed to write file: " + e.getMessage()) //$NON-NLS-1$
-                    : ToolResult.error("Failed to write file: " + e.getMessage()); //$NON-NLS-1$
+                    ? ToolResult.errorWithUnknownMutationOutcome(message)
+                    : ToolResult.error(message);
             return error.toJson();
         }
     }

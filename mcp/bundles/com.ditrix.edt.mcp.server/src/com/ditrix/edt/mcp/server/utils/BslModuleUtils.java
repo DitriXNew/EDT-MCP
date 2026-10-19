@@ -226,13 +226,15 @@ public final class BslModuleUtils
             }
 
             IPath relativePath = new Path(modulePath);
-            IFile matched = findIgnoringCase(project, new Path(SOURCE_FOLDER).append(relativePath), modulePath);
-            if (matched != null)
+            IFile sourceTarget = findIgnoringCase(project, new Path(SOURCE_FOLDER).append(relativePath), modulePath);
+            if (sourceTarget != null && sourceTarget.exists())
             {
                 Activator.logInfo("Resolved modulePath ignoring case: " + modulePath //$NON-NLS-1$
-                    + " -> " + matched.getFullPath()); //$NON-NLS-1$
-                return matched;
+                    + " -> " + sourceTarget.getFullPath()); //$NON-NLS-1$
+                return sourceTarget;
             }
+            IFile matched = null;
+            List<IFile> creationTargets = new ArrayList<>();
             for (IResource member : sourceFolders)
             {
                 if (member.getType() == IResource.FOLDER && !SOURCE_FOLDER.equals(member.getName()))
@@ -240,6 +242,14 @@ public final class BslModuleUtils
                     IFile candidate = findIgnoringCase((IFolder) member, relativePath, modulePath);
                     if (candidate != null)
                     {
+                        if (!candidate.exists())
+                        {
+                            if (!creationTargets.contains(candidate))
+                            {
+                                creationTargets.add(candidate);
+                            }
+                            continue;
+                        }
                         if (matched != null && !matched.equals(candidate))
                         {
                             throw Refusals.argument("Ambiguous modulePath '" + modulePath //$NON-NLS-1$
@@ -257,6 +267,24 @@ public final class BslModuleUtils
                     + " -> " + matched.getFullPath()); //$NON-NLS-1$
                 return matched;
             }
+            // Prefer an existing module in any source root to a missing leaf. Only
+            // then select a creation handle under the canonical existing parent.
+            if (sourceTarget == null && creationTargets.size() > 1)
+            {
+                throw Refusals.argument("Ambiguous modulePath '" + modulePath //$NON-NLS-1$
+                    + "': existing parent folders allow multiple creation targets: " //$NON-NLS-1$
+                    + creationTargets.stream().map(file -> file.getFullPath().toString()).sorted()
+                        .collect(java.util.stream.Collectors.joining(", ")) //$NON-NLS-1$
+                    + ". Create the intended module in EDT, then pass its absolute file path."); //$NON-NLS-1$
+            }
+            IFile target = sourceTarget != null ? sourceTarget
+                : creationTargets.isEmpty() ? null : creationTargets.get(0);
+            if (target != null)
+            {
+                Activator.logInfo("Resolved modulePath ignoring case: " + modulePath //$NON-NLS-1$
+                    + " -> " + target.getFullPath()); //$NON-NLS-1$
+                return target;
+            }
         }
         catch (CoreException e)
         {
@@ -271,14 +299,16 @@ public final class BslModuleUtils
      * Walks actual resource names without consulting the host filesystem's case rules.
      * A case-sensitive segment wins even when a differently-cased sibling exists;
      * otherwise exactly one case-insensitive match is required. A folder at the final
-     * segment is not a module file.
+     * segment is not a module file. A missing leaf under an existing folder returns
+     * a creation handle under that folder, retaining the real parent spelling.
      */
     private static IFile findIgnoringCase(IContainer root, IPath relativePath, String modulePath)
         throws CoreException
     {
         IResource current = root;
-        for (String segment : relativePath.segments())
+        for (int index = 0; index < relativePath.segmentCount(); index++)
         {
+            String segment = relativePath.segment(index);
             if (!(current instanceof IContainer container))
             {
                 return null;
@@ -316,12 +346,25 @@ public final class BslModuleUtils
                 }
                 if (matched == null)
                 {
-                    return null;
+                    return index == relativePath.segmentCount() - 1 && container instanceof IFolder folder
+                        ? folder.getFile(new Path(segment)) : null;
                 }
                 current = matched;
             }
         }
         return current instanceof IFile file && file.exists() ? file : null;
+    }
+
+    /**
+     * Returns a module's canonical path relative to its source root, including
+     * nonstandard source folders accepted by {@link #resolveModuleFile}.
+     *
+     * @param file the resolved workspace file
+     * @return the project-relative path without its first (source-root) segment
+     */
+    public static String sourceRelativePath(IFile file)
+    {
+        return file.getProjectRelativePath().removeFirstSegments(1).toString();
     }
 
     /**

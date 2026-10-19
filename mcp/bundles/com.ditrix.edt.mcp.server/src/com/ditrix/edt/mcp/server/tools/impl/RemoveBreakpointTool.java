@@ -10,12 +10,12 @@ import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
 
-import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Removes a previously set line breakpoint, either by its marker id or by
@@ -103,7 +103,7 @@ public class RemoveBreakpointTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("Failed to remove breakpoint", e); //$NON-NLS-1$
+            Refusals.log("Failed to remove breakpoint", e); //$NON-NLS-1$
             return ToolResult.error("Failed to remove breakpoint: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
