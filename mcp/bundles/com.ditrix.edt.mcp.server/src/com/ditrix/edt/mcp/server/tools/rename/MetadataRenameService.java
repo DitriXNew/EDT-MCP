@@ -2355,6 +2355,7 @@ public class MetadataRenameService
     private static java.lang.reflect.Method findMethod(Class<?> type, String methodName, Class<?>[] parameterTypes)
         throws NoSuchMethodException
     {
+        Objects.requireNonNull(type);
         Class<?> current = type;
         while (current != null)
         {
