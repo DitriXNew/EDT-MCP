@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Test;
@@ -254,7 +253,7 @@ public class InfobaseSessionOutputTest
 
         InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(
             new InfobaseAccessSupport.Credentials(ADMINISTRATOR, "s3cret"), //$NON-NLS-1$
-            new NullProgressMonitor(), new AtomicBoolean(), () -> process);
+            new NullProgressMonitor(), new InfobaseSessionSupport.CallerState(), () -> process);
 
         assertEquals(0, result.exitCode);
         assertEquals("the output must decode as the UTF-8 ibcmd wrote", text, result.stdout); //$NON-NLS-1$
@@ -359,7 +358,7 @@ public class InfobaseSessionOutputTest
         FinishedProcess process = new FinishedProcess(oem, oem, 0);
 
         InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(null,
-            new NullProgressMonitor(), new AtomicBoolean(), () -> process);
+            new NullProgressMonitor(), new InfobaseSessionSupport.CallerState(), () -> process);
 
         boolean windows = System.getProperty("os.name", "") //$NON-NLS-1$ //$NON-NLS-2$
             .toLowerCase(Locale.ROOT).contains("win"); //$NON-NLS-1$

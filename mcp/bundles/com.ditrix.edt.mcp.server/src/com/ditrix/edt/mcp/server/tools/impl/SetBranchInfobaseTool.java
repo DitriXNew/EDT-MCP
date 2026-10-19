@@ -992,9 +992,10 @@ public class SetBranchInfobaseTool implements IMcpTool
     private static List<InfobaseReference> boundInfobases(IInfobaseAssociationManager assocManager,
         IProject project, InfobaseAssociationContext ctx)
     {
-        Optional<IInfobaseAssociation> association = assocManager.getAssociation(project, ctx);
+        Optional<IInfobaseAssociation> association =
+            Optional.ofNullable(assocManager.getAssociation(project, ctx)).flatMap(value -> value);
         List<InfobaseReference> bound = new ArrayList<>();
-        if (association != null && association.isPresent() && association.get().getInfobases() != null)
+        if (association.isPresent() && association.get().getInfobases() != null)
         {
             for (InfobaseReference ib : association.get().getInfobases())
             {

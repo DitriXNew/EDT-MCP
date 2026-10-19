@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -209,13 +210,13 @@ public final class PreLaunchChangeTracker
     }
 
     /** Live fingerprinter (production: the workspace walk below). */
-    private static volatile ProjectFingerprinter fingerprinter = defaultFingerprinter();
+    private static final AtomicReference<ProjectFingerprinter> fingerprinter = new AtomicReference<>(defaultFingerprinter());
 
     /** Live store (production: the project persistent property). */
-    private static volatile FingerprintStore store = defaultStore();
+    private static final AtomicReference<FingerprintStore> store = new AtomicReference<>(defaultStore());
 
     /** Live disk sync (production: a bounded {@code refreshLocal}). */
-    private static volatile DiskSync diskSync = defaultDiskSync();
+    private static final AtomicReference<DiskSync> diskSync = new AtomicReference<>(defaultDiskSync());
 
     /**
      * The production bindings live in ONE place each, used both to initialise the
@@ -380,11 +381,11 @@ public final class PreLaunchChangeTracker
                 // Either we never managed to read the content, or the project
                 // re-dirtied while it was being recomputed. Both mean "this content
                 // state is not prepared" — erase, so no session certifies it.
-                store.clear(project);
+                store.get().clear(project);
             }
             else
             {
-                store.save(project, fingerprint);
+                store.get().save(project, fingerprint);
             }
         }
     }
@@ -454,8 +455,8 @@ public final class PreLaunchChangeTracker
      */
     private static Evaluation evaluate(IProject project)
     {
-        String fingerprint = fingerprinter.fingerprintOf(project);
-        String prepared = store.load(project);
+        String fingerprint = fingerprinter.get().fingerprintOf(project);
+        String prepared = store.get().load(project);
         boolean contentMatchesPrepared = fingerprint != null && fingerprint.equals(prepared);
         boolean dirty = !contentMatchesPrepared || DIRTY.containsKey(project.getName());
         return new Evaluation(fingerprint, dirty);
@@ -512,7 +513,7 @@ public final class PreLaunchChangeTracker
                 return;
             }
             long startedAt = System.currentTimeMillis();
-            if (diskSync.sync(project))
+            if (diskSync.get().sync(project))
             {
                 DISK_SYNCED.add(name);
                 Activator.logInfo("Pre-launch: synced " + name //$NON-NLS-1$
@@ -931,9 +932,9 @@ public final class PreLaunchChangeTracker
     static void resetForTest()
     {
         simulatePluginRestartForTest();
-        fingerprinter = defaultFingerprinter();
-        store = defaultStore();
-        diskSync = defaultDiskSync();
+        fingerprinter.set(defaultFingerprinter());
+        store.set(defaultStore());
+        diskSync.set(defaultDiskSync());
         diskSyncTimeoutMs = DEFAULT_DISK_SYNC_TIMEOUT_MS;
     }
 
@@ -957,19 +958,19 @@ public final class PreLaunchChangeTracker
     /** Test hook: replaces the project fingerprinter. */
     static void setFingerprinterForTest(ProjectFingerprinter testFingerprinter)
     {
-        fingerprinter = testFingerprinter;
+        fingerprinter.set(testFingerprinter);
     }
 
     /** Test hook: replaces the prepared-content store. */
     static void setStoreForTest(FingerprintStore testStore)
     {
-        store = testStore;
+        store.set(testStore);
     }
 
     /** Test hook: replaces the disk sync. */
     static void setDiskSyncForTest(DiskSync testDiskSync)
     {
-        diskSync = testDiskSync;
+        diskSync.set(testDiskSync);
     }
 
     /** Test hook: shrinks the disk-sync deadline so the timeout path is testable. */
