@@ -239,7 +239,7 @@ Quickly switch between common tool configurations using presets:
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 
-Select a preset from the dropdown in the Tools tab. The preset auto-detects based on the current enabled/disabled state and shows "Custom" when the configuration doesn't match any built-in preset.
+Select a preset from the dropdown in the Tools tab. The dropdown shows the preset you last chose and keeps it when you tick or untick individual tools, so later preset-owed updates (for example a new mutating tool disabled in the read-only presets) still reach your edited profile. Choose "Custom", "Disable all" or "Restore Defaults" to opt out. Profiles saved by older versions are recognised once, on upgrade.
 
 ### Per-Tool Parameter Defaults
 

@@ -85,6 +85,9 @@ public final class PreferenceConstants
     /** Comma-separated list of disabled tool names */
     public static final String PREF_DISABLED_TOOLS = "mcpDisabledTools"; //$NON-NLS-1$
 
+    /** Stable ID of the selected tool preset; custom selections explicitly store "custom". */
+    public static final String PREF_TOOL_PRESET_ID = "mcpToolPresetId"; //$NON-NLS-1$
+
     /**
      * Schema version of the tool-enablement preferences, so a NEW default-disabled tool also lands
      * disabled on an installation whose store already persisted an explicit {@link #PREF_DISABLED_TOOLS}
@@ -105,9 +108,10 @@ public final class PreferenceConstants
      * gain three older tools whose own descriptions declare them destructive; 10 = a stored
      * no-debug preset gains {@code debug_pause}, a tool that did not exist when it was saved;
      * 11 = stored read-only profiles gain the new {@code import_project_from_file} project importer;
-     * 12 = they gain the new {@code export_configuration_to_file} infobase dump.
+     * 12 = they gain the new {@code export_configuration_to_file} infobase dump;
+     * 13 = record preset provenance after the legacy migrations, without adding disabled tools.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 12;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 13;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
