@@ -53,9 +53,10 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesRes
  * {@link ProjectStateChecker#settleBeforeCascadeOrError(IProject, long, CascadeEnvironment)}.
  * <p>
  * The {@code (String, long)} entry point only resolves {@code project} from the live workspace
- * and injects {@link CascadeEnvironment#DEFAULT} - it and the BUILDING / project-not-found
- * branches of {@link ProjectStateChecker#checkProjectState} need a live workspace and are covered
- * by the e2e suite. The seam-taking {@code (IProject, long, CascadeEnvironment)} overload exists
+ * and injects {@link CascadeEnvironment#DEFAULT}; project resolution and not-found handling in
+ * {@link ProjectStateChecker#checkProjectState} need a live workspace and are covered by the e2e suite.
+ * {@link ProjectStateCheckerBuildStatusTest} covers the derived-data wording and verdict headlessly.
+ * The seam-taking {@code (IProject, long, CascadeEnvironment)} overload exists
  * precisely so the participant-drain logic - which projects get waited on, whether the shared
  * deadline is respected, and which refusal is returned - can be proven headlessly with a fake
  * {@link CascadeEnvironment} and mocked {@link IProject} handles.

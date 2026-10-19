@@ -242,6 +242,18 @@ BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120")
 # The server's derived-data "still building, retry" refusal, in any response channel.
 _BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
 
+# Every transient building refusal call() received this run, as the server worded it. call()
+# retries them away, so without this record no test could ever look at their text (issue #769:
+# the wording leaked a JVM object identity for months while every refusal was silently retried).
+# Capped so a long run cannot grow it without bound; the first refusals are as good as any.
+_BUILDING_REFUSALS_SEEN = []
+_BUILDING_REFUSALS_CAP = 200
+
+
+def building_refusals_seen():
+    """The texts of the transient building refusals call() has received so far this run."""
+    return list(_BUILDING_REFUSALS_SEEN)
+
 # The longest ONE logical call() can take: the retry loop keeps re-issuing a building refusal for
 # BUILDING_RETRY_TIMEOUT, the attempt in flight when that elapses still gets its full CALL_TIMEOUT,
 # and the backoff sleep before it is capped at 10s. Budgeting a clean_project at CALL_TIMEOUT alone
@@ -574,7 +586,10 @@ def call(tool, arguments):
                     "a %s request died in flight, so the server may still be executing it" % tool)
             raise
         result = Result(raw)
-        if not _is_transient_building(result) or time.time() >= deadline:
+        building = _is_transient_building(result)
+        if building and len(_BUILDING_REFUSALS_SEEN) < _BUILDING_REFUSALS_CAP:
+            _BUILDING_REFUSALS_SEEN.append(result.error_text())
+        if not building or time.time() >= deadline:
             _record_outcome(tool, arguments, result.is_error, result.structured)
             return result
         attempt += 1

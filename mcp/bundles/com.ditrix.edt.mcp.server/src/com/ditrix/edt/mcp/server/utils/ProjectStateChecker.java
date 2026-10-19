@@ -14,11 +14,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.eclipse.core.resources.IProject;
 
 import com._1c.g5.v8.derived.DerivedDataStatus;
 import com._1c.g5.v8.derived.IDerivedDataManager;
+import com._1c.g5.v8.derived.pipeline.DerivedDataSegmentBucket;
+import com._1c.g5.v8.derived.pipeline.PipelineSegmentStatus;
+import com._1c.g5.v8.derived.pipeline.PipelineStatus;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
@@ -155,6 +159,15 @@ public final class ProjectStateChecker
     private static final java.util.List<String> MODEL_SEGMENTS =
         java.util.Arrays.asList("MD", "FORM"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * At most this many active derived-data segments are named in a "still building" refusal, so a
+     * large configuration with many active segments cannot bloat the message.
+     */
+    private static final int MAX_RENDERED_SEGMENTS = 8;
+
+    /** What a "still building" refusal says when the platform status names nothing more specific. */
+    private static final String UNSPECIFIED_BUILD_STATUS = "derived data is being computed"; //$NON-NLS-1$
+
     /** The DT project behind a workspace project, or {@code null} when it is not an EDT project. */
     private static IDtProject resolveDtProject(IProject project)
     {
@@ -233,24 +246,160 @@ public final class ProjectStateChecker
             Activator.logInfo("DerivedDataManager not available for " + dtProject.getName());
             return new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state");
         }
-        
+
+        return checkDerivedDataState(ddManager);
+    }
+
+    /**
+     * The derived-data half of {@link #checkDtProjectState(IDtProject)}: the verdict from the
+     * project's derived-data manager, and the wording of a BUILDING verdict.
+     * <p>
+     * Issue #769: the refusal used to append {@code DerivedDataStatus.toString()}, which the platform
+     * does not override, so every client got {@code com._1c.g5.v8.derived.DerivedDataStatus@<hash>}
+     * - a JVM object identity that changes on every call and says nothing about what is building.
+     * The wording now comes from {@link #describeBuildStatus(DerivedDataStatus)}; the verdict is
+     * decided exactly as before, and the stable {@code "Project is building: "} prefix the e2e
+     * harness retries on is kept.
+     * <p>
+     * On EDT 2026.1 and 2026.2, the polled snapshot names only the stage, the pipeline status and
+     * the model-sync flag. Active segment maps are filled only for status listeners; the renderer's
+     * segment support is forward-compatible. The idle but incomplete branch keeps its base text
+     * without polling a status.
+     *
+     * @param ddManager the project's derived-data manager, never {@code null}
+     * @return BUILDING while the pipeline is busy or not everything is computed, READY otherwise
+     */
+    static ProjectStateResult checkDerivedDataState(IDerivedDataManager ddManager)
+    {
         // Check if computation pipeline is idle
         if (!ddManager.isIdle())
         {
-            DerivedDataStatus status = ddManager.getDerivedDataStatus();
-            String statusStr = status != null ? status.toString() : "computing";
-            return new ProjectStateResult(ProjectState.BUILDING, 
-                "Project is building: " + statusStr);
+            return new ProjectStateResult(ProjectState.BUILDING,
+                "Project is building: " + describeBuildStatus(readBuildStatus(ddManager))); //$NON-NLS-1$
         }
-        
+
         // Check if all derived data is computed
         if (!ddManager.isAllComputed())
         {
-            return new ProjectStateResult(ProjectState.BUILDING, 
-                "Project build in progress (derived data not complete)");
+            return new ProjectStateResult(ProjectState.BUILDING,
+                "Project build in progress (derived data not complete)"); //$NON-NLS-1$
         }
-        
+
         return new ProjectStateResult(ProjectState.READY, "Project is ready");
+    }
+
+    /**
+     * The status to word a BUILDING verdict with, or {@code null} when it cannot be read. Only the
+     * wording depends on it: the verdict has already been decided by the caller.
+     */
+    private static DerivedDataStatus readBuildStatus(IDerivedDataManager ddManager)
+    {
+        try
+        {
+            return ddManager.getDerivedDataStatus();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Cannot read the derived-data status to describe a build in progress: " //$NON-NLS-1$
+                + e);
+            return null;
+        }
+    }
+
+    /**
+     * Words a derived-data status for a client. On EDT 2026.1 and 2026.2, the polled snapshot names
+     * only the active stage, the pipeline status and the model-sync flag. For example
+     * {@code stage NORMAL, pipeline WAITING_STAGE_PROCCESING_END, model sync active}.
+     * <p>
+     * The active segment map is filled only for status listeners on these platforms. Segment
+     * rendering is retained as forward-compatible support if a future polled snapshot supplies the
+     * map: it appends the segment keys and their remaining and total units of work. This checker
+     * does not subscribe to status listeners, so current live refusals contain no segment details.
+     * <p>
+     * Never calls {@code toString()} on the status (issue #769: it is not overridden, so it renders
+     * a JVM object identity). A {@code null} status, a status with nothing to name, or a getter that
+     * throws yields the neutral {@value #UNSPECIFIED_BUILD_STATUS}; a {@code null} stage, pipeline
+     * status, segment key or segment status is left out rather than rendered as {@code null}.
+     *
+     * @param status the status, may be {@code null}
+     * @return the wording, never {@code null} or empty, without a trailing period
+     */
+    static String describeBuildStatus(DerivedDataStatus status)
+    {
+        if (status == null)
+        {
+            return UNSPECIFIED_BUILD_STATUS;
+        }
+        try
+        {
+            List<String> parts = new ArrayList<>();
+            DerivedDataSegmentBucket stage = status.getActiveStage();
+            if (stage != null)
+            {
+                parts.add("stage " + stage.name()); //$NON-NLS-1$
+            }
+            PipelineStatus pipeline = status.getPipelineStatus();
+            if (pipeline != null)
+            {
+                parts.add("pipeline " + pipeline.name()); //$NON-NLS-1$
+            }
+            if (status.isModelSyncActive())
+            {
+                parts.add("model sync active"); //$NON-NLS-1$
+            }
+            String head = String.join(", ", parts); //$NON-NLS-1$
+            String segments = renderSegments(status.getActivePipelineSegments());
+            if (segments.isEmpty())
+            {
+                return head.isEmpty() ? UNSPECIFIED_BUILD_STATUS : head;
+            }
+            return (head.isEmpty() ? "" : head + "; ") + "computing " + segments; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Cannot describe the derived-data status for a build in progress: " //$NON-NLS-1$
+                + e);
+            return UNSPECIFIED_BUILD_STATUS;
+        }
+    }
+
+    /**
+     * {@code KEY (remaining of total units remaining)} per segment, in key order so the wording is
+     * deterministic, cut after {@link #MAX_RENDERED_SEGMENTS} with a count of the rest.
+     */
+    private static String renderSegments(Map<String, PipelineSegmentStatus> segments)
+    {
+        if (segments == null || segments.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        TreeMap<String, PipelineSegmentStatus> named = new TreeMap<>();
+        for (Map.Entry<String, PipelineSegmentStatus> segment : segments.entrySet())
+        {
+            if (segment.getKey() != null && segment.getValue() != null)
+            {
+                named.put(segment.getKey(), segment.getValue());
+            }
+        }
+        StringBuilder text = new StringBuilder();
+        int rendered = 0;
+        for (Map.Entry<String, PipelineSegmentStatus> segment : named.entrySet())
+        {
+            if (rendered == MAX_RENDERED_SEGMENTS)
+            {
+                text.append(", ... (+").append(named.size() - rendered).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
+                break;
+            }
+            if (rendered > 0)
+            {
+                text.append(", "); //$NON-NLS-1$
+            }
+            PipelineSegmentStatus work = segment.getValue();
+            text.append(segment.getKey()).append(" (").append(work.getRemainingUnitsOfWork()) //$NON-NLS-1$
+                .append(" of ").append(work.getTotalUnitsOfWork()).append(" units remaining)"); //$NON-NLS-1$ //$NON-NLS-2$
+            rendered++;
+        }
+        return text.toString();
     }
 
     /**
