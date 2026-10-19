@@ -7,10 +7,13 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -1141,8 +1144,13 @@ public final class ComparisonEngine
             @Override
             public Path createTemporary() throws IOException
             {
+                FileAttribute<?>[] attributes = FileSystems.getDefault().supportedFileAttributeViews()
+                    .contains("posix") //$NON-NLS-1$
+                        ? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(
+                            PosixFilePermissions.fromString("rw-------"))} //$NON-NLS-1$
+                        : new FileAttribute<?>[0];
                 return Files.createTempFile("edt-mcp-merge-rules", //$NON-NLS-1$
-                    MergeRulesCodec.ZIP_EXTENSION);
+                    MergeRulesCodec.ZIP_EXTENSION, attributes);
             }
 
             @Override

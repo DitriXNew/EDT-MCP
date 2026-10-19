@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -708,7 +709,7 @@ public final class VendorSupportGuard
             return root == null || root.node == null ? null
                 : new Target(root.node.object, configurationLabel(scope.configuration()), true, ROOT_REMEDY);
         }
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        String[] parts = Objects.requireNonNull(normFqn).split("\\."); //$NON-NLS-1$
         int longest = intent == Intent.CREATE ? parts.length - 1 : parts.length;
         for (int length = longest; length >= 2; length--)
         {

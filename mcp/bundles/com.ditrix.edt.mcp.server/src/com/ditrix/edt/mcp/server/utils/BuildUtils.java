@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 import org.eclipse.core.resources.IProject;
@@ -85,7 +86,7 @@ public final class BuildUtils
      * would hold a claim longer than the three times its timeout it is stated to hold. One clock for every slot,
      * because every slot is the one limiter ({@link #beginWait}). Only a test replaces it ({@link #useSlotClock}).
      */
-    private static volatile LongSupplier slotClock = System::nanoTime;
+    private static final AtomicReference<LongSupplier> slotClock = new AtomicReference<>(System::nanoTime);
 
     /** Nanoseconds in a millisecond, for the slots' clock. */
     private static final long NANOS_PER_MILLI = TimeUnit.MILLISECONDS.toNanos(1L);
@@ -705,7 +706,7 @@ public final class BuildUtils
         {
             return 0L;
         }
-        long leftNanos = slot.reopenAtNanos - slotClock.getAsLong();
+        long leftNanos = slot.reopenAtNanos - slotClock.get().getAsLong();
         return leftNanos <= 0L ? 0L : (leftNanos - 1L) / NANOS_PER_MILLI + 1L;
     }
 
@@ -736,7 +737,7 @@ public final class BuildUtils
         // writes finishing together cannot both see a free slot and both schedule a Job. A
         // check-then-act here would have made the limit hold only when it was not needed.
         EXPORT_WAIT_RETURNED.compute(slotKey, (name, prior) -> {
-            long now = slotClock.getAsLong();
+            long now = slotClock.get().getAsLong();
             if (prior != null && !prior.returned.get() && now - prior.reopenAtNanos < 0)
             {
                 return prior;
@@ -793,8 +794,8 @@ public final class BuildUtils
      */
     static LongSupplier useSlotClock(LongSupplier clock)
     {
-        LongSupplier previous = slotClock;
-        slotClock = clock;
+        LongSupplier previous = slotClock.get();
+        slotClock.set(clock);
         return previous;
     }
 
