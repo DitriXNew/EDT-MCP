@@ -14,13 +14,14 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 
-/** Read-only CommonPicture dependencies of a metadata form or an object containing forms. */
+/** Read-only CommonPicture dependencies of a metadata form. */
 public final class FormPictureDependencies
 {
     /** Immutable names only: no transaction-bound model objects escape the read. */
@@ -43,19 +44,6 @@ public final class FormPictureDependencies
     }
 
     /**
-     * Whether this metadata kind can hold form dependencies. Inspects the metamodel only,
-     * without reading model values or computing form content.
-     *
-     * @param source the metadata object
-     * @return whether the object is a form or can own forms
-     */
-    public static boolean canHaveForms(EObject source)
-    {
-        return source instanceof BasicForm
-            || source != null && source.eClass().getEStructuralFeature("forms") != null; //$NON-NLS-1$
-    }
-
-    /**
      * Re-fetches the source inside its model's read transaction, including an adopted-copy proxy.
      *
      * @param model the model owning the source
@@ -64,6 +52,10 @@ public final class FormPictureDependencies
      */
     public static Result collect(IBmModel model, EObject source)
     {
+        if (!(source instanceof BasicForm))
+        {
+            return collect((EObject)null);
+        }
         URI uri = source.eIsProxy() ? ((InternalEObject)source).eProxyURI() : null;
         long id = uri == null && source instanceof IBmObject ? ((IBmObject)source).bmGetId() : 0L;
         return BmTransactions.read(model, "adopt_metadata_object: read form pictures", (tx, monitor) -> { //$NON-NLS-1$
@@ -82,7 +74,7 @@ public final class FormPictureDependencies
      * must hold a read boundary for live BM objects. Detached EMF fixtures need no BM runtime.
      * Computed/transient containments and references to other metadata objects are never walked.
      *
-     * @param source a form or an object containing forms
+     * @param source the form; other metadata kinds are ignored
      * @return the dependency names
      */
     public static Result collect(EObject source)
@@ -92,16 +84,6 @@ public final class FormPictureDependencies
         if (source instanceof BasicForm)
         {
             collectForm(source, found, unresolved);
-        }
-        else if (canHaveForms(source))
-        {
-            for (EObject child : PersistedContents.descendants(source))
-            {
-                if (child instanceof BasicForm)
-                {
-                    collectForm(child, found, unresolved);
-                }
-            }
         }
         return new Result(found, unresolved);
     }
@@ -170,10 +152,24 @@ public final class FormPictureDependencies
         }
         catch (RuntimeException e)
         {
-            // A failed CommonPicture resolution is a pre-write refusal. A platform picture is
+            // A CommonPicture may still be identified by its BM URI. A platform picture is
             // outside the dependency set even when its catalogue is unavailable.
             if (!(picture instanceof CommonPicture))
             {
+                return;
+            }
+        }
+        URI proxyUri = picture.eIsProxy() ? ((InternalEObject)picture).eProxyURI() : null;
+        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri)
+            && proxyUri.path() != null && !proxyUri.path().isEmpty())
+        {
+            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
+            if (fqn != null && fqn.startsWith(PictureValueBuilder.COMMON_PREFIX)
+                && fqn.length() > PictureValueBuilder.COMMON_PREFIX.length())
+            {
+                // Cross-project references in reloaded extension forms may remain unresolved here.
+                // The caller still resolves this canonical address in the base scope before any write.
+                found.add(fqn);
                 return;
             }
         }
