@@ -65,6 +65,9 @@ public class ToolsTab
     /** Local copy of disabled tools for editing (committed on performOk) */
     private final Set<String> disabledTools;
 
+    /** Pending choice, retained through checkbox edits and committed only on performOk. */
+    private ToolPreset selectedPreset;
+
     /** Local copy of destructive-allowed tools for editing (committed on performOk) */
     private final Set<String> destructiveAllowedTools;
 
@@ -92,6 +95,7 @@ public class ToolsTab
     public ToolsTab(Composite parent)
     {
         disabledTools = new HashSet<>(ToolSettingsService.getInstance().getDisabledTools());
+        selectedPreset = ToolPreset.fromId(ToolSettingsService.getInstance().getPresetId());
         destructiveAllowedTools = new HashSet<>(ConsentSettingsService.getInstance().getAllowedTools());
         loadAllValues();
 
@@ -170,10 +174,7 @@ public class ToolsTab
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                disabledTools.clear();
-                refreshCheckStates();
-                selectMatchingPreset();
-                updateCountLabel();
+                enableAllTools();
             }
         });
 
@@ -197,14 +198,7 @@ public class ToolsTab
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                disabledTools.clear();
-                for (ToolGroup group : ToolGroup.values())
-                {
-                    disabledTools.addAll(group.getToolNames());
-                }
-                refreshCheckStates();
-                selectMatchingPreset();
-                updateCountLabel();
+                disableAllTools();
             }
         });
 
@@ -220,7 +214,7 @@ public class ToolsTab
         presetCombo.setToolTipText(Messages.ToolsTab_PresetTooltip);
         GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         presetCombo.setLayoutData(comboGd);
-        selectMatchingPreset();
+        selectSelectedPreset();
 
         presetCombo.addSelectionListener(new SelectionAdapter()
         {
@@ -230,17 +224,47 @@ public class ToolsTab
                 int idx = presetCombo.getSelectionIndex();
                 if (idx >= 0)
                 {
-                    ToolPreset preset = ToolPreset.values()[idx];
-                    if (preset != ToolPreset.CUSTOM && preset.getDisabledTools() != null)
-                    {
-                        disabledTools.clear();
-                        disabledTools.addAll(preset.getDisabledTools());
-                        refreshCheckStates();
-                        updateCountLabel();
-                    }
+                    selectPreset(ToolPreset.values()[idx]);
                 }
             }
         });
+    }
+
+    /** Enable all is an explicit All Tools choice, pending until the page is saved. */
+    void enableAllTools()
+    {
+        selectedPreset = ToolPreset.ALL_TOOLS;
+        disabledTools.clear();
+        refreshCheckStates();
+        selectSelectedPreset();
+        updateCountLabel();
+    }
+
+    /** Disable all opts out of preset-owed additions. */
+    void disableAllTools()
+    {
+        selectedPreset = ToolPreset.CUSTOM;
+        disabledTools.clear();
+        for (ToolGroup group : ToolGroup.values())
+        {
+            disabledTools.addAll(group.getToolNames());
+        }
+        refreshCheckStates();
+        selectSelectedPreset();
+        updateCountLabel();
+    }
+
+    /** Record every explicit choice; Custom keeps the current checkboxes. */
+    void selectPreset(ToolPreset preset)
+    {
+        selectedPreset = preset;
+        if (preset != ToolPreset.CUSTOM && preset.getDisabledTools() != null)
+        {
+            disabledTools.clear();
+            disabledTools.addAll(preset.getDisabledTools());
+            refreshCheckStates();
+            updateCountLabel();
+        }
     }
 
     private void createToolTree(Composite parent)
@@ -266,7 +290,7 @@ public class ToolsTab
                 applyCheckChange(event.getElement(), event.getChecked());
 
                 refreshCheckStates();
-                selectMatchingPreset();
+                selectSelectedPreset();
                 updateCountLabel();
             }
         });
@@ -582,9 +606,10 @@ public class ToolsTab
         }
     }
 
-    private void selectMatchingPreset()
+    /** Display the recorded/pending choice rather than reclassifying its edited snapshot. */
+    private void selectSelectedPreset()
     {
-        ToolPreset matched = ToolPreset.matchPreset(disabledTools);
+        ToolPreset matched = selectedPreset;
         ToolPreset[] presets = ToolPreset.values();
         for (int i = 0; i < presets.length; i++)
         {
@@ -664,7 +689,7 @@ public class ToolsTab
     public void performOk()
     {
         savePendingSpinnerValues();
-        ToolSettingsService.getInstance().setDisabledTools(disabledTools);
+        ToolSettingsService.getInstance().setDisabledTools(disabledTools, selectedPreset);
         ConsentSettingsService.getInstance().setAllowedTools(destructiveAllowedTools);
         for (Map.Entry<String, Integer> entry : pendingValues.entrySet())
         {
@@ -685,12 +710,13 @@ public class ToolsTab
         // Restore the DEFAULT disabled set, not an empty one: tools that ship disabled (the raw
         // git command tool) must stay disabled after "Restore Defaults" - clearing the set would
         // silently enable them.
+        selectedPreset = ToolPreset.CUSTOM;
         disabledTools.clear();
         disabledTools.addAll(
             ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS));
         destructiveAllowedTools.clear();
         refreshCheckStates();
-        selectMatchingPreset();
+        selectSelectedPreset();
         updateCountLabel();
 
         for (Map.Entry<String, List<ParameterDef>> entry : paramSettings.getAllParameters().entrySet())
