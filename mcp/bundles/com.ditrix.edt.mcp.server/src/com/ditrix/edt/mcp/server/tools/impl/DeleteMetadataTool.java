@@ -16,16 +16,29 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.WorkspaceJob;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
@@ -86,6 +99,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
@@ -245,6 +259,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Resolves the attribute deleter; answers {@code null} when the platform service is unavailable. */
     private Supplier<FormAttributeDeleter> formAttributeDeleters = DeleteMetadataTool::platformFormAttributeDeleter;
 
+    /** Removes a deleted form's resource folder off the UI thread; see {@link FormFolderCleanup}. */
+    private FormFolderCleanup formFolderCleanup = new WorkspaceFormFolderCleanup();
+
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
     {
@@ -313,6 +330,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     DeleteMetadataTool withFormAttributeDeleters(Supplier<FormAttributeDeleter> deleters)
     {
         this.formAttributeDeleters = deleters;
+        return this;
+    }
+
+    /**
+     * Test seam: replaces the workspace removal of a deleted form's resource folder.
+     *
+     * @param cleanup schedules the removal and reports its outcome
+     * @return this tool
+     */
+    DeleteMetadataTool withFormFolderCleanup(FormFolderCleanup cleanup)
+    {
+        this.formFolderCleanup = cleanup;
         return this;
     }
 
@@ -2416,6 +2445,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
 
+    /**
+     * Internal result member: the project-relative resource folder of a deleted form, whose removal
+     * {@link #awaitDiskExport} reports; always stripped there.
+     */
+    static final String KEY_FORM_FOLDER = "formFolderToRemove"; //$NON-NLS-1$
+
+    /** Internal result member: that folder's {@link FolderRemoval}, absent when there was nothing to remove. */
+    static final String KEY_FORM_FOLDER_REMOVAL = "formFolderRemoval"; //$NON-NLS-1$
+
     /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
     private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
 
@@ -3277,18 +3315,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Remove it physically through the workspace API (best-effort: never fail the delete the model
         // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
         // or the owner folder. The path is built from the RESOLVED names captured above.
-        ResourceCleanup folderCleanup =
-            deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
+        //
+        // NOT on this thread (#763): this runs on the UI thread, inside the syncExec a job worker posted,
+        // and the workbench lets such a runnable be granted the workspace lock on that worker's behalf and
+        // run other threads' pending syncExecs while it waits. A workspace delete started here was caught
+        // with another operation ending under it ("Illegal attempt to modify an immutable tree"
+        // mid-DeleteVisitor). A workspace job does the delete instead, and awaitDiskExport reports it. The
+        // job is scheduled HERE, not by awaitDiskExport, because a call that timed out never reaches it
+        // while its UI work still commits the model delete - the folder must go either way.
+        String folderRel = formResourceFolderPathOrLog(ref.ownerType, ownerNameOnDisk, formNameOnDisk);
+        FolderRemoval removal = folderRel == null ? null
+            : formFolderCleanup.start(project, folderRel, ownerFqn, formNameOnDisk);
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                 + (persisted ? " and persisted to disk." //$NON-NLS-1$
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                         + "it).") //$NON-NLS-1$
-                + folderCleanupMessage(folderCleanup))
-            .toJson();
+                + (folderRel == null ? folderCleanupMessage(ResourceCleanup.FAILED) : "")); //$NON-NLS-1$
+        if (folderRel != null)
+        {
+            result.put(KEY_FORM_FOLDER, folderRel);
+            if (removal != null)
+            {
+                result.put(KEY_FORM_FOLDER_REMOVAL, removal.toJson());
+            }
+        }
+        return result.toJson();
     }
 
     /**
@@ -3923,7 +3978,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
-        FAILED
+        FAILED,
+        /** Still there because a form of that name was created again after the delete: it is that form's. */
+        KEPT,
+        /** The removal job had not finished when the call answered; it still runs in the background. */
+        SCHEDULED
     }
 
     /** A detached extInfo object's file as observed after the export barrier; EDT's save deletes it. */
@@ -3952,6 +4011,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
             return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
+        case KEPT:
+            return subject + " was kept: a form of the same name was created again after the delete."; //$NON-NLS-1$
+        case SCHEDULED:
+            return subject + " is still being removed in the background - re-check it shortly."; //$NON-NLS-1$
         case FAILED:
         default:
             return subject + " could not be removed - check it manually."; //$NON-NLS-1$
@@ -3987,26 +4050,22 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Physically removes an owned form's resource folder
-     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>/}, containing {@code Form.form} and any sub-files)
-     * through the Eclipse workspace API so the workspace stays in sync. The path is built from the
-     * RESOLVED owner / form names (the names the model actually carries), NOT the user-typed FQN
-     * segments: the model lookup is case-insensitive while the workspace path is case-sensitive, so a
-     * case-variant FQN would otherwise miss the real folder and leave the orphan behind. Best-effort: a
-     * delete failure is logged but never propagated - the BM-model delete already committed, so the
-     * orphan-folder cleanup must not turn a successful delete into an error. A folder that does not
-     * exist is reported as {@link ResourceCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
-     * {@code Forms/<FormName>} folder is targeted, never the parent {@code Forms/} directory (which may
-     * hold sibling forms) or the owner folder.
+     * The project-relative resource folder of a deleted owned form
+     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>/}, containing {@code Form.form} and any sub-files),
+     * built from the RESOLVED owner / form names (the names the model actually carries), NOT the
+     * user-typed FQN segments: the model lookup is case-insensitive while the workspace path is
+     * case-sensitive, so a case-variant FQN would otherwise miss the real folder and leave the orphan
+     * behind. Only the EXACT {@code Forms/<FormName>} folder is ever targeted, never the parent
+     * {@code Forms/} directory (which may hold sibling forms) or the owner folder. An unresolvable path
+     * is logged, and the folder is then left in place.
      *
-     * @param project the owning workspace project
      * @param ownerType the owner metadata TYPE token (English or Russian, as supplied)
      * @param resolvedOwnerName the owner object Name AS RESOLVED on the model
      * @param resolvedFormName the form Name AS RESOLVED on the model
-     * @return the cleanup outcome (removed / not found on disk / failed)
+     * @return the folder path, or {@code null} when it cannot be resolved
      */
-    private static ResourceCleanup deleteFormResourceFolder(IProject project, String ownerType,
-        String resolvedOwnerName, String resolvedFormName)
+    private static String formResourceFolderPathOrLog(String ownerType, String resolvedOwnerName,
+        String resolvedFormName)
     {
         String folderRel = formResourceFolderPath(ownerType, resolvedOwnerName, resolvedFormName);
         if (folderRel == null)
@@ -4014,9 +4073,542 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Could not resolve the form resource folder for " + ownerType + "." //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedOwnerName + ".Form." + resolvedFormName + "; leaving any on-disk Forms/" //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedFormName + " folder in place.", null); //$NON-NLS-1$
-            return ResourceCleanup.FAILED;
         }
-        return removeResource(project.getFolder(new Path(folderRel)));
+        return folderRel;
+    }
+
+    /**
+     * A scheduled folder removal, as it travels from the UI thread to {@link #awaitDiskExport}: the
+     * removal job's family, and what the folder's disk path names - its owner's FQN and the form name -
+     * so that a form created again at that same path can be told from the deleted one's leftovers.
+     */
+    static final class FolderRemoval
+    {
+        private static final String FAMILY = "family"; //$NON-NLS-1$
+        private static final String OWNER_FQN = "ownerFqn"; //$NON-NLS-1$
+        private static final String FORM_NAME = "formName"; //$NON-NLS-1$
+
+        final String family;
+        /** The owner's top-object FQN, {@code null} when it could not be named. */
+        final String ownerFqn;
+        final String formName;
+
+        FolderRemoval(String family, String ownerFqn, String formName)
+        {
+            this.family = family;
+            this.ownerFqn = ownerFqn;
+            this.formName = formName;
+        }
+
+        JsonObject toJson()
+        {
+            JsonObject json = new JsonObject();
+            json.addProperty(FAMILY, family);
+            json.addProperty(OWNER_FQN, ownerFqn);
+            json.addProperty(FORM_NAME, formName);
+            return json;
+        }
+
+        /** The removal a result member carries, or {@code null} when the member is absent or malformed. */
+        static FolderRemoval fromJson(JsonElement element)
+        {
+            if (element == null || !element.isJsonObject())
+            {
+                return null;
+            }
+            JsonObject json = element.getAsJsonObject();
+            JsonElement family = json.get(FAMILY);
+            JsonElement owner = json.get(OWNER_FQN);
+            JsonElement name = json.get(FORM_NAME);
+            if (family == null || !family.isJsonPrimitive() || name == null || !name.isJsonPrimitive()
+                || owner != null && !owner.isJsonNull() && !owner.isJsonPrimitive())
+            {
+                return null;
+            }
+            return new FolderRemoval(family.getAsString(),
+                owner == null || owner.isJsonNull() ? null : owner.getAsString(), name.getAsString());
+        }
+    }
+
+    /**
+     * Removes a deleted form's resource folder off the UI thread (#763), in two halves that run on two
+     * different threads: {@link #start} on the UI thread, inside the delete, only SCHEDULES a workspace
+     * job, so nothing on that thread touches the workspace tree; {@link #await} on the calling thread,
+     * in {@link #awaitDiskExport}, waits for that job (bounded) and reports what the disk shows.
+     * <p>
+     * The job is the one that removes the folder, not {@link #await}: a call that timed out never
+     * reaches {@link #awaitDiskExport}, while its UI work still goes on to commit the model delete.
+     */
+    interface FormFolderCleanup
+    {
+        /**
+         * Schedules the removal of a deleted form's resource folder.
+         *
+         * @param project the owning project
+         * @param folderRel the project-relative folder path
+         * @param ownerFqn the deleted form's owner FQN, {@code null} when it could not be named
+         * @param formName the deleted form's name, as the folder path spells it
+         * @return the scheduled removal, or {@code null} when there is no such folder to remove
+         */
+        FolderRemoval start(IProject project, String folderRel, String ownerFqn, String formName);
+
+        /**
+         * Waits for a removal and answers what the disk shows.
+         *
+         * @param projectName the owning project
+         * @param folderRel the project-relative folder path
+         * @param removal what {@link #start} scheduled, or {@code null} when it scheduled nothing
+         * @return the cleanup outcome
+         */
+        ResourceCleanup await(String projectName, String folderRel, FolderRemoval removal);
+    }
+
+    /** Whether the model holds the form a deleted form's folder path names, as far as it can be read. */
+    enum FormPresence
+    {
+        /**
+         * A form of that name is under that owner again: the folder is that form's. A name that differs
+         * only in case counts too, because on a case-insensitive file system both are the same directory.
+         */
+        PRESENT,
+        /** The model was read and holds no such form: the folder is the deleted form's leftover. */
+        ABSENT,
+        /** The model could not be read: a transient state, asked again later, never a reason to delete. */
+        UNKNOWN
+    }
+
+    /** Reads {@link FormPresence} for an owner FQN and a form name. */
+    @FunctionalInterface
+    interface FormPresenceReader
+    {
+        /**
+         * @param project the owning project
+         * @param ownerFqn the owner's top-object FQN, {@code null} when it could not be named
+         * @param formName the form name, as the folder path spells it
+         * @return what the model shows now
+         */
+        FormPresence read(IProject project, String ownerFqn, String formName);
+    }
+
+    /**
+     * The model's answer, read in one read-only BM transaction that waits as long as the model is held; the
+     * production reader is this one {@link #bounded}. The owner is looked up by
+     * the FQN the folder path names, not by the deleted owner's BM id: an owner deleted and created again
+     * under the same name writes its forms to the same path with a new id, and a renamed owner keeps its id
+     * while its forms move to another path.
+     *
+     * @param project the owning project
+     * @param ownerFqn the owner's top-object FQN
+     * @param formName the form name, as the folder path spells it
+     * @return what the model shows now
+     */
+    static FormPresence formPresenceInModel(IProject project, String ownerFqn, String formName)
+    {
+        if (ownerFqn == null || formName == null)
+        {
+            return FormPresence.UNKNOWN;
+        }
+        try
+        {
+            BmModelResolver.Resolution resolution = BmModelResolver.resolve(project);
+            if (!resolution.isAvailable())
+            {
+                // EDT is re-registering the model: not having read it is no evidence that the form is gone.
+                return FormPresence.UNKNOWN;
+            }
+            IBmModel bmModel = resolution.getModel();
+            return BmTransactions.<FormPresence>read(bmModel, "DeletedFormPresence", //$NON-NLS-1$
+                (tx, pm) -> presenceOf(tx.getTopObjectByFqn(ownerFqn), formName));
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read whether form '" + formName //$NON-NLS-1$
+                + "' was created again", e); //$NON-NLS-1$
+            return FormPresence.UNKNOWN;
+        }
+    }
+
+    /**
+     * How long one read of the model may take before it counts as {@link FormPresence#UNKNOWN}. The removal
+     * job reads it while holding the folder's delete rule, and the caller reads it on the MCP call's thread.
+     */
+    static final long PRESENCE_READ_MS = 10_000L;
+
+    /**
+     * A reader, bounded. A read-only BM transaction waits without a limit while another BM operation holds
+     * the model, and both places that ask must not: the removal job would block every save, create and
+     * delete of the folder for as long as it holds the rule, and the caller would hang a delete that
+     * already succeeded. A read that does not answer in time, or fails, is {@link FormPresence#UNKNOWN}:
+     * the job then lets the rule go and asks again later, and the caller reports what it can.
+     * <p>
+     * The read itself cannot be cancelled - it takes no monitor - so one that hangs keeps its job worker.
+     * An ask while an earlier read is still out therefore first WAITS for that read instead of starting
+     * another, so a retrying removal job and its caller never pile up workers however long the model stays
+     * held. It does not take that read's answer, though: the read began before this ask, and a form created
+     * in between would be missing from it - an ABSENT that old must not delete the folder of a new form. Once
+     * the earlier read is back, this ask starts its own; if it is not back in time, the answer is UNKNOWN.
+     *
+     * @param reader the reader to bound
+     * @param timeoutMs how long one ask may wait, all in all
+     * @return the bounded reader
+     */
+    static FormPresenceReader bounded(FormPresenceReader reader, long timeoutMs)
+    {
+        return (project, ownerFqn, formName) ->
+        {
+            String key = project.getName() + '\n' + ownerFqn + '\n' + formName;
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            CompletableFuture<FormPresence> earlier = READS_IN_FLIGHT.get(key);
+            if (earlier != null && answerWithin(earlier, deadline) == null)
+            {
+                return FormPresence.UNKNOWN;
+            }
+            CompletableFuture<FormPresence> fresh = new CompletableFuture<>();
+            CompletableFuture<FormPresence> read = READS_IN_FLIGHT.putIfAbsent(key, fresh);
+            if (read == null)
+            {
+                read = fresh;
+                Job job = new Job("delete_metadata: read the deleted form's owner") //$NON-NLS-1$
+                {
+                    @Override
+                    protected IStatus run(IProgressMonitor monitor)
+                    {
+                        FormPresence answer;
+                        try
+                        {
+                            answer = reader.read(project, ownerFqn, formName);
+                        }
+                        catch (RuntimeException e)
+                        {
+                            Activator.logError("delete_metadata: the read of form '" + formName //$NON-NLS-1$
+                                + "' failed", e); //$NON-NLS-1$
+                            answer = FormPresence.UNKNOWN;
+                        }
+                        // Out of the map BEFORE the answer is published, so no later ask can pick up a
+                        // finished read as if it were still the one in flight.
+                        READS_IN_FLIGHT.remove(key, fresh);
+                        fresh.complete(answer);
+                        return Status.OK_STATUS;
+                    }
+                };
+                job.setSystem(true);
+                McpJobs.schedule(job);
+            }
+            // A read another ask started after this one began is as fresh as this ask's own would be.
+            FormPresence answer = answerWithin(read, deadline);
+            return answer == null ? FormPresence.UNKNOWN : answer;
+        };
+    }
+
+    /** The read's answer if it comes before {@code deadline}, otherwise {@code null}. */
+    private static FormPresence answerWithin(CompletableFuture<FormPresence> read, long deadline)
+    {
+        try
+        {
+            return read.get(Math.max(0L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException | ExecutionException e)
+        {
+            return null;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /** The model reads still out, one per project, owner and form name; see {@link #bounded}. */
+    private static final Map<String, CompletableFuture<FormPresence>> READS_IN_FLIGHT = new ConcurrentHashMap<>();
+
+    /**
+     * What an owner read from the model says about a form name. The folder path is case-sensitive while
+     * the model's names are not; a form whose name differs only in case still keeps the folder, because on
+     * a case-insensitive file system both names are the same directory and removing it would strip that
+     * form of its content.
+     *
+     * @param owner the owner as read, {@code null} when there is none under that FQN
+     * @param formName the form name, as the folder path spells it
+     * @return what the model shows
+     */
+    static FormPresence presenceOf(Object owner, String formName)
+    {
+        if (!(owner instanceof MdObject))
+        {
+            return FormPresence.ABSENT;
+        }
+        MdObject form = FormStructureReader.findOwnedForm((MdObject)owner, formName);
+        if (form == null)
+        {
+            return FormPresence.ABSENT;
+        }
+        return FormPresence.PRESENT;
+    }
+
+    /** When the removal job reads a model it could not read again, or that it stops trying. */
+    @FunctionalInterface
+    interface RetryPolicy
+    {
+        /** The answer that ends the attempts: the folder is then kept, and the outcome says to check it. */
+        long STOP = -1L;
+
+        /**
+         * @param attempt the number of the read that could not be done, from 1
+         * @param elapsedMs how long ago the removal was scheduled
+         * @return the pause before reading again in milliseconds, or {@link #STOP}
+         */
+        long nextDelay(int attempt, long elapsedMs);
+    }
+
+    /** The production {@link FormFolderCleanup}: a {@link WorkspaceJob} under the folder's delete rule. */
+    static final class WorkspaceFormFolderCleanup implements FormFolderCleanup
+    {
+        /** How long the calling thread waits for the removal before reporting it as still running. */
+        private static final long WAIT_MS = 30_000L;
+
+        /** The production pause before reading the model again: doubling from 2 s, at most 1 min apart. */
+        private static final long FIRST_RETRY_MS = 2_000L;
+        private static final long MAX_RETRY_MS = 60_000L;
+
+        /**
+         * How long the job keeps reading a model it could not read. Not a bound on a transient state EDT
+         * itself does not bound - the caller's wait is bounded separately - but on how long a closed or
+         * removed project keeps a job alive.
+         */
+        private static final long GIVE_UP_AFTER_MS = 30L * 60_000L;
+
+        private final FormPresenceReader presence;
+        private final RetryPolicy retry;
+
+        WorkspaceFormFolderCleanup()
+        {
+            this(bounded(DeleteMetadataTool::formPresenceInModel, PRESENCE_READ_MS),
+                WorkspaceFormFolderCleanup::productionRetry);
+        }
+
+        WorkspaceFormFolderCleanup(FormPresenceReader presence, RetryPolicy retry)
+        {
+            this.presence = presence;
+            this.retry = retry;
+        }
+
+        /** The production {@link RetryPolicy}: a doubling pause, and none at all after the give-up time. */
+        static long productionRetry(int attempt, long elapsedMs)
+        {
+            if (elapsedMs >= GIVE_UP_AFTER_MS)
+            {
+                return RetryPolicy.STOP;
+            }
+            long pause = FIRST_RETRY_MS << Math.min(attempt - 1, 5);
+            return Math.min(pause, MAX_RETRY_MS);
+        }
+
+        @Override
+        public FolderRemoval start(IProject project, String folderRel, String ownerFqn, String formName)
+        {
+            IFolder folder = project.getFolder(new Path(folderRel));
+            if (!folder.exists())
+            {
+                return null;
+            }
+            FolderRemoval removal = new FolderRemoval(
+                "delete_metadata form folder " + UUID.randomUUID(), ownerFqn, formName); //$NON-NLS-1$
+            AtomicInteger attempts = new AtomicInteger();
+            long scheduledAt = System.currentTimeMillis();
+            WorkspaceJob job = new WorkspaceJob("Remove " + folder.getFullPath()) //$NON-NLS-1$
+            {
+                @Override
+                public IStatus runInWorkspace(IProgressMonitor monitor)
+                {
+                    // A queued create_metadata of a form at the same path can run between the delete and
+                    // this job, and its export may already have written the folder again: it is then the
+                    // new form's folder. The MODEL decides, not the folder's stamp (a save task of the
+                    // deleted form that was already running rewrites the same file), and only a model
+                    // that was actually read: not being able to tell is no licence to delete.
+                    FormPresence now = presence.read(project, removal.ownerFqn, removal.formName);
+                    if (now == FormPresence.ABSENT)
+                    {
+                        removeResource(folder);
+                        return Status.OK_STATUS;
+                    }
+                    // An unreadable model is asked again for as long as EDT keeps it unreadable, not for a
+                    // fixed number of tries: giving up while it was still re-registering would leave the
+                    // folder for good. An owner that could not be named is not transient, so it is not.
+                    long pause = now == FormPresence.UNKNOWN && removal.ownerFqn != null
+                        ? retry.nextDelay(attempts.incrementAndGet(), System.currentTimeMillis() - scheduledAt)
+                        : RetryPolicy.STOP;
+                    if (pause != RetryPolicy.STOP)
+                    {
+                        schedule(pause);
+                    }
+                    else
+                    {
+                        Activator.logInfo("delete_metadata: kept " + folder.getFullPath() //$NON-NLS-1$
+                            + (now == FormPresence.PRESENT
+                                ? ": a form of that name was created again after the delete" //$NON-NLS-1$
+                                : ": the model could not confirm that no form owns it")); //$NON-NLS-1$
+                    }
+                    return Status.OK_STATUS;
+                }
+
+                @Override
+                public boolean belongsTo(Object candidate)
+                {
+                    return removal.family.equals(candidate);
+                }
+            };
+            job.setRule(folder.getWorkspace().getRuleFactory().deleteRule(folder));
+            job.setSystem(true);
+            try
+            {
+                McpJobs.schedule(job);
+            }
+            catch (RuntimeException e)
+            {
+                Activator.logError("Failed to schedule the removal of " + folder.getFullPath() //$NON-NLS-1$
+                    + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
+            }
+            return removal;
+        }
+
+        @Override
+        public ResourceCleanup await(String projectName, String folderRel, FolderRemoval removal)
+        {
+            boolean running = false;
+            if (removal != null && Job.getJobManager().find(removal.family).length > 0)
+            {
+                // A caller that holds a scheduling rule of its own (an in-process caller running in a job)
+                // would block the removal it joins until the wait ran out; it is told the removal is still
+                // running instead, and the job finishes once that rule is released.
+                if (Job.getJobManager().currentRule() == null)
+                {
+                    join(removal.family);
+                }
+                running = Job.getJobManager().find(removal.family).length > 0;
+            }
+            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            if (!context.exists())
+            {
+                return ResourceCleanup.FAILED;
+            }
+            boolean folderExists = context.project().getFolder(new Path(folderRel)).exists();
+            FormPresence now = folderExists && removal != null && !running
+                ? presence.read(context.project(), removal.ownerFqn, removal.formName) : FormPresence.UNKNOWN;
+            return outcome(removal, folderExists, running, now);
+        }
+
+        /**
+         * What a removal came to, from what the disk and the model show once the wait is over.
+         *
+         * @param removal what was scheduled, or {@code null} when the folder was not there to remove
+         * @param folderExists whether the folder is on disk now
+         * @param running whether the removal job has still not finished
+         * @param now what the model shows about the folder's form now
+         * @return the cleanup outcome
+         */
+        static ResourceCleanup outcome(FolderRemoval removal, boolean folderExists, boolean running,
+            FormPresence now)
+        {
+            if (!folderExists)
+            {
+                return removal == null ? ResourceCleanup.NOT_FOUND : ResourceCleanup.REMOVED;
+            }
+            if (removal == null)
+            {
+                return ResourceCleanup.FAILED;
+            }
+            if (running)
+            {
+                return ResourceCleanup.SCHEDULED;
+            }
+            return now == FormPresence.PRESENT ? ResourceCleanup.KEPT : ResourceCleanup.FAILED;
+        }
+
+        /** Waits until no job of {@code family} is left, retries included, or the wait runs out. */
+        private static void join(String family)
+        {
+            long deadline = System.currentTimeMillis() + WAIT_MS;
+            Job[] jobs;
+            // A job that rescheduled itself to read the model again is SLEEPING between attempts, and a
+            // join returns at the end of each attempt, so the family is asked again until it is empty.
+            while ((jobs = Job.getJobManager().find(family)).length > 0)
+            {
+                for (Job job : jobs)
+                {
+                    long left = deadline - System.currentTimeMillis();
+                    try
+                    {
+                        if (left <= 0 || !job.join(left, new NullProgressMonitor()))
+                        {
+                            return;
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * States the outcome of a form delete's folder removal (see {@link #performFormObjectDelete}) in the
+     * result's message, and strips the internal members. Any other result - an error, another kind of
+     * delete - is returned unchanged, byte for byte.
+     *
+     * @param projectName the project the delete ran in
+     * @param result the tool's own result
+     * @param cleanup waits for the removal and reports it
+     * @return the result without the internal folder members, its message completed
+     */
+    static String reportFormFolderRemoval(String projectName, String result, FormFolderCleanup cleanup)
+    {
+        if (result == null || !result.contains(KEY_FORM_FOLDER))
+        {
+            return result;
+        }
+        JsonObject object;
+        try
+        {
+            object = JsonParser.parseString(result).getAsJsonObject();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read the form-delete result to report its " //$NON-NLS-1$
+                + "resource folder", e); //$NON-NLS-1$
+            return result;
+        }
+        JsonElement folder = object.remove(KEY_FORM_FOLDER);
+        if (folder == null)
+        {
+            return result;
+        }
+        FolderRemoval removal = FolderRemoval.fromJson(object.remove(KEY_FORM_FOLDER_REMOVAL));
+        ResourceCleanup outcome = folder.isJsonPrimitive()
+            ? cleanup.await(projectName, folder.getAsString(), removal) : ResourceCleanup.FAILED;
+        String message = resultString(object, McpKeys.MESSAGE);
+        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + folderCleanupMessage(outcome)); //$NON-NLS-1$
+        return GsonProvider.toJson(object);
+    }
+
+    /**
+     * Reports a deleted form's folder removal before the export barrier, on the calling thread.
+     * <p>
+     * Before the barrier rather than in {@link #refreshAfterExportAwait}, because a barrier that refuses
+     * on a still-pending export returns without that step, and the internal members would then reach
+     * the caller.
+     */
+    @Override
+    protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
+    {
+        return super.awaitDiskExport(params,
+            reportFormFolderRemoval(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), result,
+                formFolderCleanup),
+            scope);
     }
 
     /**
