@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -116,7 +117,7 @@ public class SearchInDcsTool implements IMcpTool
         if (query != null && !query.isEmpty())
         {
             String safeName = query.replaceAll("[^a-zA-Z0-9\\u0400-\\u04FF]", "-") //$NON-NLS-1$ //$NON-NLS-2$
-                .toLowerCase();
+                .toLowerCase(Locale.ROOT);
             if (safeName.length() > 40)
             {
                 safeName = safeName.substring(0, 40);
@@ -205,7 +206,7 @@ public class SearchInDcsTool implements IMcpTool
         {
             return SearchResultFormatter.MODE_FULL;
         }
-        String mode = outputMode.toLowerCase();
+        String mode = outputMode.toLowerCase(Locale.ROOT);
         if (SearchResultFormatter.MODE_FULL.equals(mode) || SearchResultFormatter.MODE_COUNT.equals(mode)
             || SearchResultFormatter.MODE_FILES.equals(mode))
         {

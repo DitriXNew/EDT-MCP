@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -197,7 +198,7 @@ public final class ResourceTextSearch implements IResourceVisitor
         String displayPath = displayPath(resource);
 
         if (fileMask != null && !fileMask.isEmpty()
-            && !displayPath.toLowerCase().contains(fileMask.toLowerCase()))
+            && !displayPath.toLowerCase(Locale.ROOT).contains(fileMask.toLowerCase(Locale.ROOT)))
         {
             return false;
         }

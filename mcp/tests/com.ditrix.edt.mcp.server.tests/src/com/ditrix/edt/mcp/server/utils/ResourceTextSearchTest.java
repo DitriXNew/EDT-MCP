@@ -225,4 +225,23 @@ public class ResourceTextSearchTest
         assertTrue(search.isComplete());
         assertEquals(0, search.getTotalMatches());
     }
+
+    @Test
+    public void testFileMaskIgnoresCaseIndependentlyOfTheDefaultLocale() throws CoreException
+    {
+        // Turkish lower-cases 'I' to a dotless i: a default-locale comparison would drop this file.
+        fixture.file("src/InformationRegisters/Prices/Templates/Main/Template.dcs", "needle\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR")); //$NON-NLS-1$
+        try
+        {
+            ResourceTextSearch search = scan(literal("needle", false), ".dcs", "informationregisters", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                100, 0, true, null);
+            assertEquals(1, search.getTotalMatchedFiles());
+        }
+        finally
+        {
+            java.util.Locale.setDefault(previous);
+        }
+    }
 }
