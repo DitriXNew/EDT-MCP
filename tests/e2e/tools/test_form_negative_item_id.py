@@ -17,7 +17,7 @@ from harness import (
     call,
     calls_aborted,
     e2e_test,
-    poll_disk_contains_all,
+    read_disk,
     wait_for_project_ready,
 )
 
@@ -72,15 +72,12 @@ def test_form_write_preserves_negative_item_and_companion_ids():
         })
         assert_ok(result, "write a different member of the form containing negative ids")
 
-        # Include the NEW sibling value in the SAME disk snapshot: the seeded ids alone predate
+        # modify_metadata drains its own export before it answers, so the file is read ONCE, right
+        # away. The NEW sibling value is checked in the same snapshot: the seeded ids alone predate
         # the write and would let a no-op tool pass without exercising form normalization.
-        xml = poll_disk_contains_all(
-            _FORM_FILE,
-            ["<value>%s</value>" % _TITLE]
-            + ["<id>%d</id>" % item_id for item_id in _NEGATIVE_IDS.values()],
-            ctx="the sibling write and all three negative ids must coexist in Form.form",
-        )
-        root = _assert_negative_ids(xml)
+        xml = read_disk(_FORM_FILE)
+        assert_contains(xml, "<value>%s</value>" % _TITLE, "the sibling write must already be on disk")
+        root = _assert_negative_ids(xml.encode("utf-8"))
         sibling = [node for node in root.findall("items") if node.findtext("name") == "Description"]
         assert len(sibling) == 1, "the unrelated Description field must remain in the form"
         assert sibling[0].findtext("title/key") == "en"
@@ -92,8 +89,10 @@ def test_form_write_preserves_negative_item_and_companion_ids():
         assert_ok(details, "read the changed sibling from the model")
         assert_contains(details.text, _TITLE, "the model must also expose the new sibling title")
     finally:
-        form_path.write_bytes(original)
+        # A timed-out call may still be importing or exporting this very form: once calls are
+        # aborted the harness freezes the fixtures, and the file is left alone instead of raced.
         if not calls_aborted():
+            form_path.write_bytes(original)
             wait_for_project_ready()
             assert_ok(call("clean_project", {"projectName": PROJECT}), "reload the restored form fixture")
             wait_for_project_ready()
