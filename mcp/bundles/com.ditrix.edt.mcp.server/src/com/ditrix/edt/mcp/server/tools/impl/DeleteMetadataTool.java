@@ -15,18 +15,24 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.Set;
-import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.WorkspaceJob;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
@@ -87,6 +93,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
@@ -246,8 +253,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Resolves the attribute deleter; answers {@code null} when the platform service is unavailable. */
     private Supplier<FormAttributeDeleter> formAttributeDeleters = DeleteMetadataTool::platformFormAttributeDeleter;
 
-    /** Removes a form's resource folder, given the project name and the project-relative folder path. */
-    private BiFunction<String, String, ResourceCleanup> formFolderRemover = DeleteMetadataTool::removeProjectFolder;
+    /** Removes a deleted form's resource folder off the UI thread; see {@link FormFolderCleanup}. */
+    private FormFolderCleanup formFolderCleanup = new WorkspaceFormFolderCleanup();
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
@@ -323,12 +330,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /**
      * Test seam: replaces the workspace removal of a deleted form's resource folder.
      *
-     * @param remover answers the cleanup outcome for (project name, project-relative folder path)
+     * @param cleanup schedules the removal and reports its outcome
      * @return this tool
      */
-    DeleteMetadataTool withFormFolderRemover(BiFunction<String, String, ResourceCleanup> remover)
+    DeleteMetadataTool withFormFolderCleanup(FormFolderCleanup cleanup)
     {
-        this.formFolderRemover = remover;
+        this.formFolderCleanup = cleanup;
         return this;
     }
 
@@ -2433,10 +2440,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
 
     /**
-     * Internal result member: the project-relative resource folder of a deleted form, removed off the
-     * UI thread by {@link #awaitDiskExport}; always stripped there.
+     * Internal result member: the project-relative resource folder of a deleted form, whose removal
+     * {@link #awaitDiskExport} reports; always stripped there.
      */
     static final String KEY_FORM_FOLDER = "formFolderToRemove"; //$NON-NLS-1$
+
+    /** Internal result member: the job family of that folder's removal, absent when there was nothing to remove. */
+    static final String KEY_FORM_FOLDER_REMOVAL = "formFolderRemoval"; //$NON-NLS-1$
 
     /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
     private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
@@ -3300,12 +3310,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
         // or the owner folder. The path is built from the RESOLVED names captured above.
         //
-        // NOT here: this runs on the UI thread, inside the syncExec a job worker posted, and the workbench
-        // lets such a runnable be granted the workspace lock on that worker's behalf and run other threads'
-        // pending syncExecs while it waits. A workspace delete started there was caught with another
-        // operation ending under it ("Illegal attempt to modify an immutable tree" mid-DeleteVisitor). The
-        // folder path travels to awaitDiskExport instead, which removes it on the calling thread.
+        // NOT on this thread (#763): this runs on the UI thread, inside the syncExec a job worker posted,
+        // and the workbench lets such a runnable be granted the workspace lock on that worker's behalf and
+        // run other threads' pending syncExecs while it waits. A workspace delete started here was caught
+        // with another operation ending under it ("Illegal attempt to modify an immutable tree"
+        // mid-DeleteVisitor). A workspace job does the delete instead, and awaitDiskExport reports it. The
+        // job is scheduled HERE, not by awaitDiskExport, because a call that timed out never reaches it
+        // while its UI work still commits the model delete - the folder must go either way.
         String folderRel = formResourceFolderPathOrLog(ref.ownerType, ownerNameOnDisk, formNameOnDisk);
+        String removal = folderRel == null ? null : formFolderCleanup.start(project, folderRel);
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
@@ -3318,6 +3331,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (folderRel != null)
         {
             result.put(KEY_FORM_FOLDER, folderRel);
+            if (removal != null)
+            {
+                result.put(KEY_FORM_FOLDER_REMOVAL, removal);
+            }
         }
         return result.toJson();
     }
@@ -4046,41 +4063,125 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Physically removes a project-relative folder through the Eclipse workspace API, so the workspace
-     * stays in sync. Best-effort, like {@link #removeResource}: the BM-model delete already committed,
-     * so a failure here never turns the delete into an error.
-     *
-     * @param projectName the owning project
-     * @param folderRel the project-relative folder path
-     * @return the cleanup outcome (removed / not found on disk / failed)
+     * Removes a deleted form's resource folder off the UI thread (#763), in two halves that run on two
+     * different threads: {@link #start} on the UI thread, inside the delete, only SCHEDULES a workspace
+     * job, so nothing on that thread touches the workspace tree; {@link #await} on the calling thread,
+     * in {@link #awaitDiskExport}, waits for that job (bounded) and reports what the disk shows.
+     * <p>
+     * The job is the one that removes the folder, not {@link #await}: a call that timed out never
+     * reaches {@link #awaitDiskExport}, while its UI work still goes on to commit the model delete.
      */
-    private static ResourceCleanup removeProjectFolder(String projectName, String folderRel)
+    interface FormFolderCleanup
     {
-        // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
-        com.ditrix.edt.mcp.server.utils.ProjectContext context =
-            com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
-        if (!context.exists())
+        /**
+         * Schedules the removal of a deleted form's resource folder.
+         *
+         * @param project the owning project
+         * @param folderRel the project-relative folder path
+         * @return the removal's job family, or {@code null} when there is no such folder to remove
+         */
+        String start(IProject project, String folderRel);
+
+        /**
+         * Waits for a removal and answers what the disk shows.
+         *
+         * @param projectName the owning project
+         * @param folderRel the project-relative folder path
+         * @param family the family {@link #start} answered, or {@code null} when it scheduled nothing
+         * @return the cleanup outcome (removed / not found on disk / failed)
+         */
+        ResourceCleanup await(String projectName, String folderRel, String family);
+    }
+
+    /** The production {@link FormFolderCleanup}: a {@link WorkspaceJob} under the folder's delete rule. */
+    static final class WorkspaceFormFolderCleanup implements FormFolderCleanup
+    {
+        /** How long the calling thread waits for the removal before reporting it as not done. */
+        private static final long WAIT_MS = 30_000L;
+
+        @Override
+        public String start(IProject project, String folderRel)
         {
-            Activator.logError("Could not resolve project '" + projectName + "' to remove the form folder " //$NON-NLS-1$ //$NON-NLS-2$
-                + folderRel + " (the model delete already succeeded; remove it manually if it persists).", //$NON-NLS-1$
-                null);
-            return ResourceCleanup.FAILED;
+            IFolder folder = project.getFolder(new Path(folderRel));
+            if (!folder.exists())
+            {
+                return null;
+            }
+            String family = "delete_metadata form folder " + UUID.randomUUID(); //$NON-NLS-1$
+            WorkspaceJob job = new WorkspaceJob("Remove " + folder.getFullPath()) //$NON-NLS-1$
+            {
+                @Override
+                public IStatus runInWorkspace(IProgressMonitor monitor)
+                {
+                    removeResource(folder);
+                    return Status.OK_STATUS;
+                }
+
+                @Override
+                public boolean belongsTo(Object candidate)
+                {
+                    return family.equals(candidate);
+                }
+            };
+            job.setRule(folder.getWorkspace().getRuleFactory().deleteRule(folder));
+            job.setSystem(true);
+            try
+            {
+                McpJobs.schedule(job);
+            }
+            catch (RuntimeException e)
+            {
+                Activator.logError("Failed to schedule the removal of " + folder.getFullPath() //$NON-NLS-1$
+                    + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
+            }
+            return family;
         }
-        return removeResource(context.project().getFolder(new Path(folderRel)));
+
+        @Override
+        public ResourceCleanup await(String projectName, String folderRel, String family)
+        {
+            if (family != null)
+            {
+                long deadline = System.currentTimeMillis() + WAIT_MS;
+                for (Job job : Job.getJobManager().find(family))
+                {
+                    long left = deadline - System.currentTimeMillis();
+                    try
+                    {
+                        if (left <= 0 || !job.join(left, new NullProgressMonitor()))
+                        {
+                            break;
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            if (!context.exists() || context.project().getFolder(new Path(folderRel)).exists())
+            {
+                return ResourceCleanup.FAILED;
+            }
+            return family == null ? ResourceCleanup.NOT_FOUND : ResourceCleanup.REMOVED;
+        }
     }
 
     /**
-     * Removes the resource folder a form delete left for this thread to remove (see
-     * {@link #performFormObjectDelete}), and states the outcome in the result's message. Any other
-     * result - an error, another kind of delete - is returned unchanged, byte for byte.
+     * States the outcome of a form delete's folder removal (see {@link #performFormObjectDelete}) in the
+     * result's message, and strips the internal members. Any other result - an error, another kind of
+     * delete - is returned unchanged, byte for byte.
      *
      * @param projectName the project the delete ran in
      * @param result the tool's own result
-     * @param remover removes (project name, project-relative folder) and answers the outcome
-     * @return the result without the internal folder member, its message completed
+     * @param cleanup waits for the removal and reports it
+     * @return the result without the internal folder members, its message completed
      */
-    static String removeDeferredFormFolder(String projectName, String result,
-        BiFunction<String, String, ResourceCleanup> remover)
+    static String reportFormFolderRemoval(String projectName, String result, FormFolderCleanup cleanup)
     {
         if (result == null || !result.contains(KEY_FORM_FOLDER))
         {
@@ -4093,7 +4194,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         catch (RuntimeException e)
         {
-            Activator.logError("delete_metadata: could not read the form-delete result to remove its " //$NON-NLS-1$
+            Activator.logError("delete_metadata: could not read the form-delete result to report its " //$NON-NLS-1$
                 + "resource folder", e); //$NON-NLS-1$
             return result;
         }
@@ -4102,27 +4203,28 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return result;
         }
-        ResourceCleanup cleanup = folder.isJsonPrimitive()
-            ? remover.apply(projectName, folder.getAsString()) : ResourceCleanup.FAILED;
+        JsonElement removal = object.remove(KEY_FORM_FOLDER_REMOVAL);
+        String family = removal != null && removal.isJsonPrimitive() ? removal.getAsString() : null;
+        ResourceCleanup outcome = folder.isJsonPrimitive()
+            ? cleanup.await(projectName, folder.getAsString(), family) : ResourceCleanup.FAILED;
         String message = resultString(object, McpKeys.MESSAGE);
-        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + folderCleanupMessage(cleanup)); //$NON-NLS-1$
+        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + folderCleanupMessage(outcome)); //$NON-NLS-1$
         return GsonProvider.toJson(object);
     }
 
     /**
-     * Removes a deleted form's resource folder here, on the calling thread, before the export barrier.
+     * Reports a deleted form's folder removal before the export barrier, on the calling thread.
      * <p>
-     * Off the UI thread on purpose (see {@link #performFormObjectDelete}): here the workspace operation
-     * takes its rule and lock like any other job, so nothing can be granted or run in the middle of it.
      * Before the barrier rather than in {@link #refreshAfterExportAwait}, because a barrier that refuses
-     * on a still-pending export returns without that step, and the folder would then stay behind.
+     * on a still-pending export returns without that step, and the internal members would then reach
+     * the caller.
      */
     @Override
     protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
     {
         return super.awaitDiskExport(params,
-            removeDeferredFormFolder(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), result,
-                formFolderRemover),
+            reportFormFolderRemoval(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), result,
+                formFolderCleanup),
             scope);
     }
 

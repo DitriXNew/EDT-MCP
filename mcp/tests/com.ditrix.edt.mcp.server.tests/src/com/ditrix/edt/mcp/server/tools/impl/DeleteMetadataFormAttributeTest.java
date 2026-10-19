@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,12 +35,18 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceRuleFactory;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
@@ -1187,19 +1194,22 @@ public class DeleteMetadataFormAttributeTest
         assertEquals(DeleteMetadataTool.ResourceCleanup.FAILED, DeleteMetadataTool.removeResource(locked));
     }
 
-    // ---- a deleted form's resource folder: removed on the calling thread, before the barrier --------
+    // ---- a deleted form's resource folder: removed by a workspace job, reported before the barrier ---
     //
     // performFormObjectDelete runs on the UI thread inside a job worker's syncExec, where the workbench
     // can grant that runnable the workspace lock and run other threads' syncExecs while it waits; a
     // workspace delete there was caught with another operation ending under it ("Illegal attempt to
-    // modify an immutable tree"). The folder path is handed to awaitDiskExport instead.
+    // modify an immutable tree", #763). It now only schedules a workspace job; awaitDiskExport waits
+    // for that job on the calling thread and states what the disk shows.
 
     private static final String GONE_FOLDER = "src/Catalogs/Catalog/Forms/Gone"; //$NON-NLS-1$
 
+    private static final String GONE_FAMILY = "delete_metadata form folder test"; //$NON-NLS-1$
+
     private static final String GONE_MESSAGE = "Deleted form 'Gone' from Catalog.Catalog and persisted to disk."; //$NON-NLS-1$
 
-    /** What performFormObjectDelete answers for a form whose folder path resolved. */
-    private static String formDeleteResult()
+    /** What performFormObjectDelete answers for a form whose folder removal it scheduled. */
+    private static String formDeleteResult(String family)
     {
         JsonObject result = new JsonObject();
         result.addProperty("success", true); //$NON-NLS-1$
@@ -1207,61 +1217,83 @@ public class DeleteMetadataFormAttributeTest
         result.addProperty("fqn", "Catalog.Catalog.Form.Gone"); //$NON-NLS-1$ //$NON-NLS-2$
         result.addProperty("message", GONE_MESSAGE); //$NON-NLS-1$
         result.addProperty(DeleteMetadataTool.KEY_FORM_FOLDER, GONE_FOLDER);
+        if (family != null)
+        {
+            result.addProperty(DeleteMetadataTool.KEY_FORM_FOLDER_REMOVAL, family);
+        }
         return result.toString();
     }
 
-    private static DiskTool diskToolRemoving(List<String> order, DiskExportState answer,
+    /** A cleanup whose await records itself and answers {@code outcome}; start is the UI half, unused here. */
+    private static DeleteMetadataTool.FormFolderCleanup awaiting(List<String> order,
         DeleteMetadataTool.ResourceCleanup outcome)
     {
         Thread caller = Thread.currentThread();
-        DiskTool tool = new DiskTool(order, answer, Map.of());
-        tool.withFormFolderRemover((projectName, folder) ->
+        return new DeleteMetadataTool.FormFolderCleanup()
         {
-            assertEquals("TestConfiguration", projectName); //$NON-NLS-1$
-            assertSame("the folder is removed on the calling thread", caller, Thread.currentThread()); //$NON-NLS-1$
-            order.add("remove " + folder); //$NON-NLS-1$
-            return outcome;
-        });
-        return tool;
+            @Override
+            public String start(IProject project, String folderRel)
+            {
+                throw new AssertionError("the barrier never schedules the removal"); //$NON-NLS-1$
+            }
+
+            @Override
+            public DeleteMetadataTool.ResourceCleanup await(String projectName, String folderRel, String family)
+            {
+                assertEquals("TestConfiguration", projectName); //$NON-NLS-1$
+                assertSame("the removal is awaited on the calling thread", caller, Thread.currentThread()); //$NON-NLS-1$
+                order.add("await " + folderRel + " " + family); //$NON-NLS-1$ //$NON-NLS-2$
+                return outcome;
+            }
+        };
     }
 
     @Test
-    public void testTheFormFolderIsRemovedBeforeTheBarrierAndReported()
+    public void testTheFolderRemovalIsReportedBeforeTheBarrier()
     {
         List<String> order = new ArrayList<>();
-        DiskTool tool = diskToolRemoving(order, DiskExportState.DRAINED, DeleteMetadataTool.ResourceCleanup.REMOVED);
+        DiskTool tool = new DiskTool(order, DiskExportState.DRAINED, Map.of());
+        tool.withFormFolderCleanup(awaiting(order, DeleteMetadataTool.ResourceCleanup.REMOVED));
 
-        JsonObject answered = JsonParser.parseString(tool.drive(formDeleteResult())).getAsJsonObject();
+        JsonObject answered = JsonParser.parseString(tool.drive(formDeleteResult(GONE_FAMILY))).getAsJsonObject();
 
-        assertEquals(List.of("remove " + GONE_FOLDER, "drained"), order); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("the internal member never reaches the caller: " + answered, //$NON-NLS-1$
-            answered.has(DeleteMetadataTool.KEY_FORM_FOLDER));
+        assertEquals(List.of("await " + GONE_FOLDER + " " + GONE_FAMILY, "drained"), order); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("the internal members never reach the caller: " + answered, //$NON-NLS-1$
+            answered.has(DeleteMetadataTool.KEY_FORM_FOLDER) || answered.has(DeleteMetadataTool.KEY_FORM_FOLDER_REMOVAL));
         assertEquals(GONE_MESSAGE + " The form resource folder was removed from disk.", //$NON-NLS-1$
             answered.get("message").getAsString()); //$NON-NLS-1$
     }
 
     @Test
-    public void testTheFormFolderIsRemovedEvenWhenTheBarrierRefuses()
+    public void testTheFolderRemovalIsAwaitedEvenWhenTheBarrierRefuses()
     {
-        // A still-pending export makes the barrier answer with a refusal and skip the post-barrier
-        // step; the model delete stands, so the folder must not be left behind as an orphan.
+        // A still-pending export makes the barrier answer with a refusal and skip the post-barrier step.
         List<String> order = new ArrayList<>();
-        DiskTool tool = diskToolRemoving(order, DiskExportState.PENDING, DeleteMetadataTool.ResourceCleanup.REMOVED);
+        DiskTool tool = new DiskTool(order, DiskExportState.PENDING, Map.of());
+        tool.withFormFolderCleanup(awaiting(order, DeleteMetadataTool.ResourceCleanup.REMOVED));
 
-        tool.drive(formDeleteResult());
+        String answered = tool.drive(formDeleteResult(GONE_FAMILY));
 
-        assertEquals("remove " + GONE_FOLDER, order.get(0)); //$NON-NLS-1$
+        assertEquals("await " + GONE_FOLDER + " " + GONE_FAMILY, order.get(0)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(answered, answered.contains(DeleteMetadataTool.KEY_FORM_FOLDER));
     }
 
     @Test
-    public void testTheFolderOutcomeIsStatedAsSeen()
+    public void testAFolderThatWasNotThereIsAwaitedWithNoJob()
     {
-        String notFound = DeleteMetadataTool.removeDeferredFormFolder("P", formDeleteResult(), //$NON-NLS-1$
-            (projectName, folder) -> DeleteMetadataTool.ResourceCleanup.NOT_FOUND);
-        assertTrue(notFound, notFound.contains("The form resource folder was not found on disk")); //$NON-NLS-1$
+        List<String> order = new ArrayList<>();
+        String answered = DeleteMetadataTool.reportFormFolderRemoval("TestConfiguration", formDeleteResult(null), //$NON-NLS-1$
+            awaiting(order, DeleteMetadataTool.ResourceCleanup.NOT_FOUND));
 
-        String failed = DeleteMetadataTool.removeDeferredFormFolder("P", formDeleteResult(), //$NON-NLS-1$
-            (projectName, folder) -> DeleteMetadataTool.ResourceCleanup.FAILED);
+        assertEquals(List.of("await " + GONE_FOLDER + " null"), order); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(answered, answered.contains("The form resource folder was not found on disk")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedRemovalIsStatedAsSuch()
+    {
+        String failed = DeleteMetadataTool.reportFormFolderRemoval("TestConfiguration", formDeleteResult(GONE_FAMILY), //$NON-NLS-1$
+            awaiting(new ArrayList<>(), DeleteMetadataTool.ResourceCleanup.FAILED));
         assertTrue(failed, failed.contains("The form resource folder could not be removed")); //$NON-NLS-1$
     }
 
@@ -1269,21 +1301,78 @@ public class DeleteMetadataFormAttributeTest
     public void testAResultWithoutAFolderIsReturnedUnchanged()
     {
         String other = "{\"success\":true,\"action\":\"executed\",\"message\":\"Deleted.\"}"; //$NON-NLS-1$
-        assertSame(other, DeleteMetadataTool.removeDeferredFormFolder("P", other, //$NON-NLS-1$
-            (projectName, folder) -> { throw new AssertionError("nothing to remove"); })); //$NON-NLS-1$
-        assertNull(DeleteMetadataTool.removeDeferredFormFolder("P", null, //$NON-NLS-1$
-            (projectName, folder) -> { throw new AssertionError("nothing to remove"); })); //$NON-NLS-1$
+        DeleteMetadataTool.FormFolderCleanup none = awaiting(new ArrayList<>(), null);
+        assertSame(other, DeleteMetadataTool.reportFormFolderRemoval("P", other, none)); //$NON-NLS-1$
+        assertNull(DeleteMetadataTool.reportFormFolderRemoval("P", null, none)); //$NON-NLS-1$
     }
 
     @Test
     public void testAMalformedFolderMemberIsAFailureNotAGuess()
     {
-        JsonObject result = JsonParser.parseString(formDeleteResult()).getAsJsonObject();
+        JsonObject result = JsonParser.parseString(formDeleteResult(GONE_FAMILY)).getAsJsonObject();
         result.add(DeleteMetadataTool.KEY_FORM_FOLDER, new JsonObject());
-        String answered = DeleteMetadataTool.removeDeferredFormFolder("P", result.toString(), //$NON-NLS-1$
-            (projectName, folder) -> { throw new AssertionError("no path to remove"); }); //$NON-NLS-1$
+        List<String> order = new ArrayList<>();
+        String answered = DeleteMetadataTool.reportFormFolderRemoval("P", result.toString(), //$NON-NLS-1$
+            awaiting(order, null));
+        assertTrue("no path, nothing awaited: " + order, order.isEmpty()); //$NON-NLS-1$
         assertFalse(answered, answered.contains(DeleteMetadataTool.KEY_FORM_FOLDER));
         assertTrue(answered, answered.contains("could not be removed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoFolderOnDiskSchedulesNothing()
+    {
+        IFolder folder = mock(IFolder.class);
+        when(folder.exists()).thenReturn(false);
+        IProject project = mock(IProject.class);
+        when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
+
+        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup().start(project, GONE_FOLDER));
+        verify(folder, never()).getWorkspace();
+    }
+
+    @Test
+    public void testTheFolderIsRemovedByAWorkspaceJobNotByTheCaller() throws Exception
+    {
+        // The UI half only schedules: the delete itself runs on a job worker, under the folder's rule.
+        ISchedulingRule rule = new ISchedulingRule()
+        {
+            @Override
+            public boolean contains(ISchedulingRule other)
+            {
+                return other == this;
+            }
+
+            @Override
+            public boolean isConflicting(ISchedulingRule other)
+            {
+                return other == this;
+            }
+        };
+        IResourceRuleFactory rules = mock(IResourceRuleFactory.class);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(workspace.getRuleFactory()).thenReturn(rules);
+        IFolder folder = mock(IFolder.class);
+        when(folder.exists()).thenReturn(true);
+        when(folder.getWorkspace()).thenReturn(workspace);
+        when(folder.getFullPath()).thenReturn(new Path("/TestConfiguration/" + GONE_FOLDER)); //$NON-NLS-1$
+        when(rules.deleteRule(folder)).thenReturn(rule);
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        doAnswer(invocation ->
+        {
+            deleter.set(Thread.currentThread());
+            return null;
+        }).when(folder).delete(anyBoolean(), any());
+        IProject project = mock(IProject.class);
+        when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
+
+        String family = new DeleteMetadataTool.WorkspaceFormFolderCleanup().start(project, GONE_FOLDER);
+
+        assertNotNull("an existing folder gets a removal job", family); //$NON-NLS-1$
+        Job.getJobManager().join(family, new NullProgressMonitor());
+        verify(folder).delete(eq(true), any());
+        assertNotNull(deleter.get());
+        assertNotSame("the folder is not removed on the scheduling thread", Thread.currentThread(), deleter.get()); //$NON-NLS-1$
     }
 
     // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------
