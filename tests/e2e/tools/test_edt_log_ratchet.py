@@ -23,9 +23,15 @@ are the ones this server writes; a live workspace can belong to a different EDT 
 
 Only entries whose plugin is `com.ditrix.edt.mcp.server` at severity 4 (ERROR), and only
 those stamped at or after this run started. Platform noise is deliberately out of scope: EDT
-logs plenty of its own errors (its Moxel editor touching a stopped namespace, its Xtext
-builder opening a nested transaction, legacy BSL checks throwing) and we neither cause nor
-can fix those. Ours are the ones we own.
+logs plenty of its own errors (its Xtext builder opening a nested transaction, legacy BSL checks
+throwing) and we neither cause nor can fix those. Ours are the ones we own.
+
+The plugin filter is also a blind spot: an entry logged under a PLATFORM plugin can still be
+caused by us. "Moxel editor touching a stopped namespace" (BmNamespaceInactiveException from
+MoxelControl under com._1c.g5.v8.dt.core) once sat in the noise list above, and it was ours -
+get_template_screenshot leaked the off-screen control's listeners (issue #770). That case is
+now checked by its own test in test_get_template_screenshot.py; this ratchet still sees only
+our plugin's entries.
 
 Known, accepted messages live in `edt_log_baseline.txt`, one normalized message per line.
 Most of what is in there is a VALIDATION REFUSAL logged at ERROR - a tool correctly rejecting

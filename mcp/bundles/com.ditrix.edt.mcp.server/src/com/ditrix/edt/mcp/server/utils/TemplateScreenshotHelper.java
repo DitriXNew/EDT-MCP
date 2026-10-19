@@ -246,9 +246,10 @@ public final class TemplateScreenshotHelper
     {
         Display display = Display.getCurrent();
         Shell shell = new Shell(display);
+        MoxelControl control = null;
         try
         {
-            MoxelControl control = new MoxelControl(shell, MOXEL_CONTROL_STYLE, presentation);
+            control = new MoxelControl(shell, MOXEL_CONTROL_STYLE, presentation);
             control.setDocument(document);
 
             SheetAccessor sheet = control.getSheet();
@@ -297,7 +298,24 @@ public final class TemplateScreenshotHelper
         }
         finally
         {
-            shell.dispose();
+            // MoxelControl unregisters the IV8ProjectManager / IEditingLanguageManager / IPresentationService
+            // listeners that setDocument registered ONLY in its own dispose() override. Shell.dispose()
+            // releases its children through Widget.release(false) and never calls that override, so a
+            // Shell-only teardown leaves a live project listener bound to this rolled-back document; after a
+            // project context restart it makes EDT log BmNamespaceInactiveException on the next language
+            // change. Dispose the control first - the teardown EDT's own PrintHelper does from its Shell
+            // DisposeListener. MoxelControl.dispose() is idempotent.
+            try
+            {
+                if (control != null && !control.isDisposed())
+                {
+                    control.dispose();
+                }
+            }
+            finally
+            {
+                shell.dispose();
+            }
         }
     }
 
