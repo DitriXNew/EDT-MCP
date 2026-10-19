@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -4186,7 +4187,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The production {@link FormPresenceReader}: one read-only BM transaction. The owner is looked up by
+     * The model's answer, read in one read-only BM transaction that waits as long as the model is held; the
+     * production reader is this one {@link #bounded}. The owner is looked up by
      * the FQN the folder path names, not by the deleted owner's BM id: an owner deleted and created again
      * under the same name writes its forms to the same path with a new id, and a renamed owner keeps its id
      * while its forms move to another path.
@@ -4220,6 +4222,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "' was created again", e); //$NON-NLS-1$
             return FormPresence.UNKNOWN;
         }
+    }
+
+    /**
+     * How long one read of the model may take before it counts as {@link FormPresence#UNKNOWN}. The removal
+     * job reads it while holding the folder's delete rule, and the caller reads it on the MCP call's thread.
+     */
+    static final long PRESENCE_READ_MS = 10_000L;
+
+    /**
+     * A reader, bounded. A read-only BM transaction waits without a limit while another BM operation holds
+     * the model, and both places that ask must not: the removal job would block every save, create and
+     * delete of the folder for as long as it holds the rule, and the caller would hang a delete that
+     * already succeeded. A read that does not answer in time, or fails, is {@link FormPresence#UNKNOWN}:
+     * the job then lets the rule go and asks again later, and the caller reports what it can.
+     *
+     * @param reader the reader to bound
+     * @param timeoutMs how long one read may take
+     * @return the bounded reader
+     */
+    static FormPresenceReader bounded(FormPresenceReader reader, long timeoutMs)
+    {
+        return (project, ownerFqn, formName) ->
+        {
+            AtomicReference<FormPresence> answer = new AtomicReference<>(FormPresence.UNKNOWN);
+            BoundedJob.Result read = BoundedJob.run("delete_metadata: read the deleted form's owner", //$NON-NLS-1$
+                timeoutMs, monitor -> answer.set(reader.read(project, ownerFqn, formName)));
+            return read.getOutcome() == BoundedJob.Outcome.COMPLETED && read.getFailure() == null
+                ? answer.get() : FormPresence.UNKNOWN;
+        };
     }
 
     /**
@@ -4283,7 +4314,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         WorkspaceFormFolderCleanup()
         {
-            this(DeleteMetadataTool::formPresenceInModel, WorkspaceFormFolderCleanup::productionRetry);
+            this(bounded(DeleteMetadataTool::formPresenceInModel, PRESENCE_READ_MS),
+                WorkspaceFormFolderCleanup::productionRetry);
         }
 
         WorkspaceFormFolderCleanup(FormPresenceReader presence, RetryPolicy retry)

@@ -1562,6 +1562,40 @@ public class DeleteMetadataFormAttributeTest
     }
 
     @Test
+    public void testAReadThatDoesNotAnswerInTimeIsUnknownNotAWait()
+    {
+        // BmTransactions.read waits as long as another BM operation holds the model; the removal job
+        // reads under the folder's delete rule, and the caller on the MCP call's thread.
+        DeleteMetadataTool.FormPresenceReader slow = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            try
+            {
+                Thread.sleep(5_000L);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return DeleteMetadataTool.FormPresence.ABSENT;
+        }, 100L);
+        long started = System.currentTimeMillis();
+
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, slow.read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the caller is freed at the bound", System.currentTimeMillis() - started < 4_000L); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABoundedReadPassesOnWhatTheModelSaysAndAFailureIsUnknown()
+    {
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.bounded(
+            (project, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT, 5_000L)
+            .read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, DeleteMetadataTool.bounded(
+            (project, owner, name) -> { throw new IllegalStateException("model gone"); }, 5_000L) //$NON-NLS-1$
+            .read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testAnOwnerThatCouldNotBeNamedIsUnknownNotAbsent()
     {
         assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN,
