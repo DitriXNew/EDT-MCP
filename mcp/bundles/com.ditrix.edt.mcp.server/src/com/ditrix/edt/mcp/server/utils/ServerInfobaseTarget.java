@@ -116,7 +116,8 @@ public record ServerInfobaseTarget(String server, String infobase)
             int colon = address.indexOf(':');
             host = colon < 0 ? address : address.substring(0, colon);
             suffix = colon < 0 ? "" : address.substring(colon); //$NON-NLS-1$
-            if (!host.matches("[\\p{L}\\p{N}_-]+(?:\\.[\\p{L}\\p{N}_-]+)*\\.?")) //$NON-NLS-1$
+            // Labels cannot consume dots; neither label nor group backtracking can help a match.
+            if (!host.matches("[\\p{L}\\p{N}_-]++(?:\\.[\\p{L}\\p{N}_-]++)*+\\.?")) //$NON-NLS-1$
             {
                 return false;
             }

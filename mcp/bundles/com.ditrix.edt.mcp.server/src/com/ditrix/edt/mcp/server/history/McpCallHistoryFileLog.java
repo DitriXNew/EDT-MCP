@@ -18,9 +18,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -83,6 +85,9 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     /** Single background thread that owns all disk I/O for this sink. */
     private final ExecutorService writer;
 
+    /** Completed by the executor's own {@code terminated()} hook, whichever thread terminates it. */
+    private final CompletableFuture<Void> writerTerminated = new CompletableFuture<>();
+
     /** Orders admission and drain scheduling before the final writer cleanup task. */
     private final Object lifecycleLock = new Object();
 
@@ -128,7 +133,18 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     {
         this.logFile = logFile.toAbsolutePath().normalize();
         this.queue = new ArrayBlockingQueue<>(DEFAULT_CAPACITY);
-        this.writer = Executors.newSingleThreadExecutor(this::newWriterThread);
+        // A single-thread executor whose termination hook completes writerTerminated: the hook runs in
+        // whichever thread moves the pool to TERMINATED (the worker or the thread calling shutdown()),
+        // before the state is published, so a successor that saw it not terminated is always released.
+        this.writer = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(),
+            this::newWriterThread)
+        {
+            @Override
+            protected void terminated()
+            {
+                writerTerminated.complete(null);
+            }
+        };
     }
 
     /**
@@ -488,28 +504,19 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         {
             return;
         }
-        boolean interrupted = false;
-        while (!previous.writer.isTerminated())
+        if (!previous.writer.isTerminated())
         {
-            try
+            // join waits through interruption and restores the flag on return. File ownership
+            // transfers only after the predecessor worker has finished all cleanup.
+            previous.writerTerminated.join();
+            // terminated() runs in TIDYING; TERMINATED is published by the same thread right after
+            // it returns. Wait out that short step so the handoff keeps awaitTermination's guarantee.
+            while (!previous.writer.isTerminated())
             {
-                if (previous.writer.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
-                {
-                    break;
-                }
-            }
-            catch (InterruptedException e)
-            {
-                // Interruption cannot make it safe to open a file still owned by the
-                // predecessor. Finish the handoff, then preserve the interrupt status.
-                interrupted = true;
+                Thread.yield();
             }
         }
         predecessor = null;
-        if (interrupted)
-        {
-            Thread.currentThread().interrupt();
-        }
     }
 
     /**
