@@ -187,9 +187,14 @@ public class GetToolGuideToolSectionsTest
     }
 
     @Test
-    public void testQueryReturnsWholeMatchingSectionsInOrderWithoutUnrelatedSections()
+    public void testQueryReturnsMatchingLinesWithSectionsAndAnchorsInOrder()
     {
-        assertEquals(ALPHA + "\n" + GAMMA, execute("query", "nEeDlE[.]"));
+        String result = execute("query", "nEeDlE[.]");
+        assertEquals("2 matching lines in 2 sections; fetch one with section=<heading|#anchor>.\n\n"
+            + "- Alpha (#alpha): needle[.] in the body.\n"
+            + "- NEEDLE[.] heading (#needle-heading): ## NEEDLE[.] heading\n", result);
+        assertFalse(result.contains("Nested instructions."));
+        assertFalse(result.contains("Last instructions."));
     }
 
     @Test
@@ -216,7 +221,7 @@ public class GetToolGuideToolSectionsTest
     @Test
     public void testEmptySectionDoesNotSilentlyReturnTheFullGuide()
     {
-        assertTrue(error(execute("section", "")).contains("Pass a heading or anchor"));
+        assertTrue(error(execute("section", "")).contains("section must not be blank"));
     }
 
     @Test
@@ -279,7 +284,7 @@ public class GetToolGuideToolSectionsTest
     {
         register("## Large\n" + "x".repeat(110_000) + "\n## Tail\nReachable.\n");
         assertEquals("## Tail\nReachable.\n", execute("section", "Tail"));
-        assertEquals("## Tail\nReachable.\n", execute("query", "Reachable"));
+        assertTrue(execute("query", "Reachable").contains("- Tail (#tail): Reachable.\n"));
         assertFalse(execute("mode", "summary").contains("x".repeat(100)));
     }
 
@@ -301,7 +306,7 @@ public class GetToolGuideToolSectionsTest
     }
 
     @Test
-    public void testNewSelectorsAreOptionalAndTheirSemanticsSurviveWireCompaction()
+    public void testNewSelectorsAreOptionalAndOnlyTheirEnumSurvivesWireCompaction()
     {
         JsonObject schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject();
         assertEquals("[\"toolName\"]", schema.getAsJsonArray("required").toString());
@@ -309,10 +314,11 @@ public class GetToolGuideToolSectionsTest
         assertEquals(4, properties.size());
         assertEquals("[\"full\",\"summary\"]", properties.getAsJsonObject("mode").get("enum").toString());
         JsonObject compact = InputSchemaCompactor.compact(tool.getName(), schema).getAsJsonObject();
+        assertEquals(properties.getAsJsonObject("mode").get("enum"),
+            compact.getAsJsonObject("properties").getAsJsonObject("mode").get("enum"));
         for (String name : new String[] {"mode", "section", "query"})
         {
-            assertEquals(properties.getAsJsonObject(name).get("description"),
-                compact.getAsJsonObject("properties").getAsJsonObject(name).get("description"));
+            assertFalse(compact.getAsJsonObject("properties").getAsJsonObject(name).has("description"));
         }
     }
 }

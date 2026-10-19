@@ -53,8 +53,8 @@ public class GetToolGuideTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Retrieve detailed instructions for an MCP tool. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('get_tool_guide'). Use mode=summary, section or query for partial output."; //$NON-NLS-1$
+        return "Retrieve detailed instructions for an MCP tool. " //$NON-NLS-1$
+            + "mode=summary lists sections; section=<heading|#anchor>; query=<text>."; //$NON-NLS-1$
     }
 
     @Override
@@ -73,8 +73,8 @@ public class GetToolGuideTool implements IMcpTool
             .enumProperty(KEY_MODE,
                 "summary: parameters and ## headings; full: default. Use only one of mode, section, query.", //$NON-NLS-1$
                 MODE_FULL, MODE_SUMMARY)
-            .stringProperty(KEY_SECTION, "Exact heading or #anchor, case-insensitive.") //$NON-NLS-1$
-            .stringProperty(KEY_QUERY, "Literal, case-insensitive; returns matching ## sections.") //$NON-NLS-1$
+            .stringProperty(KEY_SECTION, "Heading or #anchor; ignores case, backticks and heading markers.") //$NON-NLS-1$
+            .stringProperty(KEY_QUERY, "Literal search, ignoring case and Russian yo/ye; 2+ characters, up to 20 lines of 200 characters.") //$NON-NLS-1$
             .build();
     }
 
@@ -116,10 +116,21 @@ public class GetToolGuideTool implements IMcpTool
             return ToolResult.error("Unknown mode: " + mode //$NON-NLS-1$
                 + ". Use 'full' or 'summary', or omit mode for the full guide.").toJson(); //$NON-NLS-1$
         }
+        if (section != null && section.isBlank())
+        {
+            return ToolResult.error("section must not be blank. " //$NON-NLS-1$
+                + "Pass a heading or #anchor from mode=summary, or omit section for the full guide.").toJson(); //$NON-NLS-1$
+        }
         if (query != null && query.isBlank())
         {
             return ToolResult.error("query must not be blank. Pass a literal search term " //$NON-NLS-1$
                 + "or omit query for the full guide.").toJson(); //$NON-NLS-1$
+        }
+
+        if (query != null && query.strip().length() < 2)
+        {
+            return ToolResult.error("query must contain at least 2 characters. " //$NON-NLS-1$
+                + "Pass a longer literal search term or omit query for the full guide.").toJson(); //$NON-NLS-1$
         }
 
         String markdown = GuideRenderer.render(tool);
@@ -137,6 +148,11 @@ public class GetToolGuideTool implements IMcpTool
                     + ". Pass a heading or anchor from the available sections:\n\n" //$NON-NLS-1$
                     + sections.tableOfContents()).toJson();
         }
-        return query != null ? sections.query(query) : sections.summary();
+        if (query != null)
+        {
+            return sections.query(query);
+        }
+        return sections.summary()
+            + "\nFetch a section with section=<heading|#anchor>; full guide: guide://" + toolName + ".\n"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

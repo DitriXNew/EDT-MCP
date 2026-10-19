@@ -25,7 +25,7 @@ public class GuideSectionsTest
             + "### Child\nChild body\n#### Grandchild\nMore\n# Other\nOutside\n## Last\nEnd");
         assertEquals("## Parent\nBody\n### Child\nChild body\n#### Grandchild\nMore\n",
             sections.find("Parent").text());
-        assertNull(sections.find("Child"));
+        assertEquals("### Child\nChild body\n#### Grandchild\nMore\n", sections.find("Child").text());
         assertEquals("## Last\nEnd", sections.find("Last").text());
     }
 
@@ -88,8 +88,9 @@ public class GuideSectionsTest
             String section = "## BINDING\n\u041f\u0440\u0438\u0432\u0435\u0442\n";
             GuideSections sections = GuideSections.parse(section);
             assertEquals(section, sections.find("#binding").text());
-            assertEquals(section, sections.query("binding"));
-            assertEquals(section, sections.query("\u041f\u0420\u0418\u0412\u0415\u0422"));
+            assertTrue(sections.query("binding").contains("- BINDING (#binding): ## BINDING\n"));
+            assertTrue(sections.query("\u041f\u0420\u0418\u0412\u0415\u0422")
+                .contains("- BINDING (#binding): \u041f\u0440\u0438\u0432\u0435\u0442\n"));
         }
         finally
         {

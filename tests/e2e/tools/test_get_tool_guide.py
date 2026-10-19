@@ -144,19 +144,18 @@ def test_section_accepts_an_anchor_from_the_contents_list():
 
 
 @e2e_test(tool="get_tool_guide", kind="read")
-def test_query_returns_the_complete_matching_section():
-    """A mixed-case literal body query returns Output, without other sections."""
-    full = call("get_tool_guide", {"toolName": TARGET_TOOL})
-    assert_ok(full, "full guide for the independent query-span comparison")
-    start = full.text.index("## Output\n")
-    end = full.text.index("## Continuation (large files)\n", start)
+def test_query_returns_a_matching_line_with_its_section_and_anchor():
+    """A mixed-case literal query returns a bounded snippet, excluding neighbouring prose."""
     r = call("get_tool_guide", {"toolName": TARGET_TOOL,
                                "query": "OpAqUe WhOlE-FiLe ReViSiOn ToKeN"})
     assert_ok(r, "case-insensitive literal query")
-    if r.text != full.text[start:end]:
-        _fail("query must return the entire original matching Output section")
-    assert_contains(r.text, "Frontmatter fields:", "query retains the whole matching section")
+    assert_contains(r.text, "1 matching line in 1 section;", "query counts matching lines")
+    assert_contains(r.text, "- Output (#output): - `contentHash`: an opaque whole-file revision token.",
+                    "query labels the matching line with a reusable title and anchor")
+    assert_not_contains(r.text, "Frontmatter fields:", "query must omit non-matching neighbouring lines")
     assert_not_contains(r.text, "## Examples", "query excludes unrelated sections")
+    if len(r.text) >= 1_000:
+        _fail("one matching line must return a short snippet")
     assert_no_diff("querying a guide must not change the fixture")
 
 
@@ -236,3 +235,107 @@ def test_unknown_mode_and_blank_query_are_actionable_errors():
     assert_error_quality(err, names=["query"], suggests=["Pass a literal search term"],
                          ctx="blank query offers a fix")
     assert_no_diff("invalid selectors must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_large_modify_metadata_summary_is_small_and_lists_every_h2():
+    """The real large guide exposes all H2 headings, parameters and the full resource."""
+    full = call("get_tool_guide", {"toolName": "modify_metadata"})
+    assert_ok(full, "full modify_metadata guide")
+    if len(full.text) <= 90_000:
+        _fail("the regression must exercise the real large modify_metadata guide")
+    r = call("get_tool_guide", {"toolName": "modify_metadata", "mode": "summary"})
+    assert_ok(r, "large guide summary")
+    if len(r.text) >= 15_000 or len(r.text) >= len(full.text) / 4:
+        _fail("summary must retain only the description, parameters and a small heading index")
+    assert_contains(r.text, "| fqn |", "summary retains the real parameter table")
+    for line in full.text.splitlines():
+        if line.startswith("## "):
+            assert_contains(r.text, "| " + line[3:] + " | #", "every H2 is discoverable")
+    assert_not_contains(r.text, "When the `fqn` is a **Role**", "summary excludes body instructions")
+    assert_contains(r.text, "guide://modify_metadata", "summary offers the full guide resource")
+    assert_no_diff("large guide discovery must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_broad_modify_metadata_query_caps_lines_with_an_exact_remainder():
+    """An independently counted broad query cannot return neighbouring tens of KB."""
+    full = call("get_tool_guide", {"toolName": "modify_metadata"})
+    assert_ok(full, "independent source for the matching-line count")
+    query = "type"
+    count = sum(query in line.lower() for line in full.text.splitlines())
+    if count <= 20:
+        _fail("broad query fixture must contain more than the 20-line cap")
+    r = call("get_tool_guide", {"toolName": "modify_metadata", "query": query})
+    assert_ok(r, "bounded query of the large guide")
+    assert_contains(r.text, "%s matching lines in " % count, "header counts all matching lines")
+    assert_contains(r.text, "section=<heading|#anchor>", "query explains how to fetch complete instructions")
+    hits = [line for line in r.text.splitlines() if line.startswith("- ")]
+    if len(hits) != 20 or len(r.text) >= 10_000:
+        _fail("broad query must return exactly 20 short matching-line snippets")
+    for line in hits:
+        assert_contains(line, "(#", "each snippet identifies its enclosing anchor")
+    if not r.text.endswith("... (%s more)\n" % (count - 20)):
+        _fail("remainder must equal the independently counted total minus 20")
+    assert_not_contains(r.text, "A PREDEFINED item is addressed through its owner's member FQN",
+                        "query excludes a body sentence from a non-matching section")
+    assert_no_diff("broad guide search must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_nested_heading_accepts_pasted_markers_and_unquoted_title():
+    """A real H3 can be selected with pasted Markdown markers and no backticks."""
+    full = call("get_tool_guide", {"toolName": "modify_metadata"})
+    assert_ok(full, "full guide for the independent H3 span")
+    heading = "### Adjustable flags (`view` / `edit` / `userVisible` / `use`)\n"
+    start = full.text.index(heading)
+    end = full.text.index("### Use always", start)
+    r = call("get_tool_guide", {"toolName": "modify_metadata",
+                               "section": "### Adjustable flags (view / edit / userVisible / use)"})
+    assert_ok(r, "normalized nested heading")
+    if r.text != full.text[start:end]:
+        _fail("nested selection must equal the original H3 span, including whitespace")
+    assert_not_contains(r.text, "### Use always", "nested selection excludes its sibling")
+    assert_no_diff("nested guide selection must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_query_reaches_the_body_h1_introduction():
+    """Text after the deprecated guide's H1 remains searchable outside all H2 spans."""
+    r = call("get_tool_guide", {"toolName": "debug_yaxunit_tests",
+                               "query": "The job resolves and prepares the application"})
+    assert_ok(r, "query outside H2 sections")
+    assert_contains(r.text, "1 matching line in 1 section;", "one introduction line matches")
+    assert_contains(r.text, "debug_yaxunit_tests (deprecated) (#debug_yaxunit_tests-deprecated)",
+                    "the enclosing H1 identifies the hit")
+    assert_not_contains(r.text, "## Parameter details", "query excludes the next H2")
+    assert_no_diff("searching a guide introduction must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_blank_sections_and_short_queries_offer_actionable_fixes():
+    """Empty/whitespace sections and one-character queries fail before rendering."""
+    for value in ("", "   ", " \t\r\n"):
+        r = call("get_tool_guide", {"toolName": TARGET_TOOL, "section": value})
+        err = assert_error(r, "blank guide section")
+        assert_error_quality(err, names=["section must not be blank"],
+                             suggests=["Pass a heading or #anchor", "mode=summary"],
+                             ctx="blank section offers usable selectors")
+    r = call("get_tool_guide", {"toolName": TARGET_TOOL, "query": " a "})
+    err = assert_error(r, "one-character guide query")
+    assert_error_quality(err, names=["query", "at least 2 characters"],
+                         suggests=["Pass a longer literal search term"],
+                         ctx="short query offers a fix")
+    assert_no_diff("invalid guide selectors must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_real_create_infobase_summary_omits_fenced_heading_comments():
+    """Real shell comments in the infobase guide must stay out of the heading index."""
+    r = call("get_tool_guide", {"toolName": "create_infobase", "mode": "summary"})
+    assert_ok(r, "create_infobase summary")
+    assert_contains(r.text, "| Typical workflow | #typical-workflow |", "real guide headings are loaded")
+    assert_not_contains(r.text, "Create a brand-new infobase:", "shell comment is not a TOC row")
+    assert_not_contains(r.text, "Or register an existing one:", "second shell comment is not a TOC row")
+    assert_contains(r.text, "guide://create_infobase", "summary links to the full guide")
+    assert_no_diff("infobase guide discovery must not change the fixture")

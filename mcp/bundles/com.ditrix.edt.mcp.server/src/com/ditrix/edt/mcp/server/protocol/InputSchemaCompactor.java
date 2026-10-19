@@ -132,8 +132,6 @@ public final class InputSchemaCompactor
         keep.put("get_markers", asSet("markerKind", "priority")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Two filters that are mutually exclusive and differ in matching semantics.
         keep.put("get_project_errors", asSet("objects", "objectFqns")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        // The enum cannot express selector exclusion, heading/anchor addressing or literal matching.
-        keep.put("get_tool_guide", asSet("mode", "section", "query")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // Name-only compatibility filter vs Name-or-localized-Synonym discovery filter.
         keep.put("get_metadata_objects", asSet("nameFilter", "textFilter")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // 'callers' vs 'callees' - the enum values alone do not say which way they point.
