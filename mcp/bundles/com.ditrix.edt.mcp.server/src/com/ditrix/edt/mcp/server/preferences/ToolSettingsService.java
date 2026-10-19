@@ -110,7 +110,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS));
 
+    private static final Map<Integer, Set<String>> DEVELOPMENT_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
+        4, DEVELOPMENT_V4_ADDITIONS,
+        6, NO_DEBUG_V6_ADDITIONS,
+        10, NO_DEBUG_V10_ADDITIONS);
+
     /*
+     * Legacy-only recognition shapes for stores that have no recorded preset ID.
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
      * Never derive them from the live preset, which has grown over time. A shape is only ever
      * extended after checking that every supported historical store still contains the new name.
@@ -267,15 +273,27 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * restrictive shape first; otherwise a broader match would add only part of the tools owed to
      * an Analysis Only store.
      *
+     * <p>
+     * Version 13 records provenance once, AFTER those legacy steps. Only an exact preset set
+     * inherits an ID; tightened, loosened or otherwise edited sets become explicitly custom.
+     * Stores with a recorded ID use that identity for preset additions, never the old shapes.
+     * Missing IDs on a store already at version 13 are custom too, without another inference.
+     * Keep each historical threshold: versions 6 and 7 were originally described as the same
+     * version, but reusing 6 would skip a migration on stores that had already recorded it.
+     *
      * @param store the preference store to migrate (never {@code null} here)
      */
-    private void ensureMigrated(IPreferenceStore store)
+    private synchronized void ensureMigrated(IPreferenceStore store)
     {
         int storedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);
         if (storedVersion >= PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION)
         {
             return;
         }
+        // Null is reserved for pre-provenance stores. An explicit unknown/empty ID is custom.
+        ToolPreset storedPreset = store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID)
+            ? ToolPreset.fromId(store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID)) : null;
+        ToolPreset inferredPreset = ToolPreset.CUSTOM;
         // Only an EXPLICITLY stored list needs fixing; a default-valued store already carries the new
         // default (which includes the tool).
         if (store.contains(PreferenceConstants.PREF_DISABLED_TOOLS)
@@ -306,7 +324,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
             if (storedVersion < 2)
             {
-                changed |= migrateApplyQuickFixIntoReadOnlyPreset(disabled);
+                changed |= storedPreset == null ? migrateApplyQuickFixIntoReadOnlyPreset(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 2);
             }
             if (storedVersion < 3)
             {
@@ -319,14 +338,16 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             {
                 // The v4 shapes intentionally omit apply_quick_fix, so this step recognizes a store
                 // whose user deliberately re-enabled it after version 2 without adding it back.
-                changed |= migrateRegroupedToolsIntoPresets(disabled);
+                changed |= storedPreset == null ? migrateRegroupedToolsIntoPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 4);
             }
             if (storedVersion < 6)
             {
                 // set_error_breakpoint is new, so a preset saved before it existed cannot name it.
                 // Without this step an upgraded store that chose a NO-DEBUG preset would silently
                 // gain a debugging tool - the same hazard version 2 and version 4 exist for.
-                changed |= migrateErrorBreakpointIntoNoDebugPresets(disabled);
+                changed |= storedPreset == null ? migrateErrorBreakpointIntoNoDebugPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 6);
             }
             if (storedVersion < 7)
             {
@@ -335,42 +356,88 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // Order against it does not matter - every step here only ADDS to the disabled
                 // list, and the recognition below is a containment test, which more disabled
                 // entries can never break.
-                changed |= migrateDestructiveToolsIntoReadOnlyPresets(disabled);
+                changed |= storedPreset == null ? migrateDestructiveToolsIntoReadOnlyPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 7);
             }
             if (storedVersion < 8)
             {
                 // infobase_sessions is new and destructive, so a stored read-only profile must
                 // not gain it merely because the Applications group now contains it.
-                changed |= migrateInfobaseSessionsIntoReadOnlyPresets(disabled);
+                changed |= storedPreset == null ? migrateInfobaseSessionsIntoReadOnlyPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 8);
             }
             if (storedVersion < 9)
             {
                 // These older tools declare themselves destructive but missed read-only migrations.
-                changed |= migrateLegacyDestructiveToolsIntoReadOnlyPresets(disabled);
+                changed |= storedPreset == null ? migrateLegacyDestructiveToolsIntoReadOnlyPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 9);
             }
             if (storedVersion < 10)
             {
                 // debug_pause is new: a stored no-debug preset cannot name it, and a denylist
                 // would otherwise hand it a tool that suspends a running session.
-                changed |= migrateDebugPauseIntoNoDebugPresets(disabled);
+                changed |= storedPreset == null ? migrateDebugPauseIntoNoDebugPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 10);
             }
             if (storedVersion < 11)
             {
                 // import_project_from_file is new and creates a project from a file.
-                changed |= migrateProjectFileImportIntoReadOnlyPresets(disabled);
+                changed |= storedPreset == null ? migrateProjectFileImportIntoReadOnlyPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 11);
             }
             if (storedVersion < 12)
             {
                 // export_configuration_to_file is new and drives the Designer against an infobase.
-                changed |= migrateConfigurationFileExportIntoReadOnlyPresets(disabled);
+                changed |= storedPreset == null ? migrateConfigurationFileExportIntoReadOnlyPresets(disabled)
+                    : migrateRecordedPreset(disabled, storedPreset, 12);
             }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
             }
+            if (storedVersion < 13 && storedPreset == null)
+            {
+                // matchPreset ignores stale names; provenance must retain every edit.
+                ToolPreset matched = ToolPreset.matchPreset(disabled);
+                if (disabled.equals(matched.getDisabledTools()))
+                {
+                    inferredPreset = matched;
+                }
+            }
+        }
+        if (storedVersion < 13 && storedPreset == null)
+        {
+            store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, inferredPreset.getId());
         }
         store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
             PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+    }
+
+    /** Applies an existing migration by recorded identity, without inspecting a preset shape. */
+    private static boolean migrateRecordedPreset(Set<String> disabled, ToolPreset preset, int version)
+    {
+        Map<Integer, Set<String>> additions = switch (preset)
+        {
+            case ANALYSIS_ONLY -> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION;
+            case CODE_REVIEW -> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION;
+            case DEVELOPMENT -> DEVELOPMENT_MIGRATION_ADDITIONS_BY_VERSION;
+            default -> Collections.emptyMap();
+        };
+        return disabled.addAll(additions.getOrDefault(version, Collections.emptySet()));
+    }
+
+    /**
+     * Returns the recorded preset ID, or the custom ID if provenance is unavailable.
+     */
+    public String getPresetId()
+    {
+        IPreferenceStore store = getStore();
+        if (store == null)
+        {
+            return ToolPreset.CUSTOM.getId();
+        }
+        ensureMigrated(store);
+        return ToolPreset.fromId(store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID)).getId();
     }
 
     /**
@@ -569,16 +636,29 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * Saves the set of disabled tool names to preferences and, when the set actually changed,
      * tells connected clients that {@code tools/list} changed with it.
      *
+     * Manual changes clear preset provenance; saving an unchanged set preserves it.
+     *
      * @param disabledTools the tool names to disable
      */
     public void setDisabledTools(Set<String> disabledTools)
+    {
+        setDisabledTools(disabledTools, null);
+    }
+
+    /**
+     * Saves an explicit preset selection alongside its disabled set. A mismatched set is custom.
+     *
+     * @param disabledTools the tool names to disable
+     * @param preset the explicitly selected preset, or null for an ordinary edit
+     */
+    public void setDisabledTools(Set<String> disabledTools, ToolPreset preset)
     {
         IPreferenceStore store = getStore();
         if (store == null)
         {
             return;
         }
-        applyDisabledTools(store, disabledTools);
+        applyDisabledTools(store, disabledTools, preset);
     }
 
     /**
@@ -606,13 +686,31 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
     {
+        return applyDisabledTools(store, disabledTools, null);
+    }
+
+    private boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools, ToolPreset preset)
+    {
         String value = serializeDisabledTools(disabledTools);
+        Set<String> selection = parseDisabledTools(value);
         boolean changed;
         // Only the compare-and-write is locked; the notification wait below runs outside it.
         synchronized (this)
         {
+            ensureMigrated(store);
             changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
-                .equals(parseDisabledTools(value));
+                .equals(selection);
+            ToolPreset selected = preset;
+            if (selected == null)
+            {
+                selected = changed ? ToolPreset.CUSTOM
+                    : ToolPreset.fromId(store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+            }
+            if (selected != ToolPreset.CUSTOM && !selection.equals(selected.getDisabledTools()))
+            {
+                selected = ToolPreset.CUSTOM;
+            }
+            store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, selected.getId());
             store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
         }
         if (changed)
@@ -742,7 +840,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Set<String> disabledTools = preset.getDisabledTools();
         if (disabledTools != null)
         {
-            setDisabledTools(disabledTools);
+            setDisabledTools(disabledTools, preset);
+        }
+        else
+        {
+            setDisabledTools(getDisabledTools(), ToolPreset.CUSTOM);
         }
     }
 
