@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -243,7 +244,7 @@ public final class CommandInterfaceSupport
         CommandContainer container;
         if (address.kind() == CommandInterfaceAddress.Kind.SUBSYSTEM)
         {
-            String[] chain = address.subsystemChain();
+            String[] chain = Objects.requireNonNull(address.subsystemChain());
             Subsystem subsystem = SubsystemUtils.resolveByPath(config, chain, chain.length);
             if (subsystem == null)
             {
@@ -692,7 +693,7 @@ public final class CommandInterfaceSupport
         {
             return config;
         }
-        String[] chain = address.subsystemChain();
+        String[] chain = Objects.requireNonNull(address.subsystemChain());
         return SubsystemUtils.resolveByPath(config, chain, chain.length);
     }
 

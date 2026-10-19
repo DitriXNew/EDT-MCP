@@ -7054,7 +7054,9 @@ public final class FormElementWriter
 
     /**
      * Reserves, in {@code seen}, the ids of every candidate this pass may not rewrite, BEFORE the
-     * renumbering loop runs.
+     * renumbering loop runs. Non-zero item ids follow EDT's
+     * {@code FormIdentifierService.hasValidId(FormItem)} rule. Reserving negative ids is inert for
+     * attributes and commands, whose passes still keep and allocate only positive ids.
      * <p>
      * Without it the outcome would depend on containment order: an own object visited before the
      * adopted object holding the same id would claim that id and keep it, leaving the collision the
@@ -7069,7 +7071,7 @@ public final class FormElementWriter
         for (EObject candidate : candidates)
         {
             int id = intFeature(candidate, FEATURE_ID);
-            if (id > 0 && !isFormObjectRenumberable(candidate))
+            if (id != 0 && !isFormObjectRenumberable(candidate))
             {
                 seen.add(Integer.valueOf(id));
             }
@@ -7322,7 +7324,9 @@ public final class FormElementWriter
      * Repairs the form-wide {@code FormItem.id} invariant before validation/export sees the model.
      * The form root's predefined {@code autoCommandBar} has the platform sentinel {@code -1}; every
      * other PERSISTED form item, including designer auto-children such as {@code contextMenu} and
-     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space. Items that
+     * {@code extendedTooltip}, keeps any unique non-zero id, matching EDT's
+     * {@code FormIdentifierService.hasValidId(FormItem)} rule used by {@code InvalidItemIdCheck}.
+     * Zero and duplicate ids receive a new positive id in that same form-wide space. Items that
      * exist only behind a computed containment are left exactly as the layouter made them - they are
      * counted when the ceiling is computed, but never rewritten.
      *
@@ -7409,9 +7413,10 @@ public final class FormElementWriter
     }
 
     /**
-     * Assigns {@code item} a positive id unique within {@code seen} - skipping the form root's
-     * {@code autoCommandBar} (which keeps the platform sentinel {@code -1}) and keeping an already-unique
-     * positive id - then advances and returns the running {@code max}. Early-returns keep the per-item
+     * Keeps a unique non-zero id, as EDT's {@code FormIdentifierService.hasValidId(FormItem)} does,
+     * or assigns {@code item} a new positive id unique within {@code seen}. Skips the form root's
+     * {@code autoCommandBar}, which keeps the platform sentinel {@code -1}, then advances and returns
+     * the running {@code max}. Early-returns keep the per-item
      * logic free of loop {@code continue}s.
      */
     private static int assignItemId(EObject item, EObject rootAutoCommandBar, Set<Integer> seen, int max)
@@ -7421,7 +7426,7 @@ public final class FormElementWriter
             return max;
         }
         int id = intFeature(item, FEATURE_ID);
-        if (id > 0 && seen.add(Integer.valueOf(id)))
+        if (id != 0 && seen.add(Integer.valueOf(id)))
         {
             return max;
         }

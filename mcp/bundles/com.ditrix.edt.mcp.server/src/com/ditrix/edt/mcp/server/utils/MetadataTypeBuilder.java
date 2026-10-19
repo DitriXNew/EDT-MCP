@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
@@ -1911,7 +1912,7 @@ public final class MetadataTypeBuilder
         {
             return false;
         }
-        String k = kind.trim();
+        String k = Objects.requireNonNull(kind.trim());
         return isDefinedTypeKind(k) || k.equalsIgnoreCase("Ref") //$NON-NLS-1$
             || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
     }
@@ -2152,7 +2153,7 @@ public final class MetadataTypeBuilder
         {
             return canonical;
         }
-        String trimmed = typeName.trim();
+        String trimmed = Objects.requireNonNull(typeName).trim();
         for (int i = 0; i < RU_PRIMITIVE_NAMES.length; i++)
         {
             if (RU_PRIMITIVE_NAMES[i].equalsIgnoreCase(trimmed))
