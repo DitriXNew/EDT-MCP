@@ -74,6 +74,37 @@ public class ModifyMetadataToolAppearanceTest
     }
 
     @Test
+    public void testTheShapesKeepTheirPlaceholdersInInlineCode()
+    {
+        // The shapes land in the Markdown table of get_metadata_details(assignable:true); outside a code
+        // span a renderer drops <Name> and <overrides> as HTML tags.
+        assertPlaceholdersInCode(AppearanceValueBuilder.COLOR_SHAPES);
+        assertPlaceholdersInCode(AppearanceValueBuilder.FONT_SHAPES);
+        assertTrue(AppearanceValueBuilder.COLOR_SHAPES,
+            AppearanceValueBuilder.COLOR_SHAPES.contains("`{color:'Style.<Name>'}`")); //$NON-NLS-1$
+        assertTrue(AppearanceValueBuilder.FONT_SHAPES,
+            AppearanceValueBuilder.FONT_SHAPES.contains("`{font:{style:'<Name>', <overrides>?}}`")); //$NON-NLS-1$
+    }
+
+    /** Every {@code <} of {@code shapes} sits inside a backtick code span, and every span is closed. */
+    private static void assertPlaceholdersInCode(String shapes)
+    {
+        boolean inCode = false;
+        for (char c : shapes.toCharArray())
+        {
+            if (c == '`')
+            {
+                inCode = !inCode;
+            }
+            else if (c == '<')
+            {
+                assertTrue("a '<' outside inline code: " + shapes, inCode); //$NON-NLS-1$
+            }
+        }
+        assertFalse("an unclosed code span: " + shapes, inCode); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnExtInfoColorIsFoundOnTheExtInfo()
     {
         FormField field = FormFactory.eINSTANCE.createFormField();

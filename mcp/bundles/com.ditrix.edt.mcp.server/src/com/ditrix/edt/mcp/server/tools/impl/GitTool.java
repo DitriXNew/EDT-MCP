@@ -3241,7 +3241,7 @@ public class GitTool implements IMcpTool
         // would otherwise be added to the command's - a stalled config would push a fetch past the
         // 120 s the guide promises.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-        hardenEnv(builder.environment(), workTree);
+        hardenEnv(builder.environment(), workTree, argv.get(0));
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
         // Echoed back in every result and error: redacted like the output, so a credential that
@@ -3253,14 +3253,13 @@ public class GitTool implements IMcpTool
         // process.descendants() no longer reports them, so a late capture would find nothing.
         List<ProcessHandle> descendants = new ArrayList<>();
         boolean drainFinished = false;
-        StringBuilder out = new StringBuilder();
-        boolean[] truncated = {false};
+        OutputBuffer out = new OutputBuffer();
         try
         {
             process = builder.start();
             process.getOutputStream().close(); // no stdin
             final Process started = process;
-            drain = new Thread(() -> drainBounded(started, out, truncated), "git-output-drain"); //$NON-NLS-1$
+            drain = new Thread(() -> drainBounded(started, out), "git-output-drain"); //$NON-NLS-1$
             drain.setDaemon(true);
             drain.start();
 
@@ -3270,7 +3269,7 @@ public class GitTool implements IMcpTool
                 closeQuietly(process.getInputStream()); // unblock a drain a survivor still feeds
                 drain.join(DRAIN_JOIN_MILLIS);
                 drainFinished = !drain.isAlive();
-                Capture captured = capture(out, truncated, drainFinished);
+                Capture captured = capture(out, drainFinished);
                 ToolResult timeout = ToolResult.error("'" + safeCommand + "' timed out after " + TIMEOUT_SECONDS //$NON-NLS-1$ //$NON-NLS-2$
                     + " seconds and was killed. Check network connectivity / the remote, or run a smaller " //$NON-NLS-1$
                     + "command.") //$NON-NLS-1$
@@ -3284,7 +3283,7 @@ public class GitTool implements IMcpTool
             drain.join(DRAIN_JOIN_MILLIS);
             drainFinished = !drain.isAlive();
             int exitCode = process.exitValue();
-            Capture captured = capture(out, truncated, drainFinished);
+            Capture captured = capture(out, drainFinished);
             ToolResult result = exitCode == 0
                 ? ToolResult.success()
                 : ToolResult.error("git exited with code " + exitCode + " for '" + safeCommand //$NON-NLS-1$ //$NON-NLS-2$
@@ -3300,14 +3299,14 @@ public class GitTool implements IMcpTool
         {
             Activator.logError("git: failed to run '" + safeCommand + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
             return ToolResult.error("Failed to run '" + safeCommand + "': " + e.getMessage()) //$NON-NLS-1$ //$NON-NLS-2$
-                .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, snapshot(out, truncated)).toJson();
+                .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, snapshot(out)).toJson();
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt(); // restore the interrupt flag
             // Carries the output like every other exit path: an interrupt can land AFTER git already
             // produced everything, and dropping it would hide what actually happened.
-            Capture captured = capture(out, truncated, false);
+            Capture captured = capture(out, false);
             ToolResult interrupted = ToolResult.error("'" + safeCommand + "' was interrupted.") //$NON-NLS-1$ //$NON-NLS-2$
                 .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, captured.text);
             if (captured.truncated)
@@ -3408,15 +3407,16 @@ public class GitTool implements IMcpTool
      * executed here.
      *
      * @param workTree the repository work tree to read the configuration in
+     * @param gitExecutable the main call's executable token, preserving the host's lookup
      * @return the configured command, or {@code null} when unset, empty or unreadable
      */
-    private static String configuredSshCommand(File workTree)
+    private static String configuredSshCommand(File workTree, String gitExecutable)
     {
         Process process = null;
         try
         {
             ProcessBuilder probe =
-                new ProcessBuilder("git", "config", "--get", "core.sshCommand"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                new ProcessBuilder(gitExecutable, "config", "--get", "core.sshCommand"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             probe.directory(workTree);
             probe.redirectErrorStream(true);
             scrubInheritedGitEnv(probe.environment());
@@ -3432,7 +3432,8 @@ public class GitTool implements IMcpTool
                     new BufferedReader(new InputStreamReader(reading.getInputStream(), StandardCharsets.UTF_8)))
                 {
                     firstLine.set(reader.readLine());
-                    while (reader.readLine() != null)
+                    String ignored;
+                    while ((ignored = reader.readLine()) != null)
                     {
                         // keep draining so git can finish writing
                     }
@@ -4187,9 +4188,9 @@ public class GitTool implements IMcpTool
     }
 
     /** @return a thread-safe snapshot of the drained output so far. */
-    private static String snapshot(StringBuilder out, boolean[] truncated)
+    private static String snapshot(OutputBuffer out)
     {
-        return capture(out, truncated, false).text;
+        return capture(out, false).text;
     }
 
     /**
@@ -4220,19 +4221,18 @@ public class GitTool implements IMcpTool
      * back by {@link #cutToEscapeBoundary} and reported as truncated.
      *
      * @param out the shared output buffer
-     * @param truncated the drain thread's truncation flag
      * @param complete whether the drain finished, i.e. the buffer cannot be mid-write
      * @return both values, consistent with each other
      */
-    static Capture capture(StringBuilder out, boolean[] truncated, boolean complete)
+    static Capture capture(OutputBuffer out, boolean complete)
     {
-        synchronized (out)
+        synchronized (out.monitor)
         {
             // The flag is read under the SAME lock the drain thread appends (and sets it) with: a
             // plain read could still see 'false' for a drain that is alive past join(), and the
             // half-written URL that flag guards would then be returned unredacted.
-            String text = out.toString();
-            boolean cut = truncated[0];
+            String text = out.text.toString();
+            boolean cut = out.truncated;
             // The dangling tail is dropped for an INCOMPLETE drain too, not only for cap-truncated
             // output: a background child can be mid-write when we capture, and a half-written
             // 'https://<secret' carries no '@' for the redaction to recognise.
@@ -4247,6 +4247,14 @@ public class GitTool implements IMcpTool
             }
             return new Capture(safe, cut);
         }
+    }
+
+    /** Owns the output text, truncation flag and their shared monitor. */
+    static final class OutputBuffer
+    {
+        private final Object monitor = new Object();
+        final StringBuilder text = new StringBuilder();
+        boolean truncated;
     }
 
     /** An output snapshot together with the truncation flag it was taken with. */
@@ -4677,7 +4685,7 @@ public class GitTool implements IMcpTool
      * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
      * the machine's, exactly like the developer's terminal.
      */
-    private static void hardenEnv(Map<String, String> env, File workTree)
+    private static void hardenEnv(Map<String, String> env, File workTree, String gitExecutable)
     {
         env.put("GIT_TERMINAL_PROMPT", "0"); // a missing credential fails fast, never a hanging prompt //$NON-NLS-1$ //$NON-NLS-2$
         env.put("GIT_PAGER", "cat"); // never invoke a pager (would block) //$NON-NLS-1$ //$NON-NLS-2$
@@ -4701,7 +4709,7 @@ public class GitTool implements IMcpTool
         // core.sshCommand, so setting it unconditionally would discard the custom identity / port /
         // wrapper that makes the remote work in the user's own terminal. When they configured one we
         // leave it alone and rely on the askpass settings above plus the call timeout.
-        if (env.get("GIT_SSH_COMMAND") == null && configuredSshCommand(workTree) == null) //$NON-NLS-1$
+        if (env.get("GIT_SSH_COMMAND") == null && configuredSshCommand(workTree, gitExecutable) == null) //$NON-NLS-1$
         {
             env.put("GIT_SSH_COMMAND", "ssh -oBatchMode=yes"); //$NON-NLS-1$ //$NON-NLS-2$
             // An inherited GIT_SSH_VARIANT (e.g. 'plink') would make git format the arguments for
@@ -4744,7 +4752,7 @@ public class GitTool implements IMcpTool
     }
 
     /** Drains the process' combined output into {@code out}, stopping appends at {@link #MAX_OUTPUT_CHARS}. */
-    private static void drainBounded(Process process, StringBuilder out, boolean[] truncated)
+    private static void drainBounded(Process process, OutputBuffer out)
     {
         try (BufferedReader reader =
             new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)))
@@ -4753,18 +4761,18 @@ public class GitTool implements IMcpTool
             int read;
             while ((read = reader.read(buffer)) != -1)
             {
-                synchronized (out)
+                synchronized (out.monitor)
                 {
-                    int room = MAX_OUTPUT_CHARS - out.length();
+                    int room = MAX_OUTPUT_CHARS - out.text.length();
                     if (room <= 0)
                     {
-                        truncated[0] = true;
+                        out.truncated = true;
                         continue; // keep draining (so the process does not block on a full pipe), but stop storing
                     }
-                    out.append(buffer, 0, Math.min(read, room));
+                    out.text.append(buffer, 0, Math.min(read, room));
                     if (read > room)
                     {
-                        truncated[0] = true;
+                        out.truncated = true;
                     }
                 }
             }

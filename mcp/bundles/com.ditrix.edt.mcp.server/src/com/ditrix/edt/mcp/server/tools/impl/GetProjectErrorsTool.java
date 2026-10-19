@@ -1514,7 +1514,7 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return null;
         }
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        String[] parts = Objects.requireNonNull(normFqn).split("\\."); //$NON-NLS-1$
         if (parts.length <= 2)
         {
             // Type.Name is the object itself, and a one-segment address names nothing narrower.

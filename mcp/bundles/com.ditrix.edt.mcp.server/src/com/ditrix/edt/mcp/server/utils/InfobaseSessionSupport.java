@@ -224,7 +224,7 @@ public final class InfobaseSessionSupport
         {
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
             AtomicReference<String> preparationError = new AtomicReference<>();
-            AtomicBoolean callerAnswered = new AtomicBoolean();
+            CallerState callerAnswered = new CallerState();
             BoundedJob.Result bounded = BoundedJob.run("Read standalone-server infobase sessions", //$NON-NLS-1$
                 JOB_TIMEOUT_MS, monitor ->
                 {
@@ -287,7 +287,7 @@ public final class InfobaseSessionSupport
         {
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
             AtomicReference<String> preparationError = new AtomicReference<>();
-            AtomicBoolean callerAnswered = new AtomicBoolean();
+            CallerState callerAnswered = new CallerState();
             BoundedJob.Result bounded = BoundedJob.run(
                 "Terminate standalone-server infobase session", //$NON-NLS-1$
                 JOB_TIMEOUT_MS, monitor ->
@@ -457,7 +457,7 @@ public final class InfobaseSessionSupport
      * from {@code proceedSessionCleanup}. The callback runs while EDT still owns a live process.
      */
     private static void runAtLivePid(Object server, IProgressMonitor monitor,
-        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        CallerState callerAnswered, AtomicReference<CommandExecution> execution,
         PidCommand command) throws Exception
     {
         Object launchObject = invokeNoArg(server, "getLaunch"); //$NON-NLS-1$
@@ -506,7 +506,7 @@ public final class InfobaseSessionSupport
      * command invocation rather than before the potentially-stalling platform call.
      */
     static void executeAtPidIfActive(long pid, IProgressMonitor monitor,
-        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        CallerState callerAnswered, AtomicReference<CommandExecution> execution,
         AtomicReference<Throwable> callbackFailure, PidCommand command)
     {
         if (callEnded(monitor, callerAnswered))
@@ -516,7 +516,7 @@ public final class InfobaseSessionSupport
         try
         {
             CommandExecution completed = command.run(pid);
-            synchronized (callerAnswered)
+            synchronized (callerAnswered.monitor)
             {
                 if (completed != null && !callEnded(monitor, callerAnswered))
                 {
@@ -526,7 +526,7 @@ public final class InfobaseSessionSupport
         }
         catch (Throwable t) // NOSONAR transferred to the bounded job thread while it is still active
         {
-            synchronized (callerAnswered)
+            synchronized (callerAnswered.monitor)
             {
                 if (!callEnded(monitor, callerAnswered))
                 {
@@ -536,17 +536,44 @@ public final class InfobaseSessionSupport
         }
     }
 
-    /** Closes result publication before the bounded caller inspects the outcome and returns. */
-    static void markCallerAnswered(AtomicBoolean callerAnswered)
+    /** Owns the publication monitor and the flag also read outside that monitor. */
+    static final class CallerState
     {
-        synchronized (callerAnswered)
+        private final Object monitor = new Object();
+        private volatile boolean answered;
+
+        CallerState()
+        {
+            this(false);
+        }
+
+        CallerState(boolean answered)
+        {
+            this.answered = answered;
+        }
+
+        boolean get()
+        {
+            return answered;
+        }
+
+        void set(boolean answered)
+        {
+            this.answered = answered;
+        }
+    }
+
+    /** Closes result publication before the bounded caller inspects the outcome and returns. */
+    static void markCallerAnswered(CallerState callerAnswered)
+    {
+        synchronized (callerAnswered.monitor)
         {
             callerAnswered.set(true);
         }
     }
 
     /** Whether the bounded wait has ended or its monitor has been cancelled. */
-    private static boolean callEnded(IProgressMonitor monitor, AtomicBoolean callerAnswered)
+    private static boolean callEnded(IProgressMonitor monitor, CallerState callerAnswered)
     {
         return monitor.isCanceled() || callerAnswered.get();
     }
@@ -576,7 +603,7 @@ public final class InfobaseSessionSupport
     /** Runs one ibcmd process, drains both streams concurrently, and force-kills it on timeout. */
     private static CommandExecution runCommand(List<String> command,
         InfobaseAccessSupport.Credentials credentials, IProgressMonitor monitor,
-        AtomicBoolean callerAnswered) throws Exception
+        CallerState callerAnswered) throws Exception
     {
         ProcessBuilder builder = new ProcessBuilder(command);
         return runCommand(credentials, monitor, callerAnswered, builder::start);
@@ -584,7 +611,7 @@ public final class InfobaseSessionSupport
 
     /** Runs one command with an injectable process boundary for cancellation-race tests. */
     static CommandExecution runCommand(InfobaseAccessSupport.Credentials credentials,
-        IProgressMonitor monitor, AtomicBoolean callerAnswered, ProcessStarter starter)
+        IProgressMonitor monitor, CallerState callerAnswered, ProcessStarter starter)
         throws Exception
     {
         if (callEnded(monitor, callerAnswered))
