@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**99 tools.**
+**100 tools.**
 
 ## Core
 
@@ -43,6 +43,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`list_subsystems`](list_subsystems.md) | Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems'). |
 | [`modify_metadata`](modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
 | [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems -… |
+| [`search_in_dcs`](search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool… |
 
 ## Code
 

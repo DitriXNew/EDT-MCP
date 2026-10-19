@@ -531,7 +531,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_subsystems`](docs/tools/list_subsystems.md) | Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems'). |
 | [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems -… |
-| [`search_in_dcs`](docs/tools/search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); each hit names the template FQN to open with dcs. Parameters and examples: get_tool_gui… |
+| [`search_in_dcs`](docs/tools/search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool… |
 
 ### Code
 
