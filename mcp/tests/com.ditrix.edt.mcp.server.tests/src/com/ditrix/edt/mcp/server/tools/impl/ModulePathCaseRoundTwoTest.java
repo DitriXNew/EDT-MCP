@@ -219,6 +219,23 @@ public class ModulePathCaseRoundTwoTest
     }
 
     @Test
+    public void listModulesPropagatesAnUnreadableTreeInsteadOfSkippingIt() throws Exception
+    {
+        closedTree();
+        List<Object> modules = new ArrayList<>();
+        Method add = ListModulesTool.class.getDeclaredMethod("addIfExists", IProject.class, List.class,
+            String.class, String.class, String.class, String.class, String.class);
+        add.setAccessible(true);
+        java.lang.reflect.InvocationTargetException thrown = assertThrows(
+            java.lang.reflect.InvocationTargetException.class,
+            () -> add.invoke(new ListModulesTool(), tree.project, modules, REQUEST, "Module", "CommonModule",
+                "CALCULATION", null));
+        assertTrue("an unreadable tree must reach the listing's error handler: " + thrown.getCause(),
+            thrown.getCause() instanceof IllegalStateException);
+        assertTrue(modules.isEmpty());
+    }
+
+    @Test
     public void methodReferenceValidationPreservesResolutionRefusal() throws Exception
     {
         ambiguousTree();

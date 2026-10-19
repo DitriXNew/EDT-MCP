@@ -612,7 +612,9 @@ public class ListModulesTool implements IMcpTool
         }
         catch (RuntimeException e)
         {
-            if (Refusals.messageOf(e) == null)
+            // Only an ambiguous candidate (an argument refusal) is skipped; an unreadable resource
+            // tree is a state refusal and must fail the listing instead of returning a partial list.
+            if (!(e instanceof IllegalArgumentException) || Refusals.messageOf(e) == null)
             {
                 throw e;
             }
