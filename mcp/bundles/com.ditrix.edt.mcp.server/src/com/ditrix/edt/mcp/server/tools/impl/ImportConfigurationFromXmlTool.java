@@ -284,28 +284,14 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 }
             }
 
-            // Claimed BEFORE the existence guard below, because that guard is exactly what a
-            // concurrent import slips past: it answers about a project the other call has not
-            // created yet.
-            String concurrent = claimImport(projectName);
-            if (concurrent != null)
-            {
-                return concurrent;
-            }
-            claimed = true;
-
-            // The tool's contract is "import into a NEW project", so reject early
-            // if a workspace project with this name already exists. Without this
-            // check the underlying EDT API still throws (with a less direct
-            // message) and we'd surface it via the catch block - but a clean
-            // up-front error is friendlier and matches the validation pattern
-            // used elsewhere (DeleteMetadataTool, CleanProjectTool, etc.).
+            // Preserve the existing-project refusal before dump/base validation. Repeat this
+            // preflight check under the claim, because a project can be created during validation.
             IProject existing = workspace.getRoot().getProject(projectName);
+            String existingProjectError = "Project already exists in workspace: " + projectName //$NON-NLS-1$
+                + ". Import requires a new project name."; //$NON-NLS-1$
             if (existing != null && existing.exists())
             {
-                return ToolResult.error(
-                    "Project already exists in workspace: " + projectName //$NON-NLS-1$
-                  + ". Import requires a new project name.").toJson(); //$NON-NLS-1$
+                return ToolResult.error(existingProjectError).toJson();
             }
 
             AtomicReference<IProject> baseProject = new AtomicReference<>();
@@ -325,6 +311,29 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             }
             String runtimeVersion = baseProject.get() == null ? platformVersion
                 : ProjectImportValidation.runtimeVersionOf(baseProject.get());
+
+            if (baseProject.get() != null && runtimeVersion == null)
+            {
+                return ToolResult.error("Base project '" + baseProjectName //$NON-NLS-1$
+                    + "' is not ready: its runtime version cannot be read yet. " //$NON-NLS-1$
+                    + "Retry when list_projects shows it ready.").toJson(); //$NON-NLS-1$
+            }
+
+            // Claim only after all dump, base and runtime refusals have passed.
+            // The claim must still cover the existence check and the actual CLI import.
+            String concurrent = claimImport(projectName);
+            if (concurrent != null)
+            {
+                return concurrent;
+            }
+            claimed = true;
+
+            // Recheck while holding the claim: another import may have created the project
+            // after the preflight check but finished and released its claim before ours.
+            if (existing != null && existing.exists())
+            {
+                return ToolResult.error(existingProjectError).toJson();
+            }
 
             Object api = runner.importApi();
             if (api == null)
