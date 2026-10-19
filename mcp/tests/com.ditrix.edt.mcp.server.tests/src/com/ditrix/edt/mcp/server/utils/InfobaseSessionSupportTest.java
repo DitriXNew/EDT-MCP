@@ -290,7 +290,7 @@ public class InfobaseSessionSupportTest
         AtomicReference<InfobaseSessionSupport.CommandExecution> execution = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
 
-        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new AtomicBoolean(), execution,
+        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new InfobaseSessionSupport.CallerState(), execution,
             failure, pid ->
             {
                 commandRan.set(true);
@@ -307,7 +307,7 @@ public class InfobaseSessionSupportTest
     public void resultFinishingAfterTheCallerAnsweredIsNotPublished()
     {
         NullProgressMonitor monitor = new NullProgressMonitor();
-        AtomicBoolean callerAnswered = new AtomicBoolean();
+        InfobaseSessionSupport.CallerState callerAnswered = new InfobaseSessionSupport.CallerState();
         AtomicBoolean commandRan = new AtomicBoolean();
         AtomicReference<InfobaseSessionSupport.CommandExecution> execution = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -336,7 +336,7 @@ public class InfobaseSessionSupportTest
         InfobaseSessionSupport.CommandExecution expected =
             new InfobaseSessionSupport.CommandExecution(0, "done", "", false); //$NON-NLS-1$ //$NON-NLS-2$
 
-        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new AtomicBoolean(), execution,
+        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new InfobaseSessionSupport.CallerState(), execution,
             failure, pid -> expected);
 
         assertSame("an active callback must still publish the command result", expected, //$NON-NLS-1$
@@ -347,7 +347,7 @@ public class InfobaseSessionSupportTest
     @Test
     public void markCallerAnsweredIsNotBlockedByAStalledProcessStart() throws Exception
     {
-        AtomicBoolean callerAnswered = new AtomicBoolean();
+        InfobaseSessionSupport.CallerState callerAnswered = new InfobaseSessionSupport.CallerState();
         CountDownLatch startEntered = new CountDownLatch(1);
         CountDownLatch releaseStart = new CountDownLatch(1);
         CountDownLatch callerMarked = new CountDownLatch(1);
@@ -415,7 +415,7 @@ public class InfobaseSessionSupportTest
     @Test
     public void processReturnedAfterCallerAnsweredIsKilledBeforeStreamsAreRead() throws Exception
     {
-        AtomicBoolean callerAnswered = new AtomicBoolean();
+        InfobaseSessionSupport.CallerState callerAnswered = new InfobaseSessionSupport.CallerState();
         Process process = mock(Process.class);
 
         InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(null,
@@ -482,7 +482,7 @@ public class InfobaseSessionSupportTest
     public void aCancelledCallNeverCrossesTheMutationBoundaryEither() throws Exception
     {
         AtomicBoolean mutated = new AtomicBoolean();
-        AtomicBoolean callerAnswered = new AtomicBoolean(true);
+        InfobaseSessionSupport.CallerState callerAnswered = new InfobaseSessionSupport.CallerState(true);
 
         InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(null,
             new NullProgressMonitor(), callerAnswered,
