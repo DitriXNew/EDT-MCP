@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
@@ -186,51 +187,55 @@ public class WriteModuleSourceTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        // 5. Get file
-        IFile file = BslModuleUtils.resolveModuleFile(project, req.modulePath);
-        String outside = outsideProjectError(project, file, req.modulePath);
-        if (outside != null)
-        {
-            return outside;
-        }
-        boolean fileExists = file.exists();
-
-        // For non-replace modes, file must exist
-        if (!fileExists && !MODE_REPLACE.equals(req.mode))
-        {
-            return ToolResult.error("File not found: src/" + req.modulePath + //$NON-NLS-1$
-                ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
-        }
-
-        // 6. The metadata root, resolved ONCE and here - where the vendor guard always resolved it, so
-        // the order of the refusals is unchanged - for the guard and for the adopted-module step after
-        // the write (#711). Then vendor support: the module and the object that owns it must be
-        // editable (#642).
-        ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
-        if (!root.ok())
-        {
-            return root.errorJson();
-        }
-        String locked = vendorSupportRefusal(ctx, root, file);
-        if (locked != null)
-        {
-            return locked;
-        }
-
         AtomicBoolean mutationEntered = new AtomicBoolean();
         AtomicBoolean mutationCommitted = new AtomicBoolean();
         try
         {
+            // 5. Get file
+            IFile file = BslModuleUtils.resolveModuleFile(project, req.modulePath);
+            String outside = outsideProjectError(project, file, req.modulePath);
+            if (outside != null)
+            {
+                return outside;
+            }
+            req.modulePath = BslModuleUtils.sourceRelativePath(file);
+            boolean fileExists = file.exists();
+
+            // For non-replace modes, file must exist
+            if (!fileExists && !MODE_REPLACE.equals(req.mode))
+            {
+                return ToolResult.error("File not found: src/" + req.modulePath + //$NON-NLS-1$
+                    ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
+            }
+
+            // 6. The metadata root, resolved ONCE and here - where the vendor guard always resolved it, so
+            // the order of the refusals is unchanged - for the guard and for the adopted-module step after
+            // the write (#711). Then vendor support: the module and the object that owns it must be
+            // editable (#642).
+            ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
+            if (!root.ok())
+            {
+                return root.errorJson();
+            }
+            String locked = vendorSupportRefusal(ctx, root, file);
+            if (locked != null)
+            {
+                return locked;
+            }
+
             return writeModule(req, file, fileExists, root.scope(), mutationEntered, mutationCommitted);
         }
         catch (Exception e)
         {
+            String refusal = Refusals.messageOf(e);
+            String message = refusal != null && !mutationEntered.get() ? refusal
+                : (mutationEntered.get() ? "Failed to write file: " : "Failed to prepare module write: ") //$NON-NLS-1$ //$NON-NLS-2$
+                    + e.getMessage();
             ToolResult error = mutationCommitted.get()
-                ? ToolResult.errorAfterMutation("Failed to write file: " + e.getMessage()) //$NON-NLS-1$
+                ? ToolResult.errorAfterMutation(message)
                 : mutationEntered.get()
-                    ? ToolResult.errorWithUnknownMutationOutcome(
-                        "Failed to write file: " + e.getMessage()) //$NON-NLS-1$
-                    : ToolResult.error("Failed to write file: " + e.getMessage()); //$NON-NLS-1$
+                    ? ToolResult.errorWithUnknownMutationOutcome(message)
+                    : ToolResult.error(message);
             return error.toJson();
         }
     }
