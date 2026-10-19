@@ -19,21 +19,24 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ResourceTextSearch;
 import com.ditrix.edt.mcp.server.utils.SearchResultFormatter;
+import com.ditrix.edt.mcp.server.utils.XmlEntityDecoder;
 
 /**
  * Literal/regex full-text search over the DCS schemas of a project: every {@code Template.dcs}
  * (and any other {@code *.dcs}) file under {@code src/}. It is the discovery step before
- * {@code dcs}: each matched file is reported with the template FQN {@code dcs} addresses.
+ * {@code dcs}: recognised export layouts include the template FQN to pass to {@code dcs}.
  * <p>
  * The scan and the rendering are the ones {@code search_in_code} uses
  * ({@link ResourceTextSearch}, {@link SearchResultFormatter}); this tool differs only in the
- * files it reads ({@code .dcs}), the code fence ({@code xml}), the template address per file,
+ * files it reads ({@code .dcs}), XML entity decoding for matching, the code fence ({@code xml}),
+ * the template address per recognised layout,
  * and an empty result that never claims absence on an incomplete scan.
  */
 public class SearchInDcsTool implements IMcpTool
@@ -70,8 +73,8 @@ public class SearchInDcsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Literal/regex full-text search inside DCS schemas (*.dcs under src/); each hit names " //$NON-NLS-1$
-            + "the template FQN to open with dcs. " //$NON-NLS-1$
+        return "Literal/regex full-text search inside DCS schemas (*.dcs under src/); names " //$NON-NLS-1$
+            + "the template FQN when the layout is recognised. " //$NON-NLS-1$
             + "Parameters and examples: get_tool_guide('search_in_dcs')."; //$NON-NLS-1$
     }
 
@@ -169,14 +172,16 @@ public class SearchInDcsTool implements IMcpTool
         IProject project = ctx.project();
 
         ResourceTextSearch search = new ResourceTextSearch(pattern, DCS_EXTENSION, fileMask, null,
-            limit, contextLines, SearchResultFormatter.MODE_FULL.equals(outputMode));
+            limit, contextLines, SearchResultFormatter.MODE_FULL.equals(outputMode),
+            BslModuleUtils::readFileLines, XmlEntityDecoder::decode);
         try
         {
             IResource srcFolder = project.findMember("src"); //$NON-NLS-1$
             if (srcFolder == null)
             {
-                return ToolResult.error("src/ folder not found in project " + projectName //$NON-NLS-1$
-                    + ". Check the project name with list_projects.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("Project " + projectName + " has no src/ folder. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "It may not be a configuration or extension project, or it is not loaded yet. " //$NON-NLS-1$
+                    + "Use list_projects to check its type and state.").toJson(); //$NON-NLS-1$
             }
             srcFolder.accept(search);
         }

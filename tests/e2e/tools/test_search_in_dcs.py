@@ -33,6 +33,7 @@ from harness import (
     assert_not_contains,
     assert_ok,
     call,
+    diff,
     e2e_test,
     split_markdown_row,
     wait_for_project_ready,
@@ -44,7 +45,7 @@ BSL_MARKER = "E2EBSL541_ONLY_IN_BSL"
 BSL_MODULE = "CommonModules/OK/Module.bsl"
 
 
-def _seed_report(name, marker):
+def _seed_report(name, marker, query=None):
     """A report whose main DCS query carries ``marker``; returns the Template.dcs display path."""
     fqn = "Report." + name
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed report " + fqn)
@@ -57,7 +58,7 @@ def _seed_report(name, marker):
         "body": {"dataSets": [{
             "name": "DataSet1",
             "type": "query",
-            "query": 'SELECT "%s" AS Amount' % marker,
+            "query": query if query is not None else 'SELECT "%s" AS Amount' % marker,
             "autoFillFields": False,
             "fields": [{"dataPath": "Amount"}],
         }]},
@@ -148,6 +149,43 @@ def _count_totals(text):
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATHS (seeded)
 # ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
+def test_query_fragments_match_after_xml_entity_decoding():
+    """Search the query's parameter and comparisons after EDT escapes them on export."""
+    marker = MARKER + "ENTITIES"
+    query = 'SELECT "%s" AS Amount WHERE &%s > 0 AND &%s < 10' % (marker, marker, marker)
+    path = _seed_report("E2EDcsSearchEntities", marker, query=query)
+    with open(os.path.join(PROJECT_DIR, "src", *path.split("/")), encoding="utf-8-sig") as handle:
+        exported = handle.read()
+    assert_contains(exported, "&amp;" + marker, "the exported query actually contains an XML entity")
+    before = diff()
+    model = call("dcs", {
+        "projectName": PROJECT, "fqn": "Report.E2EDcsSearchEntities#/dataSets/DataSet1/query",
+        "action": "get", "type": "dataSet",
+    })
+    assert_ok(model, "model read-back of the seeded query")
+    assert_contains(model.text, query, "the DCS model carries the exact query written to disk")
+
+    fragment = "&" + marker + " > 0"
+    full = _search(fragment, fileMask=path)
+    assert_ok(full, "literal search for a decoded query fragment")
+    assert_contains(full.text, "**Total:** 1 matches in 1 files", "the query source line matches once")
+    assert_contains(full.text, "&amp;" + marker, "context keeps the source XML escaping")
+    assert_not_contains(full.text, "No matches found.", "escaped query text must not produce false absence")
+    for mode in ("count", "files"):
+        result = _search(fragment, outputMode=mode, fileMask=path, limit=1)
+        assert_ok(result, "decoded search in " + mode + " mode")
+        assert _count_totals(result.text) == (1, 1), result.text
+    regex = _search(re.escape("&" + marker) + r"\s+>\s+0", isRegex=True,
+                    outputMode="count", fileMask=path)
+    assert_ok(regex, "regex search for a decoded query fragment")
+    assert _count_totals(regex.text) == (1, 1), regex.text
+    less_than = _search("&" + marker + " < 10", outputMode="count", fileMask=path)
+    assert_ok(less_than, "less-than comparison search")
+    assert _count_totals(less_than.text) == (1, 1), less_than.text
+    assert diff() == before, "reading the seeded schema must not change its files"
+
+
 @e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_full_mode_reports_the_display_path_and_a_template_fqn_dcs_can_open():
     """The marker lives only in the seeded report's query. full mode must show the file by its

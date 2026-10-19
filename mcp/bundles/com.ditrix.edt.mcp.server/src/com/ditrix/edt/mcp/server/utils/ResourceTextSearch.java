@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
@@ -91,6 +92,7 @@ public final class ResourceTextSearch implements IResourceVisitor
     private final int contextLines;
     private final boolean collectDetails;
     private final LineReader lineReader;
+    private final UnaryOperator<String> matchLineTransform;
 
     private final Map<String, List<Match>> matchesByFile = new LinkedHashMap<>();
     private final Map<String, Integer> matchCountByFile = new LinkedHashMap<>();
@@ -129,6 +131,22 @@ public final class ResourceTextSearch implements IResourceVisitor
     public ResourceTextSearch(Pattern pattern, String extension, String fileMask, String folderPrefix,
         int maxResults, int contextLines, boolean collectDetails, LineReader lineReader)
     {
+        this(pattern, extension, fileMask, folderPrefix, maxResults, contextLines, collectDetails,
+            lineReader, UnaryOperator.identity());
+    }
+
+    /**
+     * Creates a scanner that transforms each source line for matching only. Detailed context and
+     * line numbers still refer to the original file, including when a transform decodes a newline.
+     *
+     * @param lineReader reads one file's lines
+     * @param matchLineTransform transforms one source line before matching, without splitting lines
+     * @see #ResourceTextSearch(Pattern, String, String, String, int, int, boolean)
+     */
+    public ResourceTextSearch(Pattern pattern, String extension, String fileMask, String folderPrefix,
+        int maxResults, int contextLines, boolean collectDetails, LineReader lineReader,
+        UnaryOperator<String> matchLineTransform)
+    {
         this.pattern = pattern;
         this.extension = extension;
         this.fileMask = fileMask;
@@ -137,6 +155,7 @@ public final class ResourceTextSearch implements IResourceVisitor
         this.contextLines = contextLines;
         this.collectDetails = collectDetails;
         this.lineReader = lineReader;
+        this.matchLineTransform = matchLineTransform;
     }
 
     /**
@@ -208,7 +227,7 @@ public final class ResourceTextSearch implements IResourceVisitor
 
         for (int i = 0; i < lines.size(); i++)
         {
-            if (pattern.matcher(lines.get(i)).find())
+            if (pattern.matcher(matchLineTransform.apply(lines.get(i))).find())
             {
                 totalMatches++;
                 fileMatches++;
