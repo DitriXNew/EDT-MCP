@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Tool to find method call hierarchy - who calls this method (callers)
@@ -377,7 +378,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             catch (Exception e)
             {
-                Activator.logError("Error finding call hierarchy", e); //$NON-NLS-1$
+                Refusals.log("Error finding call hierarchy", e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
@@ -1003,7 +1004,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("Error finding transitive call hierarchy", e); //$NON-NLS-1$
+            Refusals.log("Error finding transitive call hierarchy", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
     }
@@ -1046,7 +1047,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
-            Activator.logError("Error resolving call-hierarchy root", e); //$NON-NLS-1$
+            Refusals.log("Error resolving call-hierarchy root", e); //$NON-NLS-1$
             out.error = ToolResult.error(e.getMessage()).toJson();
         }
     }

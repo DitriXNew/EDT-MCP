@@ -16,32 +16,70 @@ import java.util.Set;
  */
 public enum ToolPreset
 {
-    ALL_TOOLS("All Tools", "All tools enabled, including the ones off by default", //$NON-NLS-1$ //$NON-NLS-2$
+    ALL_TOOLS("all-tools", //$NON-NLS-1$
+        "All Tools", "All tools enabled, including the ones off by default", //$NON-NLS-1$ //$NON-NLS-2$
         Collections.emptySet()),
 
-    ANALYSIS_ONLY("Analysis Only", //$NON-NLS-1$
+    ANALYSIS_ONLY("analysis-only", //$NON-NLS-1$
+        "Analysis Only", //$NON-NLS-1$
         "Read-only analysis - no code changes, no debugging", //$NON-NLS-1$
         buildAnalysisOnlyDisabled()),
 
-    CODE_REVIEW("Code Review", //$NON-NLS-1$
+    CODE_REVIEW("code-review", //$NON-NLS-1$
+        "Code Review", //$NON-NLS-1$
         "Analysis + BSL code reading (no writing)", //$NON-NLS-1$
         buildCodeReviewDisabled()),
 
-    DEVELOPMENT("Development", //$NON-NLS-1$
+    DEVELOPMENT("development", //$NON-NLS-1$
+        "Development", //$NON-NLS-1$
         "Full development without debugging", //$NON-NLS-1$
         disabledFor(ToolGroup.DEBUG)),
 
-    CUSTOM("Custom", "Manually configured", null); //$NON-NLS-1$ //$NON-NLS-2$
+    CUSTOM("custom", //$NON-NLS-1$
+        "Custom", "Manually configured", null); //$NON-NLS-1$ //$NON-NLS-2$
 
+    private final String id;
     private final String displayName;
     private final String description;
     private final Set<String> disabledTools;
 
-    ToolPreset(String displayName, String description, Set<String> disabledTools)
+    ToolPreset(String id, String displayName, String description, Set<String> disabledTools)
     {
+        this.id = id;
         this.displayName = displayName;
         this.description = description;
         this.disabledTools = disabledTools;
+    }
+
+    /** Returns the stable preference ID, independent of enum order and display text. */
+    public String getId()
+    {
+        return id;
+    }
+
+    /** Resolves a stored ID; missing or unknown provenance is custom. */
+    public static ToolPreset fromId(String id)
+    {
+        for (ToolPreset preset : values())
+        {
+            if (preset.id.equals(id))
+            {
+                return preset;
+            }
+        }
+        return CUSTOM;
+    }
+
+    /** Whether this preset promises read-only operation, even after owner edits. */
+    public boolean isReadOnly()
+    {
+        return this == ANALYSIS_ONLY || this == CODE_REVIEW;
+    }
+
+    /** Whether this preset promises no debugging, even after owner edits. */
+    public boolean isNoDebug()
+    {
+        return isReadOnly() || this == DEVELOPMENT;
     }
 
     /**

@@ -17,12 +17,14 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
@@ -171,10 +173,17 @@ public final class BslModuleUtils
      * The returned file is NOT guaranteed to exist; each caller keeps its own
      * existence check and tool-specific error message.
      *
+     * Exact paths are preferred across all source folders. After exact misses, each
+     * segment is matched against real resource names, preferring an exact name over
+     * a unique case-insensitive match. Ambiguity and unreadable resource trees are
+     * refused before a write can mistake an existing module for a new file.
+     *
      * @param project    the EDT project
      * @param modulePath path from the source folder, e.g.
      *                   "CommonModules/MyModule/Module.bsl" (no leading "src/")
      * @return the resolved IFile (may not exist)
+     * @throws IllegalArgumentException if case-insensitive lookup is ambiguous
+     * @throws IllegalStateException if the resource tree cannot be read
      */
     public static IFile resolveModuleFile(IProject project, String modulePath)
     {
@@ -203,7 +212,8 @@ public final class BslModuleUtils
         }
         try
         {
-            for (IResource member : project.members())
+            IResource[] sourceFolders = project.members();
+            for (IResource member : sourceFolders)
             {
                 if (member.getType() == IResource.FOLDER && !SOURCE_FOLDER.equals(member.getName()))
                 {
@@ -214,12 +224,147 @@ public final class BslModuleUtils
                     }
                 }
             }
+
+            IPath relativePath = new Path(modulePath);
+            IFile sourceTarget = findIgnoringCase(project, new Path(SOURCE_FOLDER).append(relativePath), modulePath);
+            if (sourceTarget != null && sourceTarget.exists())
+            {
+                Activator.logInfo("Resolved modulePath ignoring case: " + modulePath //$NON-NLS-1$
+                    + " -> " + sourceTarget.getFullPath()); //$NON-NLS-1$
+                return sourceTarget;
+            }
+            IFile matched = null;
+            List<IFile> creationTargets = new ArrayList<>();
+            for (IResource member : sourceFolders)
+            {
+                if (member.getType() == IResource.FOLDER && !SOURCE_FOLDER.equals(member.getName()))
+                {
+                    IFile candidate = findIgnoringCase((IFolder) member, relativePath, modulePath);
+                    if (candidate != null)
+                    {
+                        if (!candidate.exists())
+                        {
+                            if (!creationTargets.contains(candidate))
+                            {
+                                creationTargets.add(candidate);
+                            }
+                            continue;
+                        }
+                        if (matched != null && !matched.equals(candidate))
+                        {
+                            throw Refusals.argument("Ambiguous modulePath '" + modulePath //$NON-NLS-1$
+                                + "': matching files exist at '" + matched.getFullPath() //$NON-NLS-1$
+                                + "' and '" + candidate.getFullPath() //$NON-NLS-1$
+                                + "'. Pass an absolute file path to select the intended module."); //$NON-NLS-1$
+                        }
+                        matched = candidate;
+                    }
+                }
+            }
+            if (matched != null)
+            {
+                Activator.logInfo("Resolved modulePath ignoring case: " + modulePath //$NON-NLS-1$
+                    + " -> " + matched.getFullPath()); //$NON-NLS-1$
+                return matched;
+            }
+            // Prefer an existing module in any source root to a missing leaf. Only
+            // then select a creation handle under the canonical existing parent.
+            if (sourceTarget == null && creationTargets.size() > 1)
+            {
+                throw Refusals.argument("Ambiguous modulePath '" + modulePath //$NON-NLS-1$
+                    + "': existing parent folders allow multiple creation targets: " //$NON-NLS-1$
+                    + creationTargets.stream().map(file -> file.getFullPath().toString()).sorted()
+                        .collect(java.util.stream.Collectors.joining(", ")) //$NON-NLS-1$
+                    + ". Create the intended module in EDT, then pass its absolute file path."); //$NON-NLS-1$
+            }
+            IFile target = sourceTarget != null ? sourceTarget
+                : creationTargets.isEmpty() ? null : creationTargets.get(0);
+            if (target != null)
+            {
+                Activator.logInfo("Resolved modulePath ignoring case: " + modulePath //$NON-NLS-1$
+                    + " -> " + target.getFullPath()); //$NON-NLS-1$
+                return target;
+            }
         }
         catch (CoreException e)
         {
-            Activator.logError("Error scanning project folders for module " + modulePath, e); //$NON-NLS-1$
+            throw Refusals.state("Cannot resolve modulePath '" + modulePath //$NON-NLS-1$
+                + "': project resources could not be read. Open and refresh the project in EDT, " //$NON-NLS-1$
+                + "then use list_modules and retry. Details: " + e.getMessage()); //$NON-NLS-1$
         }
         return inSourceFolder;
+    }
+
+    /**
+     * Walks actual resource names without consulting the host filesystem's case rules.
+     * A case-sensitive segment wins even when a differently-cased sibling exists;
+     * otherwise exactly one case-insensitive match is required. A folder at the final
+     * segment is not a module file. A missing leaf under an existing folder returns
+     * a creation handle under that folder, retaining the real parent spelling.
+     */
+    private static IFile findIgnoringCase(IContainer root, IPath relativePath, String modulePath)
+        throws CoreException
+    {
+        IResource current = root;
+        for (int index = 0; index < relativePath.segmentCount(); index++)
+        {
+            String segment = relativePath.segment(index);
+            if (!(current instanceof IContainer container))
+            {
+                return null;
+            }
+            IResource exact = null;
+            IResource matched = null;
+            List<String> matchingNames = new ArrayList<>();
+            for (IResource member : container.members())
+            {
+                String name = member.getName();
+                if (segment.equals(name))
+                {
+                    exact = member;
+                    break;
+                }
+                if (segment.equalsIgnoreCase(name))
+                {
+                    matched = member;
+                    matchingNames.add(name);
+                }
+            }
+            if (exact != null)
+            {
+                current = exact;
+            }
+            else
+            {
+                if (matchingNames.size() > 1)
+                {
+                    matchingNames.sort(String::compareTo);
+                    throw Refusals.argument("Ambiguous modulePath '" + modulePath //$NON-NLS-1$
+                        + "': segment '" + segment + "' matches " + String.join(", ", matchingNames) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + " under '" + container.getFullPath() //$NON-NLS-1$
+                        + "'. Use list_modules and pass the exact resource names."); //$NON-NLS-1$
+                }
+                if (matched == null)
+                {
+                    return index == relativePath.segmentCount() - 1 && container instanceof IFolder folder
+                        ? folder.getFile(new Path(segment)) : null;
+                }
+                current = matched;
+            }
+        }
+        return current instanceof IFile file && file.exists() ? file : null;
+    }
+
+    /**
+     * Returns a module's canonical path relative to its source root, including
+     * nonstandard source folders accepted by {@link #resolveModuleFile}.
+     *
+     * @param file the resolved workspace file
+     * @return the project-relative path without its first (source-root) segment
+     */
+    public static String sourceRelativePath(IFile file)
+    {
+        return file.getProjectRelativePath().removeFirstSegments(1).toString();
     }
 
     /**

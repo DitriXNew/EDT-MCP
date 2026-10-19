@@ -31,7 +31,8 @@ import time
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains,
-    assert_diff_contains, assert_no_diff, e2e_test, settle_or_fail,
+    assert_diff_contains, assert_diff_paths, assert_no_diff, e2e_test, settle_or_fail,
+    calls_aborted, read_disk, PROJECT_DIR, PROJECT_REL,
     poll_disk_contains_all, read_fixture_file, restore_extension_fixture,
     E2EAssertion, E2ECallTimeout, PROJECT, REPO_ROOT, TESTS_PROJECT, TESTS_PROJECT_REL,
 )
@@ -1272,3 +1273,87 @@ def test_own_and_base_modules_carry_no_module_state():
         raise
     else:
         restore_extension_fixture("a write into the extension's own module")
+
+
+def _assert_case_variants_write_existing_module(canonical_name, variants):
+    """Check disk immediately; the write-metadata harness restores the fixture and model."""
+    relative = "src/CommonModules/%s/Module.bsl" % canonical_name
+    path = os.path.join(PROJECT_DIR, *relative.split("/"))
+    modules = os.path.dirname(os.path.dirname(path))
+    folder = os.path.dirname(path)
+    object_names = set(os.listdir(modules))
+    file_names = set(os.listdir(folder))
+    markers = []
+    for index, variant in enumerate(variants):
+        marker = "// e2e_550_existing_file_%d" % index
+        mode = "append" if index == 0 else "replace"
+        previous = list(markers)
+        markers = markers + [marker] if mode == "append" else [marker]
+        address = ({"modulePath": "CommonModules/%s/module.bsl" % variant} if index == 0
+                   else {"objectName": "CommonModule.%s" % variant})
+        result = call("write_module_source", {
+            "projectName": PROJECT, **address,
+            "mode": mode, "source": marker + "\n", "overwrite": mode == "replace",
+        })
+        assert_ok(result, "write using a modulePath or objectName in another case")
+        # No intervening MCP call or polling may hide an early return or a write to a sibling.
+        contents = read_disk(relative)
+        for expected in markers:
+            assert_contains(contents, expected, "the canonical existing file must contain the written source")
+        if mode == "replace":
+            for replaced in previous:
+                assert_not_contains(contents, replaced, "replace must overwrite the canonical existing file")
+        assert set(os.listdir(modules)) == object_names, "no differently-cased object folder may be created"
+        assert set(os.listdir(folder)) == file_names, "no differently-cased module file may be created"
+        assert_diff_contains(marker, "the write must persist on disk before the tool returns")
+        assert_diff_paths([PROJECT_REL + "/" + relative], "the canonical tracked file must be changed")
+        assert_contains(result.text, "CommonModules/%s/Module.bsl" % canonical_name,
+                        "the response must teach the caller the canonical module path")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_english_case_variants_write_the_real_existing_file():
+    _assert_case_variants_write_existing_module("OK", ("ok", "Ok"))
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_russian_case_variants_write_the_real_existing_file():
+    _assert_case_variants_write_existing_module("Вычисление", ("ВЫЧИСЛЕНИЕ", "вычисление"))
+
+
+def _assert_first_module_uses_existing_object_folder(address):
+    """A missing leaf must be created under Catalog, never a case-variant sibling."""
+    relative = "src/Catalogs/Catalog/ObjectModule.bsl"
+    catalogs = os.path.join(PROJECT_DIR, "src", "Catalogs")
+    canonical = os.path.join(PROJECT_DIR, *relative.split("/"))
+    before = set(os.listdir(catalogs))
+    assert not os.path.exists(canonical), "the committed fixture must have no object module"
+    marker = "// e2e_550_first_object_module"
+    result = call("write_module_source", {
+        "projectName": PROJECT, **address, "mode": "replace", "source": marker + "\n",
+    })
+    assert_ok(result, "create the first module with an object name in another case")
+    # Read disk once before any other tool call; the harness owns the fixture reset.
+    contents = read_disk(relative)
+    assert_contains(contents, marker, "replace must create the module inside the real object folder")
+    after = os.listdir(catalogs)
+    assert set(after) == before, "first-module creation must not introduce another object folder"
+    assert [name for name in after if name.casefold() == "catalog"] == ["Catalog"], after
+    assert_contains(result.text, "Catalogs/Catalog/ObjectModule.bsl", "echo the canonical creation target")
+    readback = call("read_module_source", {
+        "projectName": PROJECT, "modulePath": "Catalogs/Catalog/ObjectModule.bsl",
+    })
+    assert_ok(readback, "read the module from its canonical location")
+    assert_contains(readback.text, marker, "the created module must be readable through EDT")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_replace_creates_first_module_under_wrong_case_existing_object():
+    _assert_first_module_uses_existing_object_folder({"modulePath": "Catalogs/cATALOG/ObjectModule.bsl"})
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_objectname_replace_creates_first_module_under_real_object_folder():
+    _assert_first_module_uses_existing_object_folder({
+        "objectName": "Catalog.catalog", "moduleType": "ObjectModule",
+    })
