@@ -17,8 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -4236,22 +4240,68 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * delete of the folder for as long as it holds the rule, and the caller would hang a delete that
      * already succeeded. A read that does not answer in time, or fails, is {@link FormPresence#UNKNOWN}:
      * the job then lets the rule go and asks again later, and the caller reports what it can.
+     * <p>
+     * The read itself cannot be cancelled - it takes no monitor - so one that hangs keeps its job worker.
+     * A second ask while it is still out therefore waits on THAT read instead of starting another: a
+     * retrying removal job and its caller never pile up workers, however long the model stays held.
      *
      * @param reader the reader to bound
-     * @param timeoutMs how long one read may take
+     * @param timeoutMs how long one ask may wait
      * @return the bounded reader
      */
     static FormPresenceReader bounded(FormPresenceReader reader, long timeoutMs)
     {
         return (project, ownerFqn, formName) ->
         {
-            AtomicReference<FormPresence> answer = new AtomicReference<>(FormPresence.UNKNOWN);
-            BoundedJob.Result read = BoundedJob.run("delete_metadata: read the deleted form's owner", //$NON-NLS-1$
-                timeoutMs, monitor -> answer.set(reader.read(project, ownerFqn, formName)));
-            return read.getOutcome() == BoundedJob.Outcome.COMPLETED && read.getFailure() == null
-                ? answer.get() : FormPresence.UNKNOWN;
+            String key = project.getName() + '\n' + ownerFqn + '\n' + formName;
+            CompletableFuture<FormPresence> fresh = new CompletableFuture<>();
+            CompletableFuture<FormPresence> read = READS_IN_FLIGHT.putIfAbsent(key, fresh);
+            if (read == null)
+            {
+                read = fresh;
+                Job job = new Job("delete_metadata: read the deleted form's owner") //$NON-NLS-1$
+                {
+                    @Override
+                    protected IStatus run(IProgressMonitor monitor)
+                    {
+                        try
+                        {
+                            fresh.complete(reader.read(project, ownerFqn, formName));
+                        }
+                        catch (RuntimeException e)
+                        {
+                            Activator.logError("delete_metadata: the read of form '" + formName //$NON-NLS-1$
+                                + "' failed", e); //$NON-NLS-1$
+                            fresh.complete(FormPresence.UNKNOWN);
+                        }
+                        finally
+                        {
+                            READS_IN_FLIGHT.remove(key, fresh);
+                        }
+                        return Status.OK_STATUS;
+                    }
+                };
+                job.setSystem(true);
+                McpJobs.schedule(job);
+            }
+            try
+            {
+                return read.get(timeoutMs, TimeUnit.MILLISECONDS);
+            }
+            catch (TimeoutException | ExecutionException e)
+            {
+                return FormPresence.UNKNOWN;
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return FormPresence.UNKNOWN;
+            }
         };
     }
+
+    /** The model reads still out, one per project, owner and form name; see {@link #bounded}. */
+    private static final Map<String, CompletableFuture<FormPresence>> READS_IN_FLIGHT = new ConcurrentHashMap<>();
 
     /**
      * What an owner read from the model says about a form name. The folder path is case-sensitive while

@@ -1580,8 +1580,51 @@ public class DeleteMetadataFormAttributeTest
         }, 100L);
         long started = System.currentTimeMillis();
 
-        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, slow.read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, slow.read(namedProject("SlowRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue("the caller is freed at the bound", System.currentTimeMillis() - started < 4_000L); //$NON-NLS-1$
+    }
+
+    /** A project mock with its own name: reads in flight are keyed by it, so tests must not share one. */
+    private static IProject namedProject(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    @Test
+    public void testAHungReadIsWaitedOnAgainNeverStartedTwice() throws Exception
+    {
+        // The read takes no monitor, so a hung one keeps its worker; asking again must not add another.
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger started = new java.util.concurrent.atomic.AtomicInteger();
+        DeleteMetadataTool.FormPresenceReader hung = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            started.incrementAndGet();
+            try
+            {
+                release.await();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return DeleteMetadataTool.FormPresence.ABSENT;
+        }, 100L);
+        IProject project = namedProject("HungRead"); //$NON-NLS-1$
+
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the second ask waited on the first read", 1, started.get()); //$NON-NLS-1$
+
+        release.countDown();
+        long deadline = System.currentTimeMillis() + 10_000L;
+        DeleteMetadataTool.FormPresence after = DeleteMetadataTool.FormPresence.UNKNOWN;
+        while (after != DeleteMetadataTool.FormPresence.ABSENT && System.currentTimeMillis() < deadline)
+        {
+            after = hung.read(project, "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertEquals("once the read is back, its answer is the model's", DeleteMetadataTool.FormPresence.ABSENT, after); //$NON-NLS-1$
     }
 
     @Test
@@ -1589,10 +1632,10 @@ public class DeleteMetadataFormAttributeTest
     {
         assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.bounded(
             (project, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT, 5_000L)
-            .read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+            .read(namedProject("PlainRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, DeleteMetadataTool.bounded(
             (project, owner, name) -> { throw new IllegalStateException("model gone"); }, 5_000L) //$NON-NLS-1$
-            .read(mock(IProject.class), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+            .read(namedProject("FailedRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
