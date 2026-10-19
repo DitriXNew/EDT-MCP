@@ -31,7 +31,8 @@ CI STRATEGY
 -----------
 The negative matrix and confirm-gate tests are CI-safe (no platform needed). The
 live happy-path (full create+delete round-trip) is covered by test_create_infobase.py
-and gated behind EDT_MCP_LIVE_INFOBASE=1.
+and gated behind EDT_MCP_LIVE_INFOBASE=1. The directory-warning probes below
+use the same gate because association can start a Designer session on their fake marker.
 
 NOTE: delete_infobase never writes TestConfiguration source files. All calls
 leave the project tree clean: assert_no_diff() on all paths.
@@ -52,6 +53,7 @@ from harness import (
     assert_no_diff,
     assert_ok,
     e2e_test,
+    requires_live_infobase,
     E2ESkip,
     PROJECT,
     cleanup_cluster_registration_probe,
@@ -308,7 +310,7 @@ def _assert_directory_warning(workspace, directory, message_fragment, with_detai
     entries = []
     for path in paths:
         if path.is_file():
-            for entry in re.split(r"(?=^!ENTRY )", path.read_text(encoding="utf-8"), flags=re.MULTILINE):
+            for entry in re.split(r"(?=^!ENTRY )", path.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE):
                 if ("!MESSAGE delete_infobase:" in entry and directory.name in entry
                         and message_fragment in entry):
                     entries.append(entry)
@@ -319,8 +321,10 @@ def _assert_directory_warning(workspace, directory, message_fragment, with_detai
         if with_detail:
             message = entry.split("!MESSAGE ", 1)[1].splitlines()[0]
             prefix = "delete it manually): "
-            assert prefix in message and message.split(prefix, 1)[1].strip(), \
-                "the warning must retain the filesystem exception message: %s" % message
+            assert prefix in message, "the warning must include failure detail: %s" % message
+            detail = message.split(prefix, 1)[1]
+            assert re.match(r"[A-Za-z_$][A-Za-z0-9_$]*Exception: \S", detail), \
+                "the warning must retain the exception type and message: %s" % message
 
 
 def _kept_directory_case(locked):
@@ -330,7 +334,7 @@ def _kept_directory_case(locked):
     directory = Path(tempfile.mkdtemp(prefix="edtmcp735_"))
     marker = directory / "1Cv8.1CD"
     sentinel = directory / "keep.txt"
-    contents = b"test-owned database marker; no platform process opens this file"
+    contents = b"test-owned fake database marker; attended live probe only"
     marker.write_bytes(contents)
     sentinel.write_bytes(b"keep this unrelated file")
     name = "McpDeleteWarning_" + directory.name
@@ -402,11 +406,13 @@ def _kept_directory_case(locked):
 
 @e2e_test(tool="delete_infobase", kind="action")
 def test_directory_without_database_marker_is_kept_with_a_warning():
+    requires_live_infobase("delete_infobase missing-marker warning round-trip")
     _kept_directory_case(locked=False)
 
 
 @e2e_test(tool="delete_infobase", kind="action")
 def test_locked_database_directory_is_kept_with_a_warning_without_stack():
+    requires_live_infobase("delete_infobase locked-directory warning round-trip")
     if os.name != "nt":
         raise E2ESkip("Windows delete-sharing semantics are required for the real locked-file probe")
     _kept_directory_case(locked=True)

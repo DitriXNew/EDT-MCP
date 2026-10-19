@@ -1987,6 +1987,10 @@ public class DeleteInfobaseTool implements IMcpTool
      * standalone-server delete uses). Non-fatal: a locked/undeletable directory is logged and the call
      * returns {@code false} (the registration is already removed; the message tells the user to delete
      * the directory manually). Returns {@code true} only when the directory is gone afterwards.
+     * The tool returns a success response, so no {@code Failed tools/call} WARNING exists; this
+     * diagnostic is the single triage entry and therefore uses WARNING rather than INFO/Refusals.
+     * Only environmental {@link IOException} failures are demoted; an unexpected
+     * {@link RuntimeException} keeps ERROR with its stack.
      */
     private static boolean deleteDatabaseDirBestEffort(Path dir)
     {
@@ -2019,11 +2023,17 @@ public class DeleteInfobaseTool implements IMcpTool
             FileUtil.deleteRecursivelyWithRetries(dir);
             return !dir.toFile().exists();
         }
-        catch (IOException | RuntimeException e)
+        catch (IOException e)
         {
             Activator.logWarning("delete_infobase: could not delete the database directory '" + dir //$NON-NLS-1$
                 + "' (non-fatal — the registration is already removed; delete it manually): " //$NON-NLS-1$
-                + PlatformFailures.describe(e));
+                + e.getClass().getSimpleName() + ": " + PlatformFailures.describe(e)); //$NON-NLS-1$
+            return false;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_infobase: could not delete the database directory '" + dir //$NON-NLS-1$
+                + "' (non-fatal — the registration is already removed; delete it manually)", e); //$NON-NLS-1$
             return false;
         }
     }
