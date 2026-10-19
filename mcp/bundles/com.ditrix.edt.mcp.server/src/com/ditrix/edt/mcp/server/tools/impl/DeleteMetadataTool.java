@@ -4242,11 +4242,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * the job then lets the rule go and asks again later, and the caller reports what it can.
      * <p>
      * The read itself cannot be cancelled - it takes no monitor - so one that hangs keeps its job worker.
-     * A second ask while it is still out therefore waits on THAT read instead of starting another: a
-     * retrying removal job and its caller never pile up workers, however long the model stays held.
+     * An ask while an earlier read is still out therefore first WAITS for that read instead of starting
+     * another, so a retrying removal job and its caller never pile up workers however long the model stays
+     * held. It does not take that read's answer, though: the read began before this ask, and a form created
+     * in between would be missing from it - an ABSENT that old must not delete the folder of a new form. Once
+     * the earlier read is back, this ask starts its own; if it is not back in time, the answer is UNKNOWN.
      *
      * @param reader the reader to bound
-     * @param timeoutMs how long one ask may wait
+     * @param timeoutMs how long one ask may wait, all in all
      * @return the bounded reader
      */
     static FormPresenceReader bounded(FormPresenceReader reader, long timeoutMs)
@@ -4254,6 +4257,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return (project, ownerFqn, formName) ->
         {
             String key = project.getName() + '\n' + ownerFqn + '\n' + formName;
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            CompletableFuture<FormPresence> earlier = READS_IN_FLIGHT.get(key);
+            if (earlier != null && answerWithin(earlier, deadline) == null)
+            {
+                return FormPresence.UNKNOWN;
+            }
             CompletableFuture<FormPresence> fresh = new CompletableFuture<>();
             CompletableFuture<FormPresence> read = READS_IN_FLIGHT.putIfAbsent(key, fresh);
             if (read == null)
@@ -4264,40 +4273,49 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     @Override
                     protected IStatus run(IProgressMonitor monitor)
                     {
+                        FormPresence answer;
                         try
                         {
-                            fresh.complete(reader.read(project, ownerFqn, formName));
+                            answer = reader.read(project, ownerFqn, formName);
                         }
                         catch (RuntimeException e)
                         {
                             Activator.logError("delete_metadata: the read of form '" + formName //$NON-NLS-1$
                                 + "' failed", e); //$NON-NLS-1$
-                            fresh.complete(FormPresence.UNKNOWN);
+                            answer = FormPresence.UNKNOWN;
                         }
-                        finally
-                        {
-                            READS_IN_FLIGHT.remove(key, fresh);
-                        }
+                        // Out of the map BEFORE the answer is published, so no later ask can pick up a
+                        // finished read as if it were still the one in flight.
+                        READS_IN_FLIGHT.remove(key, fresh);
+                        fresh.complete(answer);
                         return Status.OK_STATUS;
                     }
                 };
                 job.setSystem(true);
                 McpJobs.schedule(job);
             }
-            try
-            {
-                return read.get(timeoutMs, TimeUnit.MILLISECONDS);
-            }
-            catch (TimeoutException | ExecutionException e)
-            {
-                return FormPresence.UNKNOWN;
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                return FormPresence.UNKNOWN;
-            }
+            // A read another ask started after this one began is as fresh as this ask's own would be.
+            FormPresence answer = answerWithin(read, deadline);
+            return answer == null ? FormPresence.UNKNOWN : answer;
         };
+    }
+
+    /** The read's answer if it comes before {@code deadline}, otherwise {@code null}. */
+    private static FormPresence answerWithin(CompletableFuture<FormPresence> read, long deadline)
+    {
+        try
+        {
+            return read.get(Math.max(0L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException | ExecutionException e)
+        {
+            return null;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     /** The model reads still out, one per project, owner and form name; see {@link #bounded}. */

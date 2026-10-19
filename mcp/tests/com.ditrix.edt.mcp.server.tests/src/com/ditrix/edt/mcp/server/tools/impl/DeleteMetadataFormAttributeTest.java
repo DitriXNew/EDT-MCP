@@ -1615,7 +1615,7 @@ public class DeleteMetadataFormAttributeTest
 
         assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("the second ask waited on the first read", 1, started.get()); //$NON-NLS-1$
+        assertEquals("the second ask waited on the first read and started none of its own", 1, started.get()); //$NON-NLS-1$
 
         release.countDown();
         long deadline = System.currentTimeMillis() + 10_000L;
@@ -1625,6 +1625,48 @@ public class DeleteMetadataFormAttributeTest
             after = hung.read(project, "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         assertEquals("once the read is back, its answer is the model's", DeleteMetadataTool.FormPresence.ABSENT, after); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAskDoesNotTakeTheAnswerOfAReadStartedBeforeIt() throws Exception
+    {
+        // A form created while an earlier read was out is missing from that read: its ABSENT must not
+        // decide the removal. The ask waits for it, then reads again.
+        java.util.concurrent.CountDownLatch firstStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        DeleteMetadataTool.FormPresenceReader model = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            if (reads.incrementAndGet() == 1)
+            {
+                firstStarted.countDown();
+                try
+                {
+                    release.await();
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return DeleteMetadataTool.FormPresence.ABSENT; // the model before the form came back
+            }
+            return DeleteMetadataTool.FormPresence.PRESENT; // the model now
+        }, 10_000L);
+        IProject project = namedProject("StaleRead"); //$NON-NLS-1$
+        java.util.concurrent.CompletableFuture<DeleteMetadataTool.FormPresence> first =
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> model.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(firstStarted.await(10L, java.util.concurrent.TimeUnit.SECONDS));
+
+        java.util.concurrent.CompletableFuture<DeleteMetadataTool.FormPresence> second =
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> model.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        Thread.sleep(200L);
+        assertEquals("nothing new is started while the earlier read is out", 1, reads.get()); //$NON-NLS-1$
+        release.countDown();
+
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, first.get(10L, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals("the later ask answers from its own read", DeleteMetadataTool.FormPresence.PRESENT, //$NON-NLS-1$
+            second.get(10L, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(2, reads.get());
     }
 
     @Test
