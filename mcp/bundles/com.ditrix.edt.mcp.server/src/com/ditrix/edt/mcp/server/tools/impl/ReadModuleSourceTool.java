@@ -126,17 +126,17 @@ public class ReadModuleSourceTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        // Get file
-        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
-        if (!file.exists())
-        {
-            return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
-                   ". Use format like 'CommonModules/ModuleName/Module.bsl' or " + //$NON-NLS-1$
-                   "'Documents/DocName/ObjectModule.bsl'").toJson(); //$NON-NLS-1$
-        }
-
         try
         {
+            // Get file
+            IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
+            if (!file.exists())
+            {
+                return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
+                       ". Use format like 'CommonModules/ModuleName/Module.bsl' or " + //$NON-NLS-1$
+                       "'Documents/DocName/ObjectModule.bsl'").toJson(); //$NON-NLS-1$
+            }
+
             // Read file content with UTF-8 BOM detection
             List<String> allLines = BslModuleUtils.readFileLines(file);
 

@@ -31,7 +31,8 @@ import time
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains,
-    assert_diff_contains, assert_no_diff, e2e_test, settle_or_fail,
+    assert_diff_contains, assert_diff_paths, assert_no_diff, e2e_test, settle_or_fail,
+    calls_aborted, read_disk, PROJECT_DIR, PROJECT_REL,
     poll_disk_contains_all, read_fixture_file, restore_extension_fixture,
     E2EAssertion, E2ECallTimeout, PROJECT, REPO_ROOT, TESTS_PROJECT, TESTS_PROJECT_REL,
 )
@@ -1272,3 +1273,54 @@ def test_own_and_base_modules_carry_no_module_state():
         raise
     else:
         restore_extension_fixture("a write into the extension's own module")
+
+
+def _assert_case_variants_write_existing_module(canonical_name, variants):
+    """Check disk immediately, including actual directory entry spelling on Windows."""
+    relative = "src/CommonModules/%s/Module.bsl" % canonical_name
+    path = os.path.join(PROJECT_DIR, *relative.split("/"))
+    modules = os.path.dirname(os.path.dirname(path))
+    folder = os.path.dirname(path)
+    object_names = set(os.listdir(modules))
+    file_names = set(os.listdir(folder))
+    with open(path, "rb") as stream:
+        original = stream.read()
+    markers = []
+    try:
+        for index, variant in enumerate(variants):
+            marker = "// e2e_550_existing_file_%d" % index
+            mode = "append" if index == 0 else "replace"
+            previous = list(markers)
+            markers = markers + [marker] if mode == "append" else [marker]
+            result = call("write_module_source", {
+                "projectName": PROJECT, "modulePath": "CommonModules/%s/module.bsl" % variant,
+                "mode": mode, "source": marker + "\n", "overwrite": mode == "replace",
+            })
+            assert_ok(result, "write using an object and file name in another case")
+            # No intervening MCP call or polling may hide an early return or a write to a sibling.
+            contents = read_disk(relative)
+            for expected in markers:
+                assert_contains(contents, expected, "the canonical existing file must contain the written source")
+            if mode == "replace":
+                for replaced in previous:
+                    assert_not_contains(contents, replaced, "replace must overwrite the canonical existing file")
+            assert set(os.listdir(modules)) == object_names, "no differently-cased object folder may be created"
+            assert set(os.listdir(folder)) == file_names, "no differently-cased module file may be created"
+            assert_diff_contains(marker, "the write must persist on disk before the tool returns")
+            assert_diff_paths([PROJECT_REL + "/" + relative], "the canonical tracked file must be changed")
+    finally:
+        # A timed-out call may still be writing. Leave frozen fixtures to the harness.
+        if not calls_aborted():
+            with open(path, "wb") as stream:
+                stream.write(original)
+    assert_no_diff("the case-variant write test must restore the original fixture bytes")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_english_case_variants_write_the_real_existing_file():
+    _assert_case_variants_write_existing_module("OK", ("ok", "Ok"))
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_russian_case_variants_write_the_real_existing_file():
+    _assert_case_variants_write_existing_module("Вычисление", ("ВЫЧИСЛЕНИЕ", "вычисление"))
