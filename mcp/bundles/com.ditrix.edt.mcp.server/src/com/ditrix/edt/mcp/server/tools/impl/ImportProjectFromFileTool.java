@@ -6,6 +6,13 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_CONFIGURATION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTENSION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTERNAL_OBJECTS;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.runtimeVersionOf;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.trimToNull;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.validateBaseProject;
+
 import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -98,10 +105,6 @@ public class ImportProjectFromFileTool implements IMcpTool
     /** The error-contract markers, as {@link ToolResult} spells them. */
     private static final String MARKER_COMMITTED = "mutationCommitted"; //$NON-NLS-1$
     private static final String MARKER_UNKNOWN = "mutationOutcomeUnknown"; //$NON-NLS-1$
-
-    private static final String NATURE_CONFIGURATION = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTENSION = "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTERNAL_OBJECTS = "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"; //$NON-NLS-1$
 
     private final BackgroundJobs jobs;
     private final IThickClientProvider thickClients;
@@ -370,73 +373,6 @@ public class ImportProjectFromFileTool implements IMcpTool
             return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, claimedAt.longValue());
         }
         return null;
-    }
-
-    /**
-     * Applies the base-project rule of each file kind.
-     *
-     * @param kind what the file holds
-     * @param baseProjectName the requested base, or {@code null}
-     * @param resolved receives the base project when one is valid
-     * @return {@code null} when the rule is met, otherwise the refusal
-     */
-    private static String validateBaseProject(SourceKind kind, String baseProjectName,
-        AtomicReference<IProject> resolved)
-    {
-        if (kind == SourceKind.CONFIGURATION && baseProjectName != null)
-        {
-            return "baseProjectName does not apply to a .cf file: a configuration depends on no " //$NON-NLS-1$
-                + "other project. Omit baseProjectName."; //$NON-NLS-1$
-        }
-        if (kind == SourceKind.EXTENSION && baseProjectName == null)
-        {
-            return "baseProjectName is required for a .cfe file: an extension project is linked to " //$NON-NLS-1$
-                + "the configuration project it extends. Use list_projects to find it."; //$NON-NLS-1$
-        }
-        if (baseProjectName == null)
-        {
-            return null;
-        }
-        if (WorkspacePaths.projectNameProblem(baseProjectName) != null
-            || !ProjectContext.of(baseProjectName).exists())
-        {
-            return ProjectContext.notFoundMessage(baseProjectName);
-        }
-        ProjectContext base = ProjectContext.of(baseProjectName);
-        if (!base.isOpen())
-        {
-            return "Base project '" + baseProjectName + "' is closed. Open it in EDT first."; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        Set<String> natures = ProjectContext.naturesOf(base.project());
-        if (natures == null || !natures.contains(NATURE_CONFIGURATION))
-        {
-            return "Base project '" + baseProjectName + "' is not a configuration project. Pass the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "configuration project the " + kind.label() //$NON-NLS-1$
-                + " belongs to, not an extension or external-objects project."; //$NON-NLS-1$
-        }
-        resolved.set(base.project());
-        return null;
-    }
-
-    /**
-     * @param baseProject the configuration project the import depends on
-     * @return its runtime version, so the new project matches it; {@code null} lets EDT derive one
-     *     from the XML
-     */
-    private static String runtimeVersionOf(IProject baseProject)
-    {
-        try
-        {
-            Activator activator = Activator.getDefault();
-            IV8ProjectManager manager = activator == null ? null : activator.getV8ProjectManager();
-            IV8Project v8Project = manager == null ? null : manager.getProject(baseProject);
-            return v8Project == null || v8Project.getVersion() == null ? null
-                : v8Project.getVersion().toString();
-        }
-        catch (RuntimeException e)
-        {
-            return null;
-        }
     }
 
     /**
@@ -825,16 +761,6 @@ public class ImportProjectFromFileTool implements IMcpTool
             + "`. Poll it with `get_job_status` using `jobId=\"" + job.getId() //$NON-NLS-1$
             + "\"`; do not call " + NAME + " again for this project.\n\n" //$NON-NLS-1$ //$NON-NLS-2$
             + BackgroundJobRenderer.render(job);
-    }
-
-    private static String trimToNull(String value)
-    {
-        if (value == null)
-        {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** What a job did to the workspace, for the markers of an error answer. */

@@ -9,8 +9,16 @@ Wraps the EDT "Import → Configuration from XML Files" action. It creates a bra
 
 - **importPath** (required): filesystem path to the DIRECTORY containing the XML files. The path is normalized to an absolute path before use. It must exist and must be a directory (a missing path or a file is rejected up front with a deterministic error). A path outside the EDT workspace root is allowed but FLAGGED (logged as a warning and noted in the response) — import from an external location is trusted-caller-only (see README Security & trust model).
 - **projectName** (required): name of the new EDT project to create. Must NOT already exist in the workspace, otherwise the call is rejected.
-- **projectNature** (optional): EDT project nature ID, e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`. Pass an empty string (or omit) to let EDT auto-detect the nature from the source.
-- **xmlVersion** (optional): XML format version, e.g. `8.3.20`. Pass an empty string (or omit) to let EDT auto-detect.
+- **platformVersion** (optional without a base): the NEW project's runtime version in `DT-INF/PROJECT.PMF`, e.g. `8.3.24`. This has the same meaning as `create_project.version`; it does not select an installed conversion platform as `import_project_from_file.platformVersion` does. Use three numeric components without a build number. Omit it or pass a blank string to derive the runtime from the dump. Malformed values are refused; when EDT's runtime registry is available, unsupported versions are refused with the supported list. With a base, omit both version arguments: the runtime is inherited from the base project.
+- **baseProjectName** (required for extension dumps, refused for main configurations, optional for external objects): an existing, open configuration project. Use `list_projects` to find it. Extensions and external-objects projects cannot be used as the base. The imported project inherits its runtime version; explicit `platformVersion` or `xmlVersion` is refused. If the base runtime cannot be read yet, the import is refused; retry when `list_projects` shows the base `ready`.
+- **projectNature** (optional): an assertion about the dump's EDT nature ID, never an override. Main configurations use `com._1c.g5.v8.dt.core.V8ConfigurationNature`; extensions use `com._1c.g5.v8.dt.core.V8ExtensionNature`; external-object dumps use `com._1c.g5.v8.dt.core.V8ExternalObjectsNature`. `Configuration.xml` with `ObjectBelonging=Adopted` identifies an extension; other readable configuration roots identify main configurations. An absent `Configuration.xml` identifies external objects. A mismatch is refused before importing. Omit it or pass a blank string to auto-detect.
+- **xmlVersion** (deprecated): synonym of `platformVersion`, not an XML format selector. Existing callers may keep using it; new calls should use `platformVersion`. If both are non-blank they must match after trimming, otherwise the call is refused. All optional string arguments are trimmed and blank values are treated as omitted.
+
+| Dump kind | `baseProjectName` | New project's runtime |
+|---|---|---|
+| Main configuration | Refused | Explicit supported `platformVersion` / deprecated `xmlVersion`, otherwise derived from the dump |
+| Extension | Required; open main configuration | Inherited from the base; omit both version arguments |
+| External objects (no `Configuration.xml`) | Optional; validated when given | Inherited when a base is given; otherwise explicit supported version or derived from the dump |
 
 ## Examples
 
@@ -20,10 +28,16 @@ Minimal (auto-detect nature and version):
 {"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig"}
 ```
 
-Explicit nature and XML version:
+Explicit nature check and platform version:
 
 ```json
-{"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ConfigurationNature", "xmlVersion": "8.3.20"}
+{"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ConfigurationNature", "platformVersion": "8.3.24"}
+```
+
+Extension linked to an open main configuration project:
+
+```json
+{"importPath": "D:/dumps/MyExtension", "projectName": "MyExtension", "baseProjectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ExtensionNature"}
 ```
 
 ## Notes
@@ -40,6 +54,7 @@ Explicit nature and XML version:
 
 - **Project must be new.** If a workspace project with `projectName` already exists, the call is rejected early; pick a fresh name.
 - **Directory, not a file.** `importPath` must point at the directory of XML files, not at a single `.xml` file.
+- **Unreadable and absent configuration roots differ.** An absent `Configuration.xml` is an external-object dump. If the file exists but cannot be parsed, a requested `projectNature` or `baseProjectName` is refused because the kind cannot be checked; pass the root dump directory produced by `export_configuration_to_xml`. Without either option, EDT decides whether it can import the dump. Correct or omit a mismatched `projectNature`.
 - **Requires the CLI API plugin.** Needs the EDT plugin `com._1c.g5.v8.dt.cli.api`; if it is not installed the tool returns an error instead of importing.
 - **A big configuration takes minutes to start.** The 300-second wait is not a bound on the import (that has already finished when the wait starts) - it is only how long this one call watches EDT start the project before answering `state: importing`.
 - **Budget the client-side call timeout.** The import itself is unbounded on the platform side (the CLI API offers no cancellation), and the post-import start wait adds up to 300 seconds on top of it. On a large dump one call can therefore run for many minutes; a client with a shorter transport timeout will drop the answer while the import keeps going.

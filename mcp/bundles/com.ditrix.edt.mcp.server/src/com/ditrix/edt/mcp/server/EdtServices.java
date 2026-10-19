@@ -43,6 +43,7 @@ import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
+import com._1c.g5.v8.dt.platform.IRuntimeRegistry;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationContextProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
@@ -70,6 +71,7 @@ import com.google.inject.Injector;
 public class EdtServices
 {
     /** Service trackers */
+    private ServiceTracker<IRuntimeRegistry, IRuntimeRegistry> runtimeRegistryTracker;
     private ServiceTracker<IV8ProjectManager, IV8ProjectManager> v8ProjectManagerTracker;
     private ServiceTracker<IDtProjectManager, IDtProjectManager> dtProjectManagerTracker;
     private ServiceTracker<IWorkspaceOrchestrator, IWorkspaceOrchestrator> workspaceOrchestratorTracker;
@@ -164,6 +166,9 @@ public class EdtServices
     public void init(BundleContext context)
     {
         // Initialize service trackers
+        runtimeRegistryTracker = new ServiceTracker<>(context, IRuntimeRegistry.class, null);
+        runtimeRegistryTracker.open();
+
         v8ProjectManagerTracker = new ServiceTracker<>(context, IV8ProjectManager.class, null);
         v8ProjectManagerTracker.open();
 
@@ -317,6 +322,7 @@ public class EdtServices
 
         // Close service trackers (each closeTracker() closes when non-null and returns null,
         // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block). // NOSONAR explanatory comment, not commented-out code
+        runtimeRegistryTracker = closeTracker(runtimeRegistryTracker);
         v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
         dtProjectManagerTracker = closeTracker(dtProjectManagerTracker);
         workspaceOrchestratorTracker = closeTracker(workspaceOrchestratorTracker);
@@ -391,6 +397,12 @@ public class EdtServices
             tracker.close();
         }
         return null;
+    }
+
+    /** @return supported platform runtimes, or {@code null} when the service is unavailable */
+    public IRuntimeRegistry getRuntimeRegistry()
+    {
+        return runtimeRegistryTracker == null ? null : runtimeRegistryTracker.getService();
     }
 
     /**

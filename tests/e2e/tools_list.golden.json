@@ -3143,10 +3143,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create an EDT project from exported 1C configuration XML files. Parameters and examples: get_tool_guide('import_configuration_from_xml').",
+    "description": "Create an EDT project from exported 1C configuration XML files. Use platformVersion for the new project's runtime, derived from the dump by default (xmlVersion is a deprecated alias; conflicting values are refused). projectNature checks the dump kind and refuses mismatches. For extensions, pass baseProjectName; omit it for main configurations; optional for external objects. With a base, omit platformVersion and xmlVersion: the runtime is inherited. Parameters and examples: get_tool_guide('import_configuration_from_xml').",
     "inputSchema": {
       "properties": {
+        "baseProjectName": {
+          "type": "string"
+        },
         "importPath": {
+          "type": "string"
+        },
+        "platformVersion": {
           "type": "string"
         },
         "projectName": {
