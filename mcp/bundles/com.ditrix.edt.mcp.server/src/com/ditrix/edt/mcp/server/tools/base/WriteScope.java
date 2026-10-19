@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 
@@ -126,7 +127,7 @@ public final class WriteScope
     private String undeterminableReason;
 
     // Published to the waiting caller for the same bounded-call race as mutationCommitted.
-    private volatile List<String> undeterminableFallback;
+    private final AtomicReference<List<String>> undeterminableFallback = new AtomicReference<>();
 
     /**
      * Runs {@code work} with {@code scope} bound to the current thread, and gives the previous
@@ -409,7 +410,7 @@ public final class WriteScope
     public void undeterminable(String reason, Collection<String> fallbackProjects)
     {
         this.undeterminableReason = reason;
-        this.undeterminableFallback = new ArrayList<>(fallbackProjects);
+        this.undeterminableFallback.set(new ArrayList<>(fallbackProjects));
     }
 
     /**
@@ -451,7 +452,7 @@ public final class WriteScope
         // An opaque platform extension point may throw without saying whether it rolled back;
         // preserve that distinction on the wire while still forcing callers to reset before
         // trusting the model.
-        return undeterminableFallback != null
+        return undeterminableFallback.get() != null
             ? ToolResult.markErrorWithUnknownMutationOutcome(result) : result;
     }
 
@@ -503,13 +504,13 @@ public final class WriteScope
             // fact available - something really was written or authorized.
             return new Verdict(new ArrayList<>(written), removeAll(cascadedInto, written), true);
         }
-        if (undeterminableFallback != null)
+        if (undeterminableFallback.get() != null)
         {
             // Ahead of queuedNothing() on purpose. A call that states BOTH has contradicted itself,
             // and of the two the safe reading is the one that waits more and claims less: publishing
             // "[] - I queued nothing" while a fallback was named would drop that wait AND assert a
             // finding the same call has just said it cannot make. No tool states both today.
-            return new Verdict(new ArrayList<>(undeterminableFallback), Collections.emptyList(), false);
+            return new Verdict(new ArrayList<>(undeterminableFallback.get()), Collections.emptyList(), false);
         }
         if (queuedNothing)
         {
