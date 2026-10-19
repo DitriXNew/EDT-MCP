@@ -23,6 +23,7 @@ public final class GuideSections
     private static final int MAX_QUERY_HITS = 20;
     private static final int MAX_SNIPPET_CHARS = 200;
     private static final Pattern FENCE = Pattern.compile("^ {0,3}(`{3,}|~{3,})(.*)$"); //$NON-NLS-1$
+    private static final Pattern LIST_MARKER = Pattern.compile("^ {0,3}(?:[-+*]|[0-9]{1,9}[.)]) {1,4}(?=\\S|$)"); //$NON-NLS-1$
     private static final Pattern HEADING = Pattern.compile("^ {0,3}(#{1,6})(?:[\\t ]+(.*)|[\\t ]*)$"); //$NON-NLS-1$
     private static final Pattern CLOSING_HASHES = Pattern.compile("(?:^|[\\t ]+)#+[\\t ]*$"); //$NON-NLS-1$
     private static final Pattern SLUG_PUNCTUATION = Pattern.compile("[^\\p{L}\\p{N}\\p{M}_\\-\\s]"); //$NON-NLS-1$
@@ -60,6 +61,8 @@ public final class GuideSections
         int firstSection = markdown.length();
         char fenceChar = 0;
         int fenceLength = 0;
+        int fenceIndent = 0;
+        List<Integer> listIndents = new ArrayList<>();
         for (int lineStart = 0; lineStart < markdown.length();)
         {
             int newline = markdown.indexOf('\n', lineStart);
@@ -69,7 +72,38 @@ public final class GuideSections
             {
                 line = line.substring(0, line.length() - 1);
             }
-            Matcher fence = FENCE.matcher(line);
+            String fenceLine = expandTabs(line);
+            int indentation = 0;
+            while (indentation < fenceLine.length() && fenceLine.charAt(indentation) == ' ')
+            {
+                indentation++;
+            }
+            if (!fenceLine.isBlank())
+            {
+                while (!listIndents.isEmpty() && indentation < listIndents.get(listIndents.size() - 1))
+                {
+                    listIndents.remove(listIndents.size() - 1);
+                }
+                if (fenceChar != 0 && indentation < fenceIndent)
+                {
+                    // A fence inside a list ends when its containing item ends.
+                    fenceChar = 0;
+                }
+            }
+            int listIndent = listIndents.isEmpty() ? 0 : listIndents.get(listIndents.size() - 1);
+            String fenceContent = fenceLine.substring(Math.min(listIndent, fenceLine.length()));
+            if (fenceChar == 0)
+            {
+                Matcher marker = LIST_MARKER.matcher(fenceContent);
+                while (marker.find())
+                {
+                    listIndent += marker.end();
+                    listIndents.add(listIndent);
+                    fenceContent = fenceContent.substring(marker.end());
+                    marker = LIST_MARKER.matcher(fenceContent);
+                }
+            }
+            Matcher fence = FENCE.matcher(fenceContent);
             if (fenceChar != 0)
             {
                 if (fence.matches() && fence.group(1).charAt(0) == fenceChar
@@ -83,6 +117,7 @@ public final class GuideSections
             {
                 fenceChar = fence.group(1).charAt(0);
                 fenceLength = fence.group(1).length();
+                fenceIndent = listIndent;
             }
             else
             {
@@ -117,6 +152,28 @@ public final class GuideSections
             sections.add(new Section(heading.title(), heading.anchor(), markdown.substring(heading.start(), end)));
         }
         return new GuideSections(markdown, firstSection, headings, sections);
+    }
+
+    private static String expandTabs(String line)
+    {
+        if (line.indexOf('\t') < 0)
+        {
+            return line;
+        }
+        StringBuilder expanded = new StringBuilder();
+        for (int i = 0; i < line.length(); i++)
+        {
+            char value = line.charAt(i);
+            if (value == '\t')
+            {
+                expanded.append(" ".repeat(4 - expanded.length() % 4)); //$NON-NLS-1$
+            }
+            else
+            {
+                expanded.append(value);
+            }
+        }
+        return expanded.toString();
     }
 
     private static String uniqueAnchor(String title, Set<String> anchors)
@@ -161,9 +218,11 @@ public final class GuideSections
     {
         boolean explicitAnchor = value.startsWith("#"); //$NON-NLS-1$
         String anchor = (explicitAnchor ? value.substring(1) : value).toLowerCase(Locale.ROOT);
+        String foldedAnchor = fold(anchor);
         String title = normalizeTitle(value);
         Section byTitle = null;
         Section byAnchor = null;
+        Section exactAnchor = null;
         for (Section section : sections)
         {
             if (byTitle == null && normalizeTitle(section.heading()).equals(title))
@@ -172,9 +231,14 @@ public final class GuideSections
             }
             if (section.anchor().equals(anchor))
             {
+                exactAnchor = section;
+            }
+            if (byAnchor == null && fold(section.anchor()).equals(foldedAnchor))
+            {
                 byAnchor = section;
             }
         }
+        byAnchor = exactAnchor != null ? exactAnchor : byAnchor;
         if (explicitAnchor && byAnchor != null)
         {
             return byAnchor;
@@ -243,11 +307,7 @@ public final class GuideSections
                 matchingSections.add(current != null ? current.anchor() : ""); //$NON-NLS-1$
                 if (hits.size() < MAX_QUERY_HITS)
                 {
-                    String snippet = line.strip();
-                    if (snippet.length() > MAX_SNIPPET_CHARS)
-                    {
-                        snippet = snippet.substring(0, MAX_SNIPPET_CHARS) + "\u2026"; //$NON-NLS-1$
-                    }
+                    String snippet = snippet(line.strip(), needle);
                     String owner = current != null ? current.heading() + " (#" + current.anchor() + ")" //$NON-NLS-1$ //$NON-NLS-2$
                         : "Introduction"; //$NON-NLS-1$
                     hits.add("- " + owner + ": " + snippet + "\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -271,5 +331,35 @@ public final class GuideSections
             result.append("... (").append(total - hits.size()).append(" more)\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return result.toString();
+    }
+
+    private static String snippet(String line, String needle)
+    {
+        int length = line.codePointCount(0, line.length());
+        if (length <= MAX_SNIPPET_CHARS)
+        {
+            return line;
+        }
+        int match = fold(line).indexOf(needle);
+        int matchStart = 0;
+        // Map the folded UTF-16 offset back to source code points; lowercase can expand U+0130.
+        for (int offset = 0, foldedOffset = 0; offset < line.length();)
+        {
+            int next = line.offsetByCodePoints(offset, 1);
+            int width = fold(line.substring(offset, next)).length();
+            if (foldedOffset + width > match)
+            {
+                break;
+            }
+            foldedOffset += width;
+            offset = next;
+            matchStart++;
+        }
+        int context = Math.max(0, (MAX_SNIPPET_CHARS - needle.codePointCount(0, needle.length())) / 2);
+        int start = Math.min(Math.max(0, matchStart - context), length - MAX_SNIPPET_CHARS);
+        int end = start + MAX_SNIPPET_CHARS;
+        return (start > 0 ? "\u2026" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + line.substring(line.offsetByCodePoints(0, start), line.offsetByCodePoints(0, end))
+            + (end < length ? "\u2026" : ""); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

@@ -30,7 +30,7 @@ import com.ditrix.edt.mcp.server.utils.GuideSections;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Regression coverage for the six round-two review findings, using real guides where possible. */
+/** Regression coverage for guide review findings, using real guides where possible. */
 public class GetToolGuideToolReviewTest
 {
     private final GetToolGuideTool tool = new GetToolGuideTool();
@@ -278,5 +278,25 @@ public class GetToolGuideToolReviewTest
         assertFalse(summary.contains("Create a brand-new infobase:"));
         assertFalse(summary.contains("Or register an existing one:"));
         assertTrue(summary.contains("guide://create_infobase"));
+    }
+
+    @Test
+    public void testRealCredentialsQueryShowsTheMatchBeyondTheFirstTwoHundredCharacters()
+    {
+        SetInfobaseCredentialsTool target = new SetInfobaseCredentialsTool();
+        assertFalse("The bundled credentials guide must be available", target.getGuide().isEmpty());
+        String query = "client half normally";
+        String full = GuideRenderer.render(target);
+        String line = full.lines().filter(value -> value.contains(query)).findFirst().orElseThrow();
+        assertTrue("The real match must be beyond the old clipping boundary", line.indexOf(query) > 200);
+        String result = execute(target, "query", query);
+        assertTrue(result.startsWith("1 matching line in 1 section;"));
+        assertTrue(result, result.contains("all three write the client half normally, because"));
+        assertTrue(result.contains("(#what-these-credentials-are-and-are-not): \u2026"));
+        assertFalse(result.contains("A **shared** launch configuration"));
+        String hit = result.lines().filter(value -> value.startsWith("- ")).findFirst().orElseThrow();
+        String snippet = hit.substring(hit.indexOf("): ") + 3);
+        assertTrue("At most 200 source code points and two clipping markers",
+            snippet.codePointCount(0, snippet.length()) <= 202);
     }
 }

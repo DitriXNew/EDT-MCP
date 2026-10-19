@@ -339,3 +339,26 @@ def test_real_create_infobase_summary_omits_fenced_heading_comments():
     assert_not_contains(r.text, "Or register an existing one:", "second shell comment is not a TOC row")
     assert_contains(r.text, "guide://create_infobase", "summary links to the full guide")
     assert_no_diff("infobase guide discovery must not change the fixture")
+
+
+@e2e_test(tool="get_tool_guide", kind="read")
+def test_late_credentials_query_keeps_the_match_in_its_bounded_snippet():
+    """The real late match stays visible with its section and a leading cut marker."""
+    phrase = "client half normally"
+    full = call("get_tool_guide", {"toolName": "set_infobase_credentials"})
+    assert_ok(full, "full credentials guide for the independent late-match check")
+    source_lines = [line for line in full.text.splitlines() if phrase in line]
+    if len(source_lines) != 1 or source_lines[0].index(phrase) <= 200:
+        _fail("the real credentials match must exercise clipping beyond the first 200 characters")
+    r = call("get_tool_guide", {"toolName": "set_infobase_credentials", "query": phrase})
+    assert_ok(r, "query whose first match is beyond the old clipping window")
+    assert_contains(r.text, "1 matching line in 1 section;", "the real phrase matches one line")
+    assert_contains(r.text, "all three write the client half normally, because",
+                    "the snippet must show the actual match with nearby context")
+    assert_contains(r.text, "(#what-these-credentials-are-and-are-not): \u2026",
+                    "the hit names its section and marks the clipped beginning")
+    assert_not_contains(r.text, "A **shared** launch configuration", "the snippet must omit the distant line start")
+    hits = [line for line in r.text.splitlines() if line.startswith("- ")]
+    if len(hits) != 1 or len(hits[0].split("): ", 1)[1]) > 202:
+        _fail("the query must return one snippet of at most 200 code points plus two cut markers")
+    assert_no_diff("querying credentials instructions must not change the fixture")
