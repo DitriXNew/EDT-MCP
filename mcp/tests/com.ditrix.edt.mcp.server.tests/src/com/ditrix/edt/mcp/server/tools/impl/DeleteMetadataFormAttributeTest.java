@@ -42,7 +42,6 @@ import org.eclipse.core.resources.IResourceRuleFactory;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.ISchedulingRule;
@@ -1205,7 +1204,7 @@ public class DeleteMetadataFormAttributeTest
     private static final String GONE_FOLDER = "src/Catalogs/Catalog/Forms/Gone"; //$NON-NLS-1$
 
     private static final DeleteMetadataTool.FolderRemoval GONE_REMOVAL =
-        new DeleteMetadataTool.FolderRemoval("delete_metadata form folder test", 42L, "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
+        new DeleteMetadataTool.FolderRemoval("delete_metadata form folder test", "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     private static final String GONE_MESSAGE = "Deleted form 'Gone' from Catalog.Catalog and persisted to disk."; //$NON-NLS-1$
 
@@ -1233,7 +1232,7 @@ public class DeleteMetadataFormAttributeTest
         return new DeleteMetadataTool.FormFolderCleanup()
         {
             @Override
-            public DeleteMetadataTool.FolderRemoval start(IProject project, String folderRel, long ownerBmId,
+            public DeleteMetadataTool.FolderRemoval start(IProject project, String folderRel, String ownerFqn,
                 String formName)
             {
                 throw new AssertionError("the barrier never schedules the removal"); //$NON-NLS-1$
@@ -1246,13 +1245,13 @@ public class DeleteMetadataFormAttributeTest
                 assertEquals("TestConfiguration", projectName); //$NON-NLS-1$
                 assertSame("the removal is awaited on the calling thread", caller, Thread.currentThread()); //$NON-NLS-1$
                 order.add("await " + folderRel + " " //$NON-NLS-1$ //$NON-NLS-2$
-                    + (removal == null ? "nothing" : removal.family + "@" + removal.ownerBmId + "/" + removal.formName)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + (removal == null ? "nothing" : removal.family + "@" + removal.ownerFqn + "/" + removal.formName)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 return outcome;
             }
         };
     }
 
-    private static final String GONE_AWAITED = "await " + GONE_FOLDER + " " + GONE_REMOVAL.family + "@42/Gone"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    private static final String GONE_AWAITED = "await " + GONE_FOLDER + " " + GONE_REMOVAL.family + "@Catalog.Catalog/Gone"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     @Test
     public void testTheFolderRemovalIsReportedBeforeTheBarrier()
@@ -1337,34 +1336,58 @@ public class DeleteMetadataFormAttributeTest
     {
         assertNull(DeleteMetadataTool.FolderRemoval.fromJson(null));
         assertNull(DeleteMetadataTool.FolderRemoval.fromJson(new JsonObject()));
-        JsonObject ownerless = GONE_REMOVAL.toJson();
-        ownerless.addProperty("ownerBmId", "someone"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNull(DeleteMetadataTool.FolderRemoval.fromJson(ownerless));
+        JsonObject nameless = GONE_REMOVAL.toJson();
+        nameless.add("formName", new JsonObject()); //$NON-NLS-1$
+        assertNull(DeleteMetadataTool.FolderRemoval.fromJson(nameless));
         DeleteMetadataTool.FolderRemoval back = DeleteMetadataTool.FolderRemoval.fromJson(GONE_REMOVAL.toJson());
         assertEquals(GONE_REMOVAL.family, back.family);
-        assertEquals(GONE_REMOVAL.ownerBmId, back.ownerBmId);
+        assertEquals(GONE_REMOVAL.ownerFqn, back.ownerFqn);
         assertEquals(GONE_REMOVAL.formName, back.formName);
+        DeleteMetadataTool.FolderRemoval ownerless = DeleteMetadataTool.FolderRemoval.fromJson(
+            new DeleteMetadataTool.FolderRemoval("f", null, "Gone").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("an owner that could not be named travels as such", ownerless.ownerFqn); //$NON-NLS-1$
     }
 
     @Test
     public void testTheOutcomeIsReadFromTheDiskAndTheModel()
     {
-        // outcome(removal, folderExists, running, createdAgain)
+        DeleteMetadataTool.FormPresence present = DeleteMetadataTool.FormPresence.PRESENT;
+        DeleteMetadataTool.FormPresence absent = DeleteMetadataTool.FormPresence.ABSENT;
+        DeleteMetadataTool.FormPresence unknown = DeleteMetadataTool.FormPresence.UNKNOWN;
+        // outcome(removal, folderExists, running, presence now)
         assertEquals(DeleteMetadataTool.ResourceCleanup.REMOVED,
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, false, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, false, absent));
         assertEquals("gone even while the job is reported running", DeleteMetadataTool.ResourceCleanup.REMOVED, //$NON-NLS-1$
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, true, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, true, unknown));
         assertEquals(DeleteMetadataTool.ResourceCleanup.NOT_FOUND,
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, false, false, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, false, false, unknown));
         assertEquals(DeleteMetadataTool.ResourceCleanup.SCHEDULED,
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, true, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, true, unknown));
         assertEquals("a form of that name is in the model again", DeleteMetadataTool.ResourceCleanup.KEPT, //$NON-NLS-1$
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, true));
-        assertEquals("still there with no form behind it: a rewritten file is no new form", //$NON-NLS-1$
-            DeleteMetadataTool.ResourceCleanup.FAILED,
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, present));
+        assertEquals("still there with no form behind it", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, absent));
+        assertEquals("still there and the model could not say whose", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, unknown));
         assertEquals("there now, though nothing was there to remove", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
-            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, true, false, false));
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, true, false, present));
+    }
+
+    @Test
+    public void testOnlyAFormOfExactlyThatNameOwnsTheFolder()
+    {
+        com._1c.g5.v8.dt.metadata.mdclass.Catalog owner = MdClassFactory.eINSTANCE.createCatalog();
+        owner.setName("Catalog"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.CatalogForm form = MdClassFactory.eINSTANCE.createCatalogForm();
+        form.setName("Gone"); //$NON-NLS-1$
+        owner.getForms().add(form);
+
+        assertEquals(DeleteMetadataTool.FormPresence.PRESENT, DeleteMetadataTool.presenceOf(owner, "Gone")); //$NON-NLS-1$
+        assertEquals("a name that differs only in case may be the same directory", //$NON-NLS-1$
+            DeleteMetadataTool.FormPresence.UNKNOWN, DeleteMetadataTool.presenceOf(owner, "GONE")); //$NON-NLS-1$
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.presenceOf(owner, "Other")); //$NON-NLS-1$
+        assertEquals("no owner under that FQN any more", DeleteMetadataTool.FormPresence.ABSENT, //$NON-NLS-1$
+            DeleteMetadataTool.presenceOf(null, "Gone")); //$NON-NLS-1$
     }
 
     @Test
@@ -1375,8 +1398,8 @@ public class DeleteMetadataFormAttributeTest
         IProject project = mock(IProject.class);
         when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
 
-        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup((p, owner, name) -> false)
-            .start(project, GONE_FOLDER, 42L, "Gone")); //$NON-NLS-1$
+        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup((p, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT)
+            .start(project, GONE_FOLDER, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
         verify(folder, never()).getWorkspace();
     }
 
@@ -1414,14 +1437,19 @@ public class DeleteMetadataFormAttributeTest
     }
 
     private static DeleteMetadataTool.FolderRemoval startAndFinish(IFolder folder,
-        DeleteMetadataTool.FormPresence presence) throws InterruptedException
+        DeleteMetadataTool.FormPresenceReader presence) throws InterruptedException
     {
         IProject project = mock(IProject.class);
         when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
         DeleteMetadataTool.FolderRemoval removal =
-            new DeleteMetadataTool.WorkspaceFormFolderCleanup(presence).start(project, GONE_FOLDER, 42L, "Gone"); //$NON-NLS-1$
+            new DeleteMetadataTool.WorkspaceFormFolderCleanup(presence).start(project, GONE_FOLDER, "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("an existing folder gets a removal job", removal); //$NON-NLS-1$
-        Job.getJobManager().join(removal.family, new NullProgressMonitor());
+        long deadline = System.currentTimeMillis() + 30_000L;
+        while (Job.getJobManager().find(removal.family).length > 0 && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertEquals("the removal job and its retries are done", 0, Job.getJobManager().find(removal.family).length); //$NON-NLS-1$
         return removal;
     }
 
@@ -1436,11 +1464,11 @@ public class DeleteMetadataFormAttributeTest
         DeleteMetadataTool.FolderRemoval removal = startAndFinish(folder, (project, owner, name) ->
         {
             asked.add(owner + "/" + name); //$NON-NLS-1$
-            return false;
+            return DeleteMetadataTool.FormPresence.ABSENT;
         });
 
-        assertEquals("the model is asked about the deleted form itself", List.of("42/Gone"), asked); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals(42L, removal.ownerBmId);
+        assertEquals("the model is asked about the path's owner and form", List.of("Catalog.Catalog/Gone"), asked); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.Catalog", removal.ownerFqn); //$NON-NLS-1$
         verify(folder).delete(eq(true), any());
         assertNotNull(deleter.get());
         assertNotSame("the folder is not removed on the scheduling thread", Thread.currentThread(), deleter.get()); //$NON-NLS-1$
@@ -1449,20 +1477,51 @@ public class DeleteMetadataFormAttributeTest
     @Test
     public void testAFolderOfAFormCreatedAgainIsKept() throws Exception
     {
-        // A create_metadata of a form with the same name ran first: the model holds that form again.
+        // A create_metadata of a form at the same path ran first: the model holds that form again.
         AtomicReference<Thread> deleter = new AtomicReference<>();
         IFolder folder = removableFolder(deleter);
 
-        startAndFinish(folder, (project, owner, name) -> true);
+        startAndFinish(folder, (project, owner, name) -> DeleteMetadataTool.FormPresence.PRESENT);
 
         verify(folder, never()).delete(anyBoolean(), any());
     }
 
     @Test
-    public void testAnOwnerWithoutABmIdHasNoFormToFindAgain()
+    public void testAModelThatCannotBeReadIsAskedAgainAndNeverDeletesOnAGuess() throws Exception
     {
-        assertFalse(DeleteMetadataTool.formPresentInModel(mock(IProject.class),
-            DeleteMetadataTool.FolderRemoval.NO_OWNER, "Gone")); //$NON-NLS-1$
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) ->
+        {
+            reads.incrementAndGet();
+            return DeleteMetadataTool.FormPresence.UNKNOWN;
+        });
+
+        assertEquals(DeleteMetadataTool.WorkspaceFormFolderCleanup.MAX_ATTEMPTS, reads.get());
+        verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testAModelReadAtTheSecondAttemptStillRemovesTheFolder() throws Exception
+    {
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) -> reads.incrementAndGet() == 1
+            ? DeleteMetadataTool.FormPresence.UNKNOWN : DeleteMetadataTool.FormPresence.ABSENT);
+
+        assertEquals(2, reads.get());
+        verify(folder).delete(eq(true), any());
+    }
+
+    @Test
+    public void testAnOwnerThatCouldNotBeNamedIsUnknownNotAbsent()
+    {
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN,
+            DeleteMetadataTool.formPresenceInModel(mock(IProject.class), null, "Gone")); //$NON-NLS-1$
     }
 
     // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------
