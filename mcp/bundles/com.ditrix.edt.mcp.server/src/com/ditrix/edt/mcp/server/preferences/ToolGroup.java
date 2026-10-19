@@ -37,7 +37,7 @@ public enum ToolGroup
         "Content assist, documentation, metadata and common-picture browsing, and references", //$NON-NLS-1$
         "get_content_assist", "get_platform_documentation", "get_metadata_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_metadata_details", "list_subsystems", "get_subsystem_content", "find_references", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "list_common_pictures", "export_common_picture"), //$NON-NLS-1$ //$NON-NLS-2$
+        "list_common_pictures", "export_common_picture", "search_in_dcs"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     TAGS("tags", "Tags", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata tag management", //$NON-NLS-1$

@@ -6,21 +6,14 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.IResourceVisitor;
 import org.eclipse.core.runtime.CoreException;
 
-import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -28,10 +21,10 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
-import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ResourceTextSearch;
+import com.ditrix.edt.mcp.server.utils.SearchResultFormatter;
 
 /**
  * Tool for full-text search across all BSL modules in a project.
@@ -60,12 +53,6 @@ public class SearchInCodeTool implements IMcpTool
 
     /** Input param: lines of context before/after each match. */
     private static final String KEY_CONTEXT_LINES = "contextLines"; //$NON-NLS-1$
-
-    /** Closing quote of a heading echoing the query, followed by a blank line. */
-    private static final String QUOTE_NEWLINES = "\"\n\n"; //$NON-NLS-1$
-
-    /** Markdown prefix for inline warnings in the rendered output. */
-    private static final String WARNING_PREFIX = "**Warning:** "; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -220,15 +207,15 @@ public class SearchInCodeTool implements IMcpTool
 
         // Search
         boolean collectDetails = MODE_FULL.equals(outputMode);
-        SearchCollector collector = new SearchCollector(pattern, fileMask, metadataFolderPrefix,
-            maxResults, contextLines, collectDetails);
+        ResourceTextSearch search = new ResourceTextSearch(pattern, ".bsl", fileMask, //$NON-NLS-1$
+            metadataFolderPrefix, maxResults, contextLines, collectDetails);
 
         try
         {
             IResource srcFolder = project.findMember("src"); //$NON-NLS-1$
             if (srcFolder != null)
             {
-                srcFolder.accept(collector);
+                srcFolder.accept(search);
             }
             else
             {
@@ -241,135 +228,7 @@ public class SearchInCodeTool implements IMcpTool
         }
 
         // Format output
-        return formatOutput(outputMode, query, collector);
-    }
-
-    /**
-     * Formats the collected search results according to the requested output mode.
-     */
-    private String formatOutput(String outputMode, String query, SearchCollector collector)
-    {
-        if (MODE_COUNT.equals(outputMode))
-        {
-            return formatCountOutput(query, collector);
-        }
-        else if (MODE_FILES.equals(outputMode))
-        {
-            return formatFilesOutput(query, collector);
-        }
-        return formatFullOutput(query, collector);
-    }
-
-    /**
-     * Formats count-only output.
-     */
-    private String formatCountOutput(String query, SearchCollector collector)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append("## Search Count for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
-        sb.append("**Total matches:** ").append(collector.totalMatches); //$NON-NLS-1$
-        sb.append(" in **").append(collector.totalMatchedFiles).append("** files\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        if (collector.skippedFiles > 0)
-        {
-            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
-              .append(" file(s) could not be read\n"); //$NON-NLS-1$
-        }
-        if (collector.wasInterrupted())
-        {
-            sb.append("**Warning:** Search was interrupted, results may be incomplete\n"); //$NON-NLS-1$
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Formats files-only output (file list with per-file match counts).
-     */
-    private String formatFilesOutput(String query, SearchCollector collector)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append("## Search Files for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
-        sb.append("**Total matches:** ").append(collector.totalMatches); //$NON-NLS-1$
-        sb.append(" in **").append(collector.totalMatchedFiles).append("** files\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        if (collector.skippedFiles > 0)
-        {
-            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
-              .append(" file(s) could not be read\n\n"); //$NON-NLS-1$
-        }
-        if (collector.wasInterrupted())
-        {
-            sb.append("**Warning:** Search was interrupted, results may be incomplete\n\n"); //$NON-NLS-1$
-        }
-
-        if (collector.matchCountByFile.isEmpty())
-        {
-            sb.append("No matches found.\n"); //$NON-NLS-1$
-            return sb.toString();
-        }
-
-        sb.append(MarkdownUtils.tableHeader("File", "Matches")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        for (Map.Entry<String, Integer> entry : collector.matchCountByFile.entrySet())
-        {
-            sb.append(MarkdownUtils.tableRow(entry.getKey(), String.valueOf(entry.getValue())));
-        }
-
-        return sb.toString();
-    }
-
-    /**
-     * Formats full search results as markdown with context.
-     */
-    private String formatFullOutput(String query, SearchCollector collector)
-    {
-        StringBuilder sb = new StringBuilder();
-        sb.append("## Search Results for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
-
-        int totalMatches = collector.totalMatches;
-        int totalFiles = collector.totalMatchedFiles;
-        int shownMatches = collector.getShownMatches();
-
-        sb.append("**Total:** ").append(totalMatches); //$NON-NLS-1$
-        sb.append(" matches in ").append(totalFiles).append(" files"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append(Pagination.truncationNotice(shownMatches, totalMatches));
-        sb.append("\n"); //$NON-NLS-1$
-
-        if (collector.skippedFiles > 0)
-        {
-            sb.append(WARNING_PREFIX).append(collector.skippedFiles)
-              .append(" file(s) could not be read (check EDT Error Log)\n"); //$NON-NLS-1$
-        }
-        if (collector.wasInterrupted())
-        {
-            sb.append("**Warning:** Search was interrupted, results may be incomplete\n"); //$NON-NLS-1$
-        }
-        sb.append("\n"); //$NON-NLS-1$
-
-        if (collector.matchesByFile.isEmpty())
-        {
-            sb.append("No matches found.\n"); //$NON-NLS-1$
-            return sb.toString();
-        }
-
-        // Group by file
-        for (Map.Entry<String, List<MatchInfo>> entry : collector.matchesByFile.entrySet())
-        {
-            sb.append("### ").append(entry.getKey()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-            for (MatchInfo match : entry.getValue())
-            {
-                sb.append("**Line ").append(match.lineNumber).append(":**\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                sb.append("```bsl\n"); //$NON-NLS-1$
-                for (String contextLine : match.contextLines)
-                {
-                    sb.append(contextLine).append("\n"); //$NON-NLS-1$
-                }
-                sb.append("```\n\n"); //$NON-NLS-1$
-            }
-        }
-
-        return sb.toString();
+        return SearchResultFormatter.forCode().format(outputMode, query, search);
     }
 
     /**
@@ -425,163 +284,6 @@ public class SearchInCodeTool implements IMcpTool
                 return "ChartsOfCalculationTypes/"; //$NON-NLS-1$
             default:
                 return null;
-        }
-    }
-
-    /**
-     * Holds a single match with context.
-     */
-    private static class MatchInfo
-    {
-        int lineNumber;
-        List<String> contextLines = new ArrayList<>();
-    }
-
-    /**
-     * Resource visitor that searches BSL files for matches.
-     * Always scans all files to get accurate total counts,
-     * but only collects detailed match info up to the limit.
-     */
-    private static class SearchCollector implements IResourceVisitor
-    {
-        private final Pattern pattern;
-        private final String fileMask;
-        private final String metadataFolderPrefix;
-        private final int maxResults;
-        private final int contextLines;
-        private final boolean collectDetails;
-
-        final Map<String, List<MatchInfo>> matchesByFile = new LinkedHashMap<>();
-        final Map<String, Integer> matchCountByFile = new LinkedHashMap<>();
-        int totalMatches = 0;
-        int totalMatchedFiles = 0;
-        int skippedFiles = 0;
-        private int collectedMatches = 0;
-        private boolean wasInterrupted = false;
-
-        SearchCollector(Pattern pattern, String fileMask, String metadataFolderPrefix,
-            int maxResults, int contextLines, boolean collectDetails)
-        {
-            this.pattern = pattern;
-            this.fileMask = fileMask;
-            this.metadataFolderPrefix = metadataFolderPrefix;
-            this.maxResults = maxResults;
-            this.contextLines = contextLines;
-            this.collectDetails = collectDetails;
-        }
-
-        @Override
-        public boolean visit(IResource resource) throws CoreException
-        {
-            if (Thread.currentThread().isInterrupted())
-            {
-                wasInterrupted = true;
-                return false;
-            }
-
-            if (resource.getType() != IResource.FILE)
-            {
-                return true; // Continue visiting children
-            }
-
-            // Only .bsl files
-            String name = resource.getName();
-            if (!name.endsWith(".bsl")) //$NON-NLS-1$
-            {
-                return false;
-            }
-
-            // Apply file mask filter
-            String relativePath = resource.getProjectRelativePath().toString();
-            // Remove src/ prefix for display
-            String displayPath = relativePath;
-            if (displayPath.startsWith("src/")) //$NON-NLS-1$
-            {
-                displayPath = displayPath.substring(4);
-            }
-
-            if (fileMask != null && !fileMask.isEmpty())
-            {
-                if (!displayPath.toLowerCase().contains(fileMask.toLowerCase()))
-                {
-                    return false;
-                }
-            }
-
-            // Apply metadata type filter
-            if (metadataFolderPrefix != null)
-            {
-                if (!displayPath.startsWith(metadataFolderPrefix))
-                {
-                    return false;
-                }
-            }
-
-            // Search in file
-            IFile file = (IFile) resource;
-            try
-            {
-                searchInFile(file, displayPath);
-            }
-            catch (Exception e)
-            {
-                Activator.logWarning("Failed to search in file: " + displayPath + " - " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
-                skippedFiles++;
-            }
-
-            return false;
-        }
-
-        private void searchInFile(IFile file, String displayPath) throws Exception
-        {
-            List<String> lines = BslModuleUtils.readFileLines(file);
-            int fileMatches = 0;
-
-            for (int i = 0; i < lines.size(); i++)
-            {
-                Matcher matcher = pattern.matcher(lines.get(i));
-                if (matcher.find())
-                {
-                    totalMatches++;
-                    fileMatches++;
-
-                    // Collect detailed match info only in full mode and within limit
-                    if (collectDetails && collectedMatches < maxResults)
-                    {
-                        MatchInfo match = new MatchInfo();
-                        match.lineNumber = i + 1;
-
-                        // Add context lines
-                        int from = Math.max(0, i - contextLines);
-                        int to = Math.min(lines.size() - 1, i + contextLines);
-
-                        for (int j = from; j <= to; j++)
-                        {
-                            String prefix = (j + 1) + ": "; //$NON-NLS-1$
-                            match.contextLines.add(prefix + lines.get(j));
-                        }
-
-                        matchesByFile.computeIfAbsent(displayPath, k -> new ArrayList<>()).add(match);
-                        collectedMatches++;
-                    }
-                }
-            }
-
-            if (fileMatches > 0)
-            {
-                totalMatchedFiles++;
-                matchCountByFile.put(displayPath, fileMatches);
-            }
-        }
-
-        int getShownMatches()
-        {
-            return collectedMatches;
-        }
-
-        boolean wasInterrupted()
-        {
-            return wasInterrupted;
         }
     }
 }
