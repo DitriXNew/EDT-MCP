@@ -18,7 +18,6 @@ import java.util.Set;
 
 import org.eclipse.jface.preference.PreferenceStore;
 import org.eclipse.jface.viewers.CheckboxTreeViewer;
-import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Label;
 import org.junit.After;
@@ -60,6 +59,8 @@ public class ToolsTabProvenanceTest
         tab = mock(ToolsTab.class, CALLS_REAL_METHODS);
         selection = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         setField("disabledTools", selection);
+        // CALLS_REAL_METHODS skips construction: mirror both constructor reads explicitly.
+        setField("selectedPreset", ToolPreset.fromId(ToolSettingsService.getInstance().getPresetId()));
         setField("destructiveAllowedTools", new HashSet<String>());
         setField("currentSpinners", new ArrayList<>());
         setField("pendingValues", new LinkedHashMap<>());
@@ -77,34 +78,34 @@ public class ToolsTabProvenanceTest
     }
 
     @Test
-    public void testCheckboxEditIsLocalUntilSaveAndThenBecomesCustom() throws Exception
+    public void testCheckboxEditIsLocalUntilSaveAndKeepsIdentity() throws Exception
     {
         edit("get_edt_version", false);
         assertEquals("pending edits must not write preferences", "code-review", store.getString(PRESET_ID));
         assertFalse(ToolSettingsService.parseDisabledTools(
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS)).contains("get_edt_version"));
         tab.performOk();
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
         assertTrue(ToolSettingsService.parseDisabledTools(
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS)).contains("get_edt_version"));
     }
 
     @Test
-    public void testReturningCheckboxesToAPresetShapeDoesNotRestoreProvenance() throws Exception
+    public void testReturningCheckboxesToAPresetShapeKeepsProvenance() throws Exception
     {
         edit("get_edt_version", false);
         edit("get_edt_version", true);
         tab.performOk();
         assertEquals(ToolPreset.CODE_REVIEW.getDisabledTools(), selection);
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
     }
 
     @Test
-    public void testGroupCheckboxEditBecomesCustomOnSave() throws Exception
+    public void testGroupCheckboxEditKeepsIdentityOnSave() throws Exception
     {
         edit(ToolGroup.DEBUG, true);
         tab.performOk();
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(selection.contains("set_breakpoint"));
     }
 
@@ -121,19 +122,19 @@ public class ToolsTabProvenanceTest
     }
 
     @Test
-    public void testEnableAllButtonRecordsCustomRatherThanInferringAllTools() throws Exception
+    public void testEnableAllButtonRecordsAllTools() throws Exception
     {
-        clickPresetBarListener(1);
+        tab.enableAllTools();
         assertTrue(selection.isEmpty());
-        verify(presetCombo).select(ToolPreset.CUSTOM.ordinal());
+        verify(presetCombo).select(ToolPreset.ALL_TOOLS.ordinal());
         tab.performOk();
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("all-tools", store.getString(PRESET_ID));
     }
 
     @Test
     public void testDisableAllButtonRecordsCustom() throws Exception
     {
-        clickPresetBarListener(2);
+        tab.disableAllTools();
         Set<String> allTools = new HashSet<>();
         for (ToolGroup group : ToolGroup.values())
         {
@@ -147,8 +148,7 @@ public class ToolsTabProvenanceTest
     @Test
     public void testPresetDropdownRecordsTheChosenPresetOnlyOnSave() throws Exception
     {
-        when(presetCombo.getSelectionIndex()).thenReturn(ToolPreset.DEVELOPMENT.ordinal());
-        clickPresetBarListener(3);
+        tab.selectPreset(ToolPreset.DEVELOPMENT);
         assertEquals(ToolPreset.DEVELOPMENT.getDisabledTools(), selection);
         assertEquals("code-review", store.getString(PRESET_ID));
         tab.performOk();
@@ -158,20 +158,52 @@ public class ToolsTabProvenanceTest
     @Test
     public void testCustomDropdownClearsProvenanceWithoutChangingCheckboxes() throws Exception
     {
-        when(presetCombo.getSelectionIndex()).thenReturn(ToolPreset.CUSTOM.ordinal());
-        clickPresetBarListener(3);
+        tab.selectPreset(ToolPreset.CUSTOM);
         assertEquals(ToolPreset.CODE_REVIEW.getDisabledTools(), selection);
         tab.performOk();
         assertEquals("custom", store.getString(PRESET_ID));
     }
 
-    /** The first three anonymous listeners are Enable All, Disable All, and the preset combo. */
-    private void clickPresetBarListener(int index) throws Exception
+    @Test
+    public void testUnchangedSaveKeepsConstructorLoadedCodeReview()
     {
-        Class<?> type = Class.forName(ToolsTab.class.getName() + "$" + index);
-        var constructor = type.getDeclaredConstructor(ToolsTab.class);
-        constructor.setAccessible(true);
-        ((SelectionAdapter)constructor.newInstance(tab)).widgetSelected(null);
+        tab.performOk();
+        assertEquals("code-review", store.getString(PRESET_ID));
+        assertEquals(ToolPreset.CODE_REVIEW.getDisabledTools(), selection);
+    }
+
+    @Test
+    public void testUnchangedHistoricalSnapshotSaveKeepsConstructorLoadedCodeReview() throws Exception
+    {
+        selection.remove("get_job_status");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(selection));
+        setField("selectedPreset", ToolPreset.fromId(ToolSettingsService.getInstance().getPresetId()));
+        tab.performOk();
+        assertEquals("code-review", store.getString(PRESET_ID));
+        assertFalse(selection.contains("get_job_status"));
+    }
+
+    @Test
+    public void testReenabledCheckboxKeepsCodeReview() throws Exception
+    {
+        edit("apply_quick_fix", true);
+        tab.performOk();
+        assertEquals("code-review", store.getString(PRESET_ID));
+        assertFalse(selection.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testCustomWithPresetShapedSetDisplaysRecordedChoice() throws Exception
+    {
+        tab.selectPreset(ToolPreset.CUSTOM);
+        Method refresh = ToolsTab.class.getDeclaredMethod("selectSelectedPreset");
+        refresh.setAccessible(true);
+        refresh.invoke(tab);
+        verify(presetCombo).select(ToolPreset.CUSTOM.ordinal());
+        tab.performOk();
+        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals(ToolPreset.CODE_REVIEW.getDisabledTools(), selection);
     }
 
     private void edit(Object element, boolean checked) throws Exception

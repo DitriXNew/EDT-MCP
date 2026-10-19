@@ -65,7 +65,7 @@ public class ToolsTab
     /** Local copy of disabled tools for editing (committed on performOk) */
     private final Set<String> disabledTools;
 
-    /** Pending provenance, cleared by manual edits and committed only on performOk. */
+    /** Pending choice, retained through checkbox edits and committed only on performOk. */
     private ToolPreset selectedPreset;
 
     /** Local copy of destructive-allowed tools for editing (committed on performOk) */
@@ -174,11 +174,7 @@ public class ToolsTab
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                selectedPreset = ToolPreset.CUSTOM;
-                disabledTools.clear();
-                refreshCheckStates();
-                selectSelectedPreset();
-                updateCountLabel();
+                enableAllTools();
             }
         });
 
@@ -202,15 +198,7 @@ public class ToolsTab
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                selectedPreset = ToolPreset.CUSTOM;
-                disabledTools.clear();
-                for (ToolGroup group : ToolGroup.values())
-                {
-                    disabledTools.addAll(group.getToolNames());
-                }
-                refreshCheckStates();
-                selectSelectedPreset();
-                updateCountLabel();
+                disableAllTools();
             }
         });
 
@@ -236,18 +224,47 @@ public class ToolsTab
                 int idx = presetCombo.getSelectionIndex();
                 if (idx >= 0)
                 {
-                    ToolPreset preset = ToolPreset.values()[idx];
-                    selectedPreset = preset;
-                    if (preset != ToolPreset.CUSTOM && preset.getDisabledTools() != null)
-                    {
-                        disabledTools.clear();
-                        disabledTools.addAll(preset.getDisabledTools());
-                        refreshCheckStates();
-                        updateCountLabel();
-                    }
+                    selectPreset(ToolPreset.values()[idx]);
                 }
             }
         });
+    }
+
+    /** Enable all is an explicit All Tools choice, pending until the page is saved. */
+    void enableAllTools()
+    {
+        selectedPreset = ToolPreset.ALL_TOOLS;
+        disabledTools.clear();
+        refreshCheckStates();
+        selectSelectedPreset();
+        updateCountLabel();
+    }
+
+    /** Disable all opts out of preset-owed additions. */
+    void disableAllTools()
+    {
+        selectedPreset = ToolPreset.CUSTOM;
+        disabledTools.clear();
+        for (ToolGroup group : ToolGroup.values())
+        {
+            disabledTools.addAll(group.getToolNames());
+        }
+        refreshCheckStates();
+        selectSelectedPreset();
+        updateCountLabel();
+    }
+
+    /** Record every explicit choice; Custom keeps the current checkboxes. */
+    void selectPreset(ToolPreset preset)
+    {
+        selectedPreset = preset;
+        if (preset != ToolPreset.CUSTOM && preset.getDisabledTools() != null)
+        {
+            disabledTools.clear();
+            disabledTools.addAll(preset.getDisabledTools());
+            refreshCheckStates();
+            updateCountLabel();
+        }
     }
 
     private void createToolTree(Composite parent)
@@ -330,7 +347,6 @@ public class ToolsTab
      */
     private void applyCheckChange(Object element, boolean checked)
     {
-        Set<String> before = new HashSet<>(disabledTools);
         if (element instanceof ToolGroup group)
         {
             for (String toolName : group.getToolNames())
@@ -355,10 +371,6 @@ public class ToolsTab
             {
                 disabledTools.add(toolName);
             }
-        }
-        if (!disabledTools.equals(before))
-        {
-            selectedPreset = ToolPreset.CUSTOM;
         }
     }
 
@@ -594,6 +606,7 @@ public class ToolsTab
         }
     }
 
+    /** Display the recorded/pending choice rather than reclassifying its edited snapshot. */
     private void selectSelectedPreset()
     {
         ToolPreset matched = selectedPreset;

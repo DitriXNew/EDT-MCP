@@ -33,7 +33,8 @@ public class ToolSettingsProvenanceTest
     private static final String PRESET_ID = "mcpToolPresetId"; //$NON-NLS-1$
     private static final String EXPORT = "export_configuration_to_file"; //$NON-NLS-1$
 
-    // Independent historical additions for the legacy compatibility matrix.
+    // Independent additions for a synthetic compatibility matrix; real historical fixtures live
+    // in ToolPresetLegacyRecognitionTest and must not be derived from the live presets.
     private static final Map<Integer, Set<String>> CODE_REVIEW_ADDITIONS = Map.ofEntries(
         Map.entry(1, Set.of("git")),
         Map.entry(2, Set.of("apply_quick_fix")),
@@ -57,6 +58,7 @@ public class ToolSettingsProvenanceTest
     public void setUp() throws Exception
     {
         store = stored(Set.of("git", "ask_workmate"), 12);
+        store.setValue(PRESET_ID, "custom");
         Activator activator = mock(Activator.class);
         when(activator.getPreferenceStore()).thenReturn(store);
         plugin = Activator.class.getDeclaredField("plugin");
@@ -97,29 +99,29 @@ public class ToolSettingsProvenanceTest
     }
 
     @Test
-    public void testManualTighteningClearsIdentityEvenWhileContainingThePresetShape()
+    public void testManualTighteningKeepsIdentityEvenWhileContainingThePresetShape()
     {
         service.applyPreset(ToolPreset.CODE_REVIEW);
         service.setToolEnabled("get_edt_version", false);
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
         assertTrue(disabled(store).containsAll(ToolPreset.CODE_REVIEW.getDisabledTools()));
     }
 
     @Test
-    public void testManualReenableClearsIdentity()
+    public void testManualReenableKeepsIdentity()
     {
         service.applyPreset(ToolPreset.CODE_REVIEW);
         service.setToolEnabled("apply_quick_fix", true);
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(disabled(store).contains("apply_quick_fix"));
     }
 
     @Test
-    public void testGroupEditClearsIdentity()
+    public void testGroupEditKeepsIdentity()
     {
         service.applyPreset(ToolPreset.CODE_REVIEW);
         service.setGroupEnabled(ToolGroup.DEBUG, true);
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
         assertTrue(service.isGroupFullyEnabled(ToolGroup.DEBUG));
     }
 
@@ -171,10 +173,9 @@ public class ToolSettingsProvenanceTest
     }
 
     @Test
-    public void testVersion13StampsExactLegacyPresetsOnce()
+    public void testVersion13StampsLegacyPresetsOnceWithoutChangingTheirSets()
     {
         Map<ToolPreset, String> ids = Map.of(
-            ToolPreset.ALL_TOOLS, "all-tools",
             ToolPreset.ANALYSIS_ONLY, "analysis-only",
             ToolPreset.CODE_REVIEW, "code-review",
             ToolPreset.DEVELOPMENT, "development");
@@ -193,7 +194,7 @@ public class ToolSettingsProvenanceTest
     }
 
     @Test
-    public void testLegacySupersetIsCustomAfterReceivingOwedSafetyMigration()
+    public void testLegacySupersetRecordsIdentityAfterReceivingOwedSafetyMigration()
     {
         Set<String> edited = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         edited.remove(EXPORT);
@@ -202,33 +203,33 @@ public class ToolSettingsProvenanceTest
         ToolSettingsService.ensureMigratedForTest(legacy);
         edited.add(EXPORT);
         assertEquals(edited, disabled(legacy));
-        assertEquals("custom", legacy.getString(PRESET_ID));
+        assertEquals("code-review", legacy.getString(PRESET_ID));
     }
 
     @Test
-    public void testLegacyStaleNamesAreEditsForProvenance()
+    public void testLegacyStaleNamesDoNotBlockProvenance()
     {
         Set<String> edited = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
         edited.add("obsolete_user_disabled_tool");
         PreferenceStore legacy = stored(edited, 12);
         ToolSettingsService.ensureMigratedForTest(legacy);
         assertEquals(edited, disabled(legacy));
-        assertEquals("custom", legacy.getString(PRESET_ID));
+        assertEquals("development", legacy.getString(PRESET_ID));
     }
 
     @Test
-    public void testLegacyLoosenedPresetIsCustom()
+    public void testLegacyReenabledAdditionDoesNotBlockProvenance()
     {
         Set<String> edited = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         edited.remove("apply_quick_fix");
         PreferenceStore legacy = stored(edited, 12);
         ToolSettingsService.ensureMigratedForTest(legacy);
         assertEquals(edited, disabled(legacy));
-        assertEquals("custom", legacy.getString(PRESET_ID));
+        assertEquals("code-review", legacy.getString(PRESET_ID));
     }
 
     @Test
-    public void testEveryLegacyVersionKeepsItsOwedAdditionsAndThenRecordsProvenance()
+    public void testSyntheticCurrentPresetMinusAdditionsKeepsLegacyMigrations()
     {
         for (int version = 0; version <= 12; version++)
         {
@@ -262,56 +263,50 @@ public class ToolSettingsProvenanceTest
         ToolSettingsService.ensureMigratedForTest(fresh);
         assertEquals(Set.of("git", "ask_workmate"), disabled(fresh));
         assertTrue(fresh.isDefault(PreferenceConstants.PREF_DISABLED_TOOLS));
-        assertEquals("custom", fresh.getString(PRESET_ID));
+        assertFalse(fresh.contains(PRESET_ID));
     }
 
     @Test
-    public void testRecordedCustomCannotGainPresetAdditionsFromItsShape()
+    public void testPreVersion13CustomKeepsFrozenLegacyMigrations()
     {
-        assertRecordedNonPresetIsUntouched("custom");
+        assertPreVersion13IdentityLeavesLegacyStepsFrozen("custom");
     }
 
     @Test
-    public void testUnknownIdCannotFallBackToShapeRecognition()
+    public void testPreVersion13UnknownIdKeepsFrozenLegacyMigrations()
     {
-        assertRecordedNonPresetIsUntouched("future-preset-id");
+        assertPreVersion13IdentityLeavesLegacyStepsFrozen("future-preset-id");
     }
 
     @Test
-    public void testAllToolsIdentityOverridesAReadOnlyShape()
+    public void testPreVersion13AllToolsIdKeepsFrozenLegacyMigrations()
     {
-        assertRecordedNonPresetIsUntouched("all-tools");
+        assertPreVersion13IdentityLeavesLegacyStepsFrozen("all-tools");
     }
 
     @Test
-    public void testRecordedIdentityDrivesEveryPresetMigrationWithoutAShape()
+    public void testPreVersion13RecordedIdentityDoesNotReplaceLegacyRecognition()
     {
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 1);
         recorded.setValue(PRESET_ID, "code-review");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        Set<String> expected = new HashSet<>(Set.of("user_disabled_tool"));
-        CODE_REVIEW_ADDITIONS.forEach((version, names) -> {
-            if (version > 1)
-            {
-                expected.addAll(names);
-            }
-        });
+        Set<String> expected = Set.of("user_disabled_tool", "ask_workmate");
         assertEquals(expected, disabled(recorded));
         assertEquals("code-review", recorded.getString(PRESET_ID));
     }
 
     @Test
-    public void testRecordedDevelopmentIdentityDoesNotReceiveReadOnlyAdditions()
+    public void testPreVersion13DevelopmentIdentityDoesNotReplaceLegacyRecognition()
     {
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 3);
         recorded.setValue(PRESET_ID, "development");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        assertEquals(Set.of("user_disabled_tool", "stop_profiling", "set_error_breakpoint", "debug_pause"),
-            disabled(recorded));
+        assertEquals(Set.of("user_disabled_tool"), disabled(recorded));
+        assertEquals("development", recorded.getString(PRESET_ID));
     }
 
     @Test
-    public void testManualEditCannotBeRecognizedAsAPresetByALaterMigration()
+    public void testOwnerEditRetainsIdentityWhenLegacyMigrationIsReplayed()
     {
         service.applyPreset(ToolPreset.CODE_REVIEW);
         service.setToolEnabled("get_edt_version", false);
@@ -321,8 +316,9 @@ public class ToolSettingsProvenanceTest
             ToolSettingsService.serializeDisabledTools(edited));
         store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 11);
         ToolSettingsService.ensureMigratedForTest(store);
+        edited.add(EXPORT);
         assertEquals(edited, disabled(store));
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
     }
 
     @Test
@@ -347,7 +343,7 @@ public class ToolSettingsProvenanceTest
     }
 
     @Test
-    public void testExplicitPresetCannotLabelAMismatchedDisabledSet() throws Exception
+    public void testExplicitPresetRecordsChoiceIndependentlyOfDisabledSet() throws Exception
     {
         service.applyPreset(ToolPreset.CODE_REVIEW);
         Set<String> edited = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
@@ -359,10 +355,10 @@ public class ToolSettingsProvenanceTest
         }
         catch (NoSuchMethodException e)
         {
-            throw new AssertionError("An explicit preset write must record and validate provenance", e);
+            throw new AssertionError("An explicit preset write must record the chosen provenance", e);
         }
         assertEquals(edited, disabled(store));
-        assertEquals("custom", store.getString(PRESET_ID));
+        assertEquals("code-review", store.getString(PRESET_ID));
     }
 
     /** Reflection lets the regression compile on base, where the new accessor is absent. */
@@ -378,7 +374,7 @@ public class ToolSettingsProvenanceTest
         }
     }
 
-    private static void assertRecordedNonPresetIsUntouched(String id)
+    private static void assertPreVersion13IdentityLeavesLegacyStepsFrozen(String id)
     {
         Set<String> before = new HashSet<>(ToolPreset.ANALYSIS_ONLY.getDisabledTools());
         before.remove(EXPORT);
@@ -388,7 +384,9 @@ public class ToolSettingsProvenanceTest
         PreferenceStore recorded = stored(before, 9);
         recorded.setValue(PRESET_ID, id);
         ToolSettingsService.ensureMigratedForTest(recorded);
-        assertEquals("identity must override containment for " + id, before, disabled(recorded));
+        Set<String> expected = new HashSet<>(before);
+        expected.addAll(Set.of("debug_pause", "import_project_from_file", EXPORT));
+        assertEquals("legacy steps must remain frozen for " + id, expected, disabled(recorded));
         assertEquals(id, recorded.getString(PRESET_ID));
     }
 

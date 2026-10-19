@@ -70,6 +70,18 @@ public enum ToolPreset
         return CUSTOM;
     }
 
+    /** Whether this preset promises read-only operation, even after owner edits. */
+    public boolean isReadOnly()
+    {
+        return this == ANALYSIS_ONLY || this == CODE_REVIEW;
+    }
+
+    /** Whether this preset promises no debugging, even after owner edits. */
+    public boolean isNoDebug()
+    {
+        return isReadOnly() || this == DEVELOPMENT;
+    }
+
     /**
      * Returns the human-readable preset name.
      */
