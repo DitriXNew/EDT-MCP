@@ -1502,7 +1502,8 @@ public class ToolSettingsServiceTest
         assertEquals("version 12 must restore the current disabled set for " + preset, //$NON-NLS-1$
             preset.getDisabledTools(), disabled);
         assertEquals(preset, ToolPreset.matchPreset(disabled));
-        assertEquals(12, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9RestoresCurrentPreset(ToolPreset preset)
