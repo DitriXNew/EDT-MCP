@@ -73,6 +73,7 @@ import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
  * Tool to get detailed properties of metadata objects from 1C configuration.
@@ -363,9 +364,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         // (DcsStructureReader), mirroring the FORM branch above. Resolved through the shared
         // MetadataNodeResolver (handles both the 2-part CommonTemplate FQN and the 4-part
         // owned-template FQN, bilingually - the same resolver TemplateScreenshotHelper uses), so
-        // this does not duplicate FQN navigation. A FQN that is not a template, or a template whose
-        // content is NOT a DataCompositionSchema (e.g. a SpreadsheetDocument print form), falls
-        // through UNCHANGED to the generic object-resolution path below.
+        // this does not duplicate FQN navigation. Other templates fall through: a common template
+        // renders its own basic info; an owned template is refused by the member-address check below.
         String dcsStructure = renderTemplateDcsIfApplicable(ctx.scope, ctx.bmModel, fqn, ctx.effectiveLanguage);
         if (dcsStructure != null)
         {
@@ -423,6 +423,14 @@ public class GetMetadataDetailsTool implements IMcpTool
         if (nestedChain == null && isMalformedSubsystemChain(fqn) && !ctx.scope.isExternalObjects())
         {
             failures.add(new String[] { fqn, MALFORMED_SUBSYSTEM_CHAIN });
+            return;
+        }
+        // Only the special views above may consume a deeper address. The generic resolver reads
+        // Type.Name only, so otherwise it would render the owner even for a missing member (#731).
+        String normalizedFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        if (nestedChain == null && normalizedFqn.split("\\.", -1).length > 2) //$NON-NLS-1$
+        {
+            failures.add(new String[] { fqn, memberAddressReason(ctx.scope, normalizedFqn) });
             return;
         }
         MdObject mdObject = nestedChain != null ? SubsystemUtils.resolveInScope(ctx.scope, nestedChain)
@@ -1332,8 +1340,8 @@ public class GetMetadataDetailsTool implements IMcpTool
      * @return the rendered Markdown, or {@code null} when the FQN does not resolve to a template, the BM
      *         model is unavailable, or the resolved template's content is NOT a
      *         {@link DataCompositionSchema} (a {@code null} content, a {@code SpreadsheetDocument} print
-     *         form, etc.) - {@code null} means "not applicable here", NOT a failure: the caller falls
-     *         through to the generic object-resolution render.
+     *         form, etc.) - {@code null} means "not applicable here": the caller checks for a member
+     *         address before the generic object-resolution render.
      */
     private static String renderTemplateDcsIfApplicable(MetadataScope scope, IBmModel bmModel, String fqn,
         String language)
@@ -1584,6 +1592,34 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         return scope.findObject(mdType, mdName);
+    }
+
+    /** Explains an unhandled deeper address without silently substituting its owner. */
+    private String memberAddressReason(MetadataScope scope, String normalizedFqn)
+    {
+        // The shared parsers discard trailing empty segments; these do not name an existing member.
+        if (normalizedFqn.endsWith(".")) //$NON-NLS-1$
+        {
+            return describeResolutionFailure(normalizedFqn, scope);
+        }
+        XdtoWriter.MemberRef xdtoRef = XdtoWriter.parseMemberRef(normalizedFqn);
+        if (xdtoRef != null && MetadataNodeResolver.resolveAddress(scope, xdtoRef.packageFqn, true) != null)
+        {
+            // XDTO content is not an MdObject and has no assignable view. Parsing its address does
+            // not establish that the member exists; the package's content view is where to check.
+            return "This is an XDTO member address; read package '" + xdtoRef.packageFqn //$NON-NLS-1$
+                + "' to inspect its content."; //$NON-NLS-1$
+        }
+        if (MetadataNodeResolver.isValidArity(normalizedFqn.split("\\.", -1).length) //$NON-NLS-1$
+            && MetadataNodeResolver.resolveAddress(scope, normalizedFqn, true) != null)
+        {
+            String[] parts = normalizedFqn.split("\\.", 3); //$NON-NLS-1$
+            String ownerFqn = parts[0] + "." + parts[1]; //$NON-NLS-1$
+            return "This addresses a member of '" + ownerFqn //$NON-NLS-1$
+                + "'; read its properties with assignable: true. The owner's details render from '" //$NON-NLS-1$
+                + ownerFqn + "'."; //$NON-NLS-1$
+        }
+        return describeResolutionFailure(normalizedFqn, scope);
     }
 
     /**
