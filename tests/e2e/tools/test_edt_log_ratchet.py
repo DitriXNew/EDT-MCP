@@ -228,6 +228,10 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
 # assertion ever reads one. This test reads them: the texts call() retried (recorded by the
 # harness) and our plugin's own log lines of this run, which include the refusals of the reset
 # cycles and of the final cleanup - it runs after both, as a ratchet.
+# Coverage is opportunistic: this read-only test does not trigger a busy pipeline. A run without a
+# refusal skips and is not positive evidence for issue #769. At stand time, record the pre-deploy
+# DerivedDataStatus@ count as a positive control, then the post-deploy count (expected 0) from NEW
+# entries after redeploy. Historical entries in .log and .bak_*.log are not post-deploy evidence.
 
 # Only the derived-data verdict's own wordings: participant/discovery refusals name projects instead.
 _BUILD_STATE_REFUSAL = re.compile(r"Project is building|Project build in progress")
@@ -292,7 +296,9 @@ def test_building_refusals_name_the_build_state_not_a_java_object_identity():
     if not texts:
         raise E2ESkip(
             "no derived-data building refusal was issued during this run (%s), so there was no "
-            "refusal text to check" % log_note)
+            "refusal text to check; this ratchet is opportunistic. At stand time record the "
+            "pre-deploy DerivedDataStatus@ count and the post-deploy count (expected 0) from new "
+            "entries after redeploy" % log_note)
 
     leaks = [(source, text) for source, text in texts if _JAVA_IDENTITY.search(text)]
     if leaks:

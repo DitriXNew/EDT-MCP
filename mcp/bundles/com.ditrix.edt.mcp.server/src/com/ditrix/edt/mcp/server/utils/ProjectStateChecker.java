@@ -260,6 +260,11 @@ public final class ProjectStateChecker
      * The wording now comes from {@link #describeBuildStatus(DerivedDataStatus)}; the verdict is
      * decided exactly as before, and the stable {@code "Project is building: "} prefix the e2e
      * harness retries on is kept.
+     * <p>
+     * On EDT 2026.1 and 2026.2, the polled snapshot names only the stage, the pipeline status and
+     * the model-sync flag. Active segment maps are filled only for status listeners; the renderer's
+     * segment support is forward-compatible. The idle but incomplete branch keeps its base text
+     * without polling a status.
      *
      * @param ddManager the project's derived-data manager, never {@code null}
      * @return BUILDING while the pipeline is busy or not everything is computed, READY otherwise
@@ -276,10 +281,8 @@ public final class ProjectStateChecker
         // Check if all derived data is computed
         if (!ddManager.isAllComputed())
         {
-            String segments = describeActiveSegments(readBuildStatus(ddManager));
             return new ProjectStateResult(ProjectState.BUILDING,
-                "Project build in progress (derived data not complete)" //$NON-NLS-1$
-                    + (segments.isEmpty() ? "" : ": computing " + segments)); //$NON-NLS-1$ //$NON-NLS-2$
+                "Project build in progress (derived data not complete)"); //$NON-NLS-1$
         }
 
         return new ProjectStateResult(ProjectState.READY, "Project is ready");
@@ -304,11 +307,14 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Words a derived-data status for a client: the active stage, the pipeline status, whether a
-     * model synchronisation is active, and the active segments with their remaining and total units
-     * of work - what EDT's own progress reporter shows. For example
-     * {@code stage NORMAL, pipeline WAITING_STAGE_PROCCESING_END, model sync active; computing
-     * FORM (0 of 5 units remaining), MD (12 of 340 units remaining)}.
+     * Words a derived-data status for a client. On EDT 2026.1 and 2026.2, the polled snapshot names
+     * only the active stage, the pipeline status and the model-sync flag. For example
+     * {@code stage NORMAL, pipeline WAITING_STAGE_PROCCESING_END, model sync active}.
+     * <p>
+     * The active segment map is filled only for status listeners on these platforms. Segment
+     * rendering is retained as forward-compatible support if a future polled snapshot supplies the
+     * map: it appends the segment keys and their remaining and total units of work. This checker
+     * does not subscribe to status listeners, so current live refusals contain no segment details.
      * <p>
      * Never calls {@code toString()} on the status (issue #769: it is not overridden, so it renders
      * a JVM object identity). A {@code null} status, a status with nothing to name, or a getter that
@@ -351,27 +357,9 @@ public final class ProjectStateChecker
         }
         catch (RuntimeException e)
         {
+            Activator.logWarning("Cannot describe the derived-data status for a build in progress: " //$NON-NLS-1$
+                + e);
             return UNSPECIFIED_BUILD_STATUS;
-        }
-    }
-
-    /**
-     * Only the active segments of a status, worded as in {@link #describeBuildStatus}; empty when the
-     * status is {@code null}, names no segment, or cannot be read.
-     */
-    static String describeActiveSegments(DerivedDataStatus status)
-    {
-        if (status == null)
-        {
-            return ""; //$NON-NLS-1$
-        }
-        try
-        {
-            return renderSegments(status.getActivePipelineSegments());
-        }
-        catch (RuntimeException e)
-        {
-            return ""; //$NON-NLS-1$
         }
     }
 

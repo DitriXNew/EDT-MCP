@@ -35,6 +35,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
  * override it, so every client got {@code com._1c.g5.v8.derived.DerivedDataStatus@<hash>} - a JVM
  * object identity, different on every call, naming nothing that is building. These tests pin the
  * wording built from the status getters instead, and the verdict that must not change with it.
+ * On EDT 2026.1 and 2026.2 the polled map is empty; segment fixtures below fill it by hand solely
+ * for forward-compatible renderer coverage if a future polled snapshot supplies segments.
  * <p>
  * Wherever the identity question is asked, the status is a REAL {@link DerivedDataStatus} (its
  * constructor and segment map are public), so its {@code toString()} is exactly the platform's
@@ -172,9 +174,12 @@ public class ProjectStateCheckerBuildStatusTest
         assertFalse(message, JAVA_IDENTITY.matcher(message).find());
     }
 
-    /** The seam is actually wired through the renderer, behind the stable retry prefix. */
+    /**
+     * Forward-compatible wiring: if a future polled snapshot supplies segments, the busy verdict
+     * renders them behind the stable retry prefix. Current EDT polling never fills this map.
+     */
     @Test
-    public void aBusyPipelineIsBuildingAndNamesWhatIsBeingComputed()
+    public void aBusyPipelineRendersSegmentsIfAFuturePolledSnapshotSuppliesThem()
     {
         ProjectStateResult result = ProjectStateChecker.checkDerivedDataState(busyManager(fullStatus()));
 
@@ -232,18 +237,19 @@ public class ProjectStateCheckerBuildStatusTest
         assertEquals("Project build in progress (derived data not complete)", result.getMessage()); //$NON-NLS-1$
     }
 
+    /**
+     * Forward-compatible renderer coverage: only a future polled snapshot could supply this map.
+     * The idle verdict itself keeps its base wording; see {@link ProjectStateCheckerPolledStatusTest}.
+     */
     @Test
-    public void anIdlePipelineWithUncomputedDataNamesItsActiveSegments()
+    public void anIdleStatusCanDescribeSegmentsIfAFuturePolledSnapshotSuppliesThem()
     {
         DerivedDataStatus status = new DerivedDataStatus(DerivedDataSegmentBucket.AFTER_BUILD, PipelineStatus.EMPTY,
             false);
         status.getActivePipelineSegments().put("MD", new PipelineSegmentStatus(0L, 9, 3)); //$NON-NLS-1$
 
-        ProjectStateResult result = ProjectStateChecker.checkDerivedDataState(idleManager(status, false));
-
-        assertEquals(ProjectState.BUILDING, result.getState());
-        assertEquals("Project build in progress (derived data not complete): computing MD (3 of 9 units remaining)", //$NON-NLS-1$
-            result.getMessage());
+        assertEquals("stage AFTER_BUILD, pipeline EMPTY; computing MD (3 of 9 units remaining)", //$NON-NLS-1$
+            ProjectStateChecker.describeBuildStatus(status));
     }
 
     @Test
@@ -258,7 +264,7 @@ public class ProjectStateCheckerBuildStatusTest
 
     // --- fixtures --------------------------------------------------------------------------------
 
-    /** A real platform status: NORMAL, waiting for the stage, sync active, MD 12/340 and FORM 0/5. */
+    /** A real status with a manually filled map for forward-compatible segment-rendering tests. */
     private static DerivedDataStatus fullStatus()
     {
         DerivedDataStatus status = new DerivedDataStatus(DerivedDataSegmentBucket.NORMAL,
