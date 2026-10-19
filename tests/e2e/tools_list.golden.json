@@ -4456,6 +4456,54 @@
   },
   {
     "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool_guide('search_in_dcs').",
+    "inputSchema": {
+      "properties": {
+        "caseSensitive": {
+          "type": "boolean"
+        },
+        "contextLines": {
+          "type": "integer"
+        },
+        "fileMask": {
+          "type": "string"
+        },
+        "isRegex": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "outputMode": {
+          "enum": [
+            "full",
+            "count",
+            "files"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "search_in_dcs",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
