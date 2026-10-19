@@ -66,8 +66,9 @@ from harness import (
     settle_or_fail,
     e2e_test,
     calls_aborted,
-    _workspace_dir,
+    split_markdown_row,
     PROJECT,
+    PROJECT_DIR,
     REPO_ROOT,
 )
 
@@ -306,20 +307,39 @@ def test_existence_check_precedes_directory_check():
 # ──────────────────────────────────────────────────────────────────────────────
 _VERSION_PROJECT = "ZZImportXmlVersion669"
 _NATURE_PROJECT = "ZZImportXmlNature669"
-_CONFIGURATION_NATURE = "com._1c.g5.v8.dt.core.V8ConfigurationNature"
 _EXTENSION_NATURE = "com._1c.g5.v8.dt.core.V8ExtensionNature"
 
 
-@e2e_test(tool="import_configuration_from_xml", kind="action")
-def test_platform_version_reaches_project_manifest_without_a_base_project():
+def _project_dir(project):
+    """Use list_projects' Path column; imported projects need not share the fixture's parent."""
+    projects = call("list_projects", {})
+    assert_ok(projects, "locate the imported project's directory")
+    columns = None
+    for line in (projects.text or "").splitlines():
+        cells = split_markdown_row(line)
+        if not cells:
+            continue
+        if columns is None:
+            lowered = [cell.lower() for cell in cells]
+            if "name" in lowered and "path" in lowered:
+                columns = (lowered.index("name"), lowered.index("path"))
+            continue
+        if len(cells) > max(columns) and cells[columns[0]] == project and cells[columns[1]]:
+            return cells[columns[1]]
+    raise AssertionError("list_projects has no path for %r:\n%s" % (project, projects.text))
+
+
+def _assert_runtime_reaches_manifest(version_key):
     """The requested runtime reaches PROJECT.PMF; neither the nature nor a version becomes a base.
 
-    Request a runtime different from the fixture's 8.5.1, and pass the matching deprecated
-    alias too: the original bug puts that alias into the CLI base-project slot.
+    Use the fixture's supported runtime. xmlVersion alone catches the original bug:
+    that alias used to occupy the base-project slot even when auto-detection agrees.
     """
-    workspace = _workspace_dir()
-    assert workspace, "locate EDT's workspace before importing so the manifest can be read immediately"
-    manifest = os.path.join(workspace, _VERSION_PROJECT, "DT-INF", "PROJECT.PMF")
+    with open(os.path.join(PROJECT_DIR, "DT-INF", "PROJECT.PMF"), encoding="utf-8-sig") as stream:
+        runtimes = [line.partition(":")[2].strip() for line in stream
+                    if line.startswith("Runtime-Version:")]
+    assert len(runtimes) == 1 and runtimes[0], "fixture must declare one Runtime-Version"
+    runtime = runtimes[0]
     _ensure_absent(_VERSION_PROJECT)
     dump_dir = tempfile.mkdtemp(prefix="edt_import_version_669_")
     try:
@@ -332,17 +352,16 @@ def test_platform_version_reaches_project_manifest_without_a_base_project():
         im = call("import_configuration_from_xml", {
             "importPath": dump_dir,
             "projectName": _VERSION_PROJECT,
-            "platformVersion": "8.3.27",
-            "xmlVersion": "8.3.27",
-            "projectNature": _CONFIGURATION_NATURE,
+            version_key: runtime,
         })
-        assert_ok(im, "import with an explicit platform version")
-        # One disk read, before another MCP call can give an early return time to catch up.
+        assert_ok(im, "import with the fixture's runtime through " + version_key)
+        manifest = os.path.join(_project_dir(_VERSION_PROJECT), "DT-INF", "PROJECT.PMF")
+        # One disk read at the reported path; EDT creates this manifest synchronously.
         with open(manifest, encoding="utf-8-sig") as stream:
             lines = stream.read().splitlines()
         runtimes = [line.partition(":")[2].strip() for line in lines
                     if line.startswith("Runtime-Version:")]
-        assert runtimes == ["8.3.27"], "platformVersion must be the manifest runtime: %r" % lines
+        assert runtimes == [runtime], "%s must be the manifest runtime: %r" % (version_key, lines)
         assert not any(line.startswith("Base-Project:") for line in lines), \
             "a main configuration import must have no Base-Project line: %r" % lines
 
@@ -356,6 +375,18 @@ def test_platform_version_reaches_project_manifest_without_a_base_project():
             _ensure_absent(_VERSION_PROJECT)
             shutil.rmtree(dump_dir)
     assert_no_diff("the version regression imports a separate project and only reads the fixture")
+
+
+@e2e_test(tool="import_configuration_from_xml", kind="action")
+def test_platform_version_reaches_project_manifest_without_a_base_project():
+    """Pin the canonical runtime argument using platform support already installed on the stand."""
+    _assert_runtime_reaches_manifest("platformVersion")
+
+
+@e2e_test(tool="import_configuration_from_xml", kind="action")
+def test_deprecated_xml_version_reaches_manifest_without_a_base_project():
+    """Red on master: the deprecated alias must never become a Base-Project manifest entry."""
+    _assert_runtime_reaches_manifest("xmlVersion")
 
 
 @e2e_test(tool="import_configuration_from_xml", kind="action")

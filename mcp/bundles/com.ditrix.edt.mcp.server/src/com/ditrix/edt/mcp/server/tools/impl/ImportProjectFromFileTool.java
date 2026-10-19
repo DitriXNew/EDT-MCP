@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_CONFIGURATION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTENSION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTERNAL_OBJECTS;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.runtimeVersionOf;
 import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.trimToNull;
 import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.validateBaseProject;
 
@@ -101,10 +105,6 @@ public class ImportProjectFromFileTool implements IMcpTool
     /** The error-contract markers, as {@link ToolResult} spells them. */
     private static final String MARKER_COMMITTED = "mutationCommitted"; //$NON-NLS-1$
     private static final String MARKER_UNKNOWN = "mutationOutcomeUnknown"; //$NON-NLS-1$
-
-    private static final String NATURE_CONFIGURATION = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTENSION = "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTERNAL_OBJECTS = "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"; //$NON-NLS-1$
 
     private final BackgroundJobs jobs;
     private final IThickClientProvider thickClients;
@@ -373,27 +373,6 @@ public class ImportProjectFromFileTool implements IMcpTool
             return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, claimedAt.longValue());
         }
         return null;
-    }
-
-    /**
-     * @param baseProject the configuration project the import depends on
-     * @return its runtime version, so the new project matches it; {@code null} lets EDT derive one
-     *     from the XML
-     */
-    private static String runtimeVersionOf(IProject baseProject)
-    {
-        try
-        {
-            Activator activator = Activator.getDefault();
-            IV8ProjectManager manager = activator == null ? null : activator.getV8ProjectManager();
-            IV8Project v8Project = manager == null ? null : manager.getProject(baseProject);
-            return v8Project == null || v8Project.getVersion() == null ? null
-                : v8Project.getVersion().toString();
-        }
-        catch (RuntimeException e)
-        {
-            return null;
-        }
     }
 
     /**

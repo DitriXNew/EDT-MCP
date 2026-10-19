@@ -156,14 +156,14 @@ public class ImportConfigurationFromXmlArgumentsTest
     }
 
     @Test
-    public void testExtensionVersionAndTrimmedBaseReachTheirOwnCliSlots() throws Exception
+    public void testExtensionRefusesExplicitVersionWithTrimmedBase() throws Exception
     {
         writeDump(true);
         String base = createBase(true, true).getName();
         params.put("baseProjectName", " " + base + " ");
         params.put("platformVersion", " 8.3.24 ");
         params.put("projectNature", EXTENSION);
-        assertImported("8.3.24", base);
+        assertRefused("platformVersion", "inherited from the base project", "Omit");
     }
 
     @Test
@@ -189,11 +189,11 @@ public class ImportConfigurationFromXmlArgumentsTest
     }
 
     @Test
-    public void testNatureCheckRequiresConfigurationXml() throws Exception
+    public void testMissingConfigurationXmlDetectsExternalNature() throws Exception
     {
         Files.delete(dump.resolve("Configuration.xml"));
         params.put("projectNature", CONFIGURATION);
-        assertRefused("Configuration.xml", "missing or unreadable", "export_configuration_to_xml");
+        assertRefused(CONFIGURATION, "external objects dump", "V8ExternalObjectsNature", "Omit projectNature");
     }
 
     @Test
@@ -201,15 +201,15 @@ public class ImportConfigurationFromXmlArgumentsTest
     {
         Files.writeString(dump.resolve("Configuration.xml"), "not XML", StandardCharsets.UTF_8);
         params.put("projectNature", CONFIGURATION);
-        assertRefused("Configuration.xml", "missing or unreadable", "export_configuration_to_xml");
+        assertRefused("Configuration.xml", "could not be read", "export_configuration_to_xml");
     }
 
     @Test
-    public void testBaseCheckRequiresConfigurationXml() throws Exception
+    public void testExternalDumpChecksRequestedBase() throws Exception
     {
         Files.delete(dump.resolve("Configuration.xml"));
         params.put("baseProjectName", "MissingBase");
-        assertRefused("baseProjectName", "Configuration.xml", "export_configuration_to_xml");
+        assertRefused("MissingBase", "Project not found", "list_projects");
     }
 
     @Test
@@ -363,6 +363,8 @@ public class ImportConfigurationFromXmlArgumentsTest
         assertFalse("validation must not claim an unknown mutation", error.has("mutationOutcomeUnknown"));
         assertEquals("validation must precede CLI API resolution", 0, runner.availabilityChecks);
         assertEquals("validation must precede project creation", 0, runner.api.calls);
+        assertNull("validation must release the import claim",
+            ImportConfigurationFromXmlTool.importClaimedAt(params.get("projectName")));
     }
 
     private static String uniqueName()

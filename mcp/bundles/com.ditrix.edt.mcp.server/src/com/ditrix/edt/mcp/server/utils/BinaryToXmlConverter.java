@@ -161,6 +161,31 @@ public final class BinaryToXmlConverter
         }
     }
 
+    /** The project kind EDT derives from an XML dump. */
+    public enum DumpKind
+    {
+        CONFIGURATION, EXTENSION, EXTERNAL, UNREADABLE
+    }
+
+    /**
+     * Classifies a dump with at most one parse of Configuration.xml. An absent root means
+     * external objects, as in EDT's CLI; an existing root that cannot be parsed is unknown.
+     *
+     * @param xmlDir the XML dump directory
+     * @return the detected project kind
+     */
+    public static DumpKind dumpKind(Path xmlDir)
+    {
+        Path configurationXml = xmlDir.resolve("Configuration.xml"); //$NON-NLS-1$
+        if (Files.notExists(configurationXml))
+        {
+            return DumpKind.EXTERNAL;
+        }
+        Boolean extension = isExtensionDump(configurationXml);
+        return extension == null ? DumpKind.UNREADABLE
+            : extension.booleanValue() ? DumpKind.EXTENSION : DumpKind.CONFIGURATION;
+    }
+
     /**
      * The thick-client operations a conversion needs. Each call may block for minutes and must
      * answer an interrupt by killing its process.

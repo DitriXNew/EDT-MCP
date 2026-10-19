@@ -164,9 +164,12 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     public String getDescription()
     {
         return "Create an EDT project from exported 1C configuration XML files. Use platformVersion " //$NON-NLS-1$
+            + "for the new project's runtime, derived from the dump by default " //$NON-NLS-1$
             + "(xmlVersion is a deprecated alias; conflicting values are refused). projectNature " //$NON-NLS-1$
             + "checks the dump kind and refuses mismatches. For extensions, pass baseProjectName; " //$NON-NLS-1$
-            + "omit it for main configurations. Parameters and examples: " //$NON-NLS-1$
+            + "omit it for main configurations; optional for external objects. " //$NON-NLS-1$
+            + "With a base, omit platformVersion and xmlVersion: the runtime is inherited. " //$NON-NLS-1$
+            + "Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('import_configuration_from_xml')."; //$NON-NLS-1$
     }
 
@@ -182,10 +185,11 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 "Check the dump's EDT nature ID, e.g. 'com._1c.g5.v8.dt.core.V8ConfigurationNature'; " //$NON-NLS-1$
                     + "mismatch is refused; empty = auto-detect.") //$NON-NLS-1$
             .stringProperty(KEY_PLATFORM_VERSION,
-                "1C:Enterprise platform version, e.g. '8.3.24'; empty = derive from the XML dump.") //$NON-NLS-1$
+                "Runtime version of the NEW project, e.g. '8.3.24'; empty = derive from the XML dump; " //$NON-NLS-1$
+                    + "refused with baseProjectName.") //$NON-NLS-1$
             .stringProperty(KEY_BASE_PROJECT_NAME,
-                "Open configuration project extended by the dump: required for extensions, " //$NON-NLS-1$
-                    + "refused for main configurations.") //$NON-NLS-1$
+                "Open configuration base: required for extensions, refused for main configurations, " //$NON-NLS-1$
+                    + "optional for external objects; the runtime is inherited.") //$NON-NLS-1$
             .stringProperty("xmlVersion", //$NON-NLS-1$
                 "Deprecated alias of platformVersion; omit it or pass the same value.") //$NON-NLS-1$
             .build();
@@ -271,6 +275,15 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                     "importPath is not a directory: " + importPath).toJson(); //$NON-NLS-1$
             }
 
+            if (baseProjectName == null)
+            {
+                String versionError = ProjectImportValidation.validateRuntimeVersion(platformVersion);
+                if (versionError != null)
+                {
+                    return ToolResult.error(versionError).toJson();
+                }
+            }
+
             // Claimed BEFORE the existence guard below, because that guard is exactly what a
             // concurrent import slips past: it answers about a project the other call has not
             // created yet.
@@ -295,11 +308,23 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                   + ". Import requires a new project name.").toJson(); //$NON-NLS-1$
             }
 
-            String dumpError = ProjectImportValidation.validateXmlDump(importPath, projectNature, baseProjectName);
+            AtomicReference<IProject> baseProject = new AtomicReference<>();
+            String dumpError = ProjectImportValidation.validateXmlDump(importPath, projectNature,
+                baseProjectName, baseProject);
             if (dumpError != null)
             {
                 return ToolResult.error(dumpError).toJson();
             }
+
+            if (baseProject.get() != null && platformVersion != null)
+            {
+                return ToolResult.error("platformVersion '" + platformVersion //$NON-NLS-1$
+                    + "' cannot be set with baseProjectName '" + baseProjectName //$NON-NLS-1$
+                    + "': the runtime version is inherited from the base project. " //$NON-NLS-1$
+                    + "Omit platformVersion and its deprecated alias xmlVersion.").toJson(); //$NON-NLS-1$
+            }
+            String runtimeVersion = baseProject.get() == null ? platformVersion
+                : ProjectImportValidation.runtimeVersionOf(baseProject.get());
 
             Object api = runner.importApi();
             if (api == null)
@@ -323,7 +348,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             }
 
             importApiEntered = true;
-            runner.runImport(api, importPath, projectName, platformVersion, baseProjectName);
+            runner.runImport(api, importPath, projectName, runtimeVersion, baseProjectName);
             importApiReturned = true;
 
             return reportImportedProject(workspace, projectName, importPath, outsideWorkspace,
