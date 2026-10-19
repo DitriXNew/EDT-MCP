@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
@@ -2003,14 +2004,14 @@ public class DeleteInfobaseTool implements IMcpTool
         // actually looks like a 1C file infobase (carries a 1Cv8.1CD).
         if (dir.getNameCount() == 0 || dir.getParent() == null)
         {
-            Activator.logError("delete_infobase: refusing to delete the filesystem root '" + dir //$NON-NLS-1$
-                + "'", null); //$NON-NLS-1$
+            Activator.logWarning("delete_infobase: refusing to delete the filesystem root '" + dir //$NON-NLS-1$
+                + "'"); //$NON-NLS-1$
             return false;
         }
         if (!dir.resolve("1Cv8.1CD").toFile().exists()) //$NON-NLS-1$
         {
-            Activator.logError("delete_infobase: '" + dir + "' is not a 1C infobase directory " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(no 1Cv8.1CD) — NOT deleting it", null); //$NON-NLS-1$
+            Activator.logWarning("delete_infobase: '" + dir + "' is not a 1C infobase directory " //$NON-NLS-1$ //$NON-NLS-2$
+                + "(no 1Cv8.1CD) — NOT deleting it"); //$NON-NLS-1$
             return false;
         }
         try
@@ -2020,8 +2021,9 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         catch (IOException | RuntimeException e)
         {
-            Activator.logError("delete_infobase: could not delete the database directory '" + dir //$NON-NLS-1$
-                + "' (non-fatal — the registration is already removed; delete it manually)", e); //$NON-NLS-1$
+            Activator.logWarning("delete_infobase: could not delete the database directory '" + dir //$NON-NLS-1$
+                + "' (non-fatal — the registration is already removed; delete it manually): " //$NON-NLS-1$
+                + PlatformFailures.describe(e));
             return false;
         }
     }
