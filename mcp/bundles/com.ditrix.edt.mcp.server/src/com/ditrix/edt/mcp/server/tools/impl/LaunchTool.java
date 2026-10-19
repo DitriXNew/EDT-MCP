@@ -677,7 +677,7 @@ public class LaunchTool implements IMcpTool
         AtomicReference<IProject> resolvedProject = new AtomicReference<>();
         AtomicReference<String> applicationId = new AtomicReference<>();
         AtomicBoolean staleServerStopped = new AtomicBoolean();
-        Object publicationLock = new Object();
+        PreparationPublicationLock publicationLock = new PreparationPublicationLock();
         AtomicBoolean acceptingPreparation = new AtomicBoolean(true);
         Consumer<StandalonePreparation> publish = candidate -> publishStandalonePreparation(
             prepared, publicationLock, acceptingPreparation, candidate);
@@ -902,12 +902,18 @@ public class LaunchTool implements IMcpTool
             : StandalonePreparation.failed(failure);
     }
 
+    /** Owns the single monitor shared by preparation publication and caller closure. */
+    static final class PreparationPublicationLock
+    {
+        private final Object monitor = new Object();
+    }
+
     /** Publishes a preparation result only while the bounded caller can still accept it. */
     private static void publishStandalonePreparation(
-        AtomicReference<StandalonePreparation> prepared, Object publicationLock,
+        AtomicReference<StandalonePreparation> prepared, PreparationPublicationLock publicationLock,
         AtomicBoolean acceptingPreparation, StandalonePreparation candidate)
     {
-        synchronized (publicationLock)
+        synchronized (publicationLock.monitor)
         {
             if (acceptingPreparation.get())
             {
@@ -922,10 +928,10 @@ public class LaunchTool implements IMcpTool
 
     /** Atomically refuses later publication and returns any result already handed to the caller. */
     private static StandalonePreparation closeStandalonePreparationPublication(
-        AtomicReference<StandalonePreparation> prepared, Object publicationLock,
+        AtomicReference<StandalonePreparation> prepared, PreparationPublicationLock publicationLock,
         AtomicBoolean acceptingPreparation)
     {
-        synchronized (publicationLock)
+        synchronized (publicationLock.monitor)
         {
             acceptingPreparation.set(false);
             return prepared.get();

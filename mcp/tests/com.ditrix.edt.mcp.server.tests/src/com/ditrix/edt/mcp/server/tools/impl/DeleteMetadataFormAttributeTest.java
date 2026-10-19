@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,12 +35,17 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceRuleFactory;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
@@ -1185,6 +1191,500 @@ public class DeleteMetadataFormAttributeTest
         when(locked.exists()).thenReturn(true);
         doThrow(new CoreException(new Status(IStatus.ERROR, "test", "locked"))).when(locked).delete(anyBoolean(), any()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(DeleteMetadataTool.ResourceCleanup.FAILED, DeleteMetadataTool.removeResource(locked));
+    }
+
+    // ---- a deleted form's resource folder: removed by a workspace job, reported before the barrier ---
+    //
+    // performFormObjectDelete runs on the UI thread inside a job worker's syncExec, where the workbench
+    // can grant that runnable the workspace lock and run other threads' syncExecs while it waits; a
+    // workspace delete there was caught with another operation ending under it ("Illegal attempt to
+    // modify an immutable tree", #763). It now only schedules a workspace job; awaitDiskExport waits
+    // for that job on the calling thread and states what the disk shows.
+
+    private static final String GONE_FOLDER = "src/Catalogs/Catalog/Forms/Gone"; //$NON-NLS-1$
+
+    private static final DeleteMetadataTool.FolderRemoval GONE_REMOVAL =
+        new DeleteMetadataTool.FolderRemoval("delete_metadata form folder test", "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    private static final String GONE_MESSAGE = "Deleted form 'Gone' from Catalog.Catalog and persisted to disk."; //$NON-NLS-1$
+
+    /** What performFormObjectDelete answers for a form whose folder removal it scheduled. */
+    private static String formDeleteResult(DeleteMetadataTool.FolderRemoval removal)
+    {
+        JsonObject result = new JsonObject();
+        result.addProperty("success", true); //$NON-NLS-1$
+        result.addProperty("action", "executed"); //$NON-NLS-1$ //$NON-NLS-2$
+        result.addProperty("fqn", "Catalog.Catalog.Form.Gone"); //$NON-NLS-1$ //$NON-NLS-2$
+        result.addProperty("message", GONE_MESSAGE); //$NON-NLS-1$
+        result.addProperty(DeleteMetadataTool.KEY_FORM_FOLDER, GONE_FOLDER);
+        if (removal != null)
+        {
+            result.add(DeleteMetadataTool.KEY_FORM_FOLDER_REMOVAL, removal.toJson());
+        }
+        return result.toString();
+    }
+
+    /** A cleanup whose await records itself and answers {@code outcome}; start is the UI half, unused here. */
+    private static DeleteMetadataTool.FormFolderCleanup awaiting(List<String> order,
+        DeleteMetadataTool.ResourceCleanup outcome)
+    {
+        Thread caller = Thread.currentThread();
+        return new DeleteMetadataTool.FormFolderCleanup()
+        {
+            @Override
+            public DeleteMetadataTool.FolderRemoval start(IProject project, String folderRel, String ownerFqn,
+                String formName)
+            {
+                throw new AssertionError("the barrier never schedules the removal"); //$NON-NLS-1$
+            }
+
+            @Override
+            public DeleteMetadataTool.ResourceCleanup await(String projectName, String folderRel,
+                DeleteMetadataTool.FolderRemoval removal)
+            {
+                assertEquals("TestConfiguration", projectName); //$NON-NLS-1$
+                assertSame("the removal is awaited on the calling thread", caller, Thread.currentThread()); //$NON-NLS-1$
+                order.add("await " + folderRel + " " //$NON-NLS-1$ //$NON-NLS-2$
+                    + (removal == null ? "nothing" : removal.family + "@" + removal.ownerFqn + "/" + removal.formName)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return outcome;
+            }
+        };
+    }
+
+    private static final String GONE_AWAITED = "await " + GONE_FOLDER + " " + GONE_REMOVAL.family + "@Catalog.Catalog/Gone"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    @Test
+    public void testTheFolderRemovalIsReportedBeforeTheBarrier()
+    {
+        List<String> order = new ArrayList<>();
+        DiskTool tool = new DiskTool(order, DiskExportState.DRAINED, Map.of());
+        tool.withFormFolderCleanup(awaiting(order, DeleteMetadataTool.ResourceCleanup.REMOVED));
+
+        JsonObject answered = JsonParser.parseString(tool.drive(formDeleteResult(GONE_REMOVAL))).getAsJsonObject();
+
+        assertEquals(List.of(GONE_AWAITED, "drained"), order); //$NON-NLS-1$
+        assertFalse("the internal members never reach the caller: " + answered, //$NON-NLS-1$
+            answered.has(DeleteMetadataTool.KEY_FORM_FOLDER) || answered.has(DeleteMetadataTool.KEY_FORM_FOLDER_REMOVAL));
+        assertEquals(GONE_MESSAGE + " The form resource folder was removed from disk.", //$NON-NLS-1$
+            answered.get("message").getAsString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFolderRemovalIsAwaitedEvenWhenTheBarrierRefuses()
+    {
+        // A still-pending export makes the barrier answer with a refusal and skip the post-barrier step.
+        List<String> order = new ArrayList<>();
+        DiskTool tool = new DiskTool(order, DiskExportState.PENDING, Map.of());
+        tool.withFormFolderCleanup(awaiting(order, DeleteMetadataTool.ResourceCleanup.REMOVED));
+
+        String answered = tool.drive(formDeleteResult(GONE_REMOVAL));
+
+        assertEquals(GONE_AWAITED, order.get(0));
+        assertFalse(answered, answered.contains(DeleteMetadataTool.KEY_FORM_FOLDER));
+    }
+
+    @Test
+    public void testAFolderThatWasNotThereIsAwaitedWithNoJob()
+    {
+        List<String> order = new ArrayList<>();
+        String answered = DeleteMetadataTool.reportFormFolderRemoval("TestConfiguration", formDeleteResult(null), //$NON-NLS-1$
+            awaiting(order, DeleteMetadataTool.ResourceCleanup.NOT_FOUND));
+
+        assertEquals(List.of("await " + GONE_FOLDER + " nothing"), order); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(answered, answered.contains("The form resource folder was not found on disk")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryOutcomeIsStatedAsSuch()
+    {
+        Map<DeleteMetadataTool.ResourceCleanup, String> said = Map.of(
+            DeleteMetadataTool.ResourceCleanup.FAILED, "could not be removed", //$NON-NLS-1$
+            DeleteMetadataTool.ResourceCleanup.KEPT, "was kept: a form of the same name was created again", //$NON-NLS-1$
+            DeleteMetadataTool.ResourceCleanup.SCHEDULED, "is still being removed in the background"); //$NON-NLS-1$
+        for (Map.Entry<DeleteMetadataTool.ResourceCleanup, String> entry : said.entrySet())
+        {
+            String answered = DeleteMetadataTool.reportFormFolderRemoval("TestConfiguration", //$NON-NLS-1$
+                formDeleteResult(GONE_REMOVAL), awaiting(new ArrayList<>(), entry.getKey()));
+            assertTrue(entry.getKey() + ": " + answered, answered.contains(entry.getValue())); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAResultWithoutAFolderIsReturnedUnchanged()
+    {
+        String other = "{\"success\":true,\"action\":\"executed\",\"message\":\"Deleted.\"}"; //$NON-NLS-1$
+        DeleteMetadataTool.FormFolderCleanup none = awaiting(new ArrayList<>(), null);
+        assertSame(other, DeleteMetadataTool.reportFormFolderRemoval("P", other, none)); //$NON-NLS-1$
+        assertNull(DeleteMetadataTool.reportFormFolderRemoval("P", null, none)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedFolderMemberIsAFailureNotAGuess()
+    {
+        JsonObject result = JsonParser.parseString(formDeleteResult(GONE_REMOVAL)).getAsJsonObject();
+        result.add(DeleteMetadataTool.KEY_FORM_FOLDER, new JsonObject());
+        List<String> order = new ArrayList<>();
+        String answered = DeleteMetadataTool.reportFormFolderRemoval("P", result.toString(), //$NON-NLS-1$
+            awaiting(order, null));
+        assertTrue("no path, nothing awaited: " + order, order.isEmpty()); //$NON-NLS-1$
+        assertFalse(answered, answered.contains(DeleteMetadataTool.KEY_FORM_FOLDER));
+        assertTrue(answered, answered.contains("could not be removed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedRemovalMemberIsReadAsNoRemoval()
+    {
+        assertNull(DeleteMetadataTool.FolderRemoval.fromJson(null));
+        assertNull(DeleteMetadataTool.FolderRemoval.fromJson(new JsonObject()));
+        JsonObject nameless = GONE_REMOVAL.toJson();
+        nameless.add("formName", new JsonObject()); //$NON-NLS-1$
+        assertNull(DeleteMetadataTool.FolderRemoval.fromJson(nameless));
+        DeleteMetadataTool.FolderRemoval back = DeleteMetadataTool.FolderRemoval.fromJson(GONE_REMOVAL.toJson());
+        assertEquals(GONE_REMOVAL.family, back.family);
+        assertEquals(GONE_REMOVAL.ownerFqn, back.ownerFqn);
+        assertEquals(GONE_REMOVAL.formName, back.formName);
+        DeleteMetadataTool.FolderRemoval ownerless = DeleteMetadataTool.FolderRemoval.fromJson(
+            new DeleteMetadataTool.FolderRemoval("f", null, "Gone").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("an owner that could not be named travels as such", ownerless.ownerFqn); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheOutcomeIsReadFromTheDiskAndTheModel()
+    {
+        DeleteMetadataTool.FormPresence present = DeleteMetadataTool.FormPresence.PRESENT;
+        DeleteMetadataTool.FormPresence absent = DeleteMetadataTool.FormPresence.ABSENT;
+        DeleteMetadataTool.FormPresence unknown = DeleteMetadataTool.FormPresence.UNKNOWN;
+        // outcome(removal, folderExists, running, presence now)
+        assertEquals(DeleteMetadataTool.ResourceCleanup.REMOVED,
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, false, absent));
+        assertEquals("gone even while the job is reported running", DeleteMetadataTool.ResourceCleanup.REMOVED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, false, true, unknown));
+        assertEquals(DeleteMetadataTool.ResourceCleanup.NOT_FOUND,
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, false, false, unknown));
+        assertEquals(DeleteMetadataTool.ResourceCleanup.SCHEDULED,
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, true, unknown));
+        assertEquals("a form of that name is in the model again", DeleteMetadataTool.ResourceCleanup.KEPT, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, present));
+        assertEquals("still there with no form behind it", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, absent));
+        assertEquals("still there and the model could not say whose", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(GONE_REMOVAL, true, false, unknown));
+        assertEquals("there now, though nothing was there to remove", DeleteMetadataTool.ResourceCleanup.FAILED, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.outcome(null, true, false, present));
+    }
+
+    @Test
+    public void testOnlyAFormOfExactlyThatNameOwnsTheFolder()
+    {
+        com._1c.g5.v8.dt.metadata.mdclass.Catalog owner = MdClassFactory.eINSTANCE.createCatalog();
+        owner.setName("Catalog"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.CatalogForm form = MdClassFactory.eINSTANCE.createCatalogForm();
+        form.setName("Gone"); //$NON-NLS-1$
+        owner.getForms().add(form);
+
+        assertEquals(DeleteMetadataTool.FormPresence.PRESENT, DeleteMetadataTool.presenceOf(owner, "Gone")); //$NON-NLS-1$
+        assertEquals("a name that differs only in case keeps the folder: the same directory on Windows", //$NON-NLS-1$
+            DeleteMetadataTool.FormPresence.PRESENT, DeleteMetadataTool.presenceOf(owner, "GONE")); //$NON-NLS-1$
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.presenceOf(owner, "Other")); //$NON-NLS-1$
+        assertEquals("no owner under that FQN any more", DeleteMetadataTool.FormPresence.ABSENT, //$NON-NLS-1$
+            DeleteMetadataTool.presenceOf(null, "Gone")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoFolderOnDiskSchedulesNothing()
+    {
+        IFolder folder = mock(IFolder.class);
+        when(folder.exists()).thenReturn(false);
+        IProject project = mock(IProject.class);
+        when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
+
+        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup((p, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT,
+            (attempt, elapsedMs) -> DeleteMetadataTool.RetryPolicy.STOP)
+            .start(project, GONE_FOLDER, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(folder, never()).getWorkspace();
+    }
+
+    /** A folder whose delete records its thread. */
+    private static IFolder removableFolder(AtomicReference<Thread> deleter) throws CoreException
+    {
+        ISchedulingRule rule = new ISchedulingRule()
+        {
+            @Override
+            public boolean contains(ISchedulingRule other)
+            {
+                return other == this;
+            }
+
+            @Override
+            public boolean isConflicting(ISchedulingRule other)
+            {
+                return other == this;
+            }
+        };
+        IResourceRuleFactory rules = mock(IResourceRuleFactory.class);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(workspace.getRuleFactory()).thenReturn(rules);
+        IFolder folder = mock(IFolder.class);
+        when(folder.exists()).thenReturn(true);
+        when(folder.getWorkspace()).thenReturn(workspace);
+        when(folder.getFullPath()).thenReturn(new Path("/TestConfiguration/" + GONE_FOLDER)); //$NON-NLS-1$
+        when(rules.deleteRule(folder)).thenReturn(rule);
+        doAnswer(invocation ->
+        {
+            deleter.set(Thread.currentThread());
+            return null;
+        }).when(folder).delete(anyBoolean(), any());
+        return folder;
+    }
+
+    /** The test's retry policy: {@link #TEST_ATTEMPTS} reads in all, 1 ms apart. */
+    private static final int TEST_ATTEMPTS = 5;
+
+    private static final DeleteMetadataTool.RetryPolicy FAST_RETRY =
+        (attempt, elapsedMs) -> attempt < TEST_ATTEMPTS ? 1L : DeleteMetadataTool.RetryPolicy.STOP;
+
+    private static DeleteMetadataTool.FolderRemoval startAndFinish(IFolder folder,
+        DeleteMetadataTool.FormPresenceReader presence) throws InterruptedException
+    {
+        return startAndFinish(folder, presence, "Catalog.Catalog"); //$NON-NLS-1$
+    }
+
+    private static DeleteMetadataTool.FolderRemoval startAndFinish(IFolder folder,
+        DeleteMetadataTool.FormPresenceReader presence, String ownerFqn) throws InterruptedException
+    {
+        IProject project = mock(IProject.class);
+        when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
+        DeleteMetadataTool.FolderRemoval removal = new DeleteMetadataTool.WorkspaceFormFolderCleanup(presence, FAST_RETRY)
+            .start(project, GONE_FOLDER, ownerFqn, "Gone"); //$NON-NLS-1$
+        assertNotNull("an existing folder gets a removal job", removal); //$NON-NLS-1$
+        long deadline = System.currentTimeMillis() + 30_000L;
+        while (Job.getJobManager().find(removal.family).length > 0 && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertEquals("the removal job and its retries are done", 0, Job.getJobManager().find(removal.family).length); //$NON-NLS-1$
+        return removal;
+    }
+
+    @Test
+    public void testTheFolderIsRemovedByAWorkspaceJobNotByTheCaller() throws Exception
+    {
+        // The UI half only schedules: the delete itself runs on a job worker, under the folder's rule.
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        List<String> asked = new ArrayList<>();
+
+        DeleteMetadataTool.FolderRemoval removal = startAndFinish(folder, (project, owner, name) ->
+        {
+            asked.add(owner + "/" + name); //$NON-NLS-1$
+            return DeleteMetadataTool.FormPresence.ABSENT;
+        });
+
+        assertEquals("the model is asked about the path's owner and form", List.of("Catalog.Catalog/Gone"), asked); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.Catalog", removal.ownerFqn); //$NON-NLS-1$
+        verify(folder).delete(eq(true), any());
+        assertNotNull(deleter.get());
+        assertNotSame("the folder is not removed on the scheduling thread", Thread.currentThread(), deleter.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFolderOfAFormCreatedAgainIsKept() throws Exception
+    {
+        // A create_metadata of a form at the same path ran first: the model holds that form again.
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+
+        startAndFinish(folder, (project, owner, name) -> DeleteMetadataTool.FormPresence.PRESENT);
+
+        verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testAModelThatCannotBeReadIsAskedAgainAndNeverDeletesOnAGuess() throws Exception
+    {
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) ->
+        {
+            reads.incrementAndGet();
+            return DeleteMetadataTool.FormPresence.UNKNOWN;
+        });
+
+        assertEquals(TEST_ATTEMPTS, reads.get());
+        verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testAnOwnerThatCouldNotBeNamedIsNotAskedAgain() throws Exception
+    {
+        // Not a transient state: no read will ever name it, so the folder is kept at once.
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) ->
+        {
+            reads.incrementAndGet();
+            return DeleteMetadataTool.FormPresence.UNKNOWN;
+        }, null);
+
+        assertEquals(1, reads.get());
+        verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testTheProductionRetryKeepsGoingAndOnlyStopsAtTheGiveUpTime()
+    {
+        // No fixed number of tries: EDT does not bound its own re-registration window.
+        assertEquals(2_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(1, 0L));
+        assertEquals(4_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(2, 3_000L));
+        assertEquals(8_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(3, 9_000L));
+        assertEquals("the pause is capped at a minute", 60_000L, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(40, 20L * 60_000L));
+        assertEquals(DeleteMetadataTool.RetryPolicy.STOP,
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(41, 30L * 60_000L));
+    }
+
+    @Test
+    public void testAModelReadAtTheSecondAttemptStillRemovesTheFolder() throws Exception
+    {
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) -> reads.incrementAndGet() == 1
+            ? DeleteMetadataTool.FormPresence.UNKNOWN : DeleteMetadataTool.FormPresence.ABSENT);
+
+        assertEquals(2, reads.get());
+        verify(folder).delete(eq(true), any());
+    }
+
+    @Test
+    public void testAReadThatDoesNotAnswerInTimeIsUnknownNotAWait()
+    {
+        // BmTransactions.read waits as long as another BM operation holds the model; the removal job
+        // reads under the folder's delete rule, and the caller on the MCP call's thread.
+        DeleteMetadataTool.FormPresenceReader slow = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            try
+            {
+                Thread.sleep(5_000L);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return DeleteMetadataTool.FormPresence.ABSENT;
+        }, 100L);
+        long started = System.currentTimeMillis();
+
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, slow.read(namedProject("SlowRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("the caller is freed at the bound", System.currentTimeMillis() - started < 4_000L); //$NON-NLS-1$
+    }
+
+    /** A project mock with its own name: reads in flight are keyed by it, so tests must not share one. */
+    private static IProject namedProject(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    @Test
+    public void testAHungReadIsWaitedOnAgainNeverStartedTwice() throws Exception
+    {
+        // The read takes no monitor, so a hung one keeps its worker; asking again must not add another.
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger started = new java.util.concurrent.atomic.AtomicInteger();
+        DeleteMetadataTool.FormPresenceReader hung = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            started.incrementAndGet();
+            try
+            {
+                release.await();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return DeleteMetadataTool.FormPresence.ABSENT;
+        }, 100L);
+        IProject project = namedProject("HungRead"); //$NON-NLS-1$
+
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, hung.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the second ask waited on the first read and started none of its own", 1, started.get()); //$NON-NLS-1$
+
+        release.countDown();
+        long deadline = System.currentTimeMillis() + 10_000L;
+        DeleteMetadataTool.FormPresence after = DeleteMetadataTool.FormPresence.UNKNOWN;
+        while (after != DeleteMetadataTool.FormPresence.ABSENT && System.currentTimeMillis() < deadline)
+        {
+            after = hung.read(project, "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertEquals("once the read is back, its answer is the model's", DeleteMetadataTool.FormPresence.ABSENT, after); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAskDoesNotTakeTheAnswerOfAReadStartedBeforeIt() throws Exception
+    {
+        // A form created while an earlier read was out is missing from that read: its ABSENT must not
+        // decide the removal. The ask waits for it, then reads again.
+        java.util.concurrent.CountDownLatch firstStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        DeleteMetadataTool.FormPresenceReader model = DeleteMetadataTool.bounded((project, owner, name) ->
+        {
+            if (reads.incrementAndGet() == 1)
+            {
+                firstStarted.countDown();
+                try
+                {
+                    release.await();
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return DeleteMetadataTool.FormPresence.ABSENT; // the model before the form came back
+            }
+            return DeleteMetadataTool.FormPresence.PRESENT; // the model now
+        }, 10_000L);
+        IProject project = namedProject("StaleRead"); //$NON-NLS-1$
+        java.util.concurrent.CompletableFuture<DeleteMetadataTool.FormPresence> first =
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> model.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(firstStarted.await(10L, java.util.concurrent.TimeUnit.SECONDS));
+
+        java.util.concurrent.CompletableFuture<DeleteMetadataTool.FormPresence> second =
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> model.read(project, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        Thread.sleep(200L);
+        assertEquals("nothing new is started while the earlier read is out", 1, reads.get()); //$NON-NLS-1$
+        release.countDown();
+
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, first.get(10L, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals("the later ask answers from its own read", DeleteMetadataTool.FormPresence.PRESENT, //$NON-NLS-1$
+            second.get(10L, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(2, reads.get());
+    }
+
+    @Test
+    public void testABoundedReadPassesOnWhatTheModelSaysAndAFailureIsUnknown()
+    {
+        assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.bounded(
+            (project, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT, 5_000L)
+            .read(namedProject("PlainRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN, DeleteMetadataTool.bounded(
+            (project, owner, name) -> { throw new IllegalStateException("model gone"); }, 5_000L) //$NON-NLS-1$
+            .read(namedProject("FailedRead"), "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAnOwnerThatCouldNotBeNamedIsUnknownNotAbsent()
+    {
+        assertEquals(DeleteMetadataTool.FormPresence.UNKNOWN,
+            DeleteMetadataTool.formPresenceInModel(mock(IProject.class), null, "Gone")); //$NON-NLS-1$
     }
 
     // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------

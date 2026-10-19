@@ -462,8 +462,8 @@ public final class BackgroundJobs implements AutoCloseable
         private final AtomicReference<HandlerExecutionState> state =
             new AtomicReference<>(HandlerExecutionState.QUEUED);
 
-        private volatile CommittedCancellation outcome;
-        private volatile Throwable failure;
+        private final AtomicReference<CommittedCancellation> outcome = new AtomicReference<>();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
         HandlerInvocation(JobRecord record, CommittedCancellationHandler handler)
         {
@@ -481,18 +481,18 @@ public final class BackgroundJobs implements AutoCloseable
             }
             try
             {
-                outcome = handler.cancel();
+                outcome.set(handler.cancel());
             }
             catch (Throwable e) // NOSONAR retained for publication on the requesting thread
             {
-                failure = e;
+                failure.set(e);
             }
             finally
             {
                 state.set(HandlerExecutionState.EXITED);
                 try
                 {
-                    if (record.committedCancellationHandlerExited(outcome, failure))
+                    if (record.committedCancellationHandlerExited(outcome.get(), failure.get()))
                     {
                         // The record monitor is deliberately not held here: cancelling queued
                         // work may release its admission slot through the registry callback.
@@ -910,18 +910,18 @@ public final class BackgroundJobs implements AutoCloseable
     private static CancellationAttempt publishHandlerInvocation(JobRecord record,
         HandlerInvocation invocation)
     {
-        if (invocation.failure == null)
+        if (invocation.failure.get() == null)
         {
-            return record.publishCommittedCancellation(invocation.outcome, null);
+            return record.publishCommittedCancellation(invocation.outcome.get(), null);
         }
 
-        String detail = committedCancellationFailureDetail(invocation.failure);
+        String detail = committedCancellationFailureDetail(invocation.failure.get());
         CancellationAttempt attempt = record.publishCommittedCancellation(null, detail);
-        if (invocation.failure instanceof Error)
+        if (invocation.failure.get() instanceof Error)
         {
             // Publishing first releases the deferred worker outcome. The Error then remains
             // visible instead of being dressed up as an ordinary handler failure.
-            throw (Error)invocation.failure;
+            throw (Error)invocation.failure.get();
         }
         return attempt;
     }
@@ -1668,7 +1668,10 @@ public final class BackgroundJobs implements AutoCloseable
             }
             try
             {
-                completed.await(waitMs, TimeUnit.MILLISECONDS);
+                if (!completed.await(waitMs, TimeUnit.MILLISECONDS))
+                {
+                    return; // A timeout still leaves the latest snapshot available to the caller.
+                }
             }
             catch (InterruptedException e)
             {

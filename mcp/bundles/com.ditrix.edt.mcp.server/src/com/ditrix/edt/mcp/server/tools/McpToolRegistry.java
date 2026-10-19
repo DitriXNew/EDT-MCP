@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -37,7 +38,8 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      * as unknown, so a bulk update publishes a finished map instead: every reader sees either
      * the whole previous catalogue or the whole new one.
      */
-    private volatile Map<String, IMcpTool> tools = new ConcurrentHashMap<>();
+    private final AtomicReference<Map<String, IMcpTool>> tools =
+        new AtomicReference<>(new ConcurrentHashMap<>());
 
     private McpToolRegistry()
     {
@@ -65,7 +67,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
         {
             return;
         }
-        tools.put(tool.getName(), tool);
+        tools.get().put(tool.getName(), tool);
         Activator.logInfo("Registered MCP tool: " + tool.getName()); //$NON-NLS-1$
     }
 
@@ -96,7 +98,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
             }
         }
         // The single point where readers switch over, and they switch over completely.
-        tools = published;
+        tools.set(published);
     }
 
     /**
@@ -107,13 +109,13 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public IMcpTool getTool(String name)
     {
-        IMcpTool tool = tools.get(name);
+        IMcpTool tool = tools.get().get(name);
         if (tool != null)
         {
             return tool;
         }
         String currentName = LEGACY_TOOL_NAMES.get(name);
-        return currentName == null ? null : tools.get(currentName);
+        return currentName == null ? null : tools.get().get(currentName);
     }
     
     /**
@@ -125,7 +127,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
     {
         if (name != null)
         {
-            tools.remove(name);
+            tools.get().remove(name);
         }
     }
 
@@ -136,7 +138,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public Collection<IMcpTool> getAllTools()
     {
-        return Collections.unmodifiableCollection(tools.values());
+        return Collections.unmodifiableCollection(tools.get().values());
     }
 
     /**
@@ -151,9 +153,9 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
         Set<String> disabled = ToolSettingsService.getInstance().getDisabledTools();
         if (disabled.isEmpty())
         {
-            return Collections.unmodifiableCollection(tools.values());
+            return Collections.unmodifiableCollection(tools.get().values());
         }
-        return tools.values().stream()
+        return tools.get().values().stream()
             .filter(tool -> !disabled.contains(tool.getName()))
             .collect(Collectors.toUnmodifiableList());
     }
@@ -208,7 +210,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public int getToolCount()
     {
-        return tools.size();
+        return tools.get().size();
     }
     
     /**
@@ -219,6 +221,6 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public void clear()
     {
-        tools = new ConcurrentHashMap<>();
+        tools.set(new ConcurrentHashMap<>());
     }
 }
