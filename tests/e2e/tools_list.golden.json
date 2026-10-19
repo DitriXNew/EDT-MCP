@@ -3022,9 +3022,22 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Retrieve detailed instructions for an MCP tool. Parameters and examples: get_tool_guide('get_tool_guide').",
+    "description": "Retrieve detailed instructions for an MCP tool. mode=summary lists sections; section=<heading|#anchor>; query=<text>.",
     "inputSchema": {
       "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "summary"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string"
+        },
         "toolName": {
           "type": "string"
         }
