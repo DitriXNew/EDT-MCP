@@ -3318,7 +3318,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // job is scheduled HERE, not by awaitDiskExport, because a call that timed out never reaches it
         // while its UI work still commits the model delete - the folder must go either way.
         String folderRel = formResourceFolderPathOrLog(ref.ownerType, ownerNameOnDisk, formNameOnDisk);
-        FolderRemoval removal = folderRel == null ? null : formFolderCleanup.start(project, folderRel);
+        long ownerBmId = ownerObj instanceof IBmObject ? ((IBmObject)ownerObj).bmGetId() : FolderRemoval.NO_OWNER;
+        FolderRemoval removal = folderRel == null ? null
+            : formFolderCleanup.start(project, folderRel, ownerBmId, formNameOnDisk);
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
@@ -3972,7 +3974,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
         FAILED,
-        /** Still there because it was written again after the delete: it belongs to a new form now. */
+        /** Still there because a form of that name was created again after the delete: it is that form's. */
         KEPT,
         /** The removal job had not finished when the call answered; it still runs in the background. */
         SCHEDULED
@@ -4072,28 +4074,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * A scheduled folder removal, as it travels from the UI thread to {@link #awaitDiskExport}: the
-     * removal job's family, and the modification stamp the folder's {@code Form.form} had when the
-     * removal was scheduled - what tells the deleted form's folder from one written again since.
+     * removal job's family, and what names the deleted form in the model - its owner's BM id and its
+     * name - so that a form of that name created again can be told from the deleted one's leftovers.
      */
     static final class FolderRemoval
     {
         private static final String FAMILY = "family"; //$NON-NLS-1$
-        private static final String FORM_STAMP = "formStamp"; //$NON-NLS-1$
+        private static final String OWNER_ID = "ownerBmId"; //$NON-NLS-1$
+        private static final String FORM_NAME = "formName"; //$NON-NLS-1$
+
+        /** The owner id when the owner is not a BM object: no form can be looked up again under it. */
+        static final long NO_OWNER = -1L;
 
         final String family;
-        final long formStamp;
+        final long ownerBmId;
+        final String formName;
 
-        FolderRemoval(String family, long formStamp)
+        FolderRemoval(String family, long ownerBmId, String formName)
         {
             this.family = family;
-            this.formStamp = formStamp;
+            this.ownerBmId = ownerBmId;
+            this.formName = formName;
         }
 
         JsonObject toJson()
         {
             JsonObject json = new JsonObject();
             json.addProperty(FAMILY, family);
-            json.addProperty(FORM_STAMP, formStamp);
+            json.addProperty(OWNER_ID, ownerBmId);
+            json.addProperty(FORM_NAME, formName);
             return json;
         }
 
@@ -4106,14 +4115,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             JsonObject json = element.getAsJsonObject();
             JsonElement family = json.get(FAMILY);
-            JsonElement stamp = json.get(FORM_STAMP);
-            if (family == null || !family.isJsonPrimitive() || stamp == null || !stamp.isJsonPrimitive())
+            JsonElement owner = json.get(OWNER_ID);
+            JsonElement name = json.get(FORM_NAME);
+            if (family == null || !family.isJsonPrimitive() || owner == null || !owner.isJsonPrimitive()
+                || name == null || !name.isJsonPrimitive())
             {
                 return null;
             }
             try
             {
-                return new FolderRemoval(family.getAsString(), stamp.getAsLong());
+                return new FolderRemoval(family.getAsString(), owner.getAsLong(), name.getAsString());
             }
             catch (NumberFormatException e)
             {
@@ -4138,9 +4149,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          *
          * @param project the owning project
          * @param folderRel the project-relative folder path
+         * @param ownerBmId the deleted form's owner, {@link FolderRemoval#NO_OWNER} when it has no BM id
+         * @param formName the deleted form's name
          * @return the scheduled removal, or {@code null} when there is no such folder to remove
          */
-        FolderRemoval start(IProject project, String folderRel);
+        FolderRemoval start(IProject project, String folderRel, long ownerBmId, String formName);
 
         /**
          * Waits for a removal and answers what the disk shows.
@@ -4153,23 +4166,73 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ResourceCleanup await(String projectName, String folderRel, FolderRemoval removal);
     }
 
+    /**
+     * Whether the model holds a form of a given name under a given owner. A form of the deleted form's
+     * name that is there again was created again after the delete, and the folder on disk is its own.
+     */
+    @FunctionalInterface
+    interface FormPresence
+    {
+        /**
+         * @param project the owning project
+         * @param ownerBmId the owner's BM id
+         * @param formName the form name
+         * @return whether the owner has such a form now; {@code false} when that cannot be read
+         */
+        boolean present(IProject project, long ownerBmId, String formName);
+    }
+
+    /** The production {@link FormPresence}: one read-only BM transaction. */
+    static boolean formPresentInModel(IProject project, long ownerBmId, String formName)
+    {
+        if (ownerBmId == FolderRemoval.NO_OWNER)
+        {
+            return false;
+        }
+        try
+        {
+            BmModelResolver.Resolution resolution = BmModelResolver.resolve(project);
+            if (!resolution.isAvailable())
+            {
+                return false;
+            }
+            IBmModel bmModel = resolution.getModel();
+            return Boolean.TRUE.equals(BmTransactions.<Boolean>read(bmModel, "DeletedFormPresence", //$NON-NLS-1$
+                (tx, pm) ->
+                {
+                    Object owner = tx.getObjectById(ownerBmId);
+                    return Boolean.valueOf(owner instanceof MdObject
+                        && FormStructureReader.findOwnedForm((MdObject)owner, formName) != null);
+                }));
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read whether form '" + formName //$NON-NLS-1$
+                + "' was created again", e); //$NON-NLS-1$
+            return false;
+        }
+    }
+
     /** The production {@link FormFolderCleanup}: a {@link WorkspaceJob} under the folder's delete rule. */
     static final class WorkspaceFormFolderCleanup implements FormFolderCleanup
     {
         /** How long the calling thread waits for the removal before reporting it as still running. */
         private static final long WAIT_MS = 30_000L;
 
-        /** The form's content file; its stamp is what tells the deleted form's folder from a new one. */
-        private static final String FORM_FILE = "Form.form"; //$NON-NLS-1$
+        private final FormPresence presence;
 
-        /** The modification stamp of the folder's {@code Form.form}, {@link IResource#NULL_STAMP} when absent. */
-        static long formStamp(IFolder folder)
+        WorkspaceFormFolderCleanup()
         {
-            return folder.getFile(new Path(FORM_FILE)).getModificationStamp();
+            this(DeleteMetadataTool::formPresentInModel);
+        }
+
+        WorkspaceFormFolderCleanup(FormPresence presence)
+        {
+            this.presence = presence;
         }
 
         @Override
-        public FolderRemoval start(IProject project, String folderRel)
+        public FolderRemoval start(IProject project, String folderRel, long ownerBmId, String formName)
         {
             IFolder folder = project.getFolder(new Path(folderRel));
             if (!folder.exists())
@@ -4177,7 +4240,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 return null;
             }
             FolderRemoval removal = new FolderRemoval(
-                "delete_metadata form folder " + UUID.randomUUID(), formStamp(folder)); //$NON-NLS-1$
+                "delete_metadata form folder " + UUID.randomUUID(), ownerBmId, formName); //$NON-NLS-1$
             WorkspaceJob job = new WorkspaceJob("Remove " + folder.getFullPath()) //$NON-NLS-1$
             {
                 @Override
@@ -4185,11 +4248,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 {
                     // A queued create_metadata of a form with the same name can run between the delete
                     // and this job, and its export may already have written the folder again: it is then
-                    // the new form's folder, and removing it would strip that form of its content.
-                    if (formStamp(folder) != removal.formStamp)
+                    // the new form's folder, and removing it would strip that form of its content. The
+                    // MODEL decides, not the folder's stamp: a save task of the deleted form that was
+                    // already running rewrites the same file, and that is no new form.
+                    if (presence.present(project, removal.ownerBmId, removal.formName))
                     {
                         Activator.logInfo("delete_metadata: kept " + folder.getFullPath() //$NON-NLS-1$
-                            + ": its Form.form was written again after the form was deleted"); //$NON-NLS-1$
+                            + ": a form of that name was created again after the delete"); //$NON-NLS-1$
                         return Status.OK_STATUS;
                     }
                     removeResource(folder);
@@ -4238,21 +4303,23 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return ResourceCleanup.FAILED;
             }
-            IFolder folder = context.project().getFolder(new Path(folderRel));
-            return outcome(removal, folder.exists(), running, folder.exists() ? formStamp(folder) : IResource.NULL_STAMP);
+            boolean folderExists = context.project().getFolder(new Path(folderRel)).exists();
+            boolean createdAgain = folderExists && removal != null && !running
+                && presence.present(context.project(), removal.ownerBmId, removal.formName);
+            return outcome(removal, folderExists, running, createdAgain);
         }
 
         /**
-         * What a removal came to, from what the disk shows once the wait is over.
+         * What a removal came to, from what the disk and the model show once the wait is over.
          *
          * @param removal what was scheduled, or {@code null} when the folder was not there to remove
          * @param folderExists whether the folder is on disk now
          * @param running whether the removal job has still not finished
-         * @param formStampNow the folder's {@code Form.form} stamp now
+         * @param createdAgain whether the model holds a form of the deleted form's name again
          * @return the cleanup outcome
          */
         static ResourceCleanup outcome(FolderRemoval removal, boolean folderExists, boolean running,
-            long formStampNow)
+            boolean createdAgain)
         {
             if (!folderExists)
             {
@@ -4266,7 +4333,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return ResourceCleanup.SCHEDULED;
             }
-            return formStampNow != removal.formStamp ? ResourceCleanup.KEPT : ResourceCleanup.FAILED;
+            return createdAgain ? ResourceCleanup.KEPT : ResourceCleanup.FAILED;
         }
 
         private static void join(String family)
