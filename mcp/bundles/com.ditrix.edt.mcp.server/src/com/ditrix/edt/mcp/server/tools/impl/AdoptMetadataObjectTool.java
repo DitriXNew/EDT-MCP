@@ -9,10 +9,14 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -30,6 +34,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -39,11 +44,13 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
+import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Adopts a base-configuration metadata object — or one of its members
@@ -92,8 +99,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Add a base-configuration object or member to an extension for customization. Parameters and " //$NON-NLS-1$
-            + "examples: get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
+        return "Add a base-configuration object or member to an extension for customization, including " //$NON-NLS-1$
+            + "referenced form common pictures. Parameters and examples: get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override
@@ -128,6 +135,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
                     + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
+            .objectProperty("dependencies", //$NON-NLS-1$
+                "commonPictures: {found, adopted, alreadyPresent, unresolved} arrays; resolved pictures use canonical FQNs") //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .stringProperty(McpKeys.MESSAGE,
                 "Present when the object was already adopted, and when the adopted copy carries no " //$NON-NLS-1$
@@ -230,42 +239,186 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         MappingEvidence mapping = new MappingEvidence(extName, extensionModel, platformVersion(target),
             extensionModel == null ? null : keepsMappingByIds(extensionModel));
 
-        if (adopter.isAdopted(source.object, target))
+        boolean alreadyAdopted = adopter.isAdopted(source.object, target);
+        EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, target) : null;
+        FormPictureDependencies.Result pictures;
+        List<String> alreadyPresent = new ArrayList<>();
+        Map<String, EObject> missing = new LinkedHashMap<>();
+        try
         {
-            // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
-            // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
-            // not say" owe the barrier different answers.
-            WriteScope.recordNothingQueued();
-            // The existing copy's link was decided when it was adopted, under the flag and the version of that time.
-            return alreadyAdoptedResult(source, extName,
-                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, target)));
+            pictures = readFormPictures(ctx.project, source.object, adopted, alreadyAdopted, extensionModel);
+            if (!pictures.unresolved.isEmpty())
+            {
+                return withPictures(ToolResult.error("Cannot adopt '" + source.fqn //$NON-NLS-1$
+                    + "': unresolved form picture references " + pictures.unresolved //$NON-NLS-1$
+                    + ". Fix the form references using list_common_pictures and modify_metadata, then retry. " //$NON-NLS-1$
+                    + "No objects were adopted.").toJson(), pictures, List.of(), alreadyPresent); //$NON-NLS-1$
+            }
+            for (String pictureFqn : pictures.found)
+            {
+                if (picturePresent(extensionModel, pictureFqn))
+                {
+                    // An edited adopted form can reference a picture owned by the extension.
+                    // Such a picture already resolves there and need not exist in the base.
+                    alreadyPresent.add(pictureFqn);
+                    continue;
+                }
+                // Resolve dependencies through the same shared bilingual metadata resolver as the
+                // source. The scope holds global-context objects suitable for the platform adopter.
+                BmModelResolver.Resolution baseModel = BmModelResolver.resolve(ctx.project);
+                if (!baseModel.isAvailable())
+                {
+                    return ToolResult.error(baseModel.actionableError(NAME, "No objects were adopted.")).toJson(); //$NON-NLS-1$
+                }
+                MetadataNodeResolver.MetadataNode node = BmTransactions.read(baseModel.getModel(),
+                    "adopt_metadata_object: resolve form picture", //$NON-NLS-1$
+                    (tx, monitor) -> MetadataNodeResolver.resolveExisting(ctx.scope, pictureFqn));
+                if (node == null)
+                {
+                    return withPictures(ToolResult.error("Form picture '" + pictureFqn //$NON-NLS-1$
+                        + "' was not found in the base configuration. Fix the reference using " //$NON-NLS-1$
+                        + "list_common_pictures and modify_metadata, then retry. No objects were adopted.") //$NON-NLS-1$
+                        .toJson(), pictures, List.of(), alreadyPresent);
+                }
+                // isAdopted itself requires an adoptable source in EDT's implementation.
+                if (!adopter.isAdoptable(node.object))
+                {
+                    return withPictures(ToolResult.error("Form picture '" + pictureFqn //$NON-NLS-1$
+                        + "' cannot be adopted into extension '" + extName //$NON-NLS-1$
+                        + "'. Choose an adoptable picture using list_common_pictures and update the form " //$NON-NLS-1$
+                        + "with modify_metadata, then retry. No objects were adopted.").toJson(), //$NON-NLS-1$
+                        pictures, List.of(), alreadyPresent);
+                }
+                else if (adopter.isAdopted(node.object, target))
+                {
+                    alreadyPresent.add(pictureFqn);
+                }
+                else
+                {
+                    missing.put(pictureFqn, node.object);
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            return ToolResult.error("Cannot read form pictures for '" + source.fqn //$NON-NLS-1$
+                + "'. No objects were adopted. Check the form with get_metadata_details and retry " //$NON-NLS-1$
+                + "adopt_metadata_object. Details: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
-        // only for a NATIVE configuration root - an extension's root is ADOPTED, so nothing here locks.
+        Set<String> dirty = new LinkedHashSet<>();
+        List<String> changed = new ArrayList<>();
+        Exception failure = null;
+        try
+        {
+            // Vendor support does not apply: the base is only read. Each platform call owns its
+            // write transaction; record every completed call before any later call can fail.
+            if (!alreadyAdopted)
+            {
+                adopted = adoptAndRecord(adopter, source.object, source.fqn, target, dirty, changed);
+            }
+            for (Map.Entry<String, EObject> dependency : missing.entrySet())
+            {
+                String pictureFqn = dependency.getKey();
+                EObject picture = dependency.getValue();
+                // The form adopter may have adopted a dependency itself. Never adopt it twice.
+                if (adopter.isAdopted(picture, target))
+                {
+                    WriteScope.recordWrite(target.getProject());
+                    changed.add(pictureFqn);
+                    dirty.addAll(collectDirtyFqns(adoptedCopy(adopter, picture, target), target));
+                }
+                else
+                {
+                    adoptAndRecord(adopter, picture, pictureFqn, target, dirty, changed);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            failure = e;
+        }
+        List<String> adoptedPictures = pictures.found.stream().filter(changed::contains).collect(Collectors.toList());
+        // Export every known completed adoption, including after a later platform call failed.
+        boolean persisted = dirty.isEmpty() ? failure == null && changed.isEmpty()
+            : BmTransactions.forceExportToDisk(target.getProject(), new ArrayList<>(dirty));
+        if (failure != null)
+        {
+            return withPictures(ToolResult.error("Could not complete adoption of '" + source.fqn //$NON-NLS-1$
+                + "' into extension '" + extName + "': " + unwrapCauseMessage(failure) //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Completed adoptions: " + changed + ". The failed platform call may also have changed " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the extension. Inspect it with get_metadata_details, then retry adopt_metadata_object.") //$NON-NLS-1$
+                .put("fqn", source.fqn).put(KEY_EXTENSION_PROJECT, extName) //$NON-NLS-1$
+                .put(KEY_PERSISTED, persisted).toJson(), pictures, adoptedPictures, alreadyPresent);
+        }
+        if (changed.isEmpty())
+        {
+            WriteScope.recordNothingQueued();
+        }
+        String result = alreadyAdopted
+            ? alreadyAdoptedResult(source, extName, mapping.forEarlierCopy(adopted))
+            : adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted));
+        JsonObject payload = JsonParser.parseString(result).getAsJsonObject();
+        payload.addProperty(KEY_PERSISTED, persisted);
+        return withPictures(GsonProvider.toJson(payload), pictures, adoptedPictures, alreadyPresent);
+    }
 
-        // The service runs its own BM write task on the extension's model, but exposes no rollback
-        // outcome if it throws. Record the opaque interval before entering it; the known write
-        // declaration immediately after a normal return takes precedence.
+    /** Resolve presence in the target before looking for a base counterpart to adopt. */
+    private static boolean picturePresent(IBmModel extensionModel, String fqn)
+    {
+        return extensionModel != null && BmTransactions.read(extensionModel,
+            "adopt_metadata_object: check existing form picture", (tx, monitor) -> { //$NON-NLS-1$
+                IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+                return root instanceof Configuration
+                    && MetadataNodeResolver.resolveExisting((Configuration)root, fqn) != null;
+            });
+    }
+
+    /** Read the actual existing copy on a repeat call, so extension edits determine dependencies. */
+    private static FormPictureDependencies.Result readFormPictures(IProject baseProject, EObject source,
+        EObject copy, boolean alreadyAdopted, IBmModel extensionModel)
+    {
+        if (!FormPictureDependencies.canHaveForms(source))
+        {
+            return FormPictureDependencies.collect((EObject)null);
+        }
+        if (alreadyAdopted)
+        {
+            if (copy == null || extensionModel == null)
+            {
+                throw new IllegalStateException("The adopted form could not be read in the extension"); //$NON-NLS-1$
+            }
+            return FormPictureDependencies.collect(extensionModel, copy);
+        }
+        BmModelResolver.Resolution model = BmModelResolver.resolve(baseProject);
+        if (!model.isAvailable())
+        {
+            throw new IllegalStateException(model.actionableError(NAME, "No objects were adopted.")); //$NON-NLS-1$
+        }
+        return FormPictureDependencies.collect(model.getModel(), source);
+    }
+
+    /** The platform owns the write boundary; the result's known scope starts at its normal return. */
+    private static EObject adoptAndRecord(IModelObjectAdopter adopter, EObject object, String fqn,
+        IExtensionProject target, Set<String> dirty, List<String> changed) throws Exception
+    {
         WriteScope.recordUndeterminable("model-object adopter may mutate before throwing", //$NON-NLS-1$
-            java.util.Collections.singletonList(extName));
-        EObject adopted = adopter.adoptAndAttach(source.object, target, new NullProgressMonitor());
-
-        // projectName is the BASE configuration by contract; the write lands in the EXTENSION.
-        // Stated here rather than left to the export submission below, because that submission is
-        // skipped when nothing came back dirty - and a write with no export of its own is still a
-        // write in this project, not a call that wrote nowhere.
+            Collections.singletonList(target.getProject().getName()));
+        EObject copy = adopter.adoptAndAttach(object, target, new NullProgressMonitor());
         WriteScope.recordWrite(target.getProject());
+        changed.add(fqn);
+        dirty.addAll(collectDirtyFqns(copy, target));
+        return copy;
+    }
 
-        // Persist the adopted TOP object's .mdo, the .mdo of every parent subsystem of an adopted
-        // nested subsystem, AND the extension Configuration.mdo registration (the parent collection
-        // changed), mirroring create_metadata. bmGetTopObject()/bmGetFqn() are safe identity reads on
-        // the objects the platform returned.
-        List<String> dirty = collectDirtyFqns(adopted, target);
-        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
-
-        // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
-        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted));
+    private static String withPictures(String result, FormPictureDependencies.Result pictures,
+        List<String> adopted, List<String> alreadyPresent)
+    {
+        JsonObject payload = JsonParser.parseString(result).getAsJsonObject();
+        payload.add("dependencies", GsonProvider.get().toJsonTree(Map.of("commonPictures", Map.of( //$NON-NLS-1$ //$NON-NLS-2$
+            "found", pictures.found, "adopted", adopted, //$NON-NLS-1$ //$NON-NLS-2$
+            "alreadyPresent", alreadyPresent, "unresolved", pictures.unresolved)))); //$NON-NLS-1$ //$NON-NLS-2$
+        return GsonProvider.toJson(payload);
     }
 
     /**

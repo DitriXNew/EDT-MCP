@@ -34,6 +34,7 @@ the adoption must write instead, and that a refused adoption leaves the extensio
 
 from harness import (
     E2ECallTimeout,
+    calls_aborted,
     call,
     assert_ok,
     assert_error,
@@ -42,6 +43,8 @@ from harness import (
     assert_no_diff,
     assert_no_diff_rel,
     poll_disk_contains_all,
+    read_disk,
+    read_fixture_file,
     restore_extension_fixture,
     wait_for_project_ready,
     e2e_test,
@@ -333,3 +336,83 @@ def test_nested_subsystem_adoption_adopts_its_parent_too():
         raise
     else:
         restore_extension_fixture("a nested-subsystem adoption")
+
+
+# Common pictures referenced by a newly adopted form (issue #539).
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
+def test_adopting_form_also_adopts_its_common_picture_on_disk():
+    """A disk/model probe usable unchanged on the old jar: the picture's own .mdo must
+    exist in the extension. No new response field is required, so a red old-jar run
+    proves the missing dependency rather than merely a changed result schema.
+
+    The fixture's ItemForm is already adopted; seed a NEW form to exercise first adoption.
+    The same picture is referenced twice, and a repeat adoption must remain benign.
+    """
+    picture_name = "E2EAdoptFormPicture"
+    picture_fqn = "CommonPicture." + picture_name
+    form_name = "E2EAdoptPictureForm"
+    form_fqn = "Catalog.Catalog.Form." + form_name
+    form_disk = "src/Catalogs/Catalog/Forms/%s/Form.form" % form_name
+    picture_disk = "src/CommonPictures/%s/%s.mdo" % (picture_name, picture_name)
+    try:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": picture_fqn,
+        }), "seed the form's common picture in the base configuration")
+        wait_for_project_ready()
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": form_fqn, "generateContent": True,
+        }), "seed a new base form that the extension has never adopted")
+        wait_for_project_ready()
+        for field in ("Code", "Description"):
+            assert_ok(call("modify_metadata", {
+                "projectName": PROJECT,
+                "fqn": form_fqn + ".Field." + field,
+                "properties": [{"name": "headerPicture", "value": picture_fqn}],
+            }), "set the shared picture on the new form's " + field + " field")
+            # The write submits its export: inspect the settled bytes immediately, once.
+            assert_contains(read_disk(form_disk), picture_fqn,
+                            "the form must persist its common-picture reference")
+
+        # Re-import the saved reference to exercise a CommonPicture proxy as well as a live object.
+        assert_ok(call("clean_project", {"projectName": PROJECT}),
+                  "reload the saved form before adopting it")
+        wait_for_project_ready()
+        adopted = call("adopt_metadata_object", {
+            "projectName": PROJECT, "fqn": form_fqn,
+            "extensionProjectName": TESTS_PROJECT,
+        })
+        assert_ok(adopted, "adopt the form and its common-picture dependency together")
+
+        # DISK FIRST, before any other MCP call. A missing .mdo fails here on the old jar.
+        picture_xml = read_fixture_file(TESTS_PROJECT_REL, picture_disk)
+        assert_contains(picture_xml, "<name>%s</name>" % picture_name,
+                        "the common picture must have its own extension .mdo")
+        assert_contains(picture_xml, _ADOPTED, "the common picture must be adopted")
+        extension_xml = read_fixture_file(TESTS_PROJECT_REL, _EXT_CONFIGURATION_MDO)
+        assert_contains(extension_xml, "<commonPictures>%s</commonPictures>" % picture_fqn,
+                        "the extension must register the adopted picture")
+        assert _structured(adopted, "form adoption").get("action") == "adopted", \
+            "the newly seeded form must be adopted for the first time"
+
+        details = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [picture_fqn],
+        })
+        assert_ok(details, "read the adopted common picture from the extension's model")
+        assert_contains(details.text, picture_name, "the extension model must contain the picture")
+        assert_contains(details.text, "**Origin:** core (adopted)",
+                        "the extension model must identify the picture as an adopted base object")
+
+        again = call("adopt_metadata_object", {
+            "projectName": PROJECT, "fqn": form_fqn,
+            "extensionProjectName": TESTS_PROJECT,
+        })
+        assert_ok(again, "repeat the form adoption without duplicating its picture")
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL, picture_disk), _ADOPTED,
+                        "the repeat call must preserve the adopted picture on disk")
+        repeated = _structured(again, "repeat form adoption")
+        assert repeated.get("action") == "alreadyAdopted", repeated
+        assert repeated.get("writtenProjects") == [], repeated
+    finally:
+        # A timed-out tool can still be writing: never race it by restoring fixture files.
+        if not calls_aborted():
+            restore_extension_fixture("a form adoption with common pictures")
