@@ -4161,11 +4161,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Whether the model holds the form a deleted form's folder path names, as far as it can be read. */
     enum FormPresence
     {
-        /** A form of exactly that name is under that owner again: the folder is that form's. */
+        /**
+         * A form of that name is under that owner again: the folder is that form's. A name that differs
+         * only in case counts too, because on a case-insensitive file system both are the same directory.
+         */
         PRESENT,
         /** The model was read and holds no such form: the folder is the deleted form's leftover. */
         ABSENT,
-        /** The model could not be read, or holds a form whose name differs only in case. */
+        /** The model could not be read: a transient state, asked again later, never a reason to delete. */
         UNKNOWN
     }
 
@@ -4220,9 +4223,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * What an owner read from the model says about a form name: the folder path is case-sensitive while
-     * the model's names are not, so only an exact name is the folder's form; a name that differs only in
-     * case is UNKNOWN, because on a case-insensitive file system both names are the same directory.
+     * What an owner read from the model says about a form name. The folder path is case-sensitive while
+     * the model's names are not; a form whose name differs only in case still keeps the folder, because on
+     * a case-insensitive file system both names are the same directory and removing it would strip that
+     * form of its content.
      *
      * @param owner the owner as read, {@code null} when there is none under that FQN
      * @param formName the form name, as the folder path spells it
@@ -4239,7 +4243,22 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return FormPresence.ABSENT;
         }
-        return formName.equals(form.getName()) ? FormPresence.PRESENT : FormPresence.UNKNOWN;
+        return FormPresence.PRESENT;
+    }
+
+    /** When the removal job reads a model it could not read again, or that it stops trying. */
+    @FunctionalInterface
+    interface RetryPolicy
+    {
+        /** The answer that ends the attempts: the folder is then kept, and the outcome says to check it. */
+        long STOP = -1L;
+
+        /**
+         * @param attempt the number of the read that could not be done, from 1
+         * @param elapsedMs how long ago the removal was scheduled
+         * @return the pause before reading again in milliseconds, or {@link #STOP}
+         */
+        long nextDelay(int attempt, long elapsedMs);
     }
 
     /** The production {@link FormFolderCleanup}: a {@link WorkspaceJob} under the folder's delete rule. */
@@ -4248,20 +4267,40 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** How long the calling thread waits for the removal before reporting it as still running. */
         private static final long WAIT_MS = 30_000L;
 
-        /** How often the job reads the model again when it could not, and how long it waits in between. */
-        static final int MAX_ATTEMPTS = 5;
-        static final long RETRY_MS = 2_000L;
+        /** The production pause before reading the model again: doubling from 2 s, at most 1 min apart. */
+        private static final long FIRST_RETRY_MS = 2_000L;
+        private static final long MAX_RETRY_MS = 60_000L;
+
+        /**
+         * How long the job keeps reading a model it could not read. Not a bound on a transient state EDT
+         * itself does not bound - the caller's wait is bounded separately - but on how long a closed or
+         * removed project keeps a job alive.
+         */
+        private static final long GIVE_UP_AFTER_MS = 30L * 60_000L;
 
         private final FormPresenceReader presence;
+        private final RetryPolicy retry;
 
         WorkspaceFormFolderCleanup()
         {
-            this(DeleteMetadataTool::formPresenceInModel);
+            this(DeleteMetadataTool::formPresenceInModel, WorkspaceFormFolderCleanup::productionRetry);
         }
 
-        WorkspaceFormFolderCleanup(FormPresenceReader presence)
+        WorkspaceFormFolderCleanup(FormPresenceReader presence, RetryPolicy retry)
         {
             this.presence = presence;
+            this.retry = retry;
+        }
+
+        /** The production {@link RetryPolicy}: a doubling pause, and none at all after the give-up time. */
+        static long productionRetry(int attempt, long elapsedMs)
+        {
+            if (elapsedMs >= GIVE_UP_AFTER_MS)
+            {
+                return RetryPolicy.STOP;
+            }
+            long pause = FIRST_RETRY_MS << Math.min(attempt - 1, 5);
+            return Math.min(pause, MAX_RETRY_MS);
         }
 
         @Override
@@ -4275,6 +4314,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             FolderRemoval removal = new FolderRemoval(
                 "delete_metadata form folder " + UUID.randomUUID(), ownerFqn, formName); //$NON-NLS-1$
             AtomicInteger attempts = new AtomicInteger();
+            long scheduledAt = System.currentTimeMillis();
             WorkspaceJob job = new WorkspaceJob("Remove " + folder.getFullPath()) //$NON-NLS-1$
             {
                 @Override
@@ -4289,10 +4329,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     if (now == FormPresence.ABSENT)
                     {
                         removeResource(folder);
+                        return Status.OK_STATUS;
                     }
-                    else if (now == FormPresence.UNKNOWN && attempts.incrementAndGet() < MAX_ATTEMPTS)
+                    // An unreadable model is asked again for as long as EDT keeps it unreadable, not for a
+                    // fixed number of tries: giving up while it was still re-registering would leave the
+                    // folder for good. An owner that could not be named is not transient, so it is not.
+                    long pause = now == FormPresence.UNKNOWN && removal.ownerFqn != null
+                        ? retry.nextDelay(attempts.incrementAndGet(), System.currentTimeMillis() - scheduledAt)
+                        : RetryPolicy.STOP;
+                    if (pause != RetryPolicy.STOP)
                     {
-                        schedule(RETRY_MS);
+                        schedule(pause);
                     }
                     else
                     {

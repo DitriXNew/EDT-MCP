@@ -1383,8 +1383,8 @@ public class DeleteMetadataFormAttributeTest
         owner.getForms().add(form);
 
         assertEquals(DeleteMetadataTool.FormPresence.PRESENT, DeleteMetadataTool.presenceOf(owner, "Gone")); //$NON-NLS-1$
-        assertEquals("a name that differs only in case may be the same directory", //$NON-NLS-1$
-            DeleteMetadataTool.FormPresence.UNKNOWN, DeleteMetadataTool.presenceOf(owner, "GONE")); //$NON-NLS-1$
+        assertEquals("a name that differs only in case keeps the folder: the same directory on Windows", //$NON-NLS-1$
+            DeleteMetadataTool.FormPresence.PRESENT, DeleteMetadataTool.presenceOf(owner, "GONE")); //$NON-NLS-1$
         assertEquals(DeleteMetadataTool.FormPresence.ABSENT, DeleteMetadataTool.presenceOf(owner, "Other")); //$NON-NLS-1$
         assertEquals("no owner under that FQN any more", DeleteMetadataTool.FormPresence.ABSENT, //$NON-NLS-1$
             DeleteMetadataTool.presenceOf(null, "Gone")); //$NON-NLS-1$
@@ -1398,7 +1398,8 @@ public class DeleteMetadataFormAttributeTest
         IProject project = mock(IProject.class);
         when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
 
-        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup((p, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT)
+        assertNull(new DeleteMetadataTool.WorkspaceFormFolderCleanup((p, owner, name) -> DeleteMetadataTool.FormPresence.ABSENT,
+            (attempt, elapsedMs) -> DeleteMetadataTool.RetryPolicy.STOP)
             .start(project, GONE_FOLDER, "Catalog.Catalog", "Gone")); //$NON-NLS-1$ //$NON-NLS-2$
         verify(folder, never()).getWorkspace();
     }
@@ -1436,13 +1437,25 @@ public class DeleteMetadataFormAttributeTest
         return folder;
     }
 
+    /** The test's retry policy: {@link #TEST_ATTEMPTS} reads in all, 1 ms apart. */
+    private static final int TEST_ATTEMPTS = 5;
+
+    private static final DeleteMetadataTool.RetryPolicy FAST_RETRY =
+        (attempt, elapsedMs) -> attempt < TEST_ATTEMPTS ? 1L : DeleteMetadataTool.RetryPolicy.STOP;
+
     private static DeleteMetadataTool.FolderRemoval startAndFinish(IFolder folder,
         DeleteMetadataTool.FormPresenceReader presence) throws InterruptedException
     {
+        return startAndFinish(folder, presence, "Catalog.Catalog"); //$NON-NLS-1$
+    }
+
+    private static DeleteMetadataTool.FolderRemoval startAndFinish(IFolder folder,
+        DeleteMetadataTool.FormPresenceReader presence, String ownerFqn) throws InterruptedException
+    {
         IProject project = mock(IProject.class);
         when(project.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(folder);
-        DeleteMetadataTool.FolderRemoval removal =
-            new DeleteMetadataTool.WorkspaceFormFolderCleanup(presence).start(project, GONE_FOLDER, "Catalog.Catalog", "Gone"); //$NON-NLS-1$ //$NON-NLS-2$
+        DeleteMetadataTool.FolderRemoval removal = new DeleteMetadataTool.WorkspaceFormFolderCleanup(presence, FAST_RETRY)
+            .start(project, GONE_FOLDER, ownerFqn, "Gone"); //$NON-NLS-1$
         assertNotNull("an existing folder gets a removal job", removal); //$NON-NLS-1$
         long deadline = System.currentTimeMillis() + 30_000L;
         while (Job.getJobManager().find(removal.family).length > 0 && System.currentTimeMillis() < deadline)
@@ -1499,8 +1512,39 @@ public class DeleteMetadataFormAttributeTest
             return DeleteMetadataTool.FormPresence.UNKNOWN;
         });
 
-        assertEquals(DeleteMetadataTool.WorkspaceFormFolderCleanup.MAX_ATTEMPTS, reads.get());
+        assertEquals(TEST_ATTEMPTS, reads.get());
         verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testAnOwnerThatCouldNotBeNamedIsNotAskedAgain() throws Exception
+    {
+        // Not a transient state: no read will ever name it, so the folder is kept at once.
+        AtomicReference<Thread> deleter = new AtomicReference<>();
+        IFolder folder = removableFolder(deleter);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+
+        startAndFinish(folder, (project, owner, name) ->
+        {
+            reads.incrementAndGet();
+            return DeleteMetadataTool.FormPresence.UNKNOWN;
+        }, null);
+
+        assertEquals(1, reads.get());
+        verify(folder, never()).delete(anyBoolean(), any());
+    }
+
+    @Test
+    public void testTheProductionRetryKeepsGoingAndOnlyStopsAtTheGiveUpTime()
+    {
+        // No fixed number of tries: EDT does not bound its own re-registration window.
+        assertEquals(2_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(1, 0L));
+        assertEquals(4_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(2, 3_000L));
+        assertEquals(8_000L, DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(3, 9_000L));
+        assertEquals("the pause is capped at a minute", 60_000L, //$NON-NLS-1$
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(40, 20L * 60_000L));
+        assertEquals(DeleteMetadataTool.RetryPolicy.STOP,
+            DeleteMetadataTool.WorkspaceFormFolderCleanup.productionRetry(41, 30L * 60_000L));
     }
 
     @Test
