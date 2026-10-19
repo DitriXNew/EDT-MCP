@@ -2445,7 +2445,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     static final String KEY_FORM_FOLDER = "formFolderToRemove"; //$NON-NLS-1$
 
-    /** Internal result member: the job family of that folder's removal, absent when there was nothing to remove. */
+    /** Internal result member: that folder's {@link FolderRemoval}, absent when there was nothing to remove. */
     static final String KEY_FORM_FOLDER_REMOVAL = "formFolderRemoval"; //$NON-NLS-1$
 
     /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
@@ -3318,7 +3318,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // job is scheduled HERE, not by awaitDiskExport, because a call that timed out never reaches it
         // while its UI work still commits the model delete - the folder must go either way.
         String folderRel = formResourceFolderPathOrLog(ref.ownerType, ownerNameOnDisk, formNameOnDisk);
-        String removal = folderRel == null ? null : formFolderCleanup.start(project, folderRel);
+        FolderRemoval removal = folderRel == null ? null : formFolderCleanup.start(project, folderRel);
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
@@ -3333,7 +3333,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             result.put(KEY_FORM_FOLDER, folderRel);
             if (removal != null)
             {
-                result.put(KEY_FORM_FOLDER_REMOVAL, removal);
+                result.put(KEY_FORM_FOLDER_REMOVAL, removal.toJson());
             }
         }
         return result.toJson();
@@ -3971,7 +3971,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
-        FAILED
+        FAILED,
+        /** Still there because it was written again after the delete: it belongs to a new form now. */
+        KEPT,
+        /** The removal job had not finished when the call answered; it still runs in the background. */
+        SCHEDULED
     }
 
     /** A detached extInfo object's file as observed after the export barrier; EDT's save deletes it. */
@@ -4000,6 +4004,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
             return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
+        case KEPT:
+            return subject + " was kept: a form of the same name was created again after the delete."; //$NON-NLS-1$
+        case SCHEDULED:
+            return subject + " is still being removed in the background - re-check it shortly."; //$NON-NLS-1$
         case FAILED:
         default:
             return subject + " could not be removed - check it manually."; //$NON-NLS-1$
@@ -4063,6 +4071,58 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * A scheduled folder removal, as it travels from the UI thread to {@link #awaitDiskExport}: the
+     * removal job's family, and the modification stamp the folder's {@code Form.form} had when the
+     * removal was scheduled - what tells the deleted form's folder from one written again since.
+     */
+    static final class FolderRemoval
+    {
+        private static final String FAMILY = "family"; //$NON-NLS-1$
+        private static final String FORM_STAMP = "formStamp"; //$NON-NLS-1$
+
+        final String family;
+        final long formStamp;
+
+        FolderRemoval(String family, long formStamp)
+        {
+            this.family = family;
+            this.formStamp = formStamp;
+        }
+
+        JsonObject toJson()
+        {
+            JsonObject json = new JsonObject();
+            json.addProperty(FAMILY, family);
+            json.addProperty(FORM_STAMP, formStamp);
+            return json;
+        }
+
+        /** The removal a result member carries, or {@code null} when the member is absent or malformed. */
+        static FolderRemoval fromJson(JsonElement element)
+        {
+            if (element == null || !element.isJsonObject())
+            {
+                return null;
+            }
+            JsonObject json = element.getAsJsonObject();
+            JsonElement family = json.get(FAMILY);
+            JsonElement stamp = json.get(FORM_STAMP);
+            if (family == null || !family.isJsonPrimitive() || stamp == null || !stamp.isJsonPrimitive())
+            {
+                return null;
+            }
+            try
+            {
+                return new FolderRemoval(family.getAsString(), stamp.getAsLong());
+            }
+            catch (NumberFormatException e)
+            {
+                return null;
+            }
+        }
+    }
+
+    /**
      * Removes a deleted form's resource folder off the UI thread (#763), in two halves that run on two
      * different threads: {@link #start} on the UI thread, inside the delete, only SCHEDULES a workspace
      * job, so nothing on that thread touches the workspace tree; {@link #await} on the calling thread,
@@ -4078,41 +4138,60 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          *
          * @param project the owning project
          * @param folderRel the project-relative folder path
-         * @return the removal's job family, or {@code null} when there is no such folder to remove
+         * @return the scheduled removal, or {@code null} when there is no such folder to remove
          */
-        String start(IProject project, String folderRel);
+        FolderRemoval start(IProject project, String folderRel);
 
         /**
          * Waits for a removal and answers what the disk shows.
          *
          * @param projectName the owning project
          * @param folderRel the project-relative folder path
-         * @param family the family {@link #start} answered, or {@code null} when it scheduled nothing
-         * @return the cleanup outcome (removed / not found on disk / failed)
+         * @param removal what {@link #start} scheduled, or {@code null} when it scheduled nothing
+         * @return the cleanup outcome
          */
-        ResourceCleanup await(String projectName, String folderRel, String family);
+        ResourceCleanup await(String projectName, String folderRel, FolderRemoval removal);
     }
 
     /** The production {@link FormFolderCleanup}: a {@link WorkspaceJob} under the folder's delete rule. */
     static final class WorkspaceFormFolderCleanup implements FormFolderCleanup
     {
-        /** How long the calling thread waits for the removal before reporting it as not done. */
+        /** How long the calling thread waits for the removal before reporting it as still running. */
         private static final long WAIT_MS = 30_000L;
 
+        /** The form's content file; its stamp is what tells the deleted form's folder from a new one. */
+        private static final String FORM_FILE = "Form.form"; //$NON-NLS-1$
+
+        /** The modification stamp of the folder's {@code Form.form}, {@link IResource#NULL_STAMP} when absent. */
+        static long formStamp(IFolder folder)
+        {
+            return folder.getFile(new Path(FORM_FILE)).getModificationStamp();
+        }
+
         @Override
-        public String start(IProject project, String folderRel)
+        public FolderRemoval start(IProject project, String folderRel)
         {
             IFolder folder = project.getFolder(new Path(folderRel));
             if (!folder.exists())
             {
                 return null;
             }
-            String family = "delete_metadata form folder " + UUID.randomUUID(); //$NON-NLS-1$
+            FolderRemoval removal = new FolderRemoval(
+                "delete_metadata form folder " + UUID.randomUUID(), formStamp(folder)); //$NON-NLS-1$
             WorkspaceJob job = new WorkspaceJob("Remove " + folder.getFullPath()) //$NON-NLS-1$
             {
                 @Override
                 public IStatus runInWorkspace(IProgressMonitor monitor)
                 {
+                    // A queued create_metadata of a form with the same name can run between the delete
+                    // and this job, and its export may already have written the folder again: it is then
+                    // the new form's folder, and removing it would strip that form of its content.
+                    if (formStamp(folder) != removal.formStamp)
+                    {
+                        Activator.logInfo("delete_metadata: kept " + folder.getFullPath() //$NON-NLS-1$
+                            + ": its Form.form was written again after the form was deleted"); //$NON-NLS-1$
+                        return Status.OK_STATUS;
+                    }
                     removeResource(folder);
                     return Status.OK_STATUS;
                 }
@@ -4120,7 +4199,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 @Override
                 public boolean belongsTo(Object candidate)
                 {
-                    return family.equals(candidate);
+                    return removal.family.equals(candidate);
                 }
             };
             job.setRule(folder.getWorkspace().getRuleFactory().deleteRule(folder));
@@ -4134,40 +4213,81 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 Activator.logError("Failed to schedule the removal of " + folder.getFullPath() //$NON-NLS-1$
                     + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
             }
-            return family;
+            return removal;
         }
 
         @Override
-        public ResourceCleanup await(String projectName, String folderRel, String family)
+        public ResourceCleanup await(String projectName, String folderRel, FolderRemoval removal)
         {
-            if (family != null)
+            boolean running = false;
+            if (removal != null && Job.getJobManager().find(removal.family).length > 0)
             {
-                long deadline = System.currentTimeMillis() + WAIT_MS;
-                for (Job job : Job.getJobManager().find(family))
+                // A caller that holds a scheduling rule of its own (an in-process caller running in a job)
+                // would block the removal it joins until the wait ran out; it is told the removal is still
+                // running instead, and the job finishes once that rule is released.
+                if (Job.getJobManager().currentRule() == null)
                 {
-                    long left = deadline - System.currentTimeMillis();
-                    try
-                    {
-                        if (left <= 0 || !job.join(left, new NullProgressMonitor()))
-                        {
-                            break;
-                        }
-                    }
-                    catch (InterruptedException e)
-                    {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
+                    join(removal.family);
                 }
+                running = Job.getJobManager().find(removal.family).length > 0;
             }
             // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
             com.ditrix.edt.mcp.server.utils.ProjectContext context =
                 com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
-            if (!context.exists() || context.project().getFolder(new Path(folderRel)).exists())
+            if (!context.exists())
             {
                 return ResourceCleanup.FAILED;
             }
-            return family == null ? ResourceCleanup.NOT_FOUND : ResourceCleanup.REMOVED;
+            IFolder folder = context.project().getFolder(new Path(folderRel));
+            return outcome(removal, folder.exists(), running, folder.exists() ? formStamp(folder) : IResource.NULL_STAMP);
+        }
+
+        /**
+         * What a removal came to, from what the disk shows once the wait is over.
+         *
+         * @param removal what was scheduled, or {@code null} when the folder was not there to remove
+         * @param folderExists whether the folder is on disk now
+         * @param running whether the removal job has still not finished
+         * @param formStampNow the folder's {@code Form.form} stamp now
+         * @return the cleanup outcome
+         */
+        static ResourceCleanup outcome(FolderRemoval removal, boolean folderExists, boolean running,
+            long formStampNow)
+        {
+            if (!folderExists)
+            {
+                return removal == null ? ResourceCleanup.NOT_FOUND : ResourceCleanup.REMOVED;
+            }
+            if (removal == null)
+            {
+                return ResourceCleanup.FAILED;
+            }
+            if (running)
+            {
+                return ResourceCleanup.SCHEDULED;
+            }
+            return formStampNow != removal.formStamp ? ResourceCleanup.KEPT : ResourceCleanup.FAILED;
+        }
+
+        private static void join(String family)
+        {
+            long deadline = System.currentTimeMillis() + WAIT_MS;
+            for (Job job : Job.getJobManager().find(family))
+            {
+                long left = deadline - System.currentTimeMillis();
+                try
+                {
+                    if (left <= 0 || !job.join(left, new NullProgressMonitor()))
+                    {
+                        return;
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
         }
     }
 
@@ -4203,10 +4323,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return result;
         }
-        JsonElement removal = object.remove(KEY_FORM_FOLDER_REMOVAL);
-        String family = removal != null && removal.isJsonPrimitive() ? removal.getAsString() : null;
+        FolderRemoval removal = FolderRemoval.fromJson(object.remove(KEY_FORM_FOLDER_REMOVAL));
         ResourceCleanup outcome = folder.isJsonPrimitive()
-            ? cleanup.await(projectName, folder.getAsString(), family) : ResourceCleanup.FAILED;
+            ? cleanup.await(projectName, folder.getAsString(), removal) : ResourceCleanup.FAILED;
         String message = resultString(object, McpKeys.MESSAGE);
         object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + folderCleanupMessage(outcome)); //$NON-NLS-1$
         return GsonProvider.toJson(object);
