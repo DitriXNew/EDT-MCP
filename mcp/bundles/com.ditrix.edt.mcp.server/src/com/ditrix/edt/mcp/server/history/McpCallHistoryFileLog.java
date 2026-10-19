@@ -509,6 +509,12 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
             // join waits through interruption and restores the flag on return. File ownership
             // transfers only after the predecessor worker has finished all cleanup.
             previous.writerTerminated.join();
+            // terminated() runs in TIDYING; TERMINATED is published by the same thread right after
+            // it returns. Wait out that short step so the handoff keeps awaitTermination's guarantee.
+            while (!previous.writer.isTerminated())
+            {
+                Thread.yield();
+            }
         }
         predecessor = null;
     }
