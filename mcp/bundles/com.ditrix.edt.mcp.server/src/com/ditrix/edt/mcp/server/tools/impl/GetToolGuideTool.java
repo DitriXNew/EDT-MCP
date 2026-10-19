@@ -127,7 +127,7 @@ public class GetToolGuideTool implements IMcpTool
                 + "or omit query for the full guide.").toJson(); //$NON-NLS-1$
         }
 
-        if (query != null && query.strip().length() < 2)
+        if (query != null && query.strip().codePointCount(0, query.strip().length()) < 2)
         {
             return ToolResult.error("query must contain at least 2 characters. " //$NON-NLS-1$
                 + "Pass a longer literal search term or omit query for the full guide.").toJson(); //$NON-NLS-1$

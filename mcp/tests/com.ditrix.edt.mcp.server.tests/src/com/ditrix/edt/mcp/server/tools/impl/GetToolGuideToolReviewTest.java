@@ -299,4 +299,12 @@ public class GetToolGuideToolReviewTest
         assertTrue("At most 200 source code points and two clipping markers",
             snippet.codePointCount(0, snippet.length()) <= 202);
     }
+
+    @org.junit.Test
+    public void testOneSupplementaryCharacterQueryIsTooShort()
+    {
+        // A single emoji is one code point but two UTF-16 chars: it must not pass the 2-character minimum.
+        String message = error(execute(new ModifyMetadataTool(), "query", new String(Character.toChars(0x1F6AB))));
+        assertTrue(message, message.contains("query must contain at least 2 characters"));
+    }
 }
