@@ -1873,12 +1873,12 @@ public class GitToolTest
     @Test
     public void testEscapingRunsAfterRedactionSoASecondUrlsCredentialIsStillMasked()
     {
-        StringBuilder out = new StringBuilder();
+        GitTool.OutputBuffer out = new GitTool.OutputBuffer();
         // Built from the code point: a raw VT in the source would be invisible on review.
-        out.append("https://public/path").append((char)0x0B) //$NON-NLS-1$
+        out.text.append("https://public/path").append((char)0x0B) //$NON-NLS-1$
             .append("https://secret@host/repo"); //$NON-NLS-1$
 
-        GitTool.Capture captured = GitTool.capture(out, new boolean[1], true);
+        GitTool.Capture captured = GitTool.capture(out, true);
 
         assertFalse("the SECOND url's credential must still be masked - escaping before the " //$NON-NLS-1$
             + "redaction erases the boundary between the two urls and hides it from the scan. Got: " //$NON-NLS-1$
@@ -1899,10 +1899,10 @@ public class GitToolTest
     @Test
     public void testEscapingRunsAfterRedactionSoAControlByteDoesNotWidenTheCredentialScan()
     {
-        StringBuilder out = new StringBuilder();
-        out.append("https://plain.example").append((char)0x0B).append("user@else.com"); //$NON-NLS-1$ //$NON-NLS-2$
+        GitTool.OutputBuffer out = new GitTool.OutputBuffer();
+        out.text.append("https://plain.example").append((char)0x0B).append("user@else.com"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        GitTool.Capture captured = GitTool.capture(out, new boolean[1], true);
+        GitTool.Capture captured = GitTool.capture(out, true);
 
         assertTrue("the readable host must survive: the redaction's scan ends at the VT, and the " //$NON-NLS-1$
             + "escaping must not remove that boundary before the redaction has looked at it. Got: " //$NON-NLS-1$
@@ -1921,17 +1921,17 @@ public class GitToolTest
     @Test
     public void testEscapedOutputIsCutBackToTheBudgetAndFlagged()
     {
-        StringBuilder out = new StringBuilder();
-        while (out.length() < GitTool.MAX_OUTPUT_CHARS)
+        GitTool.OutputBuffer out = new GitTool.OutputBuffer();
+        while (out.text.length() < GitTool.MAX_OUTPUT_CHARS)
         {
-            out.append("ab").append((char)0x01); //$NON-NLS-1$
+            out.text.append("ab").append((char)0x01); //$NON-NLS-1$
         }
-        out.setLength(GitTool.MAX_OUTPUT_CHARS);
+        out.text.setLength(GitTool.MAX_OUTPUT_CHARS);
         // Positive control: without growth past the cap this test would pass on any implementation.
         assertTrue("escaping must grow this text past the cap, or the assertions below prove nothing", //$NON-NLS-1$
-            GitTool.escapeControlBytes(out.toString()).length() > GitTool.MAX_OUTPUT_CHARS);
+            GitTool.escapeControlBytes(out.text.toString()).length() > GitTool.MAX_OUTPUT_CHARS);
 
-        GitTool.Capture captured = GitTool.capture(out, new boolean[]{false}, true);
+        GitTool.Capture captured = GitTool.capture(out, true);
 
         assertTrue("the cap bounds what is sent, but " + captured.text.length() + " was returned", //$NON-NLS-1$ //$NON-NLS-2$
             captured.text.length() <= GitTool.MAX_OUTPUT_CHARS);
