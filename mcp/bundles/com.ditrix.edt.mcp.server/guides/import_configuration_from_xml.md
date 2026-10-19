@@ -9,8 +9,10 @@ Wraps the EDT "Import → Configuration from XML Files" action. It creates a bra
 
 - **importPath** (required): filesystem path to the DIRECTORY containing the XML files. The path is normalized to an absolute path before use. It must exist and must be a directory (a missing path or a file is rejected up front with a deterministic error). A path outside the EDT workspace root is allowed but FLAGGED (logged as a warning and noted in the response) — import from an external location is trusted-caller-only (see README Security & trust model).
 - **projectName** (required): name of the new EDT project to create. Must NOT already exist in the workspace, otherwise the call is rejected.
-- **projectNature** (optional): EDT project nature ID, e.g. `com._1c.g5.v8.dt.core.V8ConfigurationNature`. Pass an empty string (or omit) to let EDT auto-detect the nature from the source.
-- **xmlVersion** (optional): XML format version, e.g. `8.3.20`. Pass an empty string (or omit) to let EDT auto-detect.
+- **platformVersion** (optional): 1C:Enterprise platform version, e.g. `8.3.24`, passed to EDT as the new project's runtime version. Omit it or pass a blank string to derive the version from the XML dump.
+- **baseProjectName** (required for extension dumps, refused for main configurations): the existing, open configuration project the extension belongs to. Use `list_projects` to find it. Extensions and external-objects projects cannot be used as the base.
+- **projectNature** (optional): an assertion about the dump's EDT nature ID, never an override. Main configurations use `com._1c.g5.v8.dt.core.V8ConfigurationNature`; extensions use `com._1c.g5.v8.dt.core.V8ExtensionNature`. The tool checks `Configuration.xml` using the same `ObjectBelonging=Adopted` extension marker as EDT's CLI, and refuses a mismatch before importing. Omit it or pass a blank string to auto-detect.
+- **xmlVersion** (deprecated): synonym of `platformVersion`, not an XML format selector. Existing callers may keep using it; new calls should use `platformVersion`. If both are non-blank they must match after trimming, otherwise the call is refused. All optional string arguments are trimmed and blank values are treated as omitted.
 
 ## Examples
 
@@ -20,10 +22,16 @@ Minimal (auto-detect nature and version):
 {"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig"}
 ```
 
-Explicit nature and XML version:
+Explicit nature check and platform version:
 
 ```json
-{"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ConfigurationNature", "xmlVersion": "8.3.20"}
+{"importPath": "D:/dumps/MyConfig", "projectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ConfigurationNature", "platformVersion": "8.3.24"}
+```
+
+Extension linked to an open main configuration project:
+
+```json
+{"importPath": "D:/dumps/MyExtension", "projectName": "MyExtension", "baseProjectName": "MyConfig", "projectNature": "com._1c.g5.v8.dt.core.V8ExtensionNature"}
 ```
 
 ## Notes
@@ -40,6 +48,7 @@ Explicit nature and XML version:
 
 - **Project must be new.** If a workspace project with `projectName` already exists, the call is rejected early; pick a fresh name.
 - **Directory, not a file.** `importPath` must point at the directory of XML files, not at a single `.xml` file.
+- **Nature checks need a readable `Configuration.xml`.** A requested `projectNature` or `baseProjectName` is refused if that file is missing or unreadable; pass the root dump directory produced by `export_configuration_to_xml`. A mismatched `projectNature` must be corrected or omitted, rather than used to change the dump kind.
 - **Requires the CLI API plugin.** Needs the EDT plugin `com._1c.g5.v8.dt.cli.api`; if it is not installed the tool returns an error instead of importing.
 - **A big configuration takes minutes to start.** The 300-second wait is not a bound on the import (that has already finished when the wait starts) - it is only how long this one call watches EDT start the project before answering `state: importing`.
 - **Budget the client-side call timeout.** The import itself is unbounded on the platform side (the CLI API offers no cancellation), and the post-import start wait adds up to 300 seconds on top of it. On a large dump one call can therefore run for many minutes; a client with a shorter transport timeout will drop the answer while the import keeps going.

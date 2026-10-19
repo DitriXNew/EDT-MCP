@@ -8,7 +8,8 @@ It reads a directory of XML source files and creates a NEW EDT project in the
 workspace from them. The reverse of export_configuration_to_xml.
 
 Required params (JsonSchemaBuilder): importPath, projectName.
-Optional params: projectNature, xmlVersion (empty string -> null -> EDT auto-detect).
+Optional params: platformVersion, baseProjectName, projectNature (a dump-kind check),
+xmlVersion (deprecated platformVersion alias). Blank strings are treated as omitted.
 
 THE HAPPY PATH IS A REAL IMPORT (issue #647):
 This file used to say a real import could not be tested here, because it needs a
@@ -64,6 +65,8 @@ from harness import (
     assert_no_diff,
     settle_or_fail,
     e2e_test,
+    calls_aborted,
+    _workspace_dir,
     PROJECT,
     REPO_ROOT,
 )
@@ -296,3 +299,102 @@ def test_existence_check_precedes_directory_check():
     assert_not_contains(e, "is not a directory",
                         "a missing path must not surface the directory-kind error")
     assert_no_diff("a rejected call must not touch the fixture")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ISSUE #669: CLI version/base slots and the nature assertion
+# ──────────────────────────────────────────────────────────────────────────────
+_VERSION_PROJECT = "ZZImportXmlVersion669"
+_NATURE_PROJECT = "ZZImportXmlNature669"
+_CONFIGURATION_NATURE = "com._1c.g5.v8.dt.core.V8ConfigurationNature"
+_EXTENSION_NATURE = "com._1c.g5.v8.dt.core.V8ExtensionNature"
+
+
+@e2e_test(tool="import_configuration_from_xml", kind="action")
+def test_platform_version_reaches_project_manifest_without_a_base_project():
+    """The requested runtime reaches PROJECT.PMF; neither the nature nor a version becomes a base.
+
+    Request a runtime different from the fixture's 8.5.1, and pass the matching deprecated
+    alias too: the original bug puts that alias into the CLI base-project slot.
+    """
+    workspace = _workspace_dir()
+    assert workspace, "locate EDT's workspace before importing so the manifest can be read immediately"
+    manifest = os.path.join(workspace, _VERSION_PROJECT, "DT-INF", "PROJECT.PMF")
+    _ensure_absent(_VERSION_PROJECT)
+    dump_dir = tempfile.mkdtemp(prefix="edt_import_version_669_")
+    try:
+        ex = call("export_configuration_to_xml",
+                  {"projectName": PROJECT, "outputPath": dump_dir})
+        assert_ok(ex, "export the fixture for the CLI argument regression")
+        assert os.path.isfile(os.path.join(dump_dir, "Configuration.xml")), \
+            "export must produce the root XML file"
+
+        im = call("import_configuration_from_xml", {
+            "importPath": dump_dir,
+            "projectName": _VERSION_PROJECT,
+            "platformVersion": "8.3.27",
+            "xmlVersion": "8.3.27",
+            "projectNature": _CONFIGURATION_NATURE,
+        })
+        assert_ok(im, "import with an explicit platform version")
+        # One disk read, before another MCP call can give an early return time to catch up.
+        with open(manifest, encoding="utf-8-sig") as stream:
+            lines = stream.read().splitlines()
+        runtimes = [line.partition(":")[2].strip() for line in lines
+                    if line.startswith("Runtime-Version:")]
+        assert runtimes == ["8.3.27"], "platformVersion must be the manifest runtime: %r" % lines
+        assert not any(line.startswith("Base-Project:") for line in lines), \
+            "a main configuration import must have no Base-Project line: %r" % lines
+
+        settle_or_fail("the imported version-regression project")
+        projects = call("list_projects", {})
+        assert_ok(projects, "read back the imported project's state")
+        assert _project_state(projects.text, _VERSION_PROJECT) == "ready", projects.text
+    finally:
+        # A timed-out import may still be reading its dump; leave it alone for the operator.
+        if not calls_aborted():
+            _ensure_absent(_VERSION_PROJECT)
+            shutil.rmtree(dump_dir)
+    assert_no_diff("the version regression imports a separate project and only reads the fixture")
+
+
+@e2e_test(tool="import_configuration_from_xml", kind="action")
+def test_project_nature_mismatch_is_refused_before_project_creation():
+    """A main-configuration dump cannot be forced into an extension by projectNature."""
+    _ensure_absent(_NATURE_PROJECT)
+    dump_dir = tempfile.mkdtemp(prefix="edt_import_nature_669_")
+    try:
+        ex = call("export_configuration_to_xml",
+                  {"projectName": PROJECT, "outputPath": dump_dir})
+        assert_ok(ex, "export the fixture for the nature check")
+        result = call("import_configuration_from_xml", {
+            "importPath": dump_dir,
+            "projectName": _NATURE_PROJECT,
+            "projectNature": _EXTENSION_NATURE,
+        })
+        error = assert_error(result, "reject a nature that disagrees with Configuration.xml")
+        assert_error_quality(error, names=[_EXTENSION_NATURE], suggests=["Omit projectNature"],
+                             ctx="the nature refusal names the value and the fix")
+        assert_contains(error, "main configuration dump", "identify the actual dump kind")
+        projects = call("list_projects", {})
+        assert_ok(projects, "verify the refused import created no project")
+        assert _project_state(projects.text, _NATURE_PROJECT) is None, projects.text
+    finally:
+        if not calls_aborted():
+            _ensure_absent(_NATURE_PROJECT)
+            shutil.rmtree(dump_dir)
+    assert_no_diff("a refused nature check must not touch the fixture")
+
+
+@e2e_test(tool="import_configuration_from_xml", kind="action")
+def test_conflicting_platform_version_and_deprecated_alias_are_refused():
+    result = call("import_configuration_from_xml", {
+        "importPath": _EXISTING_DIR,
+        "projectName": _VERSION_PROJECT,
+        "platformVersion": "8.3.27",
+        "xmlVersion": "8.3.24",
+    })
+    error = assert_error(result, "conflicting version arguments")
+    assert_error_quality(error, names=["8.3.27", "8.3.24"], suggests=["Pass platformVersion only"],
+                         ctx="conflicting aliases identify both values and the canonical argument")
+    assert_no_diff("a refused version conflict must not touch the fixture")

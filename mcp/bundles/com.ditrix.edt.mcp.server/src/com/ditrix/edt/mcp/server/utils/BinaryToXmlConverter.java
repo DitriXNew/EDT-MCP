@@ -510,7 +510,7 @@ public final class BinaryToXmlConverter
      * @return whether it declares {@code ObjectBelonging=Adopted} (an extension), or {@code null}
      *     when it cannot be parsed
      */
-    static Boolean isExtensionDump(Path configurationXml)
+    public static Boolean isExtensionDump(Path configurationXml)
     {
         try
         {
