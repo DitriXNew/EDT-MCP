@@ -1602,16 +1602,26 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             return describeResolutionFailure(normalizedFqn, scope);
         }
+        // Exact resolution only: the routes this text points to (assignable: true, the owner's
+        // Type.Name, the package view) resolve exactly, so a yo/ye-only match must not be called existing.
         XdtoWriter.MemberRef xdtoRef = XdtoWriter.parseMemberRef(normalizedFqn);
-        if (xdtoRef != null && MetadataNodeResolver.resolveAddress(scope, xdtoRef.packageFqn, true) != null)
+        if (xdtoRef != null && MetadataNodeResolver.resolveAddress(scope, xdtoRef.packageFqn, false) != null)
         {
             // XDTO content is not an MdObject and has no assignable view. Parsing its address does
             // not establish that the member exists; the package's content view is where to check.
             return "This is an XDTO member address; read package '" + xdtoRef.packageFqn //$NON-NLS-1$
                 + "' to inspect its content."; //$NON-NLS-1$
         }
-        if (MetadataNodeResolver.isValidArity(normalizedFqn.split("\\.", -1).length) //$NON-NLS-1$
-            && MetadataNodeResolver.resolveAddress(scope, normalizedFqn, true) != null)
+        MdObject member = MetadataNodeResolver.isValidArity(normalizedFqn.split("\\.", -1).length) //$NON-NLS-1$
+            ? MetadataNodeResolver.resolveAddress(scope, normalizedFqn, false) : null;
+        if (member instanceof BasicTemplate && isRenderedTemplateType(((BasicTemplate)member).getTemplateType()))
+        {
+            // A text or DCS template has its own plain view; it only lands here when that view could
+            // not read the content (the BM model is not available yet), so the call is worth retrying.
+            return "This template's content could not be read right now (the project model is not ready); " //$NON-NLS-1$
+                + "retry the same call once the project is ready."; //$NON-NLS-1$
+        }
+        if (member != null)
         {
             String[] parts = normalizedFqn.split("\\.", 3); //$NON-NLS-1$
             String ownerFqn = parts[0] + "." + parts[1]; //$NON-NLS-1$
@@ -1620,6 +1630,12 @@ public class GetMetadataDetailsTool implements IMcpTool
                 + ownerFqn + "'."; //$NON-NLS-1$
         }
         return describeResolutionFailure(normalizedFqn, scope);
+    }
+
+    /** Template types the plain view renders itself (text and Data Composition Schema). */
+    private static boolean isRenderedTemplateType(TemplateType type)
+    {
+        return type == TemplateType.TEXT_DOCUMENT || type == TemplateType.DATA_COMPOSITION_SCHEMA;
     }
 
     /**

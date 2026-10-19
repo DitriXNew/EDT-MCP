@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
@@ -44,6 +45,11 @@ public class GetMetadataDetailsMemberAddressTest
     private static final String RU_CATALOG = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a";
     private static final String RU_ATTRIBUTE = "\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442";
     private static final String RU_SUBSYSTEM = "\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430";
+    private static final String RETRY = "This template's content could not be read right now "
+        + "(the project model is not ready); retry the same call once the project is ready.";
+    /** Silk spelled with ye (stored) and with yo (requested). */
+    private static final String SILK_YE = "\u0428\u0435\u043b\u043a";
+    private static final String SILK_YO = "\u0428\u0451\u043b\u043a";
     private static final String NOT_FOUND = "Object not found - use get_metadata_objects to list valid FQNs";
 
     private final Configuration config = named(MdClassFactory.eINSTANCE.createConfiguration(), "Cfg");
@@ -324,6 +330,39 @@ public class GetMetadataDetailsMemberAddressTest
         assertTrue(result.markdown(), result.failures.isEmpty());
         assertEquals(dcs + "\n---\n\n", result.body);
         verify(model, times(2)).executeAndRollback(any());
+    }
+
+    @Test
+    public void testUnreadTextTemplateAsksForARetryNotAssignable()
+    {
+        var notes = named(MdClassFactory.eINSTANCE.createTemplate(), "Notes");
+        notes.setTemplateType(TemplateType.TEXT_DOCUMENT);
+        goods.getTemplates().add(notes);
+        // Without a BM model the text view cannot read the content; the address is still a template.
+        Rendered result = render("Catalog.Goods.Template.Notes");
+        assertRefused(result);
+        assertEquals(RETRY, result.reason());
+    }
+
+    @Test
+    public void testUnreadDcsTemplateAsksForARetryNotAssignable()
+    {
+        var schema = named(MdClassFactory.eINSTANCE.createTemplate(), "Layout");
+        schema.setTemplateType(TemplateType.DATA_COMPOSITION_SCHEMA);
+        goods.getTemplates().add(schema);
+        Rendered result = render("Catalog.Goods.Template.Layout");
+        assertRefused(result);
+        assertEquals(RETRY, result.reason());
+    }
+
+    @Test
+    public void testYoSpelledMemberIsNotCalledExisting()
+    {
+        // Stored with ye; the assignable and owner routes resolve exactly, so a yo spelling of the
+        // member is reported as missing rather than sent to a route that would not find it.
+        goods.getAttributes().add(named(MdClassFactory.eINSTANCE.createCatalogAttribute(), SILK_YE));
+        assertMember(render("Catalog.Goods.Attribute." + SILK_YE), "Catalog.Goods");
+        assertMissing(render("Catalog.Goods.Attribute." + SILK_YO));
     }
 
     private void mockTemplate(String name)
