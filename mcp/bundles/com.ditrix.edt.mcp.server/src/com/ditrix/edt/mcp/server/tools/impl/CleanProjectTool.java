@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 import java.util.function.Function;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -53,6 +54,9 @@ public class CleanProjectTool implements IMcpTool
 
     /** Default timeout for waiting project lifecycle restart (3 minutes) */
     private static final long DEFAULT_LIFECYCLE_TIMEOUT_MS = 3L * 60 * 1000;
+
+    /** Shared by all calls; held by the recovery worker until its platform work actually ends. */
+    private static final ReentrantLock RECOVERY_LOCK = new ReentrantLock();
 
     /** Input key: bound on the clean-build phase, in seconds. */
     static final String KEY_TIMEOUT = "timeout"; //$NON-NLS-1$
@@ -279,7 +283,7 @@ public class CleanProjectTool implements IMcpTool
                     String recoveryNote;
                     if (restartJobsFinished)
                     {
-                        recoveryNote = recover(recoverable, cleanTimeoutMs, support);
+                        recoveryNote = recover(recoverable, cleanTimeoutMs, support, failure);
                     }
                     else
                     {
@@ -328,27 +332,24 @@ public class CleanProjectTool implements IMcpTool
     }
 
     /** ONE bounded recovery pass; a broken sibling must not prevent the others being started. */
-    private static String recover(List<ProjectCleanInfo> projects, long timeoutMs, RestartSupport support)
+    private static String recover(List<ProjectCleanInfo> projects, long timeoutMs, RestartSupport support,
+        RestartJobFailureSignal failure)
     {
         if (projects.isEmpty())
         {
             return ""; //$NON-NLS-1$
         }
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-        AtomicReference<Collection<IDtProject>> issued = new AtomicReference<>(Collections.emptyList());
+        AtomicReference<String> admissionNote = new AtomicReference<>(""); //$NON-NLS-1$
         BoundedJob.Result result = BoundedJob.run(NAME + ": recover dependent projects", timeoutMs, //$NON-NLS-1$
-            monitor -> issued.set(support.recover(projects, monitor)));
+            monitor -> admissionNote.set(recoverWithAdmission(projects, deadline, monitor, support, failure)));
         if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null)
         {
-            for (IDtProject project : issued.get())
+            if (!admissionNote.get().isEmpty())
             {
-                long remaining = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
-                if (!support.isStarted(project))
-                {
-                    support.awaitStarted(project, remaining);
-                }
+                Activator.logWarning(admissionNote.get());
             }
-            return ""; //$NON-NLS-1$
+            return admissionNote.get();
         }
         boolean mayStillRun = result.getOutcome() == BoundedJob.Outcome.TIMED_OUT
             || result.getOutcome() == BoundedJob.Outcome.INTERRUPTED;
@@ -358,6 +359,60 @@ public class CleanProjectTool implements IMcpTool
             + " Check list_projects before retrying."; //$NON-NLS-1$
         Activator.logWarning(note);
         return note;
+    }
+
+    /**
+     * Admit each single-project start using live state under our process-wide recovery lock.
+     * EDT's restart jobs have no scheduling rule to share with recovery, so a platform restart
+     * can still be scheduled after the final pending-job check.
+     */
+    private static String recoverWithAdmission(List<ProjectCleanInfo> projects, long deadline,
+        IProgressMonitor monitor, RestartSupport support, RestartJobFailureSignal failure) throws InterruptedException
+    {
+        if (!RECOVERY_LOCK.tryLock(Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS))
+        {
+            return " Recovery was not attempted because another clean_project recovery is still running. " //$NON-NLS-1$
+                + "Check list_projects before retrying."; //$NON-NLS-1$
+        }
+        try
+        {
+            for (ProjectCleanInfo info : projects)
+            {
+                if (monitor.isCanceled() || System.nanoTime() >= deadline)
+                {
+                    break;
+                }
+                IProject project = info.project;
+                // Both the candidate snapshot and the earlier restart-job drain can be stale.
+                if (project == null || !project.exists() || !project.isOpen() || support.isStarted(info.dtProject))
+                {
+                    continue;
+                }
+                if (failure.hasPendingRestartJobs())
+                {
+                    return " Recovery was not attempted for remaining dependent projects because EDT restart " //$NON-NLS-1$
+                        + "jobs became pending before a recovery start. Check list_projects before retrying."; //$NON-NLS-1$
+                }
+                if (monitor.isCanceled() || System.nanoTime() >= deadline)
+                {
+                    break;
+                }
+                for (IDtProject issued : support.recover(Collections.singletonList(info), monitor))
+                {
+                    long remaining = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                    if (!support.isStarted(issued))
+                    {
+                        support.awaitStarted(issued, remaining);
+                    }
+                }
+            }
+            return ""; //$NON-NLS-1$
+        }
+        finally
+        {
+            // A timed-out caller cannot release a lock owned by work still running in EDT.
+            RECOVERY_LOCK.unlock();
+        }
     }
 
     private static List<RestartProject> notStarted(List<RestartProject> projects, RestartSupport support)
