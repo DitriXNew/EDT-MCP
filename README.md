@@ -96,17 +96,17 @@ As well, we can also manually check via **Help → About → Installation Detail
 
 ### Required JVM flag for form screenshots
 
-The `get_form_screenshot` and `get_form_layout_snapshot` tools need EDT to be launched with the following JVM flag:
+On **Windows**, `get_form_screenshot` needs EDT launched with:
 
 ```
 -DnativeFormBufferedLayoutRender=true
 ```
 
-**Without it**, both tools return blank output (gray PNG / empty `elements` list).
+`get_form_layout_snapshot` does not need this flag. Linux and macOS already use buffered native rendering, so the flag changes nothing there.
 
-**Why:** EDT's `NativeRenderService` reads `nativeFormBufferedLayoutRender` once at class-load time. If it was unset at JVM startup, the singleton `HippoLayoutService` is constructed without its offscreen buffer handler, the C++ form renderer never writes captureable pixels back to Java, and the screenshot helper falls through to an SWT `Control.print()` of the native window — which on Windows produces a gray rectangle. Setting the flag at runtime via reflection does not help because the singleton has already been built.
+On Windows, enabling it switches the human form designer to offscreen-image mode. EDT builds the buffer path as `<java.io.tmpdir>dtgraphics-form.bin`, without inserting a separator. If EDT cannot create that file, the designer turns **gray** and screenshots fail. Even with a usable buffer path, this mode can distort the designer on a scaled display: elements are drawn larger, and a click in the designer selects a different element in the element tree. Add the flag only while you need form screenshots, and remove it for everyday designer work.
 
-**How to add it (persistent, recommended):**
+**How to add it:**
 
 1. Close EDT.
 2. Open `1cedt.ini` (next to `1cedt.exe`, e.g. `C:\Program Files\1C\1CE\components\1c-edt-2025.2.6+4-x86_64\1cedt.ini`).
@@ -123,9 +123,7 @@ The `get_form_screenshot` and `get_form_layout_snapshot` tools need EDT to be la
 "<path-to-EDT>\1cedt.exe" -data "<workspace>" -vmargs -DnativeFormBufferedLayoutRender=true
 ```
 
-The same flag is also recommended for production EDT use — it enables the buffered native renderer that EDT itself benefits from.
-
-If your screenshots still come back blank after adding the flag, verify with `-vmargs` actually appears before it in `1cedt.ini` (Eclipse stops parsing `-vmargs` block once it hits a non-`-D` line) and that EDT was fully restarted.
+If the designer or screenshot is blank or gray, check the EDT log for `AccessDeniedException` on `dtgraphics-form.bin`. A typical cause is `-Djava.io.tmpdir=C:\edt_tmp` without a trailing separator: EDT tries `C:\edt_tmpdtgraphics-form.bin`. Change the line to `-Djava.io.tmpdir=C:\edt_tmp\` and fully restart EDT. Also verify that `-vmargs` precedes the JVM options. If nothing helps, remove the buffered-render flag and restart EDT.
 
 ### Configuration
 
@@ -599,8 +597,8 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back… |
-| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes… |
+| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot'). |
+| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image… |
 | [`get_template_screenshot`](docs/tools/get_template_screenshot.md) | Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot'). |
 | [`validate_form_model`](docs/tools/validate_form_model.md) | Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no proce… |
 

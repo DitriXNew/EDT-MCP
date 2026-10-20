@@ -1,6 +1,6 @@
 # get_form_screenshot
 
-Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back BLANK instead of failing, so an empty screenshot means the flag is missing, not that the call was wrong. Parameters and examples: get_tool_guide('get_form_screenshot').
+Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image can also mean the offscreen buffer is unavailable. Parameters and examples: get_tool_guide('get_form_screenshot').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -18,8 +18,12 @@ Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders 
 - If you need element positions/sizes as DATA (bounds, types, properties) rather than a picture, use `get_form_layout_snapshot` instead.
 - To inspect the declarative form definition, read the `.form` model; this tool is only the rendered bitmap.
 
-## Required JVM flag (read this first)
-EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.ini` `-vmargs` section. Without it the offscreen layout handler is never constructed and the screenshot comes back **blank/empty**. A blank image almost always means the flag is missing - it is NOT a bad call or a code bug, so do not retry or reshape the arguments to "fix" it; add the flag and relaunch EDT.
+## Buffered rendering (read this first)
+On **Windows**, launch EDT with `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`, then fully restart EDT. Linux and macOS already use buffered native rendering; this flag changes nothing there. `get_form_layout_snapshot` does not need it.
+
+On Windows, buffered mode also switches the human designer to offscreen images: if EDT cannot create `<java.io.tmpdir>dtgraphics-form.bin`, it paints nothing and the designer turns **gray**. Blank or gray output can mean either a missing flag or an unusable buffer path. Check the EDT log for `AccessDeniedException` on `dtgraphics-form.bin`, possibly followed by `NoClassDefFoundError: org/eclipse/core/runtime/Plugin`. EDT concatenates the directory and filename without a separator: change `-Djava.io.tmpdir=C:\edt_tmp` to `-Djava.io.tmpdir=C:\edt_tmp\` and restart EDT. If nothing helps, remove the buffered-render flag and restart EDT. Even with a usable buffer path, buffered mode can distort the human designer on a scaled Windows display (larger elements, clicks selecting a different element), so tell the user the flag is for screenshot sessions, not for everyday designer work.
+
+The screenshot path attempts to force buffered mode at runtime. This can affect the human designer too and does not guarantee a usable buffer; it is not a substitute for the launch configuration.
 
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
@@ -40,7 +44,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 - Force refresh first: `{projectName: "MyProj", formPath: "CommonForm.MyForm", refresh: true}`.
 
 ## Notes & gotchas
-- Blank image => the `-DnativeFormBufferedLayoutRender=true` flag is missing (see above), not a failure of this call.
+- Blank or gray image: check both the Windows launch flag and the buffer path (see above).
 - `formPath` without `projectName` is rejected before any rendering.
 - After opening a form the tool lets the UI settle briefly; if the page is still loading you may get "Form editor opened but WYSIWYG page is not available" - retry.
 - Needs a live workbench Display and runs on the UI thread; not available headless.
