@@ -1,6 +1,6 @@
 # get_translation_project_info
 
-Return LanguageTool metadata for a project: the translation storages declared on it and the available translation provider IDs. Use it to check whether a dictionary storage is attached before translating; an empty storages list means none is attached yet (set up manually in EDT). Requires EDT with LanguageTool installed. Full parameters and examples: call get_tool_guide('get_translation_project_info').
+Inspect the translation setup of an EDT project. Parameters and examples: get_tool_guide('get_translation_project_info').
 
 ## Parameters
 | Parameter | Required | Type | Description |

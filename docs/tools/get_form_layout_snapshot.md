@@ -1,6 +1,6 @@
 # get_form_layout_snapshot
 
-Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, display properties) as text; use it to inspect or compare what a form actually renders. Per-element bounds require EDT's native form layout rendering to be off; the buffered screenshot flag is unrelated. Full parameters and examples: call get_tool_guide('get_form_layout_snapshot').
+Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back BLANK rather than failing, so an empty snapshot means the flag is missing, not that the form has no elements. Parameters and examples: get_tool_guide('get_form_layout_snapshot').
 
 ## Parameters
 | Parameter | Required | Type | Description |

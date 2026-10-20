@@ -1,6 +1,6 @@
 # build_external_objects
 
-Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL of them when objectName is omitted. Requires an associated infobase + a resolvable 1C runtime (like update_database): if missing, set it up with create_infobase / set_infobase_credentials. Full parameters and examples: call get_tool_guide('build_external_objects').
+Compile external 1C data processors and reports into deployable files. NOT self-contained: the project needs an associated infobase AND a resolvable 1C runtime - without either the call fails with a setup error, not a compile error (see create_infobase / set_infobase_credentials). Parameters and examples: get_tool_guide('build_external_objects').
 
 ## Parameters
 | Parameter | Required | Type | Description |

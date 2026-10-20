@@ -1,6 +1,6 @@
 # get_mcp_history
 
-Return the recorded MCP call history (this server's in-memory ring of request/response exchanges) so you can introspect your OWN traffic: which tools you called, how long they took, which failed, and what has been filling your context. Read-only (a snapshot; never mutates anything). Filters (AND): tool (substring over the tool name / method), status (all|error|ok), minDurationMs, sinceMs/untilMs (half-open epoch-ms window); newest first, capped by limit. Records are metadata only by default; set includeBodies for the raw payloads (may carry infobase data), or includeStats for the aggregated per-tool context-usage totals. Full parameters and examples: call get_tool_guide('get_mcp_history').
+Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. Parameters and examples: get_tool_guide('get_mcp_history').
 
 ## Parameters
 | Parameter | Required | Type | Description |

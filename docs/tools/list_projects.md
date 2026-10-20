@@ -1,6 +1,6 @@
 # list_projects
 
-List all workspace projects with properties (name, path, type, natures). format='md' (default) returns the human Markdown table; format='json' returns the machine-readable project list in structuredContent.
+Discover projects available in the EDT workspace. Parameters and examples: get_tool_guide('list_projects').
 
 ## Parameters
 | Parameter | Required | Type | Description |

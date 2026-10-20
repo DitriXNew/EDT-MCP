@@ -1,6 +1,6 @@
 # get_configuration_properties
 
-Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.)
+Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties').
 
 ## Parameters
 | Parameter | Required | Type | Description |

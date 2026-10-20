@@ -1,6 +1,6 @@
 # apply_quick_fix
 
-Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless counterpart of the 'Quick Fix' action in the problems view. Address the marker by the locator get_project_errors prints: its Check code (+ Module path + Line to narrow); its 'Fix registered' column flags rows whose CHECK TYPE has one (not a guarantee for that exact marker - this tool reports when none is applicable). When the locator matches several markers (or the fix has several variants) the error lists them, each with its location, and you re-call with index / variant. Full parameters and examples: call get_tool_guide('apply_quick_fix').
+Apply an EDT quick fix to a validation problem. Parameters and examples: get_tool_guide('apply_quick_fix').
 
 ## Parameters
 | Parameter | Required | Type | Description |

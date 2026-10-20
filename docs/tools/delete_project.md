@@ -1,6 +1,6 @@
 # delete_project
 
-Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without confirm to preview what would be removed (no change), then confirm=true to delete. The inverse of import_configuration_from_xml. Full parameters: call get_tool_guide('delete_project').
+Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('delete_project').
 
 ## Parameters
 | Parameter | Required | Type | Description |

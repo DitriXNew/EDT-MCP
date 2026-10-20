@@ -1,6 +1,6 @@
 # create_git_branch
 
-Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's context. Rejects a name that already exists (use switch_git_branch instead). Full parameters and examples: call get_tool_guide('create_git_branch').
+Start isolated work on a new Git branch for an EDT project. Parameters and examples: get_tool_guide('create_git_branch').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -8,7 +8,7 @@ Create a new local git branch, optionally check it out, and optionally attach an
 | projectName | yes | string | EDT project whose git repository to branch (required). |
 | branch | yes | string | New branch's short name (required); must not already exist. |
 | startPoint | — | string | Existing branch, ref, or commit to start the new branch from. Optional; defaults to the current HEAD. |
-| checkout | — | boolean | Check out the new branch immediately after creating it (bounded background Job, up to 120 s). Default false. |
+| checkout | — | boolean | Check out the new branch immediately after creating it (bounded background Job, up to 120 s). Default FALSE - the branch is created and the working tree STAYS on the current branch, so later edits land there unless you pass true. |
 | applicationId | — | string | Optional: application id from get_applications to attach to the new branch's context (the base is FOR this branch). |
 | setDefault | — | boolean | Only with applicationId: also make it the DEFAULT infobase for the new branch's context. Default false. |
 

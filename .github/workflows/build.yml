@@ -26,6 +26,9 @@ jobs:
       - name: Validate business-project skills
         run: python3 docs/validate_agent_skills.py
 
+      - name: Tool documentation generator tests
+        run: python3 -m unittest discover -s docs/tests -p "test_*.py" -v
+
       # The e2e RUNNER's own contracts - isolation bookkeeping, the reset decision, fixture
       # hygiene. They need no EDT and no server, so they run here rather than inside the
       # hour-long e2e job, where a harness bug surfaces as a confusing suite failure instead

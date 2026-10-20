@@ -1,6 +1,6 @@
 # adopt_metadata_object
 
-Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. Addressed by the base object FQN; pass extensionProjectName when more than one extension extends the configuration. Adopting BSL code/methods is NOT covered. Full parameters and examples: call get_tool_guide('adopt_metadata_object').
+Add a base-configuration object or member to an extension for customization. Parameters and examples: get_tool_guide('adopt_metadata_object').
 
 ## Parameters
 | Parameter | Required | Type | Description |

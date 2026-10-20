@@ -1,6 +1,6 @@
 # step
 
-Step a suspended debug thread. kind ∈ {over, into, out}. Blocks until the next SUSPEND event (or timeout) and returns the new frame snapshot.
+Advance paused debug execution one step. Parameters and examples: get_tool_guide('step').
 
 ## Parameters
 | Parameter | Required | Type | Description |

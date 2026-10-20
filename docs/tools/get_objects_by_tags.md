@@ -1,6 +1,6 @@
 # get_objects_by_tags
 
-Get metadata objects filtered by tags. Returns objects that have any of the specified tags, including tag descriptions and object FQNs.
+Find metadata objects organized under selected tags. Parameters and examples: get_tool_guide('get_objects_by_tags').
 
 ## Parameters
 | Parameter | Required | Type | Description |
