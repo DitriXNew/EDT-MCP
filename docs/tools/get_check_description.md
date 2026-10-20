@@ -1,6 +1,6 @@
 # get_check_description
 
-Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id OR the short UID code shown by get_project_errors (pass projectName so the UID can be resolved). The descriptions ship with the plugin; the check-descriptions folder in MCP preferences is an optional per-file override.
+Understand an EDT validation rule and how to fix its diagnostic. Parameters and examples: get_tool_guide('get_check_description').
 
 ## Parameters
 | Parameter | Required | Type | Description |

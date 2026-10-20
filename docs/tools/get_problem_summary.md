@@ -1,6 +1,6 @@
 # get_problem_summary
 
-Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals only; for the detailed per-marker list call get_project_errors.
+See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary').
 
 ## Parameters
 | Parameter | Required | Type | Description |

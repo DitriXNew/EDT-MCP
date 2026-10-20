@@ -32,7 +32,7 @@ Creates one metadata node addressed by a 1C full-name FQN, then force-exports th
 ## Supported kinds
 - Top-level types: any configuration object type (Catalog, Document, Information/Accumulation/Accounting/CalculationRegister, Enum, ChartOfAccounts / ChartOfCharacteristicTypes / ChartOfCalculationTypes, ExchangePlan, BusinessProcess, Task, Subsystem, HTTPService, WebService, Constant, CommonForm, CommonCommand, Report, DataProcessor, CommonModule, ...). A type the EDT factory cannot instantiate is rejected with a clear error.
 - Member kinds: Attribute, TabularSection, Dimension, Resource, EnumValue, Command, plus the type-specific children AccountingFlag / ExtDimensionAccountingFlag (ChartOfAccounts), AddressingAttribute (Task) and Column (DocumentJournal) - each on the owner types that declare them.
-- Template (`Catalog.X.Template.T`) and Recalculation (`CalculationRegister.R.Recalculation.Rc`) are created with their default content wired (a Recalculation's produced types; a Template defaults to the SpreadsheetDocument type).
+- Template (`Catalog.X.Template.T`) and Recalculation (`CalculationRegister.R.Recalculation.Rc`) are created with their default content wired (a Recalculation's produced types; a Template defaults to SpreadsheetDocument; set `properties:[{name:"templateType", value:"TextDocument"}]` for text or `value:"SpreadsheetDocument"` for cells, using English or Russian type spellings from EDT).
 - Service children: an HTTPService URLTemplate and its Method (`HTTPService.S.URLTemplate.T.Method.M`), and a WebService Operation and its Parameter (`WebService.S.Operation.O.Parameter.P`).
 - Members of a NESTED object are supported too, e.g. a tabular-section attribute `Catalog.X.TabularSection.T.Attribute.A` (the owner is re-navigated by name inside the write transaction).
 - NESTED SUBSYSTEM (`Subsystem.Parent.Subsystem.Child`, any depth; every type token bilingual and independently spellable, e.g. `Подсистема.Продажи.Subsystem.Orders`). The whole PARENT chain must already exist - a missing parent is refused naming the chain that is missing, never auto-created. Despite the member-shaped address a nested subsystem is a TOP object of its own: EDT stores it in `Subsystems/<Parent>/Subsystems/<Child>/<Child>.mdo` with a `parentSubsystem` back-reference, and the parent registers it in its `<subsystems>` list - so BOTH `.mdo` files are force-exported, and the `Configuration.mdo` (which lists only top-level subsystems) is untouched. Takes the usual `synonym` (with `language`) and `comment`. The result reports the CANONICAL FQN, built from the parent's own stored spelling - so a request typed with Russian tokens or a differently-cased parent comes back as `Subsystem.<Parent>.Subsystem.<Child>`.
@@ -74,6 +74,12 @@ An account chart nests accounts through an account HIERARCHY. There is NO folder
 
 `ChartOfCalculationTypes` / `ChartOfAccounts` predefined items are addressed and created by the same `...Predefined.<Item>` grammar as a Catalog item; only the property set above differs.
 
+
+### Platform collection data paths
+A Field may bind to a nested platform property when EDT's own form data tree resolves it, including `K.Settings.Filter.Use`, `.LeftValue`, `.ComparisonType`, `.RightValue`, `.Presentation`, `.ViewMode`, `K.Settings.Order.Field`, `K.Settings.Selection.Field`, and `K.Settings.ConditionalAppearance[0].Filter.Use` for a `DataCompositionSettingsComposer` attribute `K`. English and Russian platform segment names are accepted when EDT resolves them; new platform paths are stored with English segments and keep their requested `[0]` suffixes. The attribute's programmatic Name is preserved.
+
+A Table on a resolved platform collection such as `K.Settings.Filter` starts without columns: there is no LineNumber property. Add each desired column as a Field with `properties:[{name:'parent', value:'Filter'}, {name:'dataPath', value:'K.Settings.Filter.Use'}]`. Existing tabular-section, dynamic-list and ValueTable/ValueTree bindings keep their column rules. An unresolved path is refused with its first unresolved segment; an unavailable data-tree service is a readiness error, so retry when EDT's model is ready.
+
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node to create.
@@ -110,6 +116,12 @@ The kind + modifiers map to ONE canonical 8-flag combination; an illegal mix (e.
 ### XDTOPackage namespace (top-object `XDTOPackage` only; create-time-only)
 - `targetNamespace`: the package URI namespace. A non-empty namespace is required for the package to be valid; defaults to `http://example.org/<Name>` when omitted. The success payload echoes the written `targetNamespace`.
 
+### Role rights model (top-object `Role` only)
+A `Role` is created together with its own rights model, exported beside the role as
+`src/Roles/<Name>/Rights.rights` and carrying the three role properties at their defaults. That
+file is what makes the role valid for the configurator: without it an incremental configuration
+load fails on the whole configuration, not just on the role. No follow-up call is needed to make
+a created role usable - `modify_metadata` is only for granting rights or changing the properties.
 ### Edition-gated top types
 `Bot`, `WebSocketClient` and `IntegrationService` are created only when the loaded platform version exposes their Configuration collection. On a build that lacks the collection feature the create returns a clear "Could not resolve configuration collection" error rather than crashing (the feature is probed on the live `Configuration` EClass, never assumed). On the 2026.1 target platform all three resolve and create.
 
@@ -171,10 +183,12 @@ call fails with "Cannot resolve a create target".
 A nested XDTO property is addressed through the full member chain:
 `XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>`.
 
+## Vendor support
+A configuration on vendor support can lock objects. A new top-level object needs the configuration to allow changes; a new member needs its owning object (for a form member, the form) to allow changes. Otherwise the call is refused before anything is created. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support: EDT applies support only to a configuration's own (native) root, never inside an extension, which is why an extension is the way to change a supported configuration.
+
 ## Template content types
 
 `templateType` is accepted at creation only for a common or owned template. Supported types are TextDocument and SpreadsheetDocument (including their Russian spellings). Other types, including DataCompositionSchema and binary templates, are refused. Creation initializes the same external content as the EDT wizard: an empty `Templates/<Name>/Template.txt` with a FileAwareTextDocument proxy, or a canonical spreadsheet resource. Use `modify_metadata` with `template:{text:"..."}` to fill a TextDocument; read its text and `contentHash` with `get_metadata_details`.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*
-

@@ -1,6 +1,6 @@
 # rename_metadata_object
 
-Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column), cascading the change across the references EDT resolves for it in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').
+Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference the refactoring cannot resolve (a dynamically built name) is left pointing at the old name. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. Parameters and examples: get_tool_guide('rename_metadata_object').
 
 ## Parameters
 | Parameter | Required | Type | Description |

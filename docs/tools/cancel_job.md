@@ -1,6 +1,6 @@
 # cancel_job
 
-Preview or cancel a background job by jobId. Destructive: omitting confirm or passing confirm=false only describes the owning tool, state, and progress; confirm=true cancels uncommitted work, or invokes an owning tool's declared destructive cancellation capability. Committed jobs without that capability remain in flight. Full parameters and examples: call get_tool_guide('cancel_job').
+Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT confirm to see the owning tool, state and progress, then again with confirm=true to cancel. Cancellation is not guaranteed - a committed job whose owner declares no destructive stop stays in flight. Parameters and examples: get_tool_guide('cancel_job').
 
 ## Parameters
 | Parameter | Required | Type | Description |

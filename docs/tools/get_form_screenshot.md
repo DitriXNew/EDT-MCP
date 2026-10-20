@@ -1,6 +1,6 @@
 # get_form_screenshot
 
-Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the form automatically or omit it to shoot the active editor. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the image is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_screenshot').
+Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back BLANK instead of failing, so an empty screenshot means the flag is missing, not that the call was wrong. Parameters and examples: get_tool_guide('get_form_screenshot').
 
 ## Parameters
 | Parameter | Required | Type | Description |

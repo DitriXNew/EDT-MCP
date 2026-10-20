@@ -1,6 +1,6 @@
 # export_common_picture
 
-Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolves the picture by FQN 'CommonPicture.<Name>' (Russian token ОбщаяКартинка accepted). Omit 'variant' to get the inventory only (no image bytes); pass variant='best'/'svg'/an exact variant name to also get that variant decoded to PNG as base64. SVG variants are rasterized to PNG. Full parameters and examples: call get_tool_guide('export_common_picture').
+Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture').
 
 ## Parameters
 | Parameter | Required | Type | Description |

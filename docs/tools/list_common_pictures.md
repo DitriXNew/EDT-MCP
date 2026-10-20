@@ -1,6 +1,6 @@
 # list_common_pictures
 
-List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, picture direction, byte size) as a Markdown overview. Use it to see which pictures exist and to spot mixed-icon mistakes; no image bytes are returned - for the PNG of one picture use export_common_picture. Full parameters and examples: call get_tool_guide('list_common_pictures').
+Inventory common pictures available in a 1C configuration. Parameters and examples: get_tool_guide('list_common_pictures').
 
 ## Parameters
 | Parameter | Required | Type | Description |

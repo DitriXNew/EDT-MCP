@@ -1,6 +1,6 @@
 # list_configurations
 
-List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before launch / run_yaxunit_tests / debug_yaxunit_tests / update_database: use the returned 'name' as their launchConfigurationName. Use type='attach' for server-side debug setups, type='client' for 1C:Enterprise client configs, or type='all' (default). Full parameters and examples: call get_tool_guide('list_configurations').
+Discover EDT runtime and server-side launch configurations. Parameters and examples: get_tool_guide('list_configurations').
 
 ## Parameters
 | Parameter | Required | Type | Description |

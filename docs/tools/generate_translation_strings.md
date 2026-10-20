@@ -1,6 +1,6 @@
 # generate_translation_strings
 
-Generate translation strings (.lstr/.trans/.dict) for a configuration project: scans translatable features and writes the resulting keys into the project's storages (EDT menu Translation -> Generate translation strings). Run on the configuration project (V8ConfigurationNature), not a dictionary storage project; requires LanguageTool installed in EDT. Full parameters and examples: call get_tool_guide('generate_translation_strings').
+Collect translatable strings of a configuration and WRITE the generated keys into the project's translation storage (.lstr/.trans/.dict; storageId, default 'edit:default'). This changes project files - it is not a read-only scan. Run it on the configuration project (V8ConfigurationNature), not a dictionary storage project; requires LanguageTool installed in EDT. Parameters and examples: get_tool_guide('generate_translation_strings').
 
 ## Parameters
 | Parameter | Required | Type | Description |

@@ -1,6 +1,6 @@
 # get_event_log
 
-Read a 1C infobase event log WITHOUT a running 1C session by parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp partitions). High diagnostic value: errors, user actions, posting, authentication. Locate the log by projectName (+ optional applicationId from get_applications for a FILE infobase), or pass logDir directly for an offline copy or a SERVER-mode infobase. Filters: from/to period, user, event, eventContains, severity, commentContains, metadataContains, session; paginated (limit/offset/order). Returns infobase PII (user names, data presentations). Full parameters and examples: call get_tool_guide('get_event_log').
+Investigate infobase activity and errors through its event log. Reads the LEGACY text format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is rejected, so switch the log format in 1C or use another source. A SERVER (client/server) infobase is NOT resolvable from projectName/applicationId - its cluster srvinfo path is not model-derivable, so pass an absolute logDir instead. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').
 
 ## Parameters
 | Parameter | Required | Type | Description |

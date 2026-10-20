@@ -1,6 +1,6 @@
 # create_launch_config
 
-Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by launch/run_yaxunit_tests — there is no separate debug-config type). Use delete_launch_config to remove it. Full parameters and examples: call get_tool_guide('create_launch_config').
+Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config').
 
 ## Parameters
 | Parameter | Required | Type | Description |
