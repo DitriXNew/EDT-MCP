@@ -17,6 +17,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
 import com.ditrix.edt.mcp.server.utils.FormPageSwitch;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 
 /**
  * Tool to capture a screenshot of a form WYSIWYG editor as PNG.
@@ -45,9 +47,8 @@ public class GetFormScreenshotTool implements IMcpTool
     public String getDescription()
     {
         return "Visually inspect an EDT form as rendered by the designer. Requires EDT launched " //$NON-NLS-1$
-            + "with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back " //$NON-NLS-1$
-            + "BLANK instead of failing, so an empty screenshot means the flag is missing, not " //$NON-NLS-1$
-            + "that the call was wrong. Parameters and examples: " //$NON-NLS-1$
+            + "with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image can " //$NON-NLS-1$
+            + "also mean the offscreen buffer is unavailable. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
     }
 
@@ -275,8 +276,8 @@ public class GetFormScreenshotTool implements IMcpTool
 
     /**
      * Applies the render gate after {@code ensureRenderedFormImage}: when the render could not be
-     * completed it returns the same explicit error the inline code did (refresh first, then the
-     * requested-form case), or {@code null} when capture may proceed. Behaviour is unchanged.
+     * completed it returns an error with advice for EDT's current buffered-render mode (refresh
+     * first, then the requested-form case), or {@code null} when capture may proceed.
      */
     private static CaptureResult checkRenderGate(boolean rendered, boolean refresh, boolean formRequested,
         String formPath)
@@ -286,9 +287,8 @@ public class GetFormScreenshotTool implements IMcpTool
             return CaptureResult.error(ToolResult.error(
                 "refresh=true was requested but the form could not be re-rendered in time, so no " //$NON-NLS-1$
                 + "screenshot was taken: returning the previously rendered image would silently " //$NON-NLS-1$
-                + "show stale (pre-edit) content. Ensure EDT runs with buffered native render " //$NON-NLS-1$
-                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again, or call with " //$NON-NLS-1$
-                + "refresh=false to accept the last rendered image.").toJson()); //$NON-NLS-1$
+                + "show stale (pre-edit) content. " + renderFailureAdvice() //$NON-NLS-1$
+                + " Or call with refresh=false to accept the last rendered image.").toJson()); //$NON-NLS-1$
         }
         if (formRequested && !rendered)
         {
@@ -299,8 +299,7 @@ public class GetFormScreenshotTool implements IMcpTool
                 "Could not render the requested form '" + formPath //$NON-NLS-1$
                 + "' in time, so no screenshot was taken. Form image data is not available: its " //$NON-NLS-1$
                 + "WYSIWYG representation produced no image within the wait budget. " //$NON-NLS-1$
-                + "Ensure EDT runs with buffered native render " //$NON-NLS-1$
-                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson()); //$NON-NLS-1$
+                + renderFailureAdvice()).toJson());
         }
         return null;
     }
@@ -337,13 +336,27 @@ public class GetFormScreenshotTool implements IMcpTool
                 return ImageDataResult.failed(
                     "Form image data is not available: the form did not finish rendering " + //$NON-NLS-1$
                     "in time, so no image could be captured. " + //$NON-NLS-1$
-                    "Ensure EDT runs with buffered native render " + //$NON-NLS-1$
-                    "(VM option -DnativeFormBufferedLayoutRender=true) and try again."); //$NON-NLS-1$
+                    renderFailureAdvice());
             }
-            return ImageDataResult.failed("Form image data is not available"); //$NON-NLS-1$
+            return ImageDataResult.failed("Form image data is not available. " + renderFailureAdvice()); //$NON-NLS-1$
         }
 
         return ImageDataResult.image(imageData);
+    }
+
+    /** Diagnoses image failures using the live EDT mode, which the screenshot path can force. */
+    private static String renderFailureAdvice()
+    {
+        if (NativeRenderModeProbe.getBufferedRenderMode() == NativeRenderMode.ON)
+        {
+            return "EDT could not produce the offscreen form image. A common cause on Windows is " //$NON-NLS-1$
+                + "-Djava.io.tmpdir without a trailing separator: check the EDT log for " //$NON-NLS-1$
+                + "AccessDeniedException on dtgraphics-form.bin. End -Djava.io.tmpdir with a " //$NON-NLS-1$
+                + "backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) and restart EDT."; //$NON-NLS-1$
+        }
+        return "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
+            + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$
+            + "and can leave it gray if no buffer is available) and try again."; //$NON-NLS-1$
     }
 
     /**
