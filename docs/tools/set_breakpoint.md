@@ -11,7 +11,7 @@ Pause BSL execution at a selected source line during debugging, optionally only 
 | lineNumber | yes | integer | 1-based line number (required) |
 | condition | — | string | BSL boolean expression evaluated at the line; omit or pass an empty string to clear it |
 | hitCount | — | integer | Positive hit count; omit or pass 0 to clear it. EDT transmits hit counts only to 1C:Enterprise 8.3.24 or newer |
-| hitCondition | — | string (enum: `EQUALS`, `EQUAL_OR_LESS`, `EQUAL_OR_HIGHER`, `MULTIPLIER`) | Hit-count comparison; requires a positive hitCount and defaults to EQUALS |
+| hitCondition | — | string (one of: EQUALS, EQUAL_OR_LESS, EQUAL_OR_HIGHER, MULTIPLIER) | Hit-count comparison; requires a positive hitCount and defaults to EQUALS |
 
 ## Guide
 Creates or updates a line breakpoint on a BSL module so the 1C application suspends there when it runs. Add a BSL condition or a hit-count rule when a plain line breakpoint is too broad.

@@ -1,6 +1,6 @@
 # set_variable
 
-Set a BSL variable's value in a suspended debug frame. WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running 1C application, mutating the variable. Address the frame by frameRef from wait_for_break (preferred) or threadId+frameIndex; name the variable (dot-path for a nested member). Read current values with get_variables first; use evaluate_expression to compute without mutating.
+Change a variable while execution is paused in the debugger. WARNING: the value is EVALUATED as a BSL expression in the running application, so it can invoke code and change state beyond the named variable. Parameters and examples: get_tool_guide('set_variable').
 
 ## Parameters
 | Parameter | Required | Type | Description |

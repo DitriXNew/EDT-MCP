@@ -1,6 +1,6 @@
 # enable_toolset
 
-Reveal (or hide) tool groups for progressive disclosure. Pass toolsets=[ids] from list_toolsets to reveal them, then RE-REQUEST tools/list to see the newly revealed tools. Set disable=true to hide. The 'core' toolset is always visible and cannot be toggled. When progressive disclosure is off, all tools are already listed and this has no effect until you enable it in EDT Preferences → MCP Server.
+Make additional MCP tool groups visible or hide them. Parameters and examples: get_tool_guide('enable_toolset').
 
 ## Parameters
 | Parameter | Required | Type | Description |

@@ -1,6 +1,6 @@
 # find_references
 
-Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). Use this for all USAGES of a symbol; for where it is DEFINED use go_to_definition, for a literal (non-symbol) text scan use search_in_code. Full parameters and examples: call get_tool_guide('find_references').
+Discover where a metadata object is used throughout the configuration and BSL code. Parameters and examples: get_tool_guide('find_references').
 
 ## Parameters
 | Parameter | Required | Type | Description |

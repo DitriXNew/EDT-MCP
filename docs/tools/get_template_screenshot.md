@@ -1,6 +1,6 @@
 # get_template_screenshot
 
-Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT renders it, so its layout and text are visible to an AI. Works for a common template 'CommonTemplate.<Name>' OR an object-owned template '<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout'). Renders off-screen (no JVM flag needed). Full parameters and examples: call get_tool_guide('get_template_screenshot').
+Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -38,7 +38,7 @@ Either a **common template** or an **object-owned template**. Type / kind tokens
 - The image is the whole template sized to its used cell range (the continuous editor canvas), so the layout matches what you see in the EDT editor.
 
 ## Notes & gotchas
-- Only `SpreadsheetDocument` templates render to an image. A non-spreadsheet template (BinaryData, DataCompositionSchema, etc.) returns a clear "is not a SpreadsheetDocument template" / "no spreadsheet editor page" error rather than a garbage image.
+- Only `SpreadsheetDocument` templates render to an image. A non-spreadsheet template returns: "Template '<fqn>' is not a SpreadsheetDocument template (its content is <EClass>). Only SpreadsheetDocument (print form) templates can be rendered to an image." Read TextDocument content with `get_metadata_details`.
 - An empty template (no content) returns "has no content to render".
 - Needs a live workbench Display and runs on the UI thread; not available headless.
 - A `templatePath` that does not resolve to an existing template returns "Cannot resolve template '<fqn>'. Expected a template FQN: ...". An FQN that resolves to a non-template object returns "'<fqn>' is not a template (it resolves to a <EClass>)". An unknown project returns "Project not found: <name>". Use `get_metadata_objects` / `get_metadata_details` to find the exact name.

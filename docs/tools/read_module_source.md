@@ -1,6 +1,6 @@
 # read_module_source
 
-Read BSL module source code from an EDT project, whole file or a line range. Returns YAML frontmatter (including a contentHash revision token to round-trip into write_module_source's expectedHash) followed by clean source in a fenced bsl block. Use this for the whole module; to read just one procedure/function body use read_method_source. Full parameters and examples: call get_tool_guide('read_module_source').
+Inspect the source of a complete BSL module. Parameters and examples: get_tool_guide('read_module_source').
 
 ## Parameters
 | Parameter | Required | Type | Description |

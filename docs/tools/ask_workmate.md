@@ -1,6 +1,6 @@
 # ask_workmate
 
-Start a background question to the 1C:Workmate plugin and return its jobId. Poll the job with get_job_status instead of calling ask_workmate again. Requires a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call get_tool_guide('ask_workmate').
+Start a background question to the 1C:Workmate plugin and return its jobId. Hands the question to an EXTERNAL agent: by default (shareMcpTools) Workmate may call EDT-MCP's own tools through this plugin, so it can READ the project and CHANGE code and metadata; workmateTool mode runs a named Workmate tool directly (JShell included). Poll the job with get_job_status instead of calling ask_workmate again. Requires a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call get_tool_guide('ask_workmate').
 
 ## Parameters
 | Parameter | Required | Type | Description |

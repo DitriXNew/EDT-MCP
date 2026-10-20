@@ -1,6 +1,6 @@
 # get_module_structure
 
-Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and parameters. responseFormat=concise (default) returns a leaner methods table (drops the verbose Parameters and Description columns; keeps type, name, export, context, lines, region); responseFormat=detailed returns the full table with signatures and doc-comments. Use detailed when you need parameter lists or descriptions. Use this for the structure of ONE module; to discover module paths across a project use list_modules.
+Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters and examples: get_tool_guide('get_module_structure').
 
 ## Parameters
 | Parameter | Required | Type | Description |

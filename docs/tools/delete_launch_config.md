@@ -1,6 +1,6 @@
 # delete_launch_config
 
-Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no change), then confirm=true to delete. Refuses to delete a running config (terminate_launch first). The inverse of create_launch_config. Full parameters and examples: call get_tool_guide('delete_launch_config').
+Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('delete_launch_config').
 
 ## Parameters
 | Parameter | Required | Type | Description |

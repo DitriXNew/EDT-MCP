@@ -701,3 +701,67 @@ def test_live_external_processor_is_actually_launched_with_execute():
     # written into it - that is the acceptance criterion the unit test pins on a mock and this
     # one would have caught for real had applyTo saved the working copy.
     assert_no_diff("launching a processor must not touch the project source")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_unknown_automated_testing_mode_names_native_values():
+    e = assert_error(call("launch", {
+        "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+        "automatedTestingMode": "UNKNOWN",
+        "restartIfRunning": True,
+    }), "unknown automated-testing mode must fail before restarting or launching")
+    assert_error_quality(e, names=["automatedTestingMode", "UNKNOWN"],
+                         suggests=["TESTCLIENT", "TESTMANAGER"])
+    assert_no_diff("invalid testing mode must leave the fixture unchanged")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_automated_testing_port_requires_client_mode():
+    e = assert_error(call("launch", {
+        "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+        "automatedTestingPort": 1540,
+    }), "port without a testing mode must fail before launch")
+    assert_error_quality(e, names=["automatedTestingPort"],
+                         suggests=["automatedTestingMode=TESTCLIENT", "omit"])
+    assert_no_diff("a refused testing port must leave the fixture unchanged")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_test_manager_refuses_automated_testing_port():
+    e = assert_error(call("launch", {
+        "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+        "automatedTestingMode": "TESTMANAGER",
+        "automatedTestingPort": 1540,
+    }), "a manager must not silently ignore a test-client port")
+    assert_error_quality(e, names=["automatedTestingPort"],
+                         suggests=["automatedTestingMode=TESTCLIENT", "omit"])
+    assert_no_diff("a refused manager port must leave the fixture unchanged")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_automated_testing_port_range_is_enforced_before_launch():
+    for port in (0, -1, 65536):
+        e = assert_error(call("launch", {
+            "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+            "automatedTestingMode": "TESTCLIENT",
+            "automatedTestingPort": port,
+        }), "out-of-range testing port %s" % port)
+        assert_error_quality(e, names=["automatedTestingPort", "Invalid automatedTestingPort: '%s'." % port],
+                             suggests=["1 to 65535", "TESTCLIENT"])
+        assert_no_diff("invalid testing port must leave the fixture unchanged")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_malformed_automated_testing_port_names_caller_value():
+    for port in ("abc", "1.5", "2147483648", "", True):
+        e = assert_error(call("launch", {
+            "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+            "automatedTestingMode": "TESTCLIENT",
+            "automatedTestingPort": port,
+            "restartIfRunning": True,
+        }), "malformed testing port must be refused before launch")
+        assert_error_quality(e, names=["automatedTestingPort"],
+                             suggests=["Use an integer from 1 to 65535", "TESTCLIENT"])
+        raw = "true" if port is True else port
+        assert "Invalid automatedTestingPort: '%s'." % raw in e, e
+        assert_no_diff("a malformed testing port must leave the fixture unchanged")

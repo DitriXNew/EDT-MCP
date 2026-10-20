@@ -127,6 +127,12 @@ public class LaunchTool implements IMcpTool
     /** Input param and response field: the external data processor / report to run on startup. */
     private static final String KEY_EXTERNAL_OBJECT_NAME = "externalObjectName"; //$NON-NLS-1$
 
+    /** Input/output key: native EDT automated-testing mode. */
+    private static final String KEY_AUTOMATED_TESTING_MODE = "automatedTestingMode"; //$NON-NLS-1$
+
+    /** Input/output key: native EDT test-client port. */
+    private static final String KEY_AUTOMATED_TESTING_PORT = "automatedTestingPort"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -188,6 +194,12 @@ public class LaunchTool implements IMcpTool
                     + "(the object NAME, not a file path); required together with it. Qualify it as " //$NON-NLS-1$
                     + "'ExternalDataProcessor.Name' / 'ExternalReport.Name' when a processor and a " //$NON-NLS-1$
                     + "report share the name.") //$NON-NLS-1$
+            .enumProperty(KEY_AUTOMATED_TESTING_MODE,
+                "Native EDT testing mode; runtime-client configurations only.", //$NON-NLS-1$
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT,
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER)
+            .integerProperty(KEY_AUTOMATED_TESTING_PORT,
+                "TESTCLIENT only: port 1..65535; omitted uses the saved port or EDT default 1538.") //$NON-NLS-1$
             .booleanProperty("restartIfRunning", //$NON-NLS-1$
                 "Default false: if a matching session is already running, short-circuit with " //$NON-NLS-1$
                     + "alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). " //$NON-NLS-1$
@@ -213,6 +225,12 @@ public class LaunchTool implements IMcpTool
                 "Echoed back when an external object was launched; absent otherwise.") //$NON-NLS-1$
             .stringProperty(KEY_EXTERNAL_OBJECT_NAME,
                 "The external data processor / report this launch runs; absent when none was requested.") //$NON-NLS-1$
+            .enumProperty(KEY_AUTOMATED_TESTING_MODE,
+                "Applied native EDT testing mode; absent when no override was requested.", //$NON-NLS-1$
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT,
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER)
+            .integerProperty(KEY_AUTOMATED_TESTING_PORT,
+                "Effective TESTCLIENT port, including the saved setting or EDT default 1538; absent for TESTMANAGER.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
                 "Effective launch mode; standalone servers report debug because EDT always starts them in debug mode") //$NON-NLS-1$
             .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
@@ -274,15 +292,19 @@ public class LaunchTool implements IMcpTool
 
         // Read here, in execute(), rather than inside LaunchOverrides: rule #6 parity is checked
         // by scanning THIS method for the project's accessor idioms.
+        String automatedTestingPortInput = JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_PORT);
         LaunchOverrides overrides = LaunchOverrides.of(
             JsonUtils.extractStringArgument(params, KEY_STARTUP_OPTION),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_PROJECT_NAME),
-            JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_NAME));
+            JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_NAME),
+            JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_MODE),
+            params != null && params.containsKey(KEY_AUTOMATED_TESTING_PORT)
+                ? JsonUtils.extractIntArgument(params, KEY_AUTOMATED_TESTING_PORT, 0) : null);
         // Validated up front, before EITHER launch route: both can terminate a live client
         // session and update the infobase on the way to the launch, and a mistyped external object
         // must not cost the caller those. The standalone-server refusal stays after type
         // resolution, where the type is known.
-        LaunchOverrides.Prepared prepared = overrides.prepare();
+        LaunchOverrides.Prepared prepared = overrides.prepare(automatedTestingPortInput);
         if (prepared.errorJson != null)
         {
             return prepared.errorJson;
@@ -508,7 +530,7 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
-            return buildLaunchSuccess(config, typeId, isAttach, configProject, effectiveAppId,
+            return buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
                 overrides, prepared, mode);
         }
         catch (Exception e)
@@ -563,6 +585,14 @@ public class LaunchTool implements IMcpTool
         if (!LaunchOverrides.blank(overrides.externalObjectName()))
         {
             parameters.add(KEY_EXTERNAL_OBJECT_NAME);
+        }
+        if (!LaunchOverrides.blank(overrides.automatedTestingMode()))
+        {
+            parameters.add(KEY_AUTOMATED_TESTING_MODE);
+        }
+        if (overrides.automatedTestingPort() != null)
+        {
+            parameters.add(KEY_AUTOMATED_TESTING_PORT);
         }
         String names = parameters.stream().map(name -> "'" + name + "'") //$NON-NLS-1$ //$NON-NLS-2$
             .collect(java.util.stream.Collectors.joining(", ")); //$NON-NLS-1$
@@ -1394,8 +1424,8 @@ public class LaunchTool implements IMcpTool
     }
 
     /**
-     * Builds the success response for the by-name launch path. Pure formatting of
-     * read-only inputs; no behavioural change relative to the inline builder.
+     * Builds the by-name success response from the configuration actually dispatched,
+     * including the effective automated-testing endpoint of its working copy.
      */
     private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         String configProject, String effectiveAppId, LaunchOverrides overrides,
@@ -1416,7 +1446,7 @@ public class LaunchTool implements IMcpTool
         {
             result.put(McpKeys.APPLICATION_ID, effectiveAppId);
         }
-        return echoOverrides(result, overrides, prepared).toJson();
+        return echoOverrides(result, overrides, prepared, config).toJson();
     }
 
     /** Returns a mode-appropriate asynchronous-launch status message. */
@@ -1448,11 +1478,28 @@ public class LaunchTool implements IMcpTool
      *
      * @param result the success payload being built
      * @param overrides what the caller asked for
+     * @param prepared the validated overrides and resolved external object
+     * @param config the configuration or working copy dispatched to EDT
      * @return the same payload, for chaining
      */
     private static ToolResult echoOverrides(ToolResult result, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared)
+        LaunchOverrides.Prepared prepared, ILaunchConfiguration config)
     {
+        if (!LaunchOverrides.blank(overrides.automatedTestingMode()))
+        {
+            result.put(KEY_AUTOMATED_TESTING_MODE, overrides.automatedTestingMode());
+            if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(overrides.automatedTestingMode()))
+            {
+                try
+                {
+                    result.put(KEY_AUTOMATED_TESTING_PORT, overrides.effectiveAutomatedTestingPort(config));
+                }
+                catch (CoreException e) // Response enrichment must not fail an already-dispatched launch.
+                {
+                    // Leave the port absent when its saved attribute cannot be read.
+                }
+            }
+        }
         if (!LaunchOverrides.blank(overrides.startupOption()))
         {
             result.put(KEY_STARTUP_OPTION, overrides.startupOption());
@@ -1599,7 +1646,7 @@ public class LaunchTool implements IMcpTool
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
                 .put(KEY_CONFIGURATION_TYPE, LaunchConfigUtils.getConfigTypeId(matchingConfig))
-                .put(KEY_ATTACH, false), overrides, prepared)
+                .put(KEY_ATTACH, false), overrides, prepared, applied.config)
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, startingMessage(mode, false))

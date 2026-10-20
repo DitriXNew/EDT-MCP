@@ -1,6 +1,6 @@
 # get_subsystem_content
 
-Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsystem.Orders'). By default lists only this subsystem's objects; set recursive=true to fold in nested ones. Full parameters and examples: call get_tool_guide('get_subsystem_content').
+Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content').
 
 ## Parameters
 | Parameter | Required | Type | Description |

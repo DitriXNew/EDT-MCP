@@ -1,6 +1,6 @@
 # get_server_status
 
-Self-diagnosis snapshot of the running MCP server: listening port, MCP protocol version, plugin version, EDT version, enabled/total tool counts, the plainTextMode and checksFolderConfigured preference flags, the two form-render JVM flags (nativeFormBufferedLayoutRender / nativeFormLayoutRender), and whether authentication is enabled. Use it to explain a blank form screenshot or a plain-text JSON response. Never returns the auth token value or the checks folder path, only booleans.
+Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status').
 
 ## Parameters
 No parameters.
@@ -22,6 +22,7 @@ JSON with: `port`, `running`, `protocolVersion`, `pluginVersion`, `edtVersion`, 
 
 ## Notes & gotchas
 - Secrets are never exposed: you get only the `authEnabled` boolean (never the token) and `checksFolderConfigured` (never the folder path).
+- `checksFolderConfigured: false` does **not** mean `get_check_description` is unavailable: the descriptions ship with the plugin. The flag reports only whether an operator configured a folder that overrides them.
 - Judge how EDT was launched by `atStartup`, which is sampled before this plugin's screenshot path can mutate a live flag - that path runs from a tool call, which cannot happen before the bundle it lives in has activated. `requested` is the system property now; this plugin can overwrite it after startup, so it may no longer reflect the line that EDT read from `1cedt.ini`.
 - `forcedAtRuntime` means only that the live flag was forced after startup; it does **not** mean buffered rendering works. `HippoLayoutService` creates its offscreen handler once, when the layout-service singleton is initialized, so changing the flag later does not create the missing handler.
 - For blank or gray screenshots, `nativeFormBufferedLayoutRender.atStartup: on` does not prove EDT could create its offscreen image. On Windows, buffered mode also switches the human designer to that image; an unusable buffer leaves the designer gray. Check the EDT log for `AccessDeniedException` on `dtgraphics-form.bin` (possibly followed by `NoClassDefFoundError: org/eclipse/core/runtime/Plugin`). EDT uses `<java.io.tmpdir>dtgraphics-form.bin` without inserting a separator: change `-Djava.io.tmpdir=C:\edt_tmp` to `-Djava.io.tmpdir=C:\edt_tmp\` and restart EDT. If nothing helps, remove the buffered-render flag and restart EDT.

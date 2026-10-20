@@ -1,6 +1,6 @@
 # read_method_source
 
-Read a specific procedure/function from a BSL module by name. Returns source code with metadata. Lists available methods if not found. Use this for one method body; to read the whole module source use read_module_source.
+Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source').
 
 ## Parameters
 | Parameter | Required | Type | Description |

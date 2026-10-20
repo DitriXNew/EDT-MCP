@@ -1,6 +1,6 @@
 # set_branch_infobase
 
-Attach or detach an EXISTING infobase (application) to/from a specific git branch context, so switch_git_branch's automatic binding follows that branch. Target the application via applicationId (from get_applications) - this tool never creates an infobase, only records the binding. Full parameters and examples: call get_tool_guide('set_branch_infobase').
+Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: get_tool_guide('set_branch_infobase').
 
 ## Parameters
 | Parameter | Required | Type | Description |

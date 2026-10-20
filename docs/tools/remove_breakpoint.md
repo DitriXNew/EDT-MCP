@@ -1,6 +1,6 @@
 # remove_breakpoint
 
-Remove a 1C BSL line breakpoint. Either pass breakpointId (returned from set_breakpoint) or projectName+module+lineNumber to look it up by coordinates.
+Stop pausing execution at a BSL source breakpoint. Address it EITHER by breakpointId OR by modulePath together with lineNumber - every field is optional on its own, and a call carrying neither pair is rejected. Parameters and examples: get_tool_guide('remove_breakpoint').
 
 ## Parameters
 | Parameter | Required | Type | Description |

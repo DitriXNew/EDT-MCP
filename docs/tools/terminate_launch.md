@@ -1,6 +1,6 @@
 # terminate_launch
 
-Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). Full parameters and examples: call get_tool_guide('terminate_launch').
+Stop 1C sessions started by EDT. NOT two-phase for a single launch: selecting one (launchConfigurationName, or projectName + applicationId) stops it IMMEDIATELY, with no preview call. Only mass termination is gated - all=true is rejected without confirm=true. Either way, list_configurations first to see what is running. Parameters and examples: get_tool_guide('terminate_launch').
 
 ## Parameters
 | Parameter | Required | Type | Description |

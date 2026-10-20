@@ -1,6 +1,6 @@
 # list_subsystems
 
-List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by default (recursive=true); use get_subsystem_content for one subsystem's objects. Full parameters and examples: call get_tool_guide('list_subsystems').
+Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems').
 
 ## Parameters
 | Parameter | Required | Type | Description |

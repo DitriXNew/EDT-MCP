@@ -1,6 +1,6 @@
 # export_configuration_to_xml
 
-Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles.
+Export an EDT configuration into 1C XML files. Parameters and examples: get_tool_guide('export_configuration_to_xml').
 
 ## Parameters
 | Parameter | Required | Type | Description |

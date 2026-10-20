@@ -1,6 +1,6 @@
 # validate_query
 
-Validate 1C:Enterprise query language (QL) text against a project, returning syntax and semantic errors with line numbers. Use to check a query before embedding it in BSL; resolves table/field names against the project's metadata. Full parameters and examples: call get_tool_guide('validate_query').
+Check a 1C query for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query').
 
 ## Parameters
 | Parameter | Required | Type | Description |
