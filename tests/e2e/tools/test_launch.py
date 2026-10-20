@@ -746,7 +746,7 @@ def test_automated_testing_port_range_is_enforced_before_launch():
             "automatedTestingMode": "TESTCLIENT",
             "automatedTestingPort": port,
         }), "out-of-range testing port %s" % port)
-        assert_error_quality(e, names=["automatedTestingPort", str(port)],
+        assert_error_quality(e, names=["automatedTestingPort", "Invalid automatedTestingPort: '%s'." % port],
                              suggests=["1 to 65535", "TESTCLIENT"])
         assert_no_diff("invalid testing port must leave the fixture unchanged")
 

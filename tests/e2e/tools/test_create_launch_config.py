@@ -263,7 +263,7 @@ def test_create_automated_testing_port_range_is_enforced():
     for port in (0, -1, 65536):
         _assert_automated_testing_refusal(
             {"automatedTestingMode": "TESTCLIENT", "automatedTestingPort": port},
-            ["automatedTestingPort", str(port)], ["1 to 65535", "TESTCLIENT"])
+            ["automatedTestingPort", "Invalid automatedTestingPort: '%s'." % port], ["1 to 65535", "TESTCLIENT"])
 
 
 @e2e_test(tool="create_launch_config", kind="action")

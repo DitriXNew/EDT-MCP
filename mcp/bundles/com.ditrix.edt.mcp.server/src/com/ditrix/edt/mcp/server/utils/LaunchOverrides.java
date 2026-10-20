@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -191,6 +192,32 @@ public final class LaunchOverrides
     }
 
     /**
+     * Renders the caller's port for a refusal. A JSON number reaches the tool as a double, so an
+     * integral number such as {@code 65536} arrives as {@code "65536.0"} (or in exponent form);
+     * it is echoed as the integer the caller wrote. Any other text is echoed unchanged.
+     *
+     * @param raw the port argument as text, may be {@code null}
+     * @return the text to echo
+     */
+    static String displayedPort(String raw)
+    {
+        if (raw == null || raw.indexOf('.') < 0 && raw.indexOf('E') < 0 && raw.indexOf('e') < 0)
+        {
+            return raw;
+        }
+        try
+        {
+            BigDecimal number = new BigDecimal(raw.trim());
+            return number.signum() == 0 || number.stripTrailingZeros().scale() <= 0
+                ? number.toBigInteger().toString() : raw;
+        }
+        catch (NumberFormatException e)
+        {
+            return raw;
+        }
+    }
+
+    /**
      * Validates the overrides while retaining the caller's port text for actionable refusals.
      *
      * @param automatedTestingPortInput the original port argument before typed extraction
@@ -215,7 +242,7 @@ public final class LaunchOverrides
             if (automatedTestingPort < 1 || automatedTestingPort > 65535)
             {
                 return new Prepared(this, null, ToolResult.error(
-                    "Invalid automatedTestingPort: '" + automatedTestingPortInput //$NON-NLS-1$
+                    "Invalid automatedTestingPort: '" + displayedPort(automatedTestingPortInput) //$NON-NLS-1$
                         + "'. Use an integer from 1 to 65535 for automatedTestingMode=TESTCLIENT.") //$NON-NLS-1$
                     .toJson());
             }
