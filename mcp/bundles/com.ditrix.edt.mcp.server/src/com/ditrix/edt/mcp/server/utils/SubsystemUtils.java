@@ -47,7 +47,8 @@ public final class SubsystemUtils
      * cannot drift into teaching different forms (a command-interface refusal keeps its own text: it
      * teaches a section address, not a subsystem). It is appended by
      * {@code adopt_metadata_object}'s "not found", by {@code get_metadata_details}' rows for a missing
-     * and for a malformed chain, and by {@link #notFoundMessage} - the "subsystem not found" of
+     * and for a malformed chain, by {@code delete_metadata}'s nested-chain miss and its subsystem
+     * node-not-found, and by {@link #notFoundMessage} - the "subsystem not found" of
      * {@code modify_metadata} and {@code get_subsystem_content}. It has no final period: each refusal
      * ends it the way the rest of its own text ends.
      *

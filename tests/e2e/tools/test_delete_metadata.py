@@ -34,6 +34,8 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    assert_no_diff_rel,
+    PROJECT_REL,
     assert_tree_unchanged,
     assert_diff_contains,
     assert_disk_lacks,
@@ -41,6 +43,7 @@ from harness import (
     poll_disk_path_gone,
     poll_disk_lacks,
     poll_disk_contains,
+    poll_disk_contains_all,
     read_disk,
     tree_snapshot,
     settle_or_fail,
@@ -1217,3 +1220,195 @@ def test_delete_success_carries_no_marker_fields():
     assert r.structured.get("action") == "executed", "must take the execute branch: %r" % (r.structured,)
     assert_no_marker_fields(r.structured, "a delete success reports no written-object markers")
     assert_not_contains(_list_commonmodules(), "| Calc ", "MODEL read-back: CommonModule.Calc is gone")
+
+
+# Nested subsystems (#734). The orchestrator owns fixture and model restoration.
+_SUBSYSTEM_PARENT_FQN = "Subsystem.Subsystem"
+_SUBSYSTEM_PARENT_MDO = "src/Subsystems/Subsystem/Subsystem.mdo"
+_SUBSYSTEM_CHILD_FQN = "Subsystem.Subsystem.Subsystem.E2EDelChild"
+_SUBSYSTEM_CHILD_MDO = "src/Subsystems/Subsystem/Subsystems/E2EDelChild/E2EDelChild.mdo"
+_CONFIGURATION_MDO = "src/Configuration/Configuration.mdo"
+
+
+def _seed_nested_delete_child():
+    seed = call("create_metadata", {"projectName": PROJECT, "fqn": _SUBSYSTEM_CHILD_FQN})
+    assert_ok(seed, "seed the nested subsystem under the fixture's Subsystem.Subsystem")
+    # The seed is setup, not the call under test: poll, as the nested-create e2e does, so a slow
+    # seed export fails here as a setup problem instead of looking like a delete defect.
+    parent_xml = poll_disk_contains_all(_SUBSYSTEM_PARENT_MDO, ["<subsystems>E2EDelChild</subsystems>"],
+                                        ctx="the parent must register the seeded child on disk")
+    child_xml = poll_disk_contains_all(_SUBSYSTEM_CHILD_MDO, ["<name>E2EDelChild</name>"],
+                                       ctx="the seeded child must have its own persisted top-object file")
+    settle_or_fail("the delete of the newly created nested subsystem")
+    return parent_xml, child_xml
+
+
+def _exercise_nested_subsystem_delete(address, preview_only=False, force=False):
+    settle_or_fail("the nested-subsystem delete round trip")
+    configuration_before = read_disk(_CONFIGURATION_MDO)
+    parent_before, child_before = _seed_nested_delete_child()
+    if preview_only:
+        before_preview = tree_snapshot()
+        preview = call("delete_metadata", {"projectName": PROJECT, "fqn": address})
+        # Preview reads once immediately too: no later model request can hide a write.
+        parent_after_preview = read_disk(_SUBSYSTEM_PARENT_MDO)
+        child_after_preview = read_disk(_SUBSYSTEM_CHILD_MDO)
+        assert_ok(preview, "preview deleting the addressed nested subsystem")
+        assert preview.structured.get("action") == "preview", preview.structured
+        assert preview.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, preview.structured
+        items = preview.structured.get("items") or []
+        assert any("E2EDelChild" in str(item.get("name")) for item in items), \
+            "preview must name the child it would remove: %r" % (items,)
+        assert parent_after_preview == parent_before, "preview must not alter the seeded parent"
+        assert child_after_preview == child_before, "preview must not alter the seeded child"
+        assert_tree_unchanged(before_preview, "the nested delete preview must write nothing")
+        assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                           "nested create and preview must leave Configuration.mdo unchanged")
+
+        model = call("list_subsystems", {"projectName": PROJECT})
+        assert_ok(model, "read back the unmodified subsystem tree after preview")
+        assert_contains(model.text, _SUBSYSTEM_CHILD_FQN, "preview must keep the child in the model")
+        return
+
+    result = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": address, "confirm": True, "force": force,
+    })
+    # The delete submits its PARENT's export. Assert that file immediately, before polling
+    # the child's removal or making a model call; those would give a broken barrier more time.
+    parent_after_delete = read_disk(_SUBSYSTEM_PARENT_MDO)
+    assert_ok(result, "confirm the nested-subsystem delete")
+    configuration_after_delete = read_disk(_CONFIGURATION_MDO)
+    assert_not_contains(parent_after_delete, "<subsystems>E2EDelChild</subsystems>",
+                        "the parent registration must already be removed on return")
+    assert_contains(parent_after_delete, "<name>Subsystem</name>", "the parent itself must survive")
+    assert configuration_after_delete == configuration_before, \
+        "a nested delete must leave Configuration.mdo unchanged"
+    assert result.structured.get("action") == "executed", result.structured
+    assert result.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, result.structured
+    assert result.structured.get("forced") is force, result.structured
+    # A completed generic delete omits persisted; only a partial result carries persisted=false.
+    assert "persisted" not in result.structured, result.structured
+    poll_disk_path_gone(_SUBSYSTEM_CHILD_MDO,
+                        ctx="EDT must remove the deleted child's separate top-object file")
+    assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                       "nested delete must not rewrite Configuration.mdo")
+    after = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(after, "read the subsystem tree after deleting the child")
+    assert_not_contains(after.text, "E2EDelChild", "the child must also be absent from the model")
+    assert_contains(after.text, _SUBSYSTEM_PARENT_FQN, "the parent must remain in the model")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_preview_writes_nothing():
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN, preview_only=True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_nested_subsystem_from_model_and_disk():
+    # This deliberately reaches confirm directly, so the OLD jar's confirmed-chain refusal is red
+    # in its own scenario instead of being hidden by the separate preview regression.
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_delete_with_russian_nonleading_token():
+    _exercise_nested_subsystem_delete(
+        "Subsystem.Subsystem.\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430.E2EDelChild",
+        force=True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_missing_nested_subsystem_explains_the_whole_chain():
+    address = "Subsystem.Subsystem.Subsystem.E2ENoSuchDeleteChild"
+    result = call("delete_metadata", {"projectName": PROJECT, "fqn": address, "confirm": True})
+    error = assert_error(result, "a missing nested subsystem must be refused")
+    assert_error_quality(error, names=[address], suggests=["list_subsystems"])
+    assert_contains(error, "Subsystem.<Parent>.Subsystem.<Child>", "the error must teach the chain grammar")
+    assert_not_contains(error, "Any node create_metadata can address", "remove the old false promise")
+    assert_no_diff("a missing nested-subsystem delete must write nothing")
+
+
+def _exercise_subsystem_parent_cascade(nested_parent):
+    settle_or_fail("the subsystem tree delete")
+    configuration_before = read_disk(_CONFIGURATION_MDO)
+    if nested_parent:
+        parent_fqn = _SUBSYSTEM_CHILD_FQN
+        parent_name = "E2EDelChild"
+        parent_folder = "src/Subsystems/Subsystem/Subsystems/E2EDelChild"
+        container_mdo = _SUBSYSTEM_PARENT_MDO
+        registration = "<subsystems>E2EDelChild</subsystems>"
+    else:
+        parent_fqn = "Subsystem.E2EDelParent"
+        parent_name = "E2EDelParent"
+        parent_folder = "src/Subsystems/E2EDelParent"
+        container_mdo = _CONFIGURATION_MDO
+        registration = "<subsystems>Subsystem.E2EDelParent</subsystems>"
+
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": parent_fqn}),
+              "seed the parent whose tree will be deleted")
+    poll_disk_contains(container_mdo, registration, ctx="the container must register the parent")
+    poll_disk_contains(parent_folder + "/" + parent_name + ".mdo", "<name>%s</name>" % parent_name,
+                       ctx="the seeded parent must be on disk")
+    settle_or_fail("seeding the subsystem descendants")
+    child_fqn = parent_fqn + ".Subsystem.E2EDelCascadeChild"
+    child_folder = parent_folder + "/Subsystems/E2EDelCascadeChild"
+    descendants = [
+        (child_fqn, child_folder, "E2EDelCascadeChild"),
+        (child_fqn + ".Subsystem.E2EDelCascadeGrandchild",
+         child_folder + "/Subsystems/E2EDelCascadeGrandchild", "E2EDelCascadeGrandchild"),
+        (parent_fqn + ".Subsystem.E2EDelCascadeSibling",
+         parent_folder + "/Subsystems/E2EDelCascadeSibling", "E2EDelCascadeSibling"),
+    ]
+    for fqn, folder, name in descendants:
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed a nested descendant for the cascade preview")
+        poll_disk_contains(folder + "/" + name + ".mdo", "<name>%s</name>" % name,
+                           ctx="every descendant must have its own persisted file")
+        settle_or_fail("the cascade preview after seeding " + fqn)
+
+    before_preview = tree_snapshot()
+    preview = call("delete_metadata", {"projectName": PROJECT, "fqn": parent_fqn})
+    assert_tree_unchanged(before_preview, "the parent preview must preserve the whole seeded tree")
+    assert_ok(preview, "preview deleting a subsystem and its descendants")
+    assert preview.structured.get("action") == "preview", preview.structured
+    for fqn, _, _ in descendants:
+        assert_contains(preview.structured.get("message", ""), fqn,
+                        "the preview message must disclose every nested descendant by chain FQN")
+    before = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(before, "read the tree preserved by the preview")
+    assert_contains(before.text, parent_fqn, "preview must preserve the parent in the model")
+    for fqn, _, _ in descendants:
+        assert_contains(before.text, fqn, "preview must preserve every descendant in the model")
+
+    result = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": parent_fqn, "confirm": True, "force": nested_parent,
+    })
+    # The registering file is read ONCE, immediately after the delete call, before any other MCP call.
+    container_after = read_disk(container_mdo)
+    assert_ok(result, "confirm the subsystem tree cascade")
+    assert_not_contains(container_after, registration, "the parent's registration must be gone on return")
+    assert result.structured.get("action") == "executed", result.structured
+    assert result.structured.get("forced") is nested_parent, result.structured
+    assert "persisted" not in result.structured, result.structured
+    if nested_parent:
+        assert read_disk(_CONFIGURATION_MDO) == configuration_before, \
+            "a nested parent cascade must leave Configuration.mdo unchanged"
+    poll_disk_path_gone(parent_folder, ctx="EDT must remove the deleted parent's folder")
+    for _, folder, _ in descendants:
+        poll_disk_path_gone(folder, ctx="EDT must remove every descendant folder")
+    after = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(after, "read the subsystem tree after the cascade")
+    assert_not_contains(after.text, parent_name, "the parent must be absent from the model")
+    for _, _, name in descendants:
+        assert_not_contains(after.text, name, "no descendant may survive under another parent or as an orphan")
+    assert_contains(after.text, _SUBSYSTEM_PARENT_FQN, "the fixture's top-level subsystem must survive")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_top_level_subsystem_preview_and_confirm_cascade_to_all_descendants():
+    _exercise_subsystem_parent_cascade(False)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_preview_and_force_confirm_cascade_to_all_descendants():
+    _exercise_subsystem_parent_cascade(True)

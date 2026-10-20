@@ -145,7 +145,7 @@ JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventH
 - A member with a value type (an attribute, dimension, resource, tabular-section or addressing attribute, accounting flag, sequence dimension) is created with the designer's defaults, type included: `String(10)` (`{types:[{kind:'String', length:10}]}`), except an accumulation / accounting / calculation register resource - `Number(10,0)` - and a ChartOfAccounts accounting flag or ext-dimension accounting flag - `Boolean`. Change the type with modify_metadata.
 - `persisted=false` means the in-memory change committed but the `.mdo` export did not confirm - re-check before relying on it on disk.
 - No automatic undo: to revert a create, delete the node with delete_metadata (same FQN). create_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.
-- A NESTED SUBSYSTEM is the one exception to that undo route: delete_metadata does not address a nested-subsystem chain yet, so it cannot remove one. Remove it in the EDT UI (or drop the parent) until delete_metadata learns the chain.
+- Nested subsystems use that same undo route: pass the whole chain to delete_metadata, preview, then confirm. Deleting a subsystem also removes all its nested subsystems; the preview message lists their whole chain FQNs.
 
 ## ObjectType members
 
