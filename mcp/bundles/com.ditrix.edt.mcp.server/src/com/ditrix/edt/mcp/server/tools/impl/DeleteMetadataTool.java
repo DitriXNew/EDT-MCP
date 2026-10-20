@@ -776,6 +776,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // missing local owner - sending the caller to look for something that can never be here
         // (issue #309).
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        // Validate nested addresses before context resolution can run the tolerant support lookup.
+        if (SubsystemUtils.nestedChain(normFqn) != null)
+        {
+            String malformed = SubsystemUtils.malformedSegmentError(normFqn);
+            if (malformed != null)
+            {
+                return ToolResult.error(malformed + " Nothing was deleted.").toJson(); //$NON-NLS-1$
+            }
+        }
         ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
@@ -916,6 +925,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
+        // The early check is the entry gate; this check is a backstop for other callers.
         // The same gate as create_metadata's nested branch, and FIRST: the parsed chain is built from
         // trimmed segments and drops a trailing empty one, so 'Subsystem.A.Subsystem.B.' or a padded
         // name would otherwise delete B and its descendants as if the address were well formed.
@@ -959,7 +969,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * EDT cascades a subsystem delete, but its removal items may name only the parent. Collect the
-     * descendants for the preview message inside a BM read boundary, using the stored lineage's
+     * descendants for the tool preview and human consent inside a BM read boundary, using the lineage's
      * spelling. A proxy has no usable name; identity tracking bounds a broken child-list cycle.
      */
     private static List<String> nestedSubsystems(Subsystem parent, String fqn)
@@ -1038,8 +1048,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
 
-        List<String> descendants = !confirm && object instanceof Subsystem
-            ? BmTransactions.read(modelResolution.getModel(), "PreviewSubsystemDeleteDescendants", //$NON-NLS-1$
+        List<String> descendants = object instanceof Subsystem
+            ? BmTransactions.read(modelResolution.getModel(), "ReadSubsystemDeleteDescendants", //$NON-NLS-1$
                 (tx, pm) -> nestedSubsystems((Subsystem)object, normFqn))
             : Collections.emptyList();
 
@@ -1062,7 +1072,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
-        return confirm ? performDelete(project, normFqn, containerFqn, refactoring, force)
+        return confirm ? performDelete(project, normFqn, containerFqn, refactoring, force, descendants)
             : buildPreview(normFqn, refactoring, descendants);
     }
 
@@ -1109,7 +1119,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     private String performDelete(IProject project, String fqn, String containerFqn,
-        IRefactoring refactoring, boolean force)
+        IRefactoring refactoring, boolean force, List<String> descendants)
     {
         String projectName = project.getName();
         // EDT's own problem check: genuine incoming references and platform prohibitions are both
@@ -1128,16 +1138,30 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Destructive-operation consent gate: the LAST check before the model mutation. Built from the
         // ref list the tool already computed; on ALLOW the behaviour is byte-identical, on REJECT the
         // caller returns an error and NOTHING is mutated. Headless / env-bypass / non-ASK never block.
-        // The count/name line names the ACTUAL deletion target (count 1, its FQN) — like the other five
-        // gated tools — so the common case (no blocking refs) reads "1 object: <fqn>" rather than a
-        // misleading "0 objects:". Any incoming references the delete leaves dangling (force=true) are
-        // described in the subtitle, where the count reflects the references, not the deletion.
-        String subtitle = !problems.blocksDelete()
-            ? "This deletes '" + fqn + "' and cascades reference cleanup (BSL, forms, metadata)." //$NON-NLS-1$ //$NON-NLS-2$
-            : forcedConsentSubtitle(fqn, problems);
+        // Count the target and every nested subsystem EDT will remove. Incoming references left
+        // dangling by force=true remain disclosed separately in the subtitle.
+        String subtitle;
+        if (problems.blocksDelete())
+        {
+            subtitle = forcedConsentSubtitle(fqn, problems);
+            if (!descendants.isEmpty())
+            {
+                subtitle += " This also deletes its " + descendants.size() + " nested subsystem(s)."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        else
+        {
+            subtitle = "This deletes '" + fqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (descendants.isEmpty() ? "" //$NON-NLS-1$
+                    : " and its " + descendants.size() + " nested subsystem(s)") //$NON-NLS-1$ //$NON-NLS-2$
+                + " and cascades reference cleanup (BSL, forms, metadata)."; //$NON-NLS-1$
+        }
+        List<String> deletionTargets = new ArrayList<>();
+        deletionTargets.add(fqn);
+        deletionTargets.addAll(descendants);
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
-            subtitle, 1, Collections.singletonList(fqn));
+            subtitle, 1 + descendants.size(), deletionTargets);
         return deleteWithConsent(preview,
             () -> performDeleteRefactoring(project, fqn, containerFqn, refactoring, force, problems));
     }
