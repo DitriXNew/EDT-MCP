@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -918,7 +919,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         Subsystem leaf = SubsystemUtils.resolveInScope(scope, chain);
         if (leaf == null)
         {
-            return new ChainTarget(null, null, null, SubsystemUtils.notFoundMessage(normFqn));
+            return new ChainTarget(null, null, null, SubsystemUtils.notFoundMessage(normFqn)
+                + (scope == null ? "" : scope.addressingHint(normFqn))); //$NON-NLS-1$
         }
         SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(leaf);
         if (!lineage.spells(chain))
@@ -948,23 +950,39 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Refuse both top-level and nested parents until EDT's child-file cascade is verified live.
-     * Read inside a BM boundary; force cannot make leaving orphaned subsystem files acceptable.
+     * EDT cascades a subsystem delete, but its removal items may name only the parent. Collect the
+     * descendants for the preview message inside a BM read boundary, using the stored lineage's
+     * spelling. A proxy has no usable name; identity tracking bounds a broken child-list cycle.
      */
-    private static String subsystemChildrenError(Subsystem parent, String fqn)
+    private static List<String> nestedSubsystems(Subsystem parent, String fqn)
     {
-        if (parent.getSubsystems().isEmpty())
+        List<String> descendants = new ArrayList<>();
+        String canonical = SubsystemUtils.lineage(parent).chainFqn();
+        List<Map.Entry<Subsystem, String>> pending = new ArrayList<>();
+        pending.add(Map.entry(parent, canonical == null ? fqn : canonical));
+        Set<Subsystem> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        seen.add(parent);
+        for (int index = 0; index < pending.size(); index++)
         {
-            return null;
+            Map.Entry<Subsystem, String> entry = pending.get(index);
+            for (Subsystem child : entry.getKey().getSubsystems())
+            {
+                if (child == null || child.eIsProxy())
+                {
+                    continue;
+                }
+                String name = child.getName();
+                if (name == null || name.isEmpty() || !seen.add(child))
+                {
+                    continue;
+                }
+                String childFqn = entry.getValue() + "." //$NON-NLS-1$
+                    + SubsystemUtils.chainFqn(new String[] {name}, 1);
+                descendants.add(childFqn);
+                pending.add(Map.entry(child, childFqn));
+            }
         }
-        List<String> children = new ArrayList<>();
-        for (Subsystem child : parent.getSubsystems())
-        {
-            children.add(fqn + "." + SubsystemUtils.chainFqn(new String[] {child.getName()}, 1)); //$NON-NLS-1$
-        }
-        return "Cannot delete subsystem '" + fqn + "' because it still has nested children: " //$NON-NLS-1$ //$NON-NLS-2$
-            + String.join(", ", children) + ". Delete these children first with delete_metadata, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "then retry the parent. Nothing was deleted."; //$NON-NLS-1$
+        return descendants;
     }
 
     /**
@@ -1012,16 +1030,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
 
-        if (object instanceof Subsystem)
-        {
-            String childrenError = BmTransactions.read(modelResolution.getModel(),
-                "CheckSubsystemDeleteChildren", (tx, pm) -> //$NON-NLS-1$
-                    subsystemChildrenError((Subsystem)object, normFqn));
-            if (childrenError != null)
-            {
-                return ToolResult.error(childrenError).toJson();
-            }
-        }
+        List<String> descendants = !confirm && object instanceof Subsystem
+            ? BmTransactions.read(modelResolution.getModel(), "PreviewSubsystemDeleteDescendants", //$NON-NLS-1$
+                (tx, pm) -> nestedSubsystems((Subsystem)object, normFqn))
+            : Collections.emptyList();
 
         IRefactoring refactoring;
         try
@@ -1043,10 +1055,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
 
         return confirm ? performDelete(project, normFqn, containerFqn, refactoring, force)
-            : buildPreview(normFqn, refactoring);
+            : buildPreview(normFqn, refactoring, descendants);
     }
 
-    private String buildPreview(String fqn, IRefactoring refactoring)
+    private String buildPreview(String fqn, IRefactoring refactoring, List<String> descendants)
     {
         List<Map<String, Object>> allItems = new ArrayList<>();
 
@@ -1069,6 +1081,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean hasBlocking = problems.blocksDelete();
 
         String message = previewMessage(problems);
+        if (!descendants.isEmpty())
+        {
+            message += " Deleting this subsystem also removes its nested subsystems: " //$NON-NLS-1$
+                + String.join(", ", descendants) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
 
         // The legacy reference fields retain their documented meaning: only CleanReferenceProblem
         // entries are references. Every other problem is exposed separately as a platform prohibition.
@@ -1680,8 +1697,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             // A subsystem's registration is a reference, deliberately absent from the generic
             // containment-kind map. Recognize it only for this serialized registration check.
-            String feature = SubsystemUtils.isSubsystemTypeToken(remainder[i])
-                ? "subsystems" : MetadataNodeResolver.featureNameForKind(remainder[i]); //$NON-NLS-1$
+            boolean subsystem = SubsystemUtils.isSubsystemTypeToken(remainder[i]);
+            String feature = subsystem ? "subsystems" //$NON-NLS-1$
+                : MetadataNodeResolver.featureNameForKind(remainder[i]);
             if (feature == null)
             {
                 return false;
@@ -1691,7 +1709,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Element match = null;
             for (Element candidate : directChildren(current, feature))
             {
-                if (addressedPrefix.equalsIgnoreCase(simpleText(candidate))
+                // EDT writes a subsystem reference as the bare child Name; tolerate a full chain too.
+                if ((subsystem && name.equalsIgnoreCase(simpleText(candidate)))
+                    || addressedPrefix.equalsIgnoreCase(simpleText(candidate))
                     || name.equalsIgnoreCase(directChildText(candidate, "name"))) //$NON-NLS-1$
                 {
                     match = candidate;

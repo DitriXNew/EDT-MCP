@@ -12,37 +12,25 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
-import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.BasicEList;
 import org.junit.Before;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.bm.integration.IBmTask;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
-import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
-import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 /**
  * Nested-subsystem deletion decisions without a workbench. Reflection lets this same suite compile
@@ -312,59 +300,5 @@ public class DeleteMetadataToolNestedSubsystemTest
         assertRefused(target(address), address, SubsystemUtils.addressingHint());
     }
 
-    @Test
-    public void testTopLevelParentPreviewNamesChildrenAndRefusesBeforeRefactoring()
-    {
-        subsystem("D", a);
-        assertParentRefused(a, "Subsystem.A", false, false);
-    }
 
-    @Test
-    public void testTopLevelParentConfirmAndForceStillRefuse()
-    {
-        assertParentRefused(a, "Subsystem.A", true, true);
-    }
-
-    @Test
-    public void testNestedParentPreviewNamesChildrenAndRefusesBeforeRefactoring()
-    {
-        subsystem("C", b);
-        assertParentRefused(b, "Subsystem.A.Subsystem.B", false, false);
-    }
-
-    @Test
-    public void testNestedParentConfirmAndForceStillRefuse()
-    {
-        subsystem("C", b);
-        assertParentRefused(b, "Subsystem.A.Subsystem.B", true, true);
-    }
-
-    private static void assertParentRefused(Subsystem parent, String fqn, boolean confirm, boolean force)
-    {
-        IProject project = mock(IProject.class);
-        when(project.getName()).thenReturn("TestConfiguration");
-        IBmModel model = mock(IBmModel.class);
-        when(model.executeReadonlyTask(any())).thenAnswer(invocation -> {
-            IBmTask<?> task = invocation.getArgument(0);
-            return task.execute(null, null);
-        });
-        IBmModelManager manager = mock(IBmModelManager.class);
-        when(manager.getModel(project)).thenReturn(model);
-        IMdRefactoringService refactoring = mock(IMdRefactoringService.class);
-        when(refactoring.createMdObjectDeleteRefactoring(any())).thenReturn(mock(IRefactoring.class));
-        String result = new DeleteMetadataTool().prepareMdClassDelete(project, fqn, parent,
-            "Configuration", confirm, force, refactoring, BmModelResolver.resolve(project, manager));
-        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
-        assertFalse(result, json.get("success").getAsBoolean());
-        String message = json.get("error").getAsString();
-        assertTrue(message, message.contains("still has nested children"));
-        assertTrue(message, message.contains(fqn));
-        for (Subsystem child : parent.getSubsystems())
-        {
-            assertTrue(message, message.contains(fqn + ".Subsystem." + child.getName()));
-        }
-        assertTrue(message, message.contains("Delete these children first with delete_metadata"));
-        verify(model).executeReadonlyTask(any());
-        verifyZeroInteractions(refactoring);
-    }
 }

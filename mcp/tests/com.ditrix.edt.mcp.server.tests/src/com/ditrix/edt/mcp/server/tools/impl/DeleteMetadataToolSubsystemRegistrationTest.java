@@ -32,10 +32,10 @@ public class DeleteMetadataToolSubsystemRegistrationTest
     @Test
     public void testParentRegistrationTracksOnlyTheAddressedChild() throws Exception
     {
-        Element parent = xml("<Subsystem><subsystems>Subsystem.A.Subsystem.B</subsystems>"
-            + "<subsystems>Subsystem.A.Subsystem.C</subsystems></Subsystem>");
+        Element parent = xml("<Subsystem><subsystems>B</subsystems>"
+            + "<subsystems>C</subsystems></Subsystem>");
         assertTrue(DeleteMetadataTool.containsRegistration(parent, "Subsystem.A", "Subsystem.A.Subsystem.B"));
-        Element after = xml("<Subsystem><subsystems>Subsystem.A.Subsystem.C</subsystems></Subsystem>");
+        Element after = xml("<Subsystem><subsystems>C</subsystems></Subsystem>");
         assertFalse(DeleteMetadataTool.containsRegistration(after, "Subsystem.A", "Subsystem.A.Subsystem.B"));
         assertTrue(DeleteMetadataTool.containsRegistration(after, "Subsystem.A", "Subsystem.A.Subsystem.C"));
     }

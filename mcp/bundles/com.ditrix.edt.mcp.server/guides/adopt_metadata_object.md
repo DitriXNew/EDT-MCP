@@ -18,7 +18,7 @@ JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted),
 ## Notes & gotchas
 - This adopts the metadata OBJECT side only. Intercepting a BSL method (`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here: write the interceptor with write_module_source, and that write marks the module `Extended`.
 - An object the platform reports as not adoptable is rejected with a clear error.
-- No automatic undo: an adopted copy is removed with delete_metadata against the extension, using the whole chain for a nested subsystem. Preview, then confirm; delete children before their parents (a subsystem that still has children is refused, even with force=true).
+- No automatic undo: an adopted copy is removed with delete_metadata against the extension, using the whole chain for a nested subsystem. Preview, then confirm. Deleting a subsystem also removes all its nested subsystems; the preview message lists their whole chain FQNs.
 - modify_metadata writes an adopted copy the way EDT keeps it in the extension: it adds types to an adopted defined type's type extension (platform 8.3.20 and later) and sources to an adopted event subscription, marked Extended (8.3.17 and later), and refuses a write EDT would leave out of the extension's `.mdo` (a property whose extension state is None) - see "Adopted objects in an extension" in modify_metadata's guide.
 
 ## Vendor support
