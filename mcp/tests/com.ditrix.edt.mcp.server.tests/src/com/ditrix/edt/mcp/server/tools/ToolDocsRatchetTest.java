@@ -207,6 +207,34 @@ public class ToolDocsRatchetTest
                 problems.add(label + ": missing link to " + prefix + name + ".md");
             }
         }
+        // A renamed or removed tool must not leave its row behind, even when the count still matches.
+        Matcher link = Pattern.compile("\\]\\(" + Pattern.quote(prefix) + "([A-Za-z0-9_]+)\\.md\\)") //$NON-NLS-1$ //$NON-NLS-2$
+            .matcher(text);
+        while (link.find())
+        {
+            String linked = link.group(1);
+            if (!"README".equals(linked) && !names.contains(linked)) //$NON-NLS-1$
+            {
+                problems.add(label + ": links to " + prefix + linked + ".md, which is not a registered tool");
+            }
+        }
+    }
+
+    @Test
+    public void indexRejectsALinkToAToolThatIsNoLongerRegistered()
+    {
+        StringBuilder index = new StringBuilder("**" + registeredNames().size() + " tools.**\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String name : registeredNames())
+        {
+            index.append("| [`").append(name).append("`](").append(name).append(".md) | x |\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        List<String> clean = new ArrayList<>();
+        checkIndex("index", index.toString(), "", clean); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(clean.toString(), 0, clean.size());
+        index.append("| [`removed_tool`](removed_tool.md) | stale |\n"); //$NON-NLS-1$
+        List<String> stale = new ArrayList<>();
+        checkIndex("index", index.toString(), "", stale); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(stale.toString(), 1, stale.size());
     }
 
     private static String pageText(IMcpTool tool)
