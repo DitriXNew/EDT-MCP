@@ -354,18 +354,20 @@ public class GetFormScreenshotTool implements IMcpTool
 
     /**
      * Diagnoses image failures without treating an unknown startup mode as a known launch setting.
-     * A mode this tool forced at runtime may not reach EDT's renderer; buffer-path advice is specific
-     * to Windows, while Unix failures also need a working display.
+     * A mode this tool forced at runtime may not reach EDT's renderer; the launch flag and the
+     * buffer-path advice are specific to Windows. Linux and macOS buffer native render without the
+     * flag, so there every failure, including an unreadable live mode, gets the neutral log and
+     * display hint.
      */
     static String renderFailureAdvice(NativeRenderMode live, NativeRenderMode startup, boolean windows)
     {
+        if (!windows)
+        {
+            return "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
+                + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
+        }
         if (live == NativeRenderMode.ON)
         {
-            if (!windows)
-            {
-                return "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
-                    + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
-            }
             String bufferPath = "A common cause on Windows is -Djava.io.tmpdir without a trailing " //$NON-NLS-1$
                 + "separator: check the EDT log for AccessDeniedException on dtgraphics-form.bin. End " //$NON-NLS-1$
                 + "-Djava.io.tmpdir with a backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) " //$NON-NLS-1$

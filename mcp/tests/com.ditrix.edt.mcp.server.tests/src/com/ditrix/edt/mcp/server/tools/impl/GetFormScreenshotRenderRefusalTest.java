@@ -35,14 +35,17 @@ public class GetFormScreenshotRenderRefusalTest
         + "and restart EDT."; //$NON-NLS-1$
 
     @Test
-    public void testBufferedOnUnixIsNeutralForEveryStartupMode() throws Exception
+    public void testUnixIsNeutralForEveryLiveAndStartupMode() throws Exception
     {
         String expected = "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
             + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
-        for (NativeRenderMode startup : NativeRenderMode.values())
+        for (NativeRenderMode live : NativeRenderMode.values())
         {
-            assertEquals("Unix, startup=" + startup, expected, //$NON-NLS-1$
-                GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, startup, false));
+            for (NativeRenderMode startup : NativeRenderMode.values())
+            {
+                assertEquals("Unix, live=" + live + ", startup=" + startup, expected, //$NON-NLS-1$ //$NON-NLS-2$
+                    GetFormScreenshotTool.renderFailureAdvice(live, startup, false));
+            }
         }
     }
 
@@ -76,7 +79,7 @@ public class GetFormScreenshotRenderRefusalTest
     }
 
     @Test
-    public void testLiveOffOrUnknownKeepsFlagAdviceForEveryStartupModeAndOs() throws Exception
+    public void testLiveOffOrUnknownOnWindowsKeepsFlagAdviceForEveryStartupMode() throws Exception
     {
         String expected = "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
             + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$
@@ -85,11 +88,8 @@ public class GetFormScreenshotRenderRefusalTest
         {
             for (NativeRenderMode startup : NativeRenderMode.values())
             {
-                for (boolean windows : new boolean[] { false, true })
-                {
-                    assertEquals("live=" + live + ", startup=" + startup + ", windows=" + windows, expected, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        GetFormScreenshotTool.renderFailureAdvice(live, startup, windows));
-                }
+                assertEquals("live=" + live + ", startup=" + startup, expected, //$NON-NLS-1$ //$NON-NLS-2$
+                    GetFormScreenshotTool.renderFailureAdvice(live, startup, true));
             }
         }
     }
