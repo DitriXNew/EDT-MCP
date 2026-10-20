@@ -2185,7 +2185,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back BLANK rather than failing, so an empty snapshot means the flag is missing, not that the form has no elements. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
+    "description": "Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
@@ -2221,7 +2221,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back BLANK instead of failing, so an empty screenshot means the flag is missing, not that the call was wrong. Parameters and examples: get_tool_guide('get_form_screenshot').",
+    "description": "Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image can also mean the offscreen buffer is unavailable. Parameters and examples: get_tool_guide('get_form_screenshot').",
     "inputSchema": {
       "properties": {
         "formPath": {

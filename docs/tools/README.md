@@ -111,8 +111,8 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 | Tool | Description |
 |------|-------------|
-| [`get_form_layout_snapshot`](get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back… |
-| [`get_form_screenshot`](get_form_screenshot.md) | Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes… |
+| [`get_form_layout_snapshot`](get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot'). |
+| [`get_form_screenshot`](get_form_screenshot.md) | Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image… |
 | [`get_template_screenshot`](get_template_screenshot.md) | Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot'). |
 | [`validate_form_model`](validate_form_model.md) | Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no proce… |
 

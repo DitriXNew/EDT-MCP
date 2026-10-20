@@ -52,7 +52,7 @@ public class GetFormScreenshotRenderRefusalTest
     @Test
     public void testBufferedOnDiagnosesTmpdirInsteadOfAddingFlag() throws Exception
     {
-        try (RenderModeScope ignored = new RenderModeScope(true))
+        try (RenderModeScope ignored = new RenderModeScope(true, NativeRenderMode.ON))
         {
             String error = refusal();
 
@@ -70,9 +70,25 @@ public class GetFormScreenshotRenderRefusalTest
     }
 
     @Test
+    public void testBufferedForcedAtRuntimeNamesTheLaunchFlagBeforeTheBufferPath() throws Exception
+    {
+        try (RenderModeScope ignored = new RenderModeScope(true, NativeRenderMode.OFF))
+        {
+            String error = refusal();
+
+            assertFalse(error, error.contains("Ensure EDT runs with buffered native render")); //$NON-NLS-1$
+            assertTrue(error, error.contains("EDT was not launched with buffered native render")); //$NON-NLS-1$
+            assertTrue(error, error.contains("may not reach the renderer")); //$NON-NLS-1$
+            assertTrue(error, error.contains("-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini")); //$NON-NLS-1$
+            assertTrue(error, error.indexOf("1cedt.ini") < error.indexOf("dtgraphics-form.bin")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(error, error.contains("-Djava.io.tmpdir=C:\\edt_tmp\\")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testBufferedOffKeepsFlagAdviceAndExplainsDesignerSideEffect() throws Exception
     {
-        try (RenderModeScope ignored = new RenderModeScope(false))
+        try (RenderModeScope ignored = new RenderModeScope(false, NativeRenderMode.OFF))
         {
             String error = refusal();
 
@@ -151,9 +167,21 @@ public class GetFormScreenshotRenderRefusalTest
         private final Class<?> service;
         private final String[] flags = { "NATIVE_FORM_LAYOUT_RENDER", "NATIVE_FORM_BUFFERED_LAYOUT_RENDER" }; //$NON-NLS-1$ //$NON-NLS-2$
         private final boolean[] original = new boolean[flags.length];
+        private final Field startupCaptured;
+        private final Field startupBuffered;
+        private final Object originalCaptured;
+        private final Object originalBuffered;
 
-        RenderModeScope(boolean enabled) throws Exception
+        RenderModeScope(boolean enabled, NativeRenderMode startup) throws Exception
         {
+            startupCaptured = NativeRenderModeProbe.class.getDeclaredField("startupModesCaptured"); //$NON-NLS-1$
+            startupBuffered = NativeRenderModeProbe.class.getDeclaredField("startupBufferedRenderMode"); //$NON-NLS-1$
+            startupCaptured.setAccessible(true);
+            startupBuffered.setAccessible(true);
+            originalCaptured = startupCaptured.get(null);
+            originalBuffered = startupBuffered.get(null);
+            startupCaptured.set(null, Boolean.TRUE);
+            startupBuffered.set(null, startup);
             service = Class.forName("com._1c.g5.v8.dt.form.layout.service.NativeRenderService"); //$NON-NLS-1$
             for (int i = 0; i < flags.length; i++)
             {
@@ -180,6 +208,15 @@ public class GetFormScreenshotRenderRefusalTest
         @Override
         public void close()
         {
+            try
+            {
+                startupCaptured.set(null, originalCaptured);
+                startupBuffered.set(null, originalBuffered);
+            }
+            catch (IllegalAccessException e)
+            {
+                throw new AssertionError("restore the startup render snapshot", e); //$NON-NLS-1$
+            }
             boolean restored = true;
             for (int i = 0; i < flags.length; i++)
             {
