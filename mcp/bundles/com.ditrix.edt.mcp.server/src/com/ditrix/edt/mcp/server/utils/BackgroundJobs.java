@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.ditrix.edt.mcp.server.Activator;
+
 /**
  * Small bounded registry for long-running MCP work whose result is polled by id.
  * <p>
@@ -1008,6 +1010,12 @@ public final class BackgroundJobs implements AutoCloseable
         }
     }
 
+    /**
+     * Publishes a failure for any Throwable raised by the work, including after commit.
+     * Errors are logged and rethrown after recording the failure; existing terminal and
+     * cancellation decisions remain authoritative.
+     * This rule must migrate to the MCP Tasks store when #338 lands.
+     */
     private static void runWork(JobRecord record, long timeoutMs, JobWork work)
     {
         if (!record.isRunning())
@@ -1051,9 +1059,11 @@ public final class BackgroundJobs implements AutoCloseable
         {
             record.fail(failureMessage(e));
         }
-        catch (LinkageError e)
+        catch (Error e) // NOSONAR fail the record before logging and rethrowing the Error
         {
             record.fail(failureMessage(e));
+            Activator.logError("Background job " + record.id + " failed with an Error", e); //$NON-NLS-1$ //$NON-NLS-2$
+            throw e;
         }
     }
 
