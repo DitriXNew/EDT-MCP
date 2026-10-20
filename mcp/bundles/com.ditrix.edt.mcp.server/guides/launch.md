@@ -26,22 +26,25 @@ Use `mode="run"` for the same regular launch as EDT's green Run button. Omit `mo
 Set `automatedTestingMode="TESTCLIENT"` to start a runtime client with the platform's
 `/TESTCLIENT` option. `automatedTestingPort=1540` selects its `-TPort` connection port
 (integer 1..65535). If omitted, the working copy inherits the saved port; when no port
-is saved, EDT uses **1538**. The response echoes the normalized mode and effective port.
+is saved, EDT uses **1538**. The response echoes the normalized mode and effective port;
+if the saved port attribute cannot be read, the launch still succeeds and the port is absent.
 Mode values are accepted case-insensitively and stored as `TESTCLIENT` / `TESTMANAGER`.
 
 `automatedTestingMode="TESTMANAGER"` starts the platform's test-manager mode. It takes
 no port: `automatedTestingPort` is refused without `TESTCLIENT`. Attach and direct
 standalone-server configurations refuse both parameters because they start no client.
 These overrides affect this launch only; `create_launch_config` can save them instead.
+A launch can switch a saved mode or override its port, but cannot clear the saved mode.
+To clear it, delete and recreate the configuration without automated-testing parameters.
 
 Pair testing mode with `startupOption` when the test harness also needs a `/C` command:
 
 ```json
-{"launchConfigurationName":"MyProject Thin Client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540,"startupOption":"E2E654"}
+{"launchConfigurationName":"MyProject Thin Client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540,"startupOption":"RunTests"}
 ```
 
-The native automated-testing web-client ID attribute is out of scope; its semantics
-are not exposed by this tool. Starting or driving tests requires an actual infobase.
+Web-client test mode is unverified because
+no automated-testing web-client ID is stamped. Starting or driving tests requires an actual infobase.
 
 ## Debugging an external data processor
 

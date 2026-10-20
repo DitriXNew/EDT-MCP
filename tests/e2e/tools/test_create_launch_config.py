@@ -264,3 +264,13 @@ def test_create_automated_testing_port_range_is_enforced():
         _assert_automated_testing_refusal(
             {"automatedTestingMode": "TESTCLIENT", "automatedTestingPort": port},
             ["automatedTestingPort", str(port)], ["1 to 65535", "TESTCLIENT"])
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_create_malformed_automated_testing_port_names_caller_value():
+    for port in ("abc", "1.5", "2147483648", "", True):
+        raw = "true" if port is True else port
+        _assert_automated_testing_refusal(
+            {"automatedTestingMode": "TESTCLIENT", "automatedTestingPort": port},
+            ["automatedTestingPort", "Invalid automatedTestingPort: '%s'." % raw],
+            ["Use an integer from 1 to 65535", "TESTCLIENT"])

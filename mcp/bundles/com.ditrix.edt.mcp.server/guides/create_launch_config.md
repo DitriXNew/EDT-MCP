@@ -26,15 +26,17 @@ Mode values are case-insensitive and stored as `TESTCLIENT` / `TESTMANAGER`.
 `automatedTestingMode="TESTMANAGER"` persists test-manager mode, which has no port.
 `automatedTestingPort` is refused unless `automatedTestingMode="TESTCLIENT"`.
 The existing project/application requirements still apply; no config is saved when the
-project has no applications. The native automated-testing web-client ID is out of scope.
+project has no applications. Web-client test mode is unverified because
+no automated-testing web-client ID is stamped.
 
 ```json
 {"projectName":"MyProject","name":"My test client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540}
 ```
 
-Then call `launch({launchConfigurationName:"My test client", startupOption:"E2E654"})`
+Then call `launch({launchConfigurationName:"My test client", startupOption:"RunTests"})`
 to combine the saved testing mode with a per-launch `/C` startup command. This tool
-does not set `startupOption`; launching can override the saved testing attributes too.
+does not set `startupOption`. A launch can switch the saved mode or override its port,
+but cannot clear it. To clear a saved mode, delete and recreate the configuration without automated-testing parameters.
 
 ## Why applicationId is required (internal)
 
@@ -43,6 +45,8 @@ The tool always writes a real `applicationId` so `list_configurations` shows it 
 ## Result
 
 JSON with `action='created'`, `name`, `project`, `clientType`, `applicationId`, `type` (the launch type id), and a `message` with next-step hints.
+When requested, `automatedTestingMode` confirms the normalized mode saved in the configuration;
+`automatedTestingPort` confirms an explicit saved port and is absent when omitted.
 
 ## Cleanup
 

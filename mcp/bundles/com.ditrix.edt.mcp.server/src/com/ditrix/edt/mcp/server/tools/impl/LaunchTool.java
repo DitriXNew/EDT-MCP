@@ -292,6 +292,7 @@ public class LaunchTool implements IMcpTool
 
         // Read here, in execute(), rather than inside LaunchOverrides: rule #6 parity is checked
         // by scanning THIS method for the project's accessor idioms.
+        String automatedTestingPortInput = JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_PORT);
         LaunchOverrides overrides = LaunchOverrides.of(
             JsonUtils.extractStringArgument(params, KEY_STARTUP_OPTION),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_PROJECT_NAME),
@@ -303,7 +304,7 @@ public class LaunchTool implements IMcpTool
         // session and update the infobase on the way to the launch, and a mistyped external object
         // must not cost the caller those. The standalone-server refusal stays after type
         // resolution, where the type is known.
-        LaunchOverrides.Prepared prepared = overrides.prepare();
+        LaunchOverrides.Prepared prepared = overrides.prepare(automatedTestingPortInput);
         if (prepared.errorJson != null)
         {
             return prepared.errorJson;
@@ -1428,7 +1429,7 @@ public class LaunchTool implements IMcpTool
      */
     private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         String configProject, String effectiveAppId, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode) throws CoreException
+        LaunchOverrides.Prepared prepared, String mode)
     {
         ToolResult result = ToolResult.success()
             .put(KEY_LAUNCH_CONFIGURATION, config.getName())
@@ -1480,17 +1481,23 @@ public class LaunchTool implements IMcpTool
      * @param prepared the validated overrides and resolved external object
      * @param config the configuration or working copy dispatched to EDT
      * @return the same payload, for chaining
-     * @throws CoreException if the inherited testing port cannot be read
      */
     private static ToolResult echoOverrides(ToolResult result, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, ILaunchConfiguration config) throws CoreException
+        LaunchOverrides.Prepared prepared, ILaunchConfiguration config)
     {
         if (!LaunchOverrides.blank(overrides.automatedTestingMode()))
         {
             result.put(KEY_AUTOMATED_TESTING_MODE, overrides.automatedTestingMode());
             if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(overrides.automatedTestingMode()))
             {
-                result.put(KEY_AUTOMATED_TESTING_PORT, overrides.effectiveAutomatedTestingPort(config));
+                try
+                {
+                    result.put(KEY_AUTOMATED_TESTING_PORT, overrides.effectiveAutomatedTestingPort(config));
+                }
+                catch (CoreException e) // Response enrichment must not fail an already-dispatched launch.
+                {
+                    // Leave the port absent when its saved attribute cannot be read.
+                }
             }
         }
         if (!LaunchOverrides.blank(overrides.startupOption()))

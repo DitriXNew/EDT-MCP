@@ -187,6 +187,17 @@ public final class LaunchOverrides
      */
     public Prepared prepare()
     {
+        return prepare(automatedTestingPort == null ? null : automatedTestingPort.toString());
+    }
+
+    /**
+     * Validates the overrides while retaining the caller's port text for actionable refusals.
+     *
+     * @param automatedTestingPortInput the original port argument before typed extraction
+     * @return the prepared overrides, or a ready error JSON inside them
+     */
+    public Prepared prepare(String automatedTestingPortInput)
+    {
         if (isEmpty())
         {
             return new Prepared(this, null, null);
@@ -204,8 +215,8 @@ public final class LaunchOverrides
             if (automatedTestingPort < 1 || automatedTestingPort > 65535)
             {
                 return new Prepared(this, null, ToolResult.error(
-                    "Invalid automatedTestingPort: " + automatedTestingPort //$NON-NLS-1$
-                        + ". Use an integer from 1 to 65535 for automatedTestingMode=TESTCLIENT.") //$NON-NLS-1$
+                    "Invalid automatedTestingPort: '" + automatedTestingPortInput //$NON-NLS-1$
+                        + "'. Use an integer from 1 to 65535 for automatedTestingMode=TESTCLIENT.") //$NON-NLS-1$
                     .toJson());
             }
             if (!LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(automatedTestingMode))

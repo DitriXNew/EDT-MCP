@@ -112,23 +112,9 @@ public class CreateLaunchConfigAutomatedTestingToolTest
         IProject project = mock(IProject.class);
         LaunchOverrides.Prepared prepared = overrides(null, mode, port).prepare();
         assertNull(prepared.errorJson);
-        Method populate;
-        try
-        {
-            populate = CreateLaunchConfigTool.class.getDeclaredMethod("populateWorkingCopy",
-                ILaunchConfigurationWorkingCopy.class, IProject.class, String.class, String.class,
-                String.class, LaunchOverrides.Prepared.class);
-        }
-        catch (NoSuchMethodException e)
-        {
-            // Run the original population seam on the base; the missing attributes must fail below.
-            populate = CreateLaunchConfigTool.class.getDeclaredMethod("populateWorkingCopy",
-                ILaunchConfigurationWorkingCopy.class, IProject.class, String.class, String.class, String.class);
-            populate.setAccessible(true);
-            populate.invoke(null, copy, project, "Project654", "App654", CreateLaunchConfigTool.COMPONENT_TYPE_THIN);
-            verify(copy).setAttribute(MODE_ATTRIBUTE, expectedMode);
-            return;
-        }
+        Method populate = CreateLaunchConfigTool.class.getDeclaredMethod("populateWorkingCopy",
+            ILaunchConfigurationWorkingCopy.class, IProject.class, String.class, String.class,
+            String.class, LaunchOverrides.Prepared.class);
         populate.setAccessible(true);
         populate.invoke(null, copy, project, "Project654", "App654", CreateLaunchConfigTool.COMPONENT_TYPE_THIN,
             prepared);

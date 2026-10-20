@@ -749,3 +749,19 @@ def test_automated_testing_port_range_is_enforced_before_launch():
         assert_error_quality(e, names=["automatedTestingPort", str(port)],
                              suggests=["1 to 65535", "TESTCLIENT"])
         assert_no_diff("invalid testing port must leave the fixture unchanged")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_malformed_automated_testing_port_names_caller_value():
+    for port in ("abc", "1.5", "2147483648", "", True):
+        e = assert_error(call("launch", {
+            "launchConfigurationName": "NoSuchLaunchConfig_654_e2e",
+            "automatedTestingMode": "TESTCLIENT",
+            "automatedTestingPort": port,
+            "restartIfRunning": True,
+        }), "malformed testing port must be refused before launch")
+        assert_error_quality(e, names=["automatedTestingPort"],
+                             suggests=["Use an integer from 1 to 65535", "TESTCLIENT"])
+        raw = "true" if port is True else port
+        assert "Invalid automatedTestingPort: '%s'." % raw in e, e
+        assert_no_diff("a malformed testing port must leave the fixture unchanged")

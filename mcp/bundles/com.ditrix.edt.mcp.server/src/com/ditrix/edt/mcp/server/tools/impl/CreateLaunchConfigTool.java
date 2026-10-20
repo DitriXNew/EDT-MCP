@@ -169,6 +169,12 @@ public class CreateLaunchConfigTool implements IMcpTool
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID stored in the config (real IApplicationManager id).") //$NON-NLS-1$
             .stringProperty("type", "Launch configuration type id.") //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty(KEY_AUTOMATED_TESTING_MODE,
+                "Persisted native EDT testing mode; absent when not requested.", //$NON-NLS-1$
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT,
+                LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER)
+            .integerProperty(KEY_AUTOMATED_TESTING_PORT,
+                "Explicit TESTCLIENT port persisted in the configuration; absent when omitted.") //$NON-NLS-1$
             .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -193,10 +199,12 @@ public class CreateLaunchConfigTool implements IMcpTool
         String clientTypeParam = JsonUtils.extractStringArgument(params, KEY_CLIENT_TYPE);
         String nameParam = JsonUtils.extractStringArgument(params, "name"); //$NON-NLS-1$
         String applicationIdParam = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
-        LaunchOverrides.Prepared testing = LaunchOverrides.of(null, null, null,
+        String automatedTestingPortInput = JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_PORT);
+        LaunchOverrides testingOverrides = LaunchOverrides.of(null, null, null,
             JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_MODE),
             params != null && params.containsKey(KEY_AUTOMATED_TESTING_PORT)
-                ? JsonUtils.extractIntArgument(params, KEY_AUTOMATED_TESTING_PORT, 0) : null).prepare();
+                ? JsonUtils.extractIntArgument(params, KEY_AUTOMATED_TESTING_PORT, 0) : null);
+        LaunchOverrides.Prepared testing = testingOverrides.prepare(automatedTestingPortInput);
         if (testing.errorJson != null)
         {
             return testing.errorJson;
@@ -267,7 +275,7 @@ public class CreateLaunchConfigTool implements IMcpTool
 
             ILaunchConfiguration saved = wc.doSave();
 
-            return ToolResult.success()
+            ToolResult result = ToolResult.success()
                 .put("action", "created") //$NON-NLS-1$ //$NON-NLS-2$
                 .put("name", saved.getName()) //$NON-NLS-1$
                 .put("project", projectName) //$NON-NLS-1$
@@ -277,8 +285,16 @@ public class CreateLaunchConfigTool implements IMcpTool
                 .put("message", "Created '" + saved.getName() + "' (" + clientLabel //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + ") for project '" + projectName + "'. Use launch or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "run_yaxunit_tests with launchConfigurationName='" + saved.getName() //$NON-NLS-1$
-                    + "' to launch it.") //$NON-NLS-1$
-                .toJson();
+                    + "' to launch it."); //$NON-NLS-1$
+            if (testingOverrides.automatedTestingMode() != null)
+            {
+                result.put(KEY_AUTOMATED_TESTING_MODE, testingOverrides.automatedTestingMode());
+                if (testingOverrides.automatedTestingPort() != null)
+                {
+                    result.put(KEY_AUTOMATED_TESTING_PORT, testingOverrides.automatedTestingPort());
+                }
+            }
+            return result.toJson();
         }
         catch (CoreException e)
         {

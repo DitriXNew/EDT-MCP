@@ -11,12 +11,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.lang.reflect.Method;
-
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Shared assertions and compatibility seams for the issue #654 red-on-base build. */
+/** Shared assertions and override construction for native automated-testing tests. */
 public final class AutomatedTestingTestSupport
 {
     public static final String MODE_ATTRIBUTE =
@@ -29,24 +27,10 @@ public final class AutomatedTestingTestSupport
     {
     }
 
-    /**
-     * On the base revision, exercise its actual override behavior with the new values ignored.
-     * This keeps every regression test runnable, so the base build records assertion failures
-     * rather than stopping at test compilation. The final implementation takes the five-value path.
-     */
-    public static LaunchOverrides overrides(String startupOption, String mode, Integer port) throws Exception
+    /** Constructs overrides through the native testing-mode factory. */
+    public static LaunchOverrides overrides(String startupOption, String mode, Integer port)
     {
-        Method factory;
-        try
-        {
-            factory = LaunchOverrides.class.getMethod("of", String.class, String.class, String.class,
-                String.class, Integer.class);
-        }
-        catch (NoSuchMethodException e)
-        {
-            return LaunchOverrides.of(startupOption, null, null);
-        }
-        return (LaunchOverrides)factory.invoke(null, startupOption, null, null, mode, port);
+        return LaunchOverrides.of(startupOption, null, null, mode, port);
     }
 
     public static String errorMessage(String json, String... fragments)
