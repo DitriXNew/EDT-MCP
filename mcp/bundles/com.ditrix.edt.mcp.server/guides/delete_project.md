@@ -14,10 +14,23 @@ Removing a project is destructive. With `deleteContent=true` the project's files
 
 ## Result
 
-JSON with `action` ('preview'/'deleted'), `confirmationRequired` (preview only), `project`, `deleteContent`, and a `message`.
+JSON with `action` ('preview'/'deleted'), `confirmationRequired` (preview only), `project`, `deleteContent`, and a `message`. A deletion also includes `state` (see below).
+
+## What 'deleted' means
+
+`action='deleted'` means the Eclipse workspace resource was deleted. EDT releases its project context asynchronously, after outstanding builds finish. The call waits up to **30 s** for that release and reports it separately:
+
+- `state='released'`: EDT has processed a DELETE stop, or its DT registration is absent and its workspace context is no longer started. Sequential callers can now `clean_project` the base or `create_project` the same name.
+- `state='releasing'`: the resource is gone, but EDT has not released its context within 30 s. Do not `clean_project` its base or `create_project` the same name yet: EDT may try to restart the deleted project and fail. Let EDT finish its background work; if release cannot be verified, restart EDT before retrying.
+- `state='unverified'`: the resource is gone, but lifecycle services are unavailable, so release could not be verified. Avoid those follow-up operations until release can be verified; restart EDT if needed.
+
+`list_projects` enumerates Eclipse workspace resources. A deleted resource can already be absent there while EDT still holds its context; absence does not prove context release.
+
+This guarantee covers sequential calls. A simultaneous clean of the base from another client can stop and restart contexts during the release check; serialize such workspace operations.
 
 ## Gotchas
 
 - The project must exist; a missing project is rejected with a `list_projects` hint.
 - Terminate any running launch against the project first; a busy project can fail to delete while it is held.
 - With `deleteContent=false` the on-disk files remain and can be re-imported with `import_configuration_from_xml`.
+- The release wait has a fixed 30 s bound and no input parameter; a running build can delay EDT beyond it. The Eclipse resource deletion itself retains its existing platform wait.
