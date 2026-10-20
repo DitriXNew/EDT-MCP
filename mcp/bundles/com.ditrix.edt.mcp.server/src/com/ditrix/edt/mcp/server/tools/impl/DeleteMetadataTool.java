@@ -916,6 +916,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
+        // The same gate as create_metadata's nested branch, and FIRST: the parsed chain is built from
+        // trimmed segments and drops a trailing empty one, so 'Subsystem.A.Subsystem.B.' or a padded
+        // name would otherwise delete B and its descendants as if the address were well formed.
+        String malformed = SubsystemUtils.malformedSegmentError(normFqn);
+        if (malformed != null)
+        {
+            return new ChainTarget(null, null, null, malformed + " Nothing was deleted."); //$NON-NLS-1$
+        }
         Subsystem leaf = SubsystemUtils.resolveInScope(scope, chain);
         if (leaf == null)
         {

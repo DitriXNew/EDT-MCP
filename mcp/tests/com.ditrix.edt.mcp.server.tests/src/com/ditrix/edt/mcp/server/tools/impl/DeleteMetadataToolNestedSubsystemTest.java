@@ -182,6 +182,20 @@ public class DeleteMetadataToolNestedSubsystemTest
     }
 
     @Test
+    public void testTrailingSeparatorIsRefusedNotResolvedAsTheChild()
+    {
+        String address = "Subsystem.A.Subsystem.B.";
+        assertRefused(target(address), address, "EMPTY segment");
+    }
+
+    @Test
+    public void testPaddedNameIsRefusedNotResolvedAsTheChild()
+    {
+        String address = "Subsystem.A.Subsystem. B ";
+        assertRefused(target(address), address, "padded segment");
+    }
+
+    @Test
     public void testSynonymDoesNotAddressAChild()
     {
         b.getSynonym().put("en", "DisplayName");
