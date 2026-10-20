@@ -15,6 +15,8 @@ Start a 1C application in EDT debug (default) or run mode. An already-running se
 | startupOption | — | string | The 1C /C startup option for THIS launch only (e.g. 'xddRun ...; xddReport ...'); applied to a working copy, the saved EDT configuration is not modified. Runtime-client configs only - an Attach config ignores it and is refused. |
 | externalObjectProjectName | — | string | Name of an EXTERNAL-OBJECTS project (not the configuration being debugged) whose data processor / report to run on startup; pair with externalObjectName. EDT builds the .epf itself - there is no way to run a prebuilt file with breakpoints, so import such a file into a project first. |
 | externalObjectName | — | string | Name of the external data processor / report inside externalObjectProjectName (the object NAME, not a file path); required together with it. Qualify it as 'ExternalDataProcessor.Name' / 'ExternalReport.Name' when a processor and a report share the name. |
+| automatedTestingMode | — | string (one of: TESTCLIENT, TESTMANAGER) | Native EDT testing mode; runtime-client configurations only. |
+| automatedTestingPort | — | integer | TESTCLIENT only: port 1..65535; omitted uses the saved port or EDT default 1538. |
 | restartIfRunning | — | boolean | Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call. |
 
 ## Guide
@@ -40,6 +42,31 @@ Use `mode="run"` for the same regular launch as EDT's green Run button. Omit `mo
 - **startupOption** (string) — the 1C `/C` startup option for THIS launch only, e.g. `xddRun DirectoryLoader C:/Tests/bin; xddReport C:/out/result.xml; xddShutdown;`. Applied to a working copy of the configuration; the saved EDT configuration is never modified and no `doSave()` happens. Runtime-client configurations only.
 - **externalObjectProjectName** + **externalObjectName** (strings, always together) — run an external data processor / report on startup (the `/Execute` option). See ## Debugging an external data processor.
 - **restartIfRunning** (boolean, default false) — controls what happens when a matching CLIENT session is already running. Default (`false`): short-circuit with `alreadyRunning: true` and do NOT relaunch — call `terminate_launch` first if you truly need a fresh session. `true`: non-interactively terminate the existing CLIENT session, wait for it to die (clearing its registry entry), then relaunch — so the EDT launch delegate never raises its blocking 'Debug session already exists' modal. It only ever terminates a live client session, NEVER a debug server: a standalone-server debug session's live threads are typed SERVER (a debug-mode standalone server keeps a live «Сервер» thread), so it is never treated as the duplicate and is left running. Use `restartIfRunning=true` for unattended re-launches after a code change instead of a separate `terminate_launch` + `launch` round-trip.
+
+## Automated testing
+
+Set `automatedTestingMode="TESTCLIENT"` to start a runtime client with the platform's
+`/TESTCLIENT` option. `automatedTestingPort=1540` selects its `-TPort` connection port
+(integer 1..65535). If omitted, the working copy inherits the saved port; when no port
+is saved, EDT uses **1538**. The response echoes the normalized mode and effective port;
+if the saved port attribute cannot be read, the launch still succeeds and the port is absent.
+Mode values are accepted case-insensitively and stored as `TESTCLIENT` / `TESTMANAGER`.
+
+`automatedTestingMode="TESTMANAGER"` starts the platform's test-manager mode. It takes
+no port: `automatedTestingPort` is refused without `TESTCLIENT`. Attach and direct
+standalone-server configurations refuse both parameters because they start no client.
+These overrides affect this launch only; `create_launch_config` can save them instead.
+A launch can switch a saved mode or override its port, but cannot clear the saved mode.
+To clear it, delete and recreate the configuration without automated-testing parameters.
+
+Pair testing mode with `startupOption` when the test harness also needs a `/C` command:
+
+```json
+{"launchConfigurationName":"MyProject Thin Client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540,"startupOption":"RunTests"}
+```
+
+Web-client test mode is unverified because
+no automated-testing web-client ID is stamped. Starting or driving tests requires an actual infobase.
 
 ## Debugging an external data processor
 
