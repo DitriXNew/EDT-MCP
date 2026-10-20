@@ -67,6 +67,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
@@ -109,6 +110,7 @@ import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.SecureXml;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
@@ -834,6 +836,28 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
+        // A nested subsystem is a separate top object referenced by its parent, so the generic
+        // containment grammar cannot resolve it. Keep a one-level subsystem on the existing path.
+        String[] subsystemChain = SubsystemUtils.parseSubsystemPath(normFqn);
+        if (subsystemChain != null && subsystemChain.length > 1)
+        {
+            BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(ctx.project);
+            if (!modelResolution.isAvailable())
+            {
+                return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
+            }
+            final String chainFqn = normFqn;
+            ChainTarget target = BmTransactions.read(modelResolution.getModel(),
+                "ResolveNestedSubsystemDelete", (tx, pm) -> //$NON-NLS-1$
+                    resolveNestedSubsystemTarget(ctx.scope, chainFqn));
+            if (target.error != null)
+            {
+                return ToolResult.error(target.error).toJson();
+            }
+            return prepareMdClassDelete(ctx.project, target.fqn, target.object, target.containerFqn,
+                confirm, force, refactoringService, modelResolution);
+        }
+
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
         // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
         // would miss the stored name — the resolver retries the normalized FQN.
@@ -842,12 +866,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null)
         {
-            return ToolResult.error("Node not found: " + fqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
-                + "'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount'). " //$NON-NLS-1$
-                + "Any node create_metadata can address can be deleted; see " //$NON-NLS-1$
-                + "get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
-                + "Use get_metadata_objects to find an object's FQN." //$NON-NLS-1$
+            return ToolResult.error(nodeNotFound(fqn)
                 + MetadataNodeResolver.yoNotFoundHint(normFqn)
                 + ctx.scope.addressingHint(normFqn)).toJson();
         }
@@ -865,6 +884,87 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String containerFqn = containerExportFqn(node.owner);
         return prepareMdClassDelete(ctx.project, normFqn, node.object, containerFqn, confirm, force,
             refactoringService, modelResolution);
+    }
+
+    /** A resolved nested-subsystem delete, or a refusal with no target. Package-visible for tests. */
+    static final class ChainTarget
+    {
+        final Subsystem object;
+        final String fqn;
+        final String containerFqn;
+        final String error;
+
+        private ChainTarget(Subsystem object, String fqn, String containerFqn, String error)
+        {
+            this.object = object;
+            this.fqn = fqn;
+            this.containerFqn = containerFqn;
+            this.error = error;
+        }
+    }
+
+    /**
+     * Resolves a nested chain through the shared subsystem resolver, with no yo retry. The stored
+     * parent links must spell the same address before any object can become a deletion target.
+     * Call inside a BM read boundary for attached model objects; null keeps the generic path.
+     */
+    static ChainTarget resolveNestedSubsystemTarget(MetadataScope scope, String normFqn)
+    {
+        String[] chain = SubsystemUtils.parseSubsystemPath(normFqn);
+        if (chain == null || chain.length <= 1)
+        {
+            return null;
+        }
+        Subsystem leaf = SubsystemUtils.resolveInScope(scope, chain);
+        if (leaf == null)
+        {
+            return new ChainTarget(null, null, null, SubsystemUtils.notFoundMessage(normFqn));
+        }
+        SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(leaf);
+        if (!lineage.spells(chain))
+        {
+            return new ChainTarget(null, null, null, "Cannot delete '" + normFqn //$NON-NLS-1$
+                + "': the stored lineage of this subsystem does not spell the address. " //$NON-NLS-1$
+                + "Nothing was deleted. Check the parent links in EDT and use list_subsystems " //$NON-NLS-1$
+                + "to verify the whole chain before retrying delete_metadata."); //$NON-NLS-1$
+        }
+        return new ChainTarget(leaf, lineage.chainFqn(), containerExportFqn(leaf.getParentSubsystem()), null);
+    }
+
+    /** Actionable not-found text shared by the generic path and its headless contract tests. */
+    static String nodeNotFound(String fqn)
+    {
+        int dot = fqn == null ? -1 : fqn.indexOf('.');
+        if (dot > 0 && SubsystemUtils.isSubsystemTypeToken(fqn.substring(0, dot)))
+        {
+            return SubsystemUtils.notFoundMessage(fqn);
+        }
+        return "Node not found: " + fqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
+            + "'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount'). " //$NON-NLS-1$
+            + "A nested subsystem uses 'Subsystem.<Parent>.Subsystem.<Child>' (repeatable to any depth). " //$NON-NLS-1$
+            + "See get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
+            + "Use get_metadata_objects to find an object's FQN."; //$NON-NLS-1$
+    }
+
+    /**
+     * Refuse both top-level and nested parents until EDT's child-file cascade is verified live.
+     * Read inside a BM boundary; force cannot make leaving orphaned subsystem files acceptable.
+     */
+    private static String subsystemChildrenError(Subsystem parent, String fqn)
+    {
+        if (parent.getSubsystems().isEmpty())
+        {
+            return null;
+        }
+        List<String> children = new ArrayList<>();
+        for (Subsystem child : parent.getSubsystems())
+        {
+            children.add(fqn + "." + SubsystemUtils.chainFqn(new String[] {child.getName()}, 1)); //$NON-NLS-1$
+        }
+        return "Cannot delete subsystem '" + fqn + "' because it still has nested children: " //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", children) + ". Delete these children first with delete_metadata, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "then retry the parent. Nothing was deleted."; //$NON-NLS-1$
     }
 
     /**
@@ -910,6 +1010,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (!modelResolution.isAvailable())
         {
             return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
+        }
+
+        if (object instanceof Subsystem)
+        {
+            String childrenError = BmTransactions.read(modelResolution.getModel(),
+                "CheckSubsystemDeleteChildren", (tx, pm) -> //$NON-NLS-1$
+                    subsystemChildrenError((Subsystem)object, normFqn));
+            if (childrenError != null)
+            {
+                return ToolResult.error(childrenError).toJson();
+            }
         }
 
         IRefactoring refactoring;
@@ -1270,29 +1381,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return "src/Configuration/Configuration.mdo"; //$NON-NLS-1$
         }
-        String direct = MetadataPathResolver.resolveTopObjectMdoPath(containerFqn);
-        if (direct != null)
+        // Subsystem has no entry in the general directory map, and each nested level has its
+        // own folder. Parse before the generic path mapper; these are separate top objects.
+        String[] chain = SubsystemUtils.parseSubsystemPath(containerFqn);
+        if (chain != null)
         {
-            return direct;
-        }
-
-        // Nested subsystems are top BM objects too, stored below their parent's Subsystems folder.
-        String[] parts = containerFqn == null ? new String[0] : containerFqn.split("\\."); //$NON-NLS-1$
-        if (parts.length < 4 || (parts.length & 1) != 0
-            || !"Subsystems".equals(MetadataPathResolver.resolveMetadataDir(parts[0]))) //$NON-NLS-1$
-        {
-            return null;
-        }
-        StringBuilder path = new StringBuilder("src/Subsystems/").append(parts[1]); //$NON-NLS-1$
-        for (int i = 2; i < parts.length; i += 2)
-        {
-            if (!"subsystems".equals(MetadataNodeResolver.featureNameForKind(parts[i]))) //$NON-NLS-1$
+            StringBuilder path = new StringBuilder("src"); //$NON-NLS-1$
+            for (String name : chain)
             {
-                return null;
+                path.append("/Subsystems/").append(name); //$NON-NLS-1$
             }
-            path.append("/Subsystems/").append(parts[i + 1]); //$NON-NLS-1$
+            return path.append('/').append(chain[chain.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
         }
-        return path.append('/').append(parts[parts.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
+        return MetadataPathResolver.resolveTopObjectMdoPath(containerFqn);
     }
 
     /** Reads and structurally checks one registering {@code .mdo}. */
@@ -1577,7 +1678,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String addressedPrefix = registeringContainer;
         for (int i = 0; i < remainder.length; i += 2)
         {
-            String feature = MetadataNodeResolver.featureNameForKind(remainder[i]);
+            // A subsystem's registration is a reference, deliberately absent from the generic
+            // containment-kind map. Recognize it only for this serialized registration check.
+            String feature = SubsystemUtils.isSubsystemTypeToken(remainder[i])
+                ? "subsystems" : MetadataNodeResolver.featureNameForKind(remainder[i]); //$NON-NLS-1$
             if (feature == null)
             {
                 return false;

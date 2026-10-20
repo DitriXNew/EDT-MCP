@@ -34,6 +34,10 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    assert_no_diff_rel,
+    calls_aborted,
+    reset_model,
+    PROJECT_REL,
     assert_tree_unchanged,
     assert_diff_contains,
     assert_disk_lacks,
@@ -1217,3 +1221,166 @@ def test_delete_success_carries_no_marker_fields():
     assert r.structured.get("action") == "executed", "must take the execute branch: %r" % (r.structured,)
     assert_no_marker_fields(r.structured, "a delete success reports no written-object markers")
     assert_not_contains(_list_commonmodules(), "| Calc ", "MODEL read-back: CommonModule.Calc is gone")
+
+
+# Nested subsystems (#734). These action tests restore the seeded fixture themselves, since the
+# orchestrator's write-metadata reset is not selected by kind=action. Never race a timed-out call.
+_SUBSYSTEM_PARENT_FQN = "Subsystem.Subsystem"
+_SUBSYSTEM_PARENT_MDO = "src/Subsystems/Subsystem/Subsystem.mdo"
+_SUBSYSTEM_CHILD_FQN = "Subsystem.Subsystem.Subsystem.E2EDelChild"
+_SUBSYSTEM_CHILD_MDO = "src/Subsystems/Subsystem/Subsystems/E2EDelChild/E2EDelChild.mdo"
+_CONFIGURATION_MDO = "src/Configuration/Configuration.mdo"
+
+
+def _restore_nested_delete_fixture():
+    if not calls_aborted():
+        # reset_model owns the harness's protected revert/clean/settle cycle, including late exports.
+        reset_model()
+        assert_no_diff("the nested-subsystem action must restore the fixture")
+        assert_disk_path_gone("src/Subsystems/Subsystem/Subsystems",
+                              "restoration must leave no seeded Subsystems folder")
+
+
+def _seed_nested_delete_child():
+    seed = call("create_metadata", {"projectName": PROJECT, "fqn": _SUBSYSTEM_CHILD_FQN})
+    assert_ok(seed, "seed the nested subsystem under the fixture's Subsystem.Subsystem")
+    # create submits both exports, so read them before any further MCP round trip.
+    parent_xml = read_disk(_SUBSYSTEM_PARENT_MDO)
+    child_xml = read_disk(_SUBSYSTEM_CHILD_MDO)
+    assert_contains(parent_xml, "<subsystems>%s</subsystems>" % _SUBSYSTEM_CHILD_FQN,
+                    "the parent must register the seeded child on disk")
+    assert_contains(child_xml, "<name>E2EDelChild</name>",
+                    "the seeded child must have its own persisted top-object file")
+    settle_or_fail("the delete of the newly created nested subsystem")
+    return parent_xml, child_xml
+
+
+def _exercise_nested_subsystem_delete(address, preview_only=False, force=False):
+    settle_or_fail("the nested-subsystem delete round trip")
+    configuration_before = read_disk(_CONFIGURATION_MDO)
+    try:
+        parent_before, child_before = _seed_nested_delete_child()
+        if preview_only:
+            before_preview = tree_snapshot()
+            preview = call("delete_metadata", {"projectName": PROJECT, "fqn": address})
+            # Preview reads once immediately too: no later model request can hide a write.
+            parent_after_preview = read_disk(_SUBSYSTEM_PARENT_MDO)
+            child_after_preview = read_disk(_SUBSYSTEM_CHILD_MDO)
+            assert_ok(preview, "preview deleting the addressed nested subsystem")
+            assert preview.structured.get("action") == "preview", preview.structured
+            assert preview.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, preview.structured
+            assert preview.structured.get("refactoringTitle"), "preview must name the EDT refactoring"
+            items = preview.structured.get("items") or []
+            assert any("E2EDelChild" in str(item.get("name")) for item in items), \
+                "preview must name the child it would remove: %r" % (items,)
+            assert parent_after_preview == parent_before, "preview must not alter the seeded parent"
+            assert child_after_preview == child_before, "preview must not alter the seeded child"
+            assert_tree_unchanged(before_preview, "the nested delete preview must write nothing")
+            assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                               "nested create and preview must leave Configuration.mdo unchanged")
+
+            model = call("list_subsystems", {"projectName": PROJECT})
+            assert_ok(model, "read back the unmodified subsystem tree after preview")
+            assert_contains(model.text, _SUBSYSTEM_CHILD_FQN, "preview must keep the child in the model")
+            return
+
+        result = call("delete_metadata", {
+            "projectName": PROJECT, "fqn": address, "confirm": True, "force": force,
+        })
+        assert_ok(result, "confirm the nested-subsystem delete")
+        # The delete submits its PARENT's export. Assert that file immediately, before polling
+        # the child's removal or making a model call; those would give a broken barrier more time.
+        parent_after_delete = read_disk(_SUBSYSTEM_PARENT_MDO)
+        configuration_after_delete = read_disk(_CONFIGURATION_MDO)
+        assert_not_contains(parent_after_delete, "<subsystems>%s</subsystems>" % _SUBSYSTEM_CHILD_FQN,
+                            "the parent registration must already be removed on return")
+        assert_contains(parent_after_delete, "<name>Subsystem</name>", "the parent itself must survive")
+        assert configuration_after_delete == configuration_before, \
+            "a nested delete must leave Configuration.mdo unchanged"
+        assert result.structured.get("action") == "executed", result.structured
+        assert result.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, result.structured
+        assert result.structured.get("forced") is force, result.structured
+        # A completed generic delete omits persisted; only a partial result carries persisted=false.
+        assert "persisted" not in result.structured, result.structured
+        poll_disk_path_gone(_SUBSYSTEM_CHILD_MDO,
+                            ctx="EDT must remove the deleted child's separate top-object file")
+        assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                           "nested delete must not rewrite Configuration.mdo")
+        after = call("list_subsystems", {"projectName": PROJECT})
+        assert_ok(after, "read the subsystem tree after deleting the child")
+        assert_not_contains(after.text, "E2EDelChild", "the child must also be absent from the model")
+        assert_contains(after.text, _SUBSYSTEM_PARENT_FQN, "the parent must remain in the model")
+    finally:
+        _restore_nested_delete_fixture()
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_nested_subsystem_preview_writes_nothing():
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN, preview_only=True)
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_confirm_deletes_nested_subsystem_from_model_and_disk():
+    # This deliberately reaches confirm directly, so the OLD jar's confirmed-chain refusal is red
+    # in its own scenario instead of being hidden by the separate preview regression.
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN)
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_nested_subsystem_delete_with_russian_nonleading_token():
+    _exercise_nested_subsystem_delete(
+        "Subsystem.Subsystem.\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430.E2EDelChild",
+        force=True)
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_missing_nested_subsystem_explains_the_whole_chain():
+    address = "Subsystem.Subsystem.Subsystem.E2ENoSuchDeleteChild"
+    result = call("delete_metadata", {"projectName": PROJECT, "fqn": address, "confirm": True})
+    error = assert_error(result, "a missing nested subsystem must be refused")
+    assert_error_quality(error, names=[address], suggests=["list_subsystems"])
+    assert_contains(error, "Subsystem.<Parent>.Subsystem.<Child>", "the error must teach the chain grammar")
+    assert_not_contains(error, "Any node create_metadata can address", "remove the old false promise")
+    assert_no_diff("a missing nested-subsystem delete must write nothing")
+
+
+def _exercise_subsystem_parent_refusal(nested_parent):
+    settle_or_fail("the parent-with-children refusal")
+    try:
+        _seed_nested_delete_child()
+        parent_fqn = _SUBSYSTEM_CHILD_FQN if nested_parent else _SUBSYSTEM_PARENT_FQN
+        child_fqn = parent_fqn + ".Subsystem.E2EDelGrandchild" if nested_parent else _SUBSYSTEM_CHILD_FQN
+        if nested_parent:
+            assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": child_fqn}),
+                      "seed a grandchild to exercise a nested parent's refusal")
+            grandchild_mdo = "src/Subsystems/Subsystem/Subsystems/E2EDelChild/Subsystems/" \
+                "E2EDelGrandchild/E2EDelGrandchild.mdo"
+            assert_contains(read_disk(grandchild_mdo), "<name>E2EDelGrandchild</name>",
+                            "the grandchild must be persisted before the parent refusal")
+            settle_or_fail("the delete of a nested parent with a child")
+        before = tree_snapshot()
+        for options in ({}, {"confirm": True}, {"confirm": True, "force": True}):
+            result = call("delete_metadata", dict({"projectName": PROJECT, "fqn": parent_fqn}, **options))
+            error = assert_error(result, "a parent with nested children must be refused")
+            assert_error_quality(error, names=[parent_fqn, child_fqn],
+                                 suggests=["Delete these children first with delete_metadata"])
+            assert_contains(error, "still has nested children", "the refusal must explain the child safeguard")
+            assert_tree_unchanged(before, "a refused parent delete must not change any seeded file")
+        model = call("list_subsystems", {"projectName": PROJECT})
+        assert_ok(model, "read the preserved subsystem tree after parent refusals")
+        assert_contains(model.text, parent_fqn, "the refused parent must remain in the model")
+        assert_contains(model.text, child_fqn, "the child must remain attached in the model")
+        assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                           "refused parent deletes must not change the configuration registration")
+    finally:
+        _restore_nested_delete_fixture()
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_top_level_subsystem_with_child_is_refused_even_with_force():
+    _exercise_subsystem_parent_refusal(False)
+
+
+@e2e_test(tool="delete_metadata", kind="action")
+def test_nested_subsystem_with_child_is_refused_even_with_force():
+    _exercise_subsystem_parent_refusal(True)
