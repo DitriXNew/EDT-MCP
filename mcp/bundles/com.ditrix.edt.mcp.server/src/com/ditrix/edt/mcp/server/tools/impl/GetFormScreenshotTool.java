@@ -6,6 +6,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.widgets.Display;
 
@@ -344,27 +345,46 @@ public class GetFormScreenshotTool implements IMcpTool
         return ImageDataResult.image(imageData);
     }
 
-    /**
-     * Diagnoses image failures. The live mode says whether EDT renders buffered now; the startup
-     * snapshot says whether that came from the launch. A mode this tool forced at runtime may not
-     * reach the renderer (EDT builds its offscreen handler once), so it is not a proven buffer.
-     */
+    /** Gathers the current render modes and platform for the pure advice selector. */
     private static String renderFailureAdvice()
     {
-        if (NativeRenderModeProbe.getBufferedRenderMode() == NativeRenderMode.ON)
+        return renderFailureAdvice(NativeRenderModeProbe.getBufferedRenderMode(),
+            NativeRenderModeProbe.getStartupBufferedRenderMode(), Platform.OS_WIN32.equals(Platform.getOS()));
+    }
+
+    /**
+     * Diagnoses image failures without treating an unknown startup mode as a known launch setting.
+     * A mode this tool forced at runtime may not reach EDT's renderer; buffer-path advice is specific
+     * to Windows, while Unix failures also need a working display.
+     */
+    static String renderFailureAdvice(NativeRenderMode live, NativeRenderMode startup, boolean windows)
+    {
+        if (live == NativeRenderMode.ON)
         {
+            if (!windows)
+            {
+                return "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
+                    + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
+            }
             String bufferPath = "A common cause on Windows is -Djava.io.tmpdir without a trailing " //$NON-NLS-1$
                 + "separator: check the EDT log for AccessDeniedException on dtgraphics-form.bin. End " //$NON-NLS-1$
                 + "-Djava.io.tmpdir with a backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) " //$NON-NLS-1$
                 + "and restart EDT."; //$NON-NLS-1$
-            if (NativeRenderModeProbe.getStartupBufferedRenderMode() == NativeRenderMode.ON)
+            if (startup == NativeRenderMode.ON)
             {
                 return "EDT could not produce the offscreen form image. " + bufferPath; //$NON-NLS-1$
             }
-            return "EDT could not produce the offscreen form image. EDT was not launched with " //$NON-NLS-1$
-                + "buffered native render, and switching it on at runtime may not reach the renderer: " //$NON-NLS-1$
-                + "on Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
-                + "and restart EDT. If the image is still missing, check the buffer path. " + bufferPath; //$NON-NLS-1$
+            if (startup == NativeRenderMode.OFF)
+            {
+                return "EDT could not produce the offscreen form image. EDT was not launched with " //$NON-NLS-1$
+                    + "buffered native render, and switching it on at runtime may not reach the renderer: " //$NON-NLS-1$
+                    + "on Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
+                    + "and restart EDT. If the image is still missing, check the buffer path. " + bufferPath; //$NON-NLS-1$
+            }
+            return "EDT could not produce the offscreen form image. If EDT was not launched with " //$NON-NLS-1$
+                + "-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini, add it and restart EDT " //$NON-NLS-1$
+                + "(switching it on at runtime may not reach the renderer); otherwise check the buffer path. " //$NON-NLS-1$
+                + bufferPath;
         }
         return "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
             + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$

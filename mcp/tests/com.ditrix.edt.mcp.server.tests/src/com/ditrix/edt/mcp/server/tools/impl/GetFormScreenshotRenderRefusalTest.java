@@ -13,14 +13,9 @@ import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.Collection;
 
 import org.eclipse.swt.graphics.ImageData;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -30,79 +25,132 @@ import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
-/** Refusal diagnostics through the existing render gate and image-read paths, without a workbench. */
-@RunWith(Parameterized.class)
+/** Pure advice decisions and the existing render gate and image-read refusals, without a workbench. */
 public class GetFormScreenshotRenderRefusalTest
 {
-    private final String path;
-
-    @Parameters(name = "{0}")
-    public static Collection<Object[]> paths()
-    {
-        return Arrays.asList(new Object[][] {
-            { "refresh" }, { "requested form" }, { "active editor" }, { "rendered without image" } //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        });
-    }
-
-    public GetFormScreenshotRenderRefusalTest(String path)
-    {
-        this.path = path;
-    }
+    private static final String BUFFER_PATH_ADVICE =
+        "A common cause on Windows is -Djava.io.tmpdir without a trailing " //$NON-NLS-1$
+        + "separator: check the EDT log for AccessDeniedException on dtgraphics-form.bin. End " //$NON-NLS-1$
+        + "-Djava.io.tmpdir with a backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) " //$NON-NLS-1$
+        + "and restart EDT."; //$NON-NLS-1$
 
     @Test
-    public void testBufferedOnDiagnosesTmpdirInsteadOfAddingFlag() throws Exception
+    public void testBufferedOnUnixIsNeutralForEveryStartupMode() throws Exception
     {
-        try (RenderModeScope ignored = new RenderModeScope(true, NativeRenderMode.ON))
+        String expected = "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
+            + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
+        for (NativeRenderMode startup : NativeRenderMode.values())
         {
-            String error = refusal();
-
-            assertFalse(error, error.contains("-DnativeFormBufferedLayoutRender=true")); //$NON-NLS-1$
-            assertFalse(error, error.contains("Ensure EDT runs with buffered native render")); //$NON-NLS-1$
-            assertTrue(error, error.contains("EDT could not produce the offscreen form image")); //$NON-NLS-1$
-            assertTrue(error, error.contains("Windows")); //$NON-NLS-1$
-            assertTrue(error, error.contains("-Djava.io.tmpdir")); //$NON-NLS-1$
-            assertTrue(error, error.contains("trailing separator")); //$NON-NLS-1$
-            assertTrue(error, error.contains("AccessDeniedException on dtgraphics-form.bin")); //$NON-NLS-1$
-            assertTrue(error, error.contains("backslash")); //$NON-NLS-1$
-            assertTrue(error, error.contains("-Djava.io.tmpdir=C:\\edt_tmp\\")); //$NON-NLS-1$
-            assertTrue(error, error.contains("restart EDT")); //$NON-NLS-1$
+            assertEquals("Unix, startup=" + startup, expected, //$NON-NLS-1$
+                GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, startup, false));
         }
     }
 
     @Test
-    public void testBufferedForcedAtRuntimeNamesTheLaunchFlagBeforeTheBufferPath() throws Exception
+    public void testBufferedOnWindowsStartupOnKeepsBufferPathAdvice() throws Exception
     {
-        try (RenderModeScope ignored = new RenderModeScope(true, NativeRenderMode.OFF))
-        {
-            String error = refusal();
+        assertEquals("EDT could not produce the offscreen form image. " + BUFFER_PATH_ADVICE, //$NON-NLS-1$
+            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.ON, true));
+    }
 
-            assertFalse(error, error.contains("Ensure EDT runs with buffered native render")); //$NON-NLS-1$
-            assertTrue(error, error.contains("EDT was not launched with buffered native render")); //$NON-NLS-1$
-            assertTrue(error, error.contains("may not reach the renderer")); //$NON-NLS-1$
-            assertTrue(error, error.contains("-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini")); //$NON-NLS-1$
-            assertTrue(error, error.indexOf("1cedt.ini") < error.indexOf("dtgraphics-form.bin")); //$NON-NLS-1$ //$NON-NLS-2$
-            assertTrue(error, error.contains("-Djava.io.tmpdir=C:\\edt_tmp\\")); //$NON-NLS-1$
+    @Test
+    public void testBufferedOnWindowsStartupOffNamesTheLaunchFlagFirst() throws Exception
+    {
+        String expected = "EDT could not produce the offscreen form image. EDT was not launched with " //$NON-NLS-1$
+            + "buffered native render, and switching it on at runtime may not reach the renderer: " //$NON-NLS-1$
+            + "on Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
+            + "and restart EDT. If the image is still missing, check the buffer path. " + BUFFER_PATH_ADVICE; //$NON-NLS-1$
+        assertEquals(expected,
+            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.OFF, true));
+    }
+
+    @Test
+    public void testBufferedOnWindowsUnknownStartupIsConditional() throws Exception
+    {
+        String advice = GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.UNKNOWN, true);
+        assertFalse(advice, advice.contains("EDT was not launched with buffered native render")); //$NON-NLS-1$
+        assertEquals("EDT could not produce the offscreen form image. If EDT was not launched with " //$NON-NLS-1$
+            + "-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini, add it and restart EDT " //$NON-NLS-1$
+            + "(switching it on at runtime may not reach the renderer); otherwise check the buffer path. " //$NON-NLS-1$
+            + BUFFER_PATH_ADVICE, advice);
+    }
+
+    @Test
+    public void testLiveOffOrUnknownKeepsFlagAdviceForEveryStartupModeAndOs() throws Exception
+    {
+        String expected = "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
+            + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$
+            + "and can leave it gray if no buffer is available) and try again."; //$NON-NLS-1$
+        for (NativeRenderMode live : new NativeRenderMode[] { NativeRenderMode.OFF, NativeRenderMode.UNKNOWN })
+        {
+            for (NativeRenderMode startup : NativeRenderMode.values())
+            {
+                for (boolean windows : new boolean[] { false, true })
+                {
+                    assertEquals("live=" + live + ", startup=" + startup + ", windows=" + windows, expected, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        GetFormScreenshotTool.renderFailureAdvice(live, startup, windows));
+                }
+            }
         }
     }
 
     @Test
-    public void testBufferedOffKeepsFlagAdviceAndExplainsDesignerSideEffect() throws Exception
+    public void testRefreshRefusalUsesCurrentAdvice() throws Exception
     {
-        try (RenderModeScope ignored = new RenderModeScope(false, NativeRenderMode.OFF))
-        {
-            String error = refusal();
+        assertRefusalUsesCurrentAdvice("refresh", //$NON-NLS-1$
+            "refresh=true was requested but the form could not be re-rendered in time, so no " //$NON-NLS-1$
+            + "screenshot was taken: returning the previously rendered image would silently " //$NON-NLS-1$
+            + "show stale (pre-edit) content. ", //$NON-NLS-1$
+            " Or call with refresh=false to accept the last rendered image."); //$NON-NLS-1$
+    }
 
-            assertTrue(error, error.contains("Ensure EDT runs with buffered native render")); //$NON-NLS-1$
-            assertTrue(error, error.contains("-DnativeFormBufferedLayoutRender=true")); //$NON-NLS-1$
-            assertTrue(error, error.contains("on Windows")); //$NON-NLS-1$
-            assertTrue(error, error.contains("switches the designer to offscreen images")); //$NON-NLS-1$
-            assertTrue(error, error.contains("gray")); //$NON-NLS-1$
-            assertTrue(error, error.contains("try again")); //$NON-NLS-1$
+    @Test
+    public void testRequestedFormRefusalUsesCurrentAdvice() throws Exception
+    {
+        assertRefusalUsesCurrentAdvice("requested form", //$NON-NLS-1$
+            "Could not render the requested form 'CommonForm.Test' in time, so no screenshot was taken. " //$NON-NLS-1$
+            + "Form image data is not available: its WYSIWYG representation produced no image within the wait budget. ", //$NON-NLS-1$
+            ""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testActiveEditorRefusalUsesCurrentAdvice() throws Exception
+    {
+        assertRefusalUsesCurrentAdvice("active editor", //$NON-NLS-1$
+            "Form image data is not available: the form did not finish rendering in time, " //$NON-NLS-1$
+            + "so no image could be captured. ", ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderedWithoutImageRefusalUsesCurrentAdvice() throws Exception
+    {
+        assertRefusalUsesCurrentAdvice("rendered without image", "Form image data is not available. ", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** Each refusal must preserve its envelope and include exactly the advice selected in this JVM. */
+    private static void assertRefusalUsesCurrentAdvice(String path, String prefix, String suffix) throws Exception
+    {
+        for (boolean enabled : new boolean[] { false, true })
+        {
+            for (NativeRenderMode startup : NativeRenderMode.values())
+            {
+                try (RenderModeScope ignored = new RenderModeScope(enabled, startup))
+                {
+                    assertEquals(prefix + currentAdvice() + suffix, refusal(path));
+                }
+            }
         }
+    }
+
+    private static String currentAdvice() throws Exception
+    {
+        Method advice = GetFormScreenshotTool.class.getDeclaredMethod("renderFailureAdvice"); //$NON-NLS-1$
+        advice.setAccessible(true);
+        return (String)advice.invoke(null);
     }
 
     /** Keeps the existing JSON error envelope and the render-unavailable sentinels under test. */
-    private String refusal() throws Exception
+    private static String refusal(String path) throws Exception
     {
         CaptureResult result;
         if ("refresh".equals(path) || "requested form".equals(path)) //$NON-NLS-1$ //$NON-NLS-2$
