@@ -8,8 +8,10 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
@@ -20,7 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
  * Per-launch attribute overrides for a debug launch: the {@code /C} startup option, and the
- * external data processor / report to run on startup ({@code /Execute}).
+ * external data processor / report to run on startup ({@code /Execute}), plus automated testing.
  *
  * <p><b>Nothing here is persisted.</b> The overrides are applied to an
  * {@link ILaunchConfigurationWorkingCopy}, which is itself an {@link ILaunchConfiguration} and can
@@ -56,12 +58,19 @@ public final class LaunchOverrides
 
     private final String externalObjectName;
 
+    private final String automatedTestingMode;
+
+    private final Integer automatedTestingPort;
+
     private LaunchOverrides(String startupOption, String externalObjectProjectName,
-        String externalObjectName)
+        String externalObjectName, String automatedTestingMode, Integer automatedTestingPort)
     {
         this.startupOption = startupOption;
         this.externalObjectProjectName = externalObjectProjectName;
         this.externalObjectName = externalObjectName;
+        this.automatedTestingMode = isBlank(automatedTestingMode) ? null
+            : automatedTestingMode.trim().toUpperCase(Locale.ROOT);
+        this.automatedTestingPort = automatedTestingPort;
     }
 
     /**
@@ -79,7 +88,48 @@ public final class LaunchOverrides
     public static LaunchOverrides of(String startupOption, String externalObjectProjectName,
         String externalObjectName)
     {
-        return new LaunchOverrides(startupOption, externalObjectProjectName, externalObjectName);
+        return of(startupOption, externalObjectProjectName, externalObjectName, null, null);
+    }
+
+    /**
+     * Creates overrides including native EDT automated-testing attributes.
+     *
+     * @param startupOption the /C value, or null
+     * @param externalObjectProjectName the external-objects project, or null
+     * @param externalObjectName the external object name, or null
+     * @param automatedTestingMode TESTCLIENT or TESTMANAGER (case-insensitive), or null
+     * @param automatedTestingPort an explicit TESTCLIENT port, or null to keep EDT's setting
+     * @return the overrides, to validate with {@link #prepare()}
+     */
+    public static LaunchOverrides of(String startupOption, String externalObjectProjectName,
+        String externalObjectName, String automatedTestingMode, Integer automatedTestingPort)
+    {
+        return new LaunchOverrides(startupOption, externalObjectProjectName, externalObjectName,
+            automatedTestingMode, automatedTestingPort);
+    }
+
+    /** @return the normalized native testing mode, or null when absent. */
+    public String automatedTestingMode()
+    {
+        return automatedTestingMode;
+    }
+
+    /** @return the explicit port, or null when the saved setting / EDT default is used. */
+    public Integer automatedTestingPort()
+    {
+        return automatedTestingPort;
+    }
+
+    /**
+     * @param config the configuration whose existing port is inherited when none is supplied
+     * @return the port EDT will read, including an inherited value or its default
+     * @throws CoreException if the stored port attribute cannot be read
+     */
+    public int effectiveAutomatedTestingPort(ILaunchConfiguration config) throws CoreException
+    {
+        return automatedTestingPort != null ? automatedTestingPort
+            : config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER,
+                LaunchConfigUtils.DEFAULT_AUTOMATED_TESTING_PORT);
     }
 
     /** @return the {@code /C} startup option, or {@code null} / blank when unset. */
@@ -120,7 +170,8 @@ public final class LaunchOverrides
     public boolean isEmpty()
     {
         return isBlank(startupOption) && isBlank(externalObjectProjectName)
-            && isBlank(externalObjectName);
+            && isBlank(externalObjectName) && automatedTestingMode == null
+            && automatedTestingPort == null;
     }
 
     /**
@@ -139,6 +190,30 @@ public final class LaunchOverrides
         if (isEmpty())
         {
             return new Prepared(this, null, null);
+        }
+        if (automatedTestingMode != null
+            && !LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(automatedTestingMode)
+            && !LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER.equals(automatedTestingMode))
+        {
+            return new Prepared(this, null, ToolResult.error(
+                "Unknown automatedTestingMode value: '" + automatedTestingMode //$NON-NLS-1$
+                    + "'. Accepted values: TESTCLIENT, TESTMANAGER.").toJson()); //$NON-NLS-1$
+        }
+        if (automatedTestingPort != null)
+        {
+            if (automatedTestingPort < 1 || automatedTestingPort > 65535)
+            {
+                return new Prepared(this, null, ToolResult.error(
+                    "Invalid automatedTestingPort: " + automatedTestingPort //$NON-NLS-1$
+                        + ". Use an integer from 1 to 65535 for automatedTestingMode=TESTCLIENT.") //$NON-NLS-1$
+                    .toJson());
+            }
+            if (!LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(automatedTestingMode))
+            {
+                return new Prepared(this, null, ToolResult.error(
+                    "automatedTestingPort applies to automatedTestingMode=TESTCLIENT only. " //$NON-NLS-1$
+                        + "Set automatedTestingMode=TESTCLIENT or omit automatedTestingPort.").toJson()); //$NON-NLS-1$
+            }
         }
         boolean hasProject = !isBlank(externalObjectProjectName);
         boolean hasObject = !isBlank(externalObjectName);
@@ -183,6 +258,7 @@ public final class LaunchOverrides
         try
         {
             ILaunchConfigurationWorkingCopy workingCopy = config.getWorkingCopy();
+            applyToWorkingCopy(workingCopy);
             if (!isBlank(startupOption))
             {
                 workingCopy.setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, startupOption);
@@ -213,6 +289,21 @@ public final class LaunchOverrides
         {
             return Applied.error("Could not prepare the launch overrides for '" + config.getName() //$NON-NLS-1$
                 + "': " + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /** Stamps only the validated native testing attributes; never saves the working copy. */
+    private void applyToWorkingCopy(ILaunchConfigurationWorkingCopy workingCopy)
+    {
+        if (automatedTestingMode != null)
+        {
+            workingCopy.setAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_MODE, automatedTestingMode);
+            if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(automatedTestingMode)
+                && automatedTestingPort != null)
+            {
+                workingCopy.setAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER,
+                    automatedTestingPort.intValue());
+            }
         }
     }
 
@@ -284,7 +375,8 @@ public final class LaunchOverrides
         {
             return null;
         }
-        return "startupOption / externalObjectName apply to a RUNTIME-CLIENT launch, and '" //$NON-NLS-1$
+        return "startupOption / externalObjectName / automatedTestingMode / automatedTestingPort " //$NON-NLS-1$
+            + "apply to a RUNTIME-CLIENT launch, and '" //$NON-NLS-1$
             + config.getName() + "' is an Attach configuration, which ignores them (it attaches " //$NON-NLS-1$ //$NON-NLS-2$
             + "to an already-running server rather than starting a client). Name a " //$NON-NLS-1$
             + "runtime-client configuration, or drop these arguments."; //$NON-NLS-1$
@@ -559,6 +651,17 @@ public final class LaunchOverrides
         public Applied applyTo(ILaunchConfiguration config, boolean isAttach)
         {
             return overrides.applyTo(config, isAttach, externalObject);
+        }
+
+        /**
+         * Stamps validated testing attributes into a newly created runtime-client working copy.
+         * The caller owns persistence and must first check {@link #errorJson}.
+         *
+         * @param workingCopy the new configuration, not saved here
+         */
+        public void applyToWorkingCopy(ILaunchConfigurationWorkingCopy workingCopy)
+        {
+            overrides.applyToWorkingCopy(workingCopy);
         }
     }
 

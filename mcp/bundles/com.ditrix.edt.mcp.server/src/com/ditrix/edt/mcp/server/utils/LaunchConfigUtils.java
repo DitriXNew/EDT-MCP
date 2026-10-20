@@ -81,6 +81,27 @@ public final class LaunchConfigUtils
     /** Launch configuration attribute: startup option string passed to 1cv8c.exe via /C. */
     public static final String ATTR_STARTUP_OPTION = "com._1c.g5.v8.dt.launching.core.ATTR_STARTUP_OPTION"; //$NON-NLS-1$
 
+    /** Native attribute verified against EDT's ILaunchConfigurationAttributes.AUTOMATED_TESTING_MODE. */
+    public static final String ATTR_AUTOMATED_TESTING_MODE =
+        "com._1c.g5.v8.dt.launching.core.ATTR_AUTOMATED_TESTING_MODE"; //$NON-NLS-1$
+
+    /** Native int attribute verified against ILaunchConfigurationAttributes.AUTOMATED_TESTING_PORT_NUMBER. */
+    public static final String ATTR_AUTOMATED_TESTING_PORT_NUMBER =
+        "com._1c.g5.v8.dt.launching.core.ATTR_AUTOMATED_TESTING_PORT_NUMBER"; //$NON-NLS-1$
+
+    /** Native attribute verified against ILaunchConfigurationAttributes.AUTOMATED_TESTING_WEB_CLIENT_ID. */
+    public static final String ATTR_AUTOMATED_TESTING_WEB_CLIENT_ID =
+        "com._1c.g5.v8.dt.launching.core.ATTR_AUTOMATED_TESTING_WEB_CLIENT_ID"; //$NON-NLS-1$
+
+    /** Exact mode string returned by EDT's AutomatedTestingMode.TEST_CLIENT_MODE.getMode(). */
+    public static final String VALUE_AUTOMATED_TESTING_TEST_CLIENT = "TESTCLIENT"; //$NON-NLS-1$
+
+    /** Exact mode string returned by EDT's AutomatedTestingMode.TEST_MANAGER_MODE.getMode(). */
+    public static final String VALUE_AUTOMATED_TESTING_TEST_MANAGER = "TESTMANAGER"; //$NON-NLS-1$
+
+    /** Default test-client port read by EDT's RuntimeClientLaunchDelegate. */
+    public static final int DEFAULT_AUTOMATED_TESTING_PORT = 1538;
+
     /**
      * Launch attribute: the EXTERNAL OBJECTS project holding the object to run on startup.
      *

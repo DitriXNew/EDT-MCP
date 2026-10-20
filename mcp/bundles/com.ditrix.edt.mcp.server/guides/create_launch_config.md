@@ -16,6 +16,26 @@ Run mode vs debug mode is chosen at launch time (the mode string), never a diffe
 - **name** (optional): exact name for the new config. If omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
 - **applicationId** (optional): the infobase/application ID from `get_applications`. If omitted the project's **default application** is resolved automatically. If the project has no applications the call is rejected with a hint to create an infobase first.
 
+## Automated testing
+
+Set `automatedTestingMode="TESTCLIENT"` to persist the platform's `/TESTCLIENT` mode.
+`automatedTestingPort=1540` sets the `-TPort` connection port (integer 1..65535);
+omitting it leaves the native attribute unset, so EDT uses **1538** for this new config.
+Mode values are case-insensitive and stored as `TESTCLIENT` / `TESTMANAGER`.
+
+`automatedTestingMode="TESTMANAGER"` persists test-manager mode, which has no port.
+`automatedTestingPort` is refused unless `automatedTestingMode="TESTCLIENT"`.
+The existing project/application requirements still apply; no config is saved when the
+project has no applications. The native automated-testing web-client ID is out of scope.
+
+```json
+{"projectName":"MyProject","name":"My test client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540}
+```
+
+Then call `launch({launchConfigurationName:"My test client", startupOption:"E2E654"})`
+to combine the saved testing mode with a per-launch `/C` startup command. This tool
+does not set `startupOption`; launching can override the saved testing attributes too.
+
 ## Why applicationId is required (internal)
 
 The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
