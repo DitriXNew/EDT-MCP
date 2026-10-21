@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -8400,18 +8399,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     private static Long parseLong(String value)
     {
-        if (value == null || value.isEmpty())
-        {
-            return null;
-        }
-        try
-        {
-            return Long.valueOf(new BigDecimal(value.trim()).longValueExact());
-        }
-        catch (NumberFormatException | ArithmeticException e)
-        {
-            return null;
-        }
+        return JsonUtils.parseExactDecimalLong(value);
     }
 
     private static EObject childByName(EObject owner, EStructuralFeature feature, String name)

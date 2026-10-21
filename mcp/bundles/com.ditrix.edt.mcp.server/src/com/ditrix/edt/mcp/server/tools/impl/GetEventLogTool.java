@@ -357,16 +357,14 @@ public class GetEventLogTool implements IMcpTool
         List<Long> sessionFilter = null;
         if (sessionRaw != null && !sessionRaw.isBlank())
         {
-            try
-            {
-                sessionFilter = List.of(Long.valueOf(sessionRaw.trim()));
-            }
-            catch (NumberFormatException e)
+            Long session = JsonUtils.parseIntegralLong(sessionRaw);
+            if (session == null)
             {
                 return new ParsedQuery(null,
-                    ToolResult.error("Invalid session: '" + sessionRaw + "'. It must be an " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "integer session number.").toJson()); //$NON-NLS-1$
+                    ToolResult.error("Invalid session: '" + sessionRaw //$NON-NLS-1$
+                        + "'. It must be an integer session number.").toJson()); //$NON-NLS-1$
             }
+            sessionFilter = List.of(session);
         }
 
         int limit = Pagination.clampLimit(
