@@ -945,6 +945,11 @@ public class ToolSettingsServiceTest
         // Only version-unique additions are checked; shared names need direct migration tests.
         beforeMigration.removeAll(uniqueAdditions);
         PreferenceStore store = storedDisabledTools(beforeMigration, version - 1);
+        if (version - 1 >= 13)
+        {
+            // Post-v13 stores carry provenance; later migrations must not guess from their shape.
+            store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset.getId());
+        }
 
         ToolSettingsService.ensureMigratedForTest(store);
 
