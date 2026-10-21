@@ -69,8 +69,9 @@ import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 /**
  * Shared writer for the editable FORM CONTENT model ({@code com._1c.g5.v8.dt.form.model.Form}, a
@@ -3921,21 +3922,18 @@ public final class FormElementWriter
         {
             return indexOfSibling(destNames, position.substring(POS_AFTER.length()).trim(), movedName) + 1;
         }
-        try
-        {
-            int idx = Integer.parseInt(position.trim());
-            if (idx < 0)
-            {
-                throw Refusals.argument("Invalid position index '" + position //$NON-NLS-1$
-                    + "': must be zero or positive."); //$NON-NLS-1$
-            }
-            return idx;
-        }
-        catch (NumberFormatException e)
+        Integer idx = JsonUtils.parseIntegralInt(position);
+        if (idx == null)
         {
             throw Refusals.argument("Invalid position '" + position //$NON-NLS-1$
                 + "'. Expected an integer index, 'first', 'last', 'before:<name>' or 'after:<name>'."); //$NON-NLS-1$
         }
+        if (idx.intValue() < 0)
+        {
+            throw Refusals.argument("Invalid position index '" + JsonUtils.canonicalIntegerText(position) //$NON-NLS-1$
+                + "': must be zero or positive."); //$NON-NLS-1$
+        }
+        return idx.intValue();
     }
 
     /** The 0-based index of {@code sibling} in {@code destNames} (case-insensitive), or throws. */
