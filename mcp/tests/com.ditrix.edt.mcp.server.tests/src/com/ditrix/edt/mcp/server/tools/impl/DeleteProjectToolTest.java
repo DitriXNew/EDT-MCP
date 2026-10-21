@@ -87,6 +87,7 @@ public class DeleteProjectToolTest
         assertTrue("outputSchema must declare action", schema.contains("\"action\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare confirmationRequired", //$NON-NLS-1$
             schema.contains("\"confirmationRequired\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare context release state", schema.contains("\"state\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must echo deleteContent", schema.contains("\"deleteContent\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -99,6 +100,7 @@ public class DeleteProjectToolTest
         assertTrue("guide must document the preview phase", //$NON-NLS-1$
             guide.toLowerCase().contains("preview")); //$NON-NLS-1$
         assertTrue("guide must document the confirm parameter", guide.contains("confirm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must explain context release", guide.contains("releasing") && guide.contains("clean_project")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue("guide must document deleteContent semantics", guide.contains("deleteContent")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
