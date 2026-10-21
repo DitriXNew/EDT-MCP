@@ -69,14 +69,14 @@ def _assert_session_parameter_default(requested_fqn, name, project=PROJECT, fixt
     for _ in range(3):
         assert wait_for_project_ready(), "EDT must finish validating the new parameter"
         errors = call("get_project_errors", {
-            "projectName": project, "objectFqns": [canonical_fqn], "severity": "ERRORS",
+            "projectName": project, "objectFqns": [canonical_fqn],
         })
         assert_ok(errors, "settled SessionParameter errors")
         assert errors.structured.get("objectsResolved") == [canonical_fqn], errors.structured
         assert errors.structured.get("objectsNotFound") == [], errors.structured
         assert errors.structured.get("objectsUnsupported") == [], errors.structured
         assert errors.structured.get("problemsFound") == 0, \
-            "the typed parameter must have no ERROR marker (including TypedMdObjectValidator 68): %r" \
+            "the typed parameter must have no marker at all; the untyped one carries EDT's MAJOR type-not-specified marker (TypedMdObjectValidator 68): %r" \
             % errors.structured
 
 
