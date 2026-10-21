@@ -239,7 +239,7 @@ MODEL_SETTLE_ATTEMPTS = int(os.environ.get("E2E_MODEL_SETTLE_ATTEMPTS", "3"))
 # stabilizing the slower matrix legs without masking real results (a genuine success/error
 # returns unchanged on the next attempt). Override with E2E_BUILDING_RETRY_TIMEOUT.
 BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120"))
-# The server's derived-data "still building, retry" refusal, in any response channel.
+# The server's derived-data "still building, retry" refusal, in an error channel.
 _BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
 
 # Every transient building refusal call() received this run, as the server worded it. call()
@@ -543,11 +543,11 @@ def _is_transient_building(result):
     and retry" refusal — surfaced in any channel (an isError text, or a structured
     success=false envelope). The call was refused with NO side effect, so re-issuing it is
     safe and correct (it is never an assertion target)."""
-    try:
-        blob = json.dumps(result.raw, ensure_ascii=False)
-    except (TypeError, ValueError):
-        blob = str(result.raw)
-    return bool(_BUILDING_REFUSAL_RE.search(blob))
+    structured_error = (isinstance(result.structured, dict)
+                        and result.structured.get("success") is False)
+    if not result.is_error and not structured_error:
+        return False
+    return bool(_BUILDING_REFUSAL_RE.search(result.error_text()))
 
 
 def call(tool, arguments):

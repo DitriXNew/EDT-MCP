@@ -73,6 +73,7 @@ stopped rejecting an unknown project fails assert_error.
 
 import os
 
+import harness
 from harness import (
     call,
     assert_ok,
@@ -345,9 +346,66 @@ def test_clean_names_a_dependent_the_platform_could_not_restart_and_brings_the_s
         assert "PROJECT.PMF" in sc.get("restartFailure", ""), sc
         assert isinstance(sc.get("recovered"), list), sc
         assert set(sc["recovered"]) <= fixture_names, sc
+        # #797: a stranded EDT context must stay on the established state wire value,
+        # with an actionable reason instead of being called a plain Eclipse project.
+        stranded_list = call("list_projects", {"format": "json"})
+        assert_ok(stranded_list, "inspect the stranded extension's reason")
+        stranded_rows = (stranded_list.structured or {}).get("projects")
+        assert isinstance(stranded_rows, list), stranded_list.structured
+        stranded = next((row for row in stranded_rows if row.get("name") == name), None)
+        # A context without a DtProject reads not_available. A registered one that EDT has not
+        # started keeps its derived-data state (as before #797) and the reason names the start.
+        assert stranded and stranded.get("state") in ("not_available", "building", "unknown"), stranded
+        reason = stranded.get("reason", "")
+        low_reason = reason.lower()
+        if stranded.get("state") != "not_available":
+            assert "is starting this project's context" in reason, stranded
+        assert "context" in low_reason and any(
+            state in low_reason for state in ("not started", "starting", "restart")), stranded
+        assert any(remedy in low_reason for remedy in (
+            "close and reopen", "clean_project", "delete_project", "poll list_projects")), stranded
+        assert "Not an EDT project" not in reason, stranded
+        print("#797 stranded context observed: %s" % reason)
+
+        table = call("list_projects", {"format": "md"})
+        assert_ok(table, "the stranded extension's Markdown reason")
+        header = next((line for line in table.text.splitlines() if line.startswith("| Name |")), "")
+        assert header.endswith("| Reason |"), header
+        extension_cells = next((harness.split_markdown_row(line) for line in table.text.splitlines()
+                                if line.startswith("| ") and
+                                harness.split_markdown_row(line)[0] == name), None)
+        assert extension_cells and len(extension_cells) == 7 and extension_cells[6], extension_cells
+
+        # The stand may reach a different gate before the configuration lookup. Pin the
+        # shared reason when that lookup is reached, and report the other branch verbatim.
+        write = call("create_metadata", {"projectName": name, "fqn": "Catalog.Zz797"})
+        write_error = assert_error(write, "a write on the stranded extension must fail")
+        configuration_refusal = "Could not get configuration for project: " + name
+        if configuration_refusal in write_error:
+            assert "context" in write_error.lower(), write_error
+            assert any(remedy in write_error.lower() for remedy in (
+                "close and reopen", "clean_project", "delete_project", "poll list_projects")), write_error
+        else:
+            print("#797 write gate reached another refusal: %s" % write_error)
+
         failures = []
         assert wait_for_project_ready(failure_details=failures, ignore_projects=(name,)), \
             "fixture siblings were stranded after failed restart: %s" % failures
+        # Siblings can still be building immediately after the failed clean. Re-read
+        # both formats only after the recovery wait before asserting their readiness.
+        settled_list = call("list_projects", {"format": "json"})
+        assert_ok(settled_list, "inspect the recovered fixture's reason omission")
+        settled_rows = (settled_list.structured or {}).get("projects")
+        assert isinstance(settled_rows, list), settled_list.structured
+        ready_fixture = next((row for row in settled_rows if row.get("name") == PROJECT), None)
+        assert ready_fixture and ready_fixture.get("state") == "ready", ready_fixture
+        assert "reason" not in ready_fixture, ready_fixture
+        settled_table = call("list_projects", {"format": "md"})
+        assert_ok(settled_table, "inspect recovered siblings' Markdown readiness")
+        blockers = []
+        assert harness._all_edt_projects_ready(
+            settled_table.text, not_ready=blockers, ignore=(name,)), blockers
+
         states = wait_for_named_projects_ready(fixture_names, ctx="recovered fixture siblings")
         assert all(states.get(fixture) == "ready" for fixture in fixture_names), \
             "all fixture projects must be ready after recovery: %r" % states

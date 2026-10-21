@@ -11,11 +11,20 @@ Every project in the EDT workspace, with the state and metadata you need to pick
 It always lists the whole workspace - there is no filter.
 
 ## What you get
-With `format=md` (the default): a Markdown table with one row per project - **Name**, **State** (e.g. ready / building / closed), **Path** on disk, **Open** (Yes/No), **EDT Project** (Yes if it has the 1C configuration or extension nature), and an abbreviated **Natures** list (first few, with `...+N` for the rest). A total count is shown above the table.
+With `format=md` (the default): a Markdown table with one row per project - **Name**, **State** (`ready` / `building` / `not_available` / `unknown`), **Path** on disk, **Open** (Yes/No), **EDT Project** (Yes if it has the 1C configuration or extension nature), an abbreviated **Natures** list (first few, with `...+N` for the rest), and a trailing **Reason** column (empty when ready). A total count is shown above the table.
 
-With `format=json`: `structuredContent` carries `{"projects": [{"name", "state", "path", "open", "edtProject", "natures"}]}` - the same rows, machine-readable. `open` is a boolean; `edtProject` is a boolean ONLY when the nature was actually determined and is **omitted** for a closed or uninspected project (mirroring the table's `-`), so a consumer can tell "not an EDT project" from "not inspected".
+With `format=json`: `structuredContent` carries `{"projects": [{"name", "state", "reason"?, "path", "open", "edtProject", "natures"}]}` - the same rows, machine-readable. `open` is a boolean; `edtProject` is a boolean ONLY when the nature was actually determined and is **omitted** for a closed or uninspected project (mirroring the table's `-`), so a consumer can tell "not an EDT project" from "not inspected".
+
+## State
+- `ready`: the EDT context is running and its derived data is complete. JSON omits `reason`; the Markdown Reason cell is empty.
+- `building`: derived data is still being computed. The reason describes the build, and also says so when EDT has not finished starting the project's context; poll `list_projects` until it reads `ready`.
+- `not_available`: the project is missing, closed, not an EDT project, has unreadable natures, or has no EDT context (not started, or a project-restart job is pending). The reason distinguishes these cases and gives the next step.
+- `unknown`: the project manager or build state could not be read. The reason names the unavailable service or state.
+
+Every non-ready JSON row carries a `reason` string with the same explanation as the trailing Markdown Reason cell.
 
 ## Notes & gotchas
+- `not_available` carries a reason. A context that is not started may still be starting just after import or creation: poll `list_projects` first. If it stays there, close and reopen the project in EDT, or use `delete_project` and import it again; EDT does not restart it by itself. A restarting reason means a project-restart job is pending in the workspace, which may belong to another project; poll `list_projects`. A `building` or `unknown` reason that says EDT is starting the context also means poll; if it stays there after a failed clean, run `clean_project` again or close and reopen the project.
 - A project shown as still *building* is not yet safe for model reads/writes - wait for it to settle (or `clean_project`) before driving it.
 - Use the **Name** column verbatim as the `projectName` argument elsewhere; do not guess from the folder path.
 - For configuration-level details of one project (root properties, languages, compatibility mode) use `get_configuration_properties`; for the list of configurations use `list_configurations`.

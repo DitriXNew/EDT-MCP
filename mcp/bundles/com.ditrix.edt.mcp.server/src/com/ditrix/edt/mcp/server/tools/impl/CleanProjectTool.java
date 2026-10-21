@@ -661,7 +661,7 @@ public class CleanProjectTool implements IMcpTool
     static String unstartedProjectRefusalOrNull(String projectName, boolean managerAvailable,
         boolean dtProjectPresent, Boolean hasV8Nature)
     {
-        if (!managerAvailable || dtProjectPresent || !Boolean.TRUE.equals(hasV8Nature))
+        if (!ProjectStateChecker.isUnstartedEdtProject(managerAvailable, dtProjectPresent, hasV8Nature))
         {
             return null;
         }
