@@ -53,7 +53,19 @@ public final class BmObjectAddress
      */
     public static String metadataAddressOrNull(IBmObject object)
     {
-        String fqn = topFqnOrNull(object);
+        return metadataAddressOf(topFqnOrNull(object));
+    }
+
+    /**
+     * The metadata address of a top-object BM FQN: the same suffix rules as
+     * {@link #metadataAddressOrNull(IBmObject)}, applied to an FQN already read. A display helper:
+     * the BM FQN itself is what identities and signatures keep.
+     *
+     * @param fqn a top-object BM FQN, may be {@code null}
+     * @return the metadata address, the FQN unchanged when no suffix rule applies, or {@code null}
+     */
+    public static String metadataAddressOf(String fqn)
+    {
         if (fqn == null)
         {
             return null;

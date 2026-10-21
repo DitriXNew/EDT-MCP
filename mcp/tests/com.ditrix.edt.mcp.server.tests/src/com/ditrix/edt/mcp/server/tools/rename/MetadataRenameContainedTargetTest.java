@@ -49,6 +49,7 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com._1c.g5.v8.dt.refactoring.core.ltk.BmObjectTextContentChange;
+import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
 import com._1c.g5.v8.dt.refactoring.core.ltk.BmObjectTextContentCompositeChange;
 
 /** Regression for contained query targets in preview, exact matches and confirm's hash walk (#790). */
@@ -153,12 +154,16 @@ public class MetadataRenameContainedTargetTest
     }
 
     @Test
-    public void testATopContentTargetKeepsItsOwnFqnInTheRowAndTheSignature() throws Exception
+    public void testATopContentTargetIsRenderedByAddressButSignedByItsOwnFqn() throws Exception
     {
+        MetadataRenameService service = new MetadataRenameService();
         IBmObject target = top(OWNER);
         String preview = preview(refactorings(change(target)), Map.of());
 
-        assertEquals(OWNER, row(preview, 0)[8]);
+        assertEquals(ADDRESS, row(preview, 0)[8]);
+        // Same rendered row, different BM FQN: only a signature that keeps the BM FQN tells them apart.
+        assertNotEquals(service.changePointContentHash(refactorings(change(top(OWNER)))),
+            service.changePointContentHash(refactorings(change(top(ADDRESS)))));
         verify(target, never()).bmGetTopObject();
     }
 
@@ -198,7 +203,8 @@ public class MetadataRenameContainedTargetTest
         Object exact = method("createModelExactMatchInfo", Object.class).invoke(new MetadataRenameService(), //$NON-NLS-1$
             new ModelMatch(top, feature));
         assertNotNull(exact);
-        assertEquals(ADDRESS, field(exact, "fqn")); //$NON-NLS-1$
+        // The match keeps the BM FQN; only the rendered row shows the metadata address.
+        assertEquals(OWNER, field(exact, "fqn")); //$NON-NLS-1$
         assertEquals(Integer.valueOf(1), field(exact, "lineNumber")); //$NON-NLS-1$
         verify(top, never()).bmGetTopObject();
     }
@@ -305,7 +311,7 @@ public class MetadataRenameContainedTargetTest
             "/TestConfiguration/src/CommonForms/F/Module.bsl", 16, location); //$NON-NLS-1$
         String preview = preview(refactorings(change(target)), Map.of("bsl", exact)); //$NON-NLS-1$
         String[] cells = row(preview, 0);
-        assertEquals("CommonForm.F.Form", cells[8]); //$NON-NLS-1$
+        assertEquals("CommonForm.F", cells[8]); //$NON-NLS-1$
         assertEquals("1", cells[3]); //$NON-NLS-1$
         assertEquals("17", cells[4]); //$NON-NLS-1$
         assertTrue(preview, preview.contains(CONTENT));
@@ -324,7 +330,9 @@ public class MetadataRenameContainedTargetTest
         Object exact = method("createModelExactMatchInfo", Object.class).invoke(new MetadataRenameService(), //$NON-NLS-1$
             new ModelMatch(target, feature));
         assertNotNull(exact);
-        assertEquals("Report.R.Template.T", field(exact, "fqn")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The match keeps the owning top's BM FQN (as before #790); the row renders its address.
+        assertEquals(owner, field(exact, "fqn")); //$NON-NLS-1$
+        assertEquals("Report.R.Template.T", BmObjectAddress.metadataAddressOf(owner)); //$NON-NLS-1$
     }
 
     @Test

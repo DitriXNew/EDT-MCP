@@ -997,7 +997,7 @@ public class MetadataRenameService
     {
         String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
         String optionalMark = cp.optional && hasStableIdentity(cp) ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
-        String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
+        String fqnCell = cp.fqn != null ? escapeMarkdownCell(BmObjectAddress.metadataAddressOf(cp.fqn)) : DASH;
         String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
         String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
                     String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : DASH;
@@ -1043,7 +1043,7 @@ public class MetadataRenameService
             if (cp.methodName != null)
                 sb.append(" \u2014 `").append(escapeMarkdownCell(cp.methodName)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
             if (cp.fqn != null && cp.lineNumber > 0)
-                sb.append(" \u00b7 ").append(escapeMarkdownCell(cp.fqn)) //$NON-NLS-1$
+                sb.append(" \u00b7 ").append(escapeMarkdownCell(BmObjectAddress.metadataAddressOf(cp.fqn))) //$NON-NLS-1$
                   .append(":").append(cp.lineNumber); //$NON-NLS-1$
             sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -1265,7 +1265,7 @@ public class MetadataRenameService
             Object modifiedElement = bmComposite.getModifiedElement();
             if (modifiedElement instanceof IBmObject bmObj)
             {
-                currentFqn = BmObjectAddress.metadataAddressOrNull(bmObj);
+                currentFqn = BmObjectAddress.topFqnOrNull(bmObj);
             }
         }
         if (change instanceof CompositeChange composite)
@@ -1378,9 +1378,9 @@ public class MetadataRenameService
             EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
             if (modifiedElement instanceof IBmObject ibm)
             {
-                // A top target keeps its own FQN, exactly as before #790: it enters the canonical
-                // signature, so shortening it would change the contentHash of existing previews.
-                scan.fqn = ibm.bmIsTop() ? BmObjectAddress.topFqnOrNull(ibm) : BmObjectAddress.metadataAddressOrNull(ibm);
+                // The owning top's BM FQN, as before #790: it enters the canonical signature, so the
+                // metadata address is applied only where the row is rendered.
+                scan.fqn = BmObjectAddress.topFqnOrNull(ibm);
             }
             String content = bmChange.getCurrentContent(new NullProgressMonitor());
             TextEdit edit = bmChange.getEdit();
@@ -1771,7 +1771,7 @@ public class MetadataRenameService
             int lineNumber = computeLineNumber(content, textOffset);
             int columnNumber = computeColumnNumber(content, textOffset);
             String project = object instanceof IBmObject bmObject ? bmObject.bmGetEngine().getId() : null;
-            String fqn = object instanceof IBmObject bmObject ? BmObjectAddress.metadataAddressOrNull(bmObject) : null;
+            String fqn = object instanceof IBmObject bmObject ? BmObjectAddress.topFqnOrNull(bmObject) : null;
             return new ExactMatchInfo(null, textOffset,
                 new CodeLocation(fqn, project, lineNumber, columnNumber, extractContext(content, lineNumber), null));
         }
