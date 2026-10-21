@@ -8399,7 +8399,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     private static Long parseLong(String value)
     {
-        return JsonUtils.parseIntegralLong(value);
+        return JsonUtils.parseExactDecimalLong(value);
     }
 
     private static EObject childByName(EObject owner, EStructuralFeature feature, String name)

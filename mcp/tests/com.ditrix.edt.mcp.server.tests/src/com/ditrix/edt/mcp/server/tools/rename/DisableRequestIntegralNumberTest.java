@@ -186,4 +186,16 @@ public class DisableRequestIntegralNumberTest
         assertEquals(raw, 0, parsed.unparsedCount());
         assertNull(raw, parsed.validationError());
     }
+
+    @Test
+    public void aCommaFormEntryMustBeAJsonNumberToUseTheRendering()
+    {
+        for (String raw : new String[] {"2.", "+2.0", "02.0", ".2e1"})
+        {
+            DisableRequest request = DisableRequest.parse(raw);
+            assertEquals(raw, 1, request.unparsedCount());
+            assertTrue(raw, request.indices().isEmpty());
+        }
+        assertEquals(Set.of(Integer.valueOf(2)), DisableRequest.parse("2.0").indices());
+    }
 }

@@ -87,11 +87,11 @@ public class JsonUtilsIntegralNumberTest
     @Test
     public void lengthLimitAppliesToTrimmedText()
     {
-        String boundary = "0".repeat(61) + "2.0";
+        String boundary = "2." + "0".repeat(62); // a 64-character JSON number
         assertEquals(Long.valueOf(2), JsonUtils.parseIntegralLong("  " + boundary + "  "));
         assertEquals(Integer.valueOf(2), JsonUtils.parseIntegralInt("  " + boundary + "  "));
-        assertNull(JsonUtils.parseIntegralLong("0" + boundary));
-        assertNull(JsonUtils.parseIntegralInt("0" + boundary));
+        assertNull(JsonUtils.parseIntegralLong(boundary + "0"));
+        assertNull(JsonUtils.parseIntegralInt(boundary + "0"));
         String decimalBoundary = "0." + "0".repeat(62);
         assertEquals("0", JsonUtils.canonicalIntegerText(decimalBoundary));
         assertEquals(decimalBoundary + "0", JsonUtils.canonicalIntegerText(decimalBoundary + "0"));
@@ -142,5 +142,34 @@ public class JsonUtilsIntegralNumberTest
         assertEquals("1e999999999", JsonUtils.canonicalIntegerText("1e999999999"));
         assertNull(JsonUtils.parseIntegralLong("1e-999999999"));
         assertEquals("1e-999999999", JsonUtils.canonicalIntegerText("1e-999999999"));
+    }
+
+    @Test
+    public void aDecimalOrExponentRenderingMustBeAJsonNumber()
+    {
+        for (String raw : new String[] {"2.", "+2.0", "02.0", ".2e1", "2.e0", "2e", "-.5e1", "+2e0", "00.0"})
+        {
+            assertNull(raw, JsonUtils.parseIntegralLong(raw));
+            assertNull(raw, JsonUtils.parseIntegralInt(raw));
+            assertEquals(raw, raw, JsonUtils.canonicalIntegerText(raw));
+        }
+        for (String raw : new String[] {"2.0", "2e0", "2E+0", "20e-1", "-2.0", "0.0", "1.0E7"})
+        {
+            Long expected = Long.valueOf(new java.math.BigDecimal(raw).longValueExact());
+            assertEquals(raw, expected, JsonUtils.parseIntegralLong(raw));
+        }
+    }
+
+    @Test
+    public void theLenientExactReaderKeepsTheBigDecimalSpellings()
+    {
+        for (String raw : new String[] {"2.", "+2.0", "02.0", ".2e1", "2", "2.0", " 2 "})
+        {
+            assertEquals(raw, Long.valueOf(2), JsonUtils.parseExactDecimalLong(raw));
+        }
+        for (String raw : new String[] {"2.5", "abc", "", null, "1e999999999"})
+        {
+            assertNull(raw, JsonUtils.parseExactDecimalLong(raw));
+        }
     }
 }

@@ -814,7 +814,7 @@ public class GetComparisonNodeTool implements IMcpTool
         {
             // Not an integer literal. It may still be the double-shaped rendering of one.
         }
-        Long value = JsonUtils.parseIntegralLong(text);
+        Long value = JsonUtils.parseExactDecimalLong(text);
         return value == null || Math.abs(value.longValue()) >= EXACT_IN_DOUBLE ? null : value;
     }
 

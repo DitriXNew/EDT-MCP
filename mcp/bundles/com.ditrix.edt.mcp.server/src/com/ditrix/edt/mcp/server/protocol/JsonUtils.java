@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -35,6 +36,10 @@ public final class JsonUtils
 
     /** Maximum trimmed decimal/exponent length accepted before constructing an integral decimal. */
     private static final int MAX_INTEGRAL_NUMBER_LENGTH = 64;
+
+    /** A JSON number (RFC 8259) with a fraction or exponent: the only non-plain shape a transport renders. */
+    private static final Pattern JSON_DECIMAL_NUMBER =
+        Pattern.compile("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"); //$NON-NLS-1$
 
     /**
      * Whether a serialized JSON-RPC response reports failure.
@@ -438,7 +443,8 @@ public final class JsonUtils
      * Reads an exact whole number from text, including a decimal or exponent rendering such as
      * {@code "2.0"} or {@code "1.0E7"}. Null, blank, fractional, non-finite, non-numeric and
      * out-of-range values return {@code null}. Plain decimal digits with an optional sign have no
-     * length cap; decimal/exponent renderings are limited to 64 trimmed characters.
+     * length cap; a decimal/exponent rendering must be a JSON number (so {@code "2."}, {@code "+2.0"},
+     * {@code "02.0"} and {@code ".2e1"} are refused) of at most 64 trimmed characters.
      * <p>
      * The received digits are read exactly. A JSON number at or above 2^53 may already have been
      * rounded by its transport Double; callers handing out such ids keep their own precision gate.
@@ -459,7 +465,7 @@ public final class JsonUtils
             {
                 return Long.valueOf(Long.parseLong(text));
             }
-            if (text.length() > MAX_INTEGRAL_NUMBER_LENGTH)
+            if (!isJsonDecimalRendering(text))
             {
                 return null;
             }
@@ -491,11 +497,41 @@ public final class JsonUtils
             {
                 return Integer.valueOf(Integer.parseInt(text));
             }
-            if (text.length() > MAX_INTEGRAL_NUMBER_LENGTH)
+            if (!isJsonDecimalRendering(text))
             {
                 return null;
             }
             return Integer.valueOf(new BigDecimal(text).intValueExact());
+        }
+        catch (NumberFormatException | ArithmeticException e)
+        {
+            return null;
+        }
+    }
+
+    private static boolean isJsonDecimalRendering(String text)
+    {
+        return text.length() <= MAX_INTEGRAL_NUMBER_LENGTH && JSON_DECIMAL_NUMBER.matcher(text).matches();
+    }
+
+    /**
+     * Reads any exact whole decimal within {@code long} the way {@link BigDecimal} spells it (for
+     * example {@code "+2"}, {@code "2."}, {@code "2.50e1"}); {@code null} for null, empty, fractional,
+     * non-numeric or out-of-range text. This is the lenient reader of the tools that always parsed
+     * through BigDecimal; a reader that used to accept only integers uses {@link #parseIntegralLong}.
+     *
+     * @param raw the number text, may be {@code null}
+     * @return the whole number within {@code long}, or {@code null}
+     */
+    public static Long parseExactDecimalLong(String raw)
+    {
+        if (raw == null || raw.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            return Long.valueOf(new BigDecimal(raw.trim()).longValueExact());
         }
         catch (NumberFormatException | ArithmeticException e)
         {
