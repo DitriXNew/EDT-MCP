@@ -93,6 +93,10 @@ public class CleanProjectToolTest
         String schema = new CleanProjectTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
+        String output = new CleanProjectTool().getOutputSchema();
+        assertTrue(output.contains("\"notRestarted\"")); //$NON-NLS-1$
+        assertTrue(output.contains("\"recovered\"")); //$NON-NLS-1$
+        assertTrue(output.contains("\"restartFailure\"")); //$NON-NLS-1$
         assertTrue("the clean-build bound must be reachable from the wire", //$NON-NLS-1$
             schema.contains("\"timeout\"")); //$NON-NLS-1$
     }

@@ -71,6 +71,8 @@ a clean that silently rewrote a tracked file fails assert_no_diff; a tool that
 stopped rejecting an unknown project fails assert_error.
 """
 
+import os
+
 from harness import (
     call,
     assert_ok,
@@ -79,6 +81,11 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
+    ALL_FIXTURE_PROJECTS,
+    settle_or_fail,
+    wait_for_project_ready,
+    wait_for_named_projects_ready,
 )
 
 
@@ -294,3 +301,65 @@ def test_whitespace_project_name_errors_and_does_not_mutate():
     assert_error_quality(err, names=["Project not found"], suggests=["list_projects"],
                          ctx="whitespace projectName surfaces the 'Project not found' error with a list_projects next step")
     assert_no_diff("a rejected clean must not touch the project on disk")
+
+
+# Keep this last: the test deliberately breaks only its disposable extension's manifest.
+@e2e_test(tool="clean_project", kind="action")
+def test_clean_names_a_dependent_the_platform_could_not_restart_and_brings_the_siblings_back():
+    """#789: a missing extension manifest deterministically fails EDT's restart job.
+
+    Stand prerequisite P3 checks the trigger on the base jar. The changed jar must report
+    the broken extension and restore all fixture siblings, regardless of HashSet order.
+    """
+    settle_or_fail("failed restart regression precondition")
+    name = PROJECT + ".CleanStranded_e2e"
+    call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+    extension_created = False
+    try:
+        created = call("create_project", {"projectKind": "extension", "name": "CleanStranded_e2e",
+                                          "baseProjectName": PROJECT})
+        assert_ok(created, "create disposable extension for failed restart")
+        extension_created = True
+        settle_or_fail("break the disposable extension's manifest")
+        listed = call("list_projects", {"format": "json"})
+        assert_ok(listed, "locate the extension directory and fixture projects")
+        rows = listed.structured.get("projects") if isinstance(listed.structured, dict) else None
+        assert isinstance(rows, list), "list_projects must return structured project rows"
+        extension = next((row for row in rows if row.get("name") == name), None)
+        assert extension and extension.get("path"), "created extension must have a directory"
+        fixture_names = {row["name"] for row in rows if row["name"] in ALL_FIXTURE_PROJECTS}
+        assert {PROJECT, TESTS_PROJECT} <= fixture_names, "both required fixture projects must exist"
+        manifest = os.path.join(extension["path"], "DT-INF", "PROJECT.PMF")
+        assert os.path.isfile(manifest), "expected the created extension's manifest: %s" % manifest
+        os.remove(manifest)
+
+        cleaned = call("clean_project", {"projectName": PROJECT})
+        error = assert_error(cleaned, "the broken dependent must make a failed restart visible")
+        assert_error_quality(error, names=[name], suggests=["list_projects", "delete_project"],
+                             ctx="failed restart names the broken project and recovery steps")
+        sc = cleaned.structured
+        assert isinstance(sc, dict), "failed clean must return structuredContent"
+        assert sc.get("mutationCommitted") is True, sc
+        assert sc.get("projects") == [PROJECT] and sc.get("projectsCleaned") == 1, sc
+        assert sc.get("notRestarted") == [name], sc
+        assert "PROJECT.PMF" in sc.get("restartFailure", ""), sc
+        assert isinstance(sc.get("recovered"), list), sc
+        assert set(sc["recovered"]) <= fixture_names, sc
+        failures = []
+        assert wait_for_project_ready(failure_details=failures, ignore_projects=(name,)), \
+            "fixture siblings were stranded after failed restart: %s" % failures
+        states = wait_for_named_projects_ready(fixture_names, ctx="recovered fixture siblings")
+        assert all(states.get(fixture) == "ready" for fixture in fixture_names), \
+            "all fixture projects must be ready after recovery: %r" % states
+    finally:
+        if extension_created:
+            deleted = call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+            assert_ok(deleted, "delete the disposable broken extension")
+            assert deleted.structured.get("state") == "released", deleted.structured
+            settle_or_fail("failed restart regression cleanup")
+        else:
+            try:
+                call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+            except Exception as cleanup_error:
+                print("Best-effort cleanup after failed extension creation: %s" % cleanup_error)
+    assert_no_diff("failed restart and sibling recovery must preserve committed fixture files")
