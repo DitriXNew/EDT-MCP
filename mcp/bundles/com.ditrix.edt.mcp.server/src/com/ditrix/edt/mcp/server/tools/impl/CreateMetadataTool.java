@@ -1122,6 +1122,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
         final IV8Project v8Project = bm.v8Project;
+        final IEObjectProvider typeProvider = typeProviderFor(eClass, version);
         // Needed to name the external-property content of a CommonForm, of an XDTOPackage and the
         // rights model of a Role (all below); resolved up front like the rest of the BM services
         // this method uses, not inside the transaction.
@@ -1158,13 +1159,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
                 }
-                MdObject newObject = newTopObject(factory, eClass, v8Project);
+                MdObject newObject = newTopObject(factory, eClass, v8Project, name, typeProvider);
                 if (newObject == null)
                 {
                     throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
                         + "' object"); //$NON-NLS-1$
                 }
-                newObject.setName(name);
                 applyScalarProps(newObject, req.props, req.synonymLanguage);
                 // Type-specific defaults applied on top of the factory's default content (sets the
                 // namespace for an XDTOPackage - always non-empty, defaulted when omitted).
@@ -1377,6 +1377,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         final long parentBmId = ((IBmObject)parent).bmGetId();
         final IModelObjectFactory factory = bm.factory;
+        final Version version = bm.version;
         final IV8Project v8Project = bm.v8Project;
         final Props props = req.props;
         // The chain FQN's type token is the metamodel's own name for the class - the spelling EDT
@@ -1396,14 +1397,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 Subsystem owner = (Subsystem)txParent;
                 String ownerFqn = ((IBmObject)owner).bmGetFqn();
-                Object created = newTopObject(factory, eClass, v8Project);
+                Object created = newTopObject(factory, eClass, v8Project, name,
+                    typeProviderFor(eClass, version));
                 if (!(created instanceof Subsystem))
                 {
                     throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
                         + "' object"); //$NON-NLS-1$
                 }
                 Subsystem newObject = (Subsystem)created;
-                newObject.setName(name);
                 applyScalarProps(newObject, props, synonymLanguage);
                 String childFqn = ownerFqn + "." + eClass.getName() + "." + name; //$NON-NLS-1$ //$NON-NLS-2$
                 tx.attachTopObject((IBmObject)newObject, childFqn);
@@ -1452,13 +1453,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Creates a detached TOP object through the project-aware factory overload, so the platform type
-     * initializer sees the project and applies its project-dependent defaults (issue #644).
+     * initializer sees the project and applies its project-dependent defaults (issue #644). Names
+     * it and gives a top object that must carry a value type but got none from the factory the
+     * designer's default ({@link #ensureMandatoryType}). A SessionParameter has no platform
+     * initializer; EDT's New Session Parameter wizard gives it a variable {@code String(10)}.
      *
      * @return the new object, or {@code null} when the factory declines the type
+     * @throws IllegalStateException when the object must carry a value type and the default cannot be
+     *     built (no type provider); the caller's write transaction then rolls back
      */
-    static MdObject newTopObject(IModelObjectFactory factory, EClass eClass, IV8Project v8Project)
+    static MdObject newTopObject(IModelObjectFactory factory, EClass eClass, IV8Project v8Project,
+        String name, IEObjectProvider typeProvider)
     {
-        return factory.create(eClass, v8Project);
+        MdObject created = factory.create(eClass, v8Project);
+        if (created == null)
+        {
+            return null;
+        }
+        created.setName(name);
+        ensureMandatoryType(created, typeProvider);
+        return created;
     }
 
     /**
@@ -3084,16 +3098,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Gives a member that must carry a value type, but has none, the designer's default type for its
-     * kind ({@link #defaultTypeSpec}). This is the fallback for a factory that declined (an
+     * Gives an object (a member, or a top object such as a SessionParameter) that must carry a value
+     * type, but has none, the designer's default for its kind ({@link #defaultTypeSpec}). This is the
+     * fallback for a factory that declined (an
      * initializer's {@code IllegalArgumentException} reaches us as {@code null}) or returned its bare
      * fallback object; a type the owner's initializer did set is kept. Runs inside the write
-     * transaction, before the member is attached.
+     * transaction, before the object is attached.
      *
-     * @param member the new member
+     * @param member the new object
      * @param typeProvider the platform type provider for the project's version (may be {@code null})
      * @throws IllegalStateException when the default type cannot be built - the create is then rolled
-     *     back rather than writing a member without its mandatory type
+     *     back rather than writing an object without its mandatory type
      */
     static void ensureMandatoryType(MdObject member, IEObjectProvider typeProvider)
     {
@@ -3117,13 +3132,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static final int DEFAULT_TYPE_SIZE = 10;
 
     /**
-     * The designer's default value type for a new member of {@code memberClass}, as the
+     * The designer's default value type for a new object of {@code memberClass}, as the
      * {@code create_metadata} type spec ({@code {types:[{kind, ...}]}}). It mirrors EDT's type
      * initializers ({@code com._1c.g5.v8.dt.md.model.*Initializer}): {@code Number(10,0)} for an
      * accumulation, accounting or calculation register resource; {@code Boolean} for a chart of
      * accounts' accounting flag and ext-dimension accounting flag; {@code String(10)} for every other
      * member - attributes, dimensions, an information register's resource, tabular-section and
-     * addressing attributes, a sequence's dimension.
+     * addressing attributes, a sequence's dimension, and a SessionParameter (EDT's New Session
+     * Parameter wizard: String, length 10, variable).
      *
      * @param memberClass the member's class
      * @return the type spec

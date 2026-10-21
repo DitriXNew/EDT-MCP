@@ -157,7 +157,7 @@ public class CreateMetadataToolTest
         MdObject catalog = MdClassFactory.eINSTANCE.createCatalog();
         doReturn(catalog).when(factory).create(eClass, project);
 
-        MdObject created = CreateMetadataTool.newTopObject(factory, eClass, project);
+        MdObject created = CreateMetadataTool.newTopObject(factory, eClass, project, "Goods", null); //$NON-NLS-1$
 
         assertSame("the object the project-aware overload built must be returned", catalog, created); //$NON-NLS-1$
         verify(factory).create(eClass, project);
