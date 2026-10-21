@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.widgets.Display;
@@ -22,10 +24,15 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.rename.DisableRequest;
 import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
 import com.ditrix.edt.mcp.server.tools.rename.RenameProgress;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.google.gson.JsonParser;
 
 /**
  * Tool to rename a metadata object, one of its members, or a managed-form element, with
@@ -93,9 +100,35 @@ public class RenameMetadataObjectTool implements IMcpTool
     /** Largest accepted cascade bound, in seconds. */
     private static final int MAX_RENAME_TIMEOUT_SECONDS = 3600;
 
-    private final MetadataRenameService service = new MetadataRenameService();
+    private static final String KEY_WAIT_SECONDS = "waitSeconds"; //$NON-NLS-1$
+    private static final String KEY_TEXT_OCCURRENCES = "textOccurrences"; //$NON-NLS-1$
+    /**
+     * Default preview wait: the transport-safe maximum the other job tools use. A preview that
+     * finishes within it is answered inline exactly as before the job path existed, so existing
+     * callers that read the preview from the answer keep working on a slow machine.
+     */
+    private static final int DEFAULT_WAIT_SECONDS = 45;
+    private static final int MAX_WAIT_SECONDS = 45;
+    /** Rename previews running at once; counted among rename previews only, not other tools' jobs. */
+    private static final int MAX_RUNNING_PREVIEWS = 2;
+    /**
+     * Slack between the preview's own stage bounds and the registry deadline, so the stage-named
+     * timeout error is what a caller sees, never the registry's generic budget text.
+     */
+    static final long PREVIEW_JOB_MARGIN_MS = 30_000L;
+    /** Smallest bound handed to the bounded UI-thread hand-off when the settle used up the budget. */
+    private static final long MIN_PREVIEW_RENAME_BOUND_MS = 1_000L;
+    private static final Object PREVIEW_JOBS_LOCK = new Object();
+    private static final Map<String, PreviewSubmission> SUBMISSION_JOBS = new ConcurrentHashMap<>();
 
-    /** Caller-thread cascade-settle seam. */
+    private final BackgroundJobs jobs;
+
+    /** Options are retained so attaching cannot silently return another requested plan or slice. */
+    private record PreviewSubmission(String jobId, boolean excludeText, int maxResults)
+    {
+    }
+
+    /** Derived-data settle seam, used inside a preview job and synchronously for confirm. */
     @FunctionalInterface
     interface CascadeSettler
     {
@@ -111,10 +144,17 @@ public class RenameMetadataObjectTool implements IMcpTool
             timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
     }
 
-    /** Package-visible test seam for the caller-thread settle before the UI-thread hand-off. */
+    /** Package-visible test seam for settling before the UI-thread hand-off. */
     RenameMetadataObjectTool(CascadeSettler cascadeSettler)
     {
+        this(cascadeSettler, BackgroundJobs.shared());
+    }
+
+    /** Isolated registry seam for headless job lifecycle tests. */
+    RenameMetadataObjectTool(CascadeSettler cascadeSettler, BackgroundJobs jobs)
+    {
         this.cascadeSettler = cascadeSettler;
+        this.jobs = jobs;
     }
 
     @Override
@@ -130,7 +170,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             + "CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference " //$NON-NLS-1$
             + "the refactoring cannot resolve (a dynamically built name) is left pointing at the old " //$NON-NLS-1$
             + "name. Two-phase: call once WITHOUT confirm to " //$NON-NLS-1$
-            + "see the edit scope, then again with confirm=true to apply. Parameters and examples: " //$NON-NLS-1$
+            + "see the edit scope, then again with confirm=true to apply. A long preview continues " //$NON-NLS-1$
+            + "as a background job - poll get_job_status. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('rename_metadata_object')."; //$NON-NLS-1$
     }
 
@@ -162,13 +203,23 @@ public class RenameMetadataObjectTool implements IMcpTool
                 + "and disableIndices is non-empty.") //$NON-NLS-1$
             .integerProperty("maxResults", //$NON-NLS-1$
                 "Max change points shown in the preview (default 20; 0 = no limit).") //$NON-NLS-1$
+            .integerProperty(KEY_WAIT_SECONDS,
+                "Preview only: how long this call waits before returning a jobId (default " //$NON-NLS-1$
+                + DEFAULT_WAIT_SECONDS + ", accepts 0.." + MAX_WAIT_SECONDS //$NON-NLS-1$
+                + "; 0 returns immediately). Poll get_job_status for the preview and contentHash. " //$NON-NLS-1$
+                + "Refused with confirm=true; confirm runs synchronously under timeout.") //$NON-NLS-1$
+            .enumProperty(KEY_TEXT_OCCURRENCES,
+                "include (default) keeps EDT's whole-word text matches enabled; exclude disables " //$NON-NLS-1$
+                + "module-file text leaves in both preview and confirm. Use the same value for " //$NON-NLS-1$
+                + "both calls so contentHash matches.", "include", "exclude") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .integerProperty(KEY_TIMEOUT,
-                "How long to wait for the cascade itself, in seconds (default " //$NON-NLS-1$
+                "Bounds the server-side computation, not the HTTP call (default " //$NON-NLS-1$
                 + DEFAULT_RENAME_TIMEOUT_SECONDS + ", clamped to " + MIN_RENAME_TIMEOUT_SECONDS //$NON-NLS-1$
-                + ".." + MAX_RENAME_TIMEOUT_SECONDS + "). On expiry the call fails with a timeout " //$NON-NLS-1$ //$NON-NLS-2$
-                + "error naming the stage it reached instead of waiting forever; EDT may still " //$NON-NLS-1$
-                + "finish the rename afterwards, so verify the model. Does not cover the " //$NON-NLS-1$
-                + "pre-flight index drain (a separate 60s bound).") //$NON-NLS-1$
+                + ".." + MAX_RENAME_TIMEOUT_SECONDS + " seconds); it cannot keep the call alive. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "waitSeconds bounds the preview call. A preview timeout produces a FAILED job " //$NON-NLS-1$
+                + "naming the stage. Confirm stays synchronous and EDT may still finish the rename " //$NON-NLS-1$
+                + "after its timeout; verify the model. The pre-flight index drain has a separate " //$NON-NLS-1$
+                + "60s bound inside the preview job or before confirm.") //$NON-NLS-1$
             .build();
     }
 
@@ -253,41 +304,40 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error(MetadataRenameService.missingExpectedHashError()).toJson();
         }
 
-        // A cascade rename rewrites every reference to the object across BSL, forms and
-        // metadata. If the project's derived data (the reference index) is still building,
-        // the refactoring resolves an INCOMPLETE set of references: it would rename the
-        // object, miss some references, and still report success — leaving dangling old
-        // references (silent partial corruption). Refuse only for that transient BUILDING
-        // state; a missing/closed project falls through to the value-naming error below.
-        // Drain the derived-data pipeline before the cascade rather than merely asking whether it
-        // is quiet. NB this narrows the window, it does not close it: EDT builds the refactoring
-        // INSIDE the syncExec below (saving dirty editors and running an incremental build as it
-        // goes), so fresh work can still be queued between here and perform(). Closing it properly
-        // needs an EDT-supported "quiesce then open the batch session" step; doing it ourselves -
-        // by draining between construction and perform - would mean releasing the UI thread in the
-        // middle of a rename, which drops the serialisation that keeps a concurrent write from
-        // making the built cascade stale. See issue #320.
-        String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
-        if (building != null)
+        if (confirm && params.containsKey(KEY_WAIT_SECONDS))
         {
-            return ToolResult.error(building).toJson();
+            return ToolResult.error("waitSeconds applies to the preview only; a confirm runs " //$NON-NLS-1$
+                + "synchronously under timeout. Omit waitSeconds when confirm=true.").toJson(); //$NON-NLS-1$
         }
+        Integer waitSeconds = confirm ? Integer.valueOf(0)
+            : BackgroundJobPolling.readWaitSeconds(params, KEY_WAIT_SECONDS,
+                DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
+        if (waitSeconds == null)
+        {
+            return BackgroundJobPolling.waitSecondsError(KEY_WAIT_SECONDS,
+                params.get(KEY_WAIT_SECONDS), DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
+        }
+        String textOccurrences = params.containsKey(KEY_TEXT_OCCURRENCES)
+            ? JsonUtils.extractStringArgument(params, KEY_TEXT_OCCURRENCES) : "include"; //$NON-NLS-1$
+        if (!"include".equals(textOccurrences) && !"exclude".equals(textOccurrences)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return ToolResult.error("textOccurrences must be 'include' or 'exclude' " //$NON-NLS-1$
+                + "(default 'include'), but was '" + textOccurrences //$NON-NLS-1$
+                + "'. Nothing was renamed.").toJson(); //$NON-NLS-1$ //$NON-NLS-1$
+        }
+        boolean excludeText = "exclude".equals(textOccurrences); //$NON-NLS-1$
+        long timeoutMs = resolveRenameTimeoutMs(params);
 
-        final DisableRequest finalDisableRequest = disableRequest;
-        final String finalExpectedHash = expectedHash;
-        Display display = PlatformUI.getWorkbench().getDisplay();
-
-        // The cascade runs on the UI thread, and nothing in that hand-off had an upper bound: EDT
-        // wedged inside it holds the MCP request open until the CLIENT gives up, with no answer and
-        // no cleanup (issue #365 - eight aborted e2e runs, each losing ~188 tests to one call).
-        // Bound it here, the same shape #354 established for clean_project.
+        // Resolve the workbench only INSIDE the bounded action. Preview settling, the hand-off and
+        // the unchanged EDT pipeline all belong to the registry worker, never the HTTP caller.
         IRenameAction action = progress -> {
+            Display display = PlatformUI.getWorkbench().getDisplay();
             AtomicReference<String> resultRef = new AtomicReference<>();
             display.syncExec(() -> {
                 try
                 {
-                    resultRef.set(service.rename(projectName, objectFqn, newName, confirm,
-                        finalDisableRequest, finalExpectedHash, maxResults, progress));
+                    resultRef.set(new MetadataRenameService(excludeText).rename(projectName,
+                        objectFqn, newName, confirm, disableRequest, expectedHash, maxResults, progress));
                 }
                 catch (Exception e)
                 {
@@ -297,7 +347,168 @@ public class RenameMetadataObjectTool implements IMcpTool
             });
             return resultRef.get();
         };
-        return runRenameBounded(objectFqn, newName, confirm, resolveRenameTimeoutMs(params), action);
+        if (!confirm)
+        {
+            return startOrAttachJob(projectName, objectFqn, newName, excludeText, maxResults,
+                waitSeconds.intValue(), timeoutMs, action);
+        }
+
+        // Drain before confirm too: a busy reference index can produce an incomplete cascade.
+        // This narrows the pre-flight window; EDT may queue fresh derived work while preparing.
+        String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
+        if (building != null)
+        {
+            return ToolResult.error(building).toJson();
+        }
+        return runRenameBounded(objectFqn, newName, true, timeoutMs, action);
+    }
+
+    /** Admission and attachment share a lock; terminal previews are retrieved only by jobId. */
+    String startOrAttachJob(String projectName, String objectFqn, String newName, boolean excludeText,
+        int maxResults, int waitSeconds, long timeoutMs, IRenameAction action)
+    {
+        String key = previewKey(projectName, objectFqn, newName);
+        JobSnapshot started;
+        try
+        {
+            synchronized (PREVIEW_JOBS_LOCK)
+            {
+                // After this purge the map holds exactly the RUNNING rename previews.
+                SUBMISSION_JOBS.entrySet().removeIf(entry -> findRunningJob(entry.getValue().jobId()) == null);
+                PreviewSubmission submission = SUBMISSION_JOBS.get(key);
+                started = submission == null ? null : findRunningJob(submission.jobId());
+                if (started != null && (submission.excludeText() != excludeText
+                    || submission.maxResults() != maxResults))
+                {
+                    return ToolResult.error("A preview of this rename is already running with " //$NON-NLS-1$
+                        + "different textOccurrences or maxResults in job '" + started.getId() //$NON-NLS-1$
+                        + "'. Poll get_job_status with that jobId, then retry with the desired " //$NON-NLS-1$
+                        + "options when it finishes.").toJson(); //$NON-NLS-1$
+                }
+                if (started == null && SUBMISSION_JOBS.size() >= MAX_RUNNING_PREVIEWS)
+                {
+                    return ToolResult.error(MAX_RUNNING_PREVIEWS + " other rename previews are " //$NON-NLS-1$
+                        + "already running, the limit for rename previews. Poll them with " //$NON-NLS-1$
+                        + "get_job_status and retry when one finishes.").toJson(); //$NON-NLS-1$
+                }
+                if (started == null)
+                {
+                    long jobBudgetMs = SETTLE_TIMEOUT_MS + timeoutMs + PREVIEW_JOB_MARGIN_MS;
+                    long jobDeadlineNanos = System.nanoTime() + jobBudgetMs * 1_000_000L;
+                    // Capped at the worker count, not at the preview limit: other tools' jobs
+                    // then never refuse a preview while a worker is free, and a preview is never
+                    // admitted to wait in the queue while its registry deadline runs down.
+                    started = jobs.start(NAME, jobBudgetMs, jobs.getWorkerThreads(),
+                        "Accepted the rename preview for " + objectFqn //$NON-NLS-1$
+                            + " -> " + newName + ".", progress -> { //$NON-NLS-1$ //$NON-NLS-2$
+                                progress.add("Draining the derived-data pipeline"); //$NON-NLS-1$
+                                String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
+                                if (building != null)
+                                {
+                                    throw new BackgroundJobs.MarkedFailure(building, null);
+                                }
+                                progress.add("Building the refactoring on EDT's UI thread"); //$NON-NLS-1$
+                                String result = runRenameBounded(objectFqn, newName, false,
+                                    previewRenameBoundMs(jobDeadlineNanos, System.nanoTime(), timeoutMs),
+                                    action);
+                                if (ToolResult.isErrorPayload(result))
+                                {
+                                    String errorText = JsonParser.parseString(result).getAsJsonObject()
+                                        .get("error").getAsString(); //$NON-NLS-1$
+                                    throw new BackgroundJobs.MarkedFailure(errorText, null);
+                                }
+                                return result;
+                            });
+                    if (started == null)
+                    {
+                        return ToolResult.error("All " + jobs.getWorkerThreads() //$NON-NLS-1$
+                            + " background-job workers are busy with other jobs, so the rename " //$NON-NLS-1$
+                            + "preview was not started. Nothing was renamed. Retry when one of " //$NON-NLS-1$
+                            + "them finishes (get_job_status shows a job's state).").toJson(); //$NON-NLS-1$
+                    }
+                    SUBMISSION_JOBS.put(key, new PreviewSubmission(started.getId(), excludeText, maxResults));
+                }
+            }
+        }
+        catch (RejectedExecutionException e)
+        {
+            return ToolResult.error("Could not start the rename preview because the background-job " //$NON-NLS-1$
+                + "registry is full or stopping: " + e.getMessage() //$NON-NLS-1$
+                + ". Poll existing jobs with get_job_status and retry.").toJson(); //$NON-NLS-1$
+        }
+        JobSnapshot latest = BackgroundJobPolling.await(jobs, started.getId(), waitSeconds);
+        if (latest == null)
+        {
+            return ToolResult.error("The rename preview job '" + started.getId() //$NON-NLS-1$
+                + "' expired before this call could poll it. Start a new preview.").toJson(); //$NON-NLS-1$
+        }
+        return renderSnapshot(latest, objectFqn, newName);
+    }
+
+    /**
+     * The bound for the UI-thread hand-off inside a preview job: the caller's {@code timeout}, cut
+     * down when the settle ran long so the stage-named timeout still fires
+     * {@link #PREVIEW_JOB_MARGIN_MS} before the registry deadline would fail the job with its
+     * generic budget text.
+     *
+     * @param jobDeadlineNanos the registry deadline of the job, on the {@code nanoTime} clock
+     * @param nowNanos the current {@code nanoTime}
+     * @param timeoutMs the caller's cascade bound
+     * @return the bound in milliseconds, never below {@value #MIN_PREVIEW_RENAME_BOUND_MS}
+     */
+    static long previewRenameBoundMs(long jobDeadlineNanos, long nowNanos, long timeoutMs)
+    {
+        long remainingMs = (jobDeadlineNanos - nowNanos) / 1_000_000L - PREVIEW_JOB_MARGIN_MS;
+        return Math.max(MIN_PREVIEW_RENAME_BOUND_MS, Math.min(timeoutMs, remainingMs));
+    }
+
+    /**
+     * The attachment key: project, target and new name. A managed-form element is keyed by its
+     * parsed form path, kind and name, so the same element written with Russian form or kind
+     * tokens attaches to the preview started with the English ones; any other target is keyed by
+     * the FQN with its leading type token normalized.
+     */
+    static String previewKey(String projectName, String objectFqn, String newName)
+    {
+        String normalized = MetadataTypeUtils.normalizeFqn(objectFqn);
+        FormElementWriter.FormMemberRef ref = FormElementWriter.parse(normalized);
+        String target = ref == null ? normalized
+            : ref.formPath + "|" + kindKey(ref.itemKindToken) + "." + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
+                + "|" + kindKey(ref.kindToken) + "." + ref.name + "|" + ref.ownerAttributeName; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return projectName + "|" + target + "|" + newName; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String kindKey(String token)
+    {
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(token);
+        return kind != null ? kind.name() : token;
+    }
+
+    private JobSnapshot findRunningJob(String jobId)
+    {
+        JobSnapshot job = jobId == null ? null : jobs.get(jobId);
+        return job != null && job.getStatus() == BackgroundJobs.Status.RUNNING ? job : null;
+    }
+
+    private static String renderSnapshot(JobSnapshot job, String objectFqn, String newName)
+    {
+        switch (job.getStatus())
+        {
+        case DONE:
+            return (String)job.getResult();
+        case FAILED:
+            return ToolResult.error(job.getErrorMessage()).toJson();
+        case RUNNING:
+            return "**Pending:** the preview of '" + objectFqn + "' -> '" + newName //$NON-NLS-1$ //$NON-NLS-2$
+                + "' continues in background job `" + job.getId() //$NON-NLS-1$
+                + "`. Nothing was or will be renamed by it. Poll `get_job_status` with " //$NON-NLS-1$
+                + "`jobId=\"" + job.getId() + "\"`; its Result is the preview - take contentHash " //$NON-NLS-1$ //$NON-NLS-2$
+                + "and the '#' indices from there, then call rename_metadata_object again with " //$NON-NLS-1$
+                + "confirm=true (a synchronous call bounded by timeout).\n\n" //$NON-NLS-1$
+                + BackgroundJobRenderer.render(job);
+        default:
+            return BackgroundJobRenderer.render(job);
+        }
     }
 
     /**

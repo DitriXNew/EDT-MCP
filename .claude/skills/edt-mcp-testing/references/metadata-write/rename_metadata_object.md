@@ -26,6 +26,9 @@ rename_metadata_object(
 - `objectFqn` accepts a top-level object (`Catalog.Catalog`) or a nested child `Type.Name.ChildType.ChildName`. Supported child types (case-insensitive, EN + RU): `Attribute`/`реквизит`, `TabularSection`/`табличнаячасть`, `Dimension`/`измерение`, `Resource`/`ресурс` (singular or plural). The leading TYPE token may be Russian (`Справочник.Catalog…`) — it is normalized via `MetadataTypeUtils.normalizeFqn` + `findObject`.
 - `objectFqn` **also** accepts a managed-form ELEMENT: `Catalog.Catalog.Form.ItemForm.<Kind>.Name` or `CommonForm.F.<Kind>.Name` (Kind = Attribute / Command / Field / Button / Group / Decoration / Table), plus an attribute column as `...Form.ItemForm.Attribute.Rows.Column.Price`. `FormElementWriter.parse` recognizes the shape and `MetadataRenameService` routes it to the form branch **before** the mdclass lookup. Refused with their own messages: an event-handler FQN (`...Handler.OnOpen`, `...Command.X.Handler.Action`), a bare `...Column.C` without its owning attribute, a designer-owned `AutoCommandBar`/`ContextMenu`/`ExtendedTooltip` addressed directly (rename the OWNING element — its auto children follow), and a `newName` already taken by a sibling.
 - `maxResults` (integer, default 20, `0` = no limit) caps how many change points the preview *table* shows; the YAML `totalChanges` still reports the full count.
+- **The preview runs as a background job** (#803). The call waits up to `waitSeconds` (default 45, accepted 0..45). A preview that finishes within the wait is answered inline, byte-identical to the job's Result. Otherwise the answer starts with `**Pending:**` and carries a `jobId`: poll `get_job_status(jobId=..., waitSeconds=45)` until `# Background job: done`, and take the preview (its `contentHash` and `#` indices) from the `## Result` section. A failed preview job carries the stage-named timeout advice under `## Error`. `waitSeconds=0` returns the jobId at once; `waitSeconds` together with `confirm=true` is refused, because a confirm stays synchronous. In e2e, route every call through `harness.rename_call(...)`, which follows a Pending answer to its Result.
+- `timeout` (default 420, clamped 60..3600) bounds the server-side computation, not the HTTP call. For a preview the job budget is settle (60 s) + `timeout` + a 30 s margin, so its stage-named error fires before the job's own deadline. A confirm that times out still answers synchronously, and EDT may finish the rename afterwards: verify the model before retrying.
+- `textOccurrences` (`include` default / `exclude`): EDT's full-text participant adds a whole-word match of the old name in comments, string literals and unresolved names as its own change point (`Kind: text`), one per match. `exclude` switches those points off in both the preview and the confirm. Pass the same value to both calls, because it is part of `contentHash`.
 
 Phase 2 — apply (DESTRUCTIVE; explicit-request-only):
 ```
@@ -64,8 +67,11 @@ objectFqn: Catalog.Catalog.Attribute.Attribute
 newName: AttributeRenamed
 totalChanges: 5
 enabledChanges: 5
+referenceChanges: 2
+textChanges: 1
 problems: 0
 debugExactMatches: 2
+contentHash: 3f2a...
 ---
 
 # Refactoring Preview: Rename `Catalog.Catalog.Attribute.Attribute` → `AttributeRenamed`
@@ -74,15 +80,19 @@ debugExactMatches: 2
 
 ## Change Points
 
-| # | Type | Description | Line | Col | Default | Skippable | Project | FQN |
-|---|------|-------------|------|-----|---------|-----------|---------|-----|
-| 0 | rename | Rename attribute | — | — | ✅ | no | TestConfiguration | Catalog.Catalog |
-| 1 | bslRef | Update reference | 12 | 9 | ✅ | yes | TestConfiguration | CommonModule.OK |
-| 2 | bslRef | Update reference | 34 | 15 | ✅ | yes | TestConfiguration | Catalog.Catalog.Form.ItemForm.Form |
+| # | Type | Description | Line | Col | Default | Skippable | Project | FQN | Kind |
+|---|------|-------------|------|-----|---------|-----------|---------|-----|------|
+| 0 | rename | Rename attribute | — | — | ✅ | no | TestConfiguration | Catalog.Catalog | rename |
+| 1 | bslRef | Update reference | 12 | 9 | ✅ | yes | TestConfiguration | CommonModule.OK | reference |
+| 2 | bslRef | Update reference | 34 | 15 | ✅ | yes | TestConfiguration | Catalog.Catalog.Form.ItemForm.Form | reference |
+| 3 | bslRef | Text occurrence | 40 | 8 | ✅ | yes | TestConfiguration | CommonModule.OK | text |
 
 ## Code Context
 
 ### #1 — `Procedure DoWork()` · CommonModule.OK:12
+
+Kind: reference
+
 ```bsl
    9:     // ...
   10:     Value = 0;
@@ -93,7 +103,10 @@ debugExactMatches: 2
 
 > To execute, call with `confirm=true`.
 > Use `disableIndices='1,2,3'` to skip change points by their `#` index (optional only; one index may span several context rows - skipping it skips them all).
+> Text occurrences (whole-word matches of the old name in comments, string literals and names EDT could not resolve) are change points #3; pass them in disableIndices with this preview's contentHash to leave them untouched.
 ```
+
+The footer line is omitted when there are no text points; under `textOccurrences: exclude` it says instead that `textOccurrences=exclude` has already switched them off. Kind is the LAST column, so a parser that reads the first nine cells by position keeps working.
 
 Apply (`confirm=true`):
 ```markdown
@@ -118,6 +131,7 @@ Field/shape notes (from source):
 - **`totalChanges` vs the table** — `totalChanges` is the full leaf count; the table is clamped to `maxResults` (a trailing `| ... | _N more_ |` row and a "_Showing X of Y_" line appear when clamped). `enabledChanges` counts leaves enabled by default.
 - **`#` index** — global, stable across preview→execute (one per leaf change; composites get no index). This is exactly what `disableIndices` consumes.
 - **Type** — `rename` for the core metadata rename leaf (non-optional), `bslRef` for a code/form/query reference edit.
+- **Kind** (last column, and a `Kind:` line in each code-context block) — `rename`, `reference` or `text`. `text` is asserted only for a module-file leaf carrying EDT's full-text marker; model-side text edits (DCS / dynamic-list query content) stay `reference`. `referenceChanges` / `textChanges` count distinct leaf indices of those kinds, including rows hidden by `maxResults`. Under `textOccurrences: exclude` the executed report adds `textOccurrencesSkipped: N`, separate from `disabledCount`.
 - **`problems`** — count of `IRefactoringProblem`s (e.g. `CleanReferenceProblem`); a non-empty **Problems** section lists `referencingFqn → feature | objectFqn`. Treat any problem as a stop-and-investigate signal.
 - **`debugExactMatches`** — diagnostic count from the full-text-search exact-match pipeline; informational only.
 - Apply: **`performedCount`** = refactorings successfully `perform()`ed, **`errors`** = failed ones (each listed under `## Errors` as `<title>: <message>`), **`disabledCount`** = how many change points the request LEFT switched off (not the size of the `disableIndices` set; a leaf that arrived disabled and was named counts too). **`notSkippableIndices`** / **`unsupportedIndices`** / **`unknownIndices`** are emitted only when non-empty, as YAML flow sequences (`[1, 99]`); **`unparsedCount`** is a plain number. Together they account for every requested entry that did not result in a skip: required by the refactoring, unskippable by this tool, matching nothing, or not a whole number. The unparsable entries are COUNTED, never echoed - showing caller text produced nine defects over seven review rounds (controls, non-characters, surrogates, backtick, FORMAT, line/paragraph separators, grapheme joiners, broken ZWJ emoji, literal-vs-real escape ambiguity). Empty/whitespace-only entries count as formatting; identical indices written twice count once.

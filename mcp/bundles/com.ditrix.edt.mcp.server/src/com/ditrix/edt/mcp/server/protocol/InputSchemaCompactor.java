@@ -330,7 +330,7 @@ public final class InputSchemaCompactor
         // cannot be preempted and MAY STILL COMPLETE afterwards. Without this a caller reads
         // "failed" and retries - or starts editing - while the first rename is still mutating.
         keep.put("rename_metadata_object", //$NON-NLS-1$
-            asSet("expectedHash", "timeout")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            asSet("expectedHash", "timeout", "waitSeconds", "textOccurrences")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // An OPTIONAL parameter whose omission widens the blast radius to the whole
         // workspace: without projectName, clean_project rebuilds EVERY EDT project and
         // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to
