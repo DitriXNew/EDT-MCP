@@ -715,17 +715,8 @@ public final class ProjectStateChecker
     static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
         CascadeEnvironment env, String operationName, String stateStatement)
     {
-        if (!project.exists() || !project.isOpen())
+        if (cannotSettle(project, env))
         {
-            // Nothing to drain, and asking anyway can block on a project EDT is still disposing.
-            // A missing / closed project is not this method's error to report either - the caller's
-            // own resolution names the value ("Project not found: X").
-            return null;
-        }
-        if (Boolean.FALSE.equals(env.hasBmModelProjectNature(project)))
-        {
-            // This is permanently outside EDT; let the caller's project/configuration validation
-            // produce its established error instead of advising a retry that can never succeed.
             return null;
         }
         long deadline = System.currentTimeMillis() + settleTimeoutMs;
@@ -1203,6 +1194,82 @@ public final class ProjectStateChecker
         }
     }
 
+    /**
+     * Waits within a caller-owned budget for every reference-search project to be ready.
+     * Must run outside the UI thread: derived-data work can need that thread to progress.
+     *
+     * @param projectName the base project name
+     * @param budgetMs the total polling budget in milliseconds
+     * @return the last dependency/readiness snapshot, including an incomplete one on expiry
+     */
+    public static SearchDependenciesResult awaitSearchScopeReady(String projectName, long budgetMs)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return SearchDependenciesResult.undetermined();
+        }
+        IProject project;
+        try
+        {
+            project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                .getRoot().getProject(projectName);
+        }
+        catch (RuntimeException e)
+        {
+            // A name the workspace cannot even form a handle for is the caller's validation error to
+            // report; the settle runs before that validation and must not pre-empt it.
+            return SearchDependenciesResult.undetermined();
+        }
+        return awaitSearchScopeReady(project, budgetMs, CascadeEnvironment.DEFAULT);
+    }
+
+    /**
+     * Package-visible polling seam; the snapshot predicate itself never waits.
+     * <p>
+     * A base that can never become ready (missing, closed, or permanently outside EDT - see
+     * {@link #cannotSettle(IProject, CascadeEnvironment)}) gets one snapshot and no wait: the
+     * settle runs BEFORE the caller's project validation, so waiting here would only put the full
+     * budget in front of an error the caller reports instantly ("Project not found: X").
+     */
+    static SearchDependenciesResult awaitSearchScopeReady(IProject base, long budgetMs,
+        CascadeEnvironment env)
+    {
+        if (env == null || cannotSettle(base, env))
+        {
+            return determineSearchDependencies(base, env);
+        }
+        long deadline = System.currentTimeMillis() + Math.max(0L, budgetMs);
+        while (true)
+        {
+            SearchDependenciesResult snapshot = determineSearchDependencies(base, env);
+            if (snapshot.isAllReady())
+            {
+                return snapshot;
+            }
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0L || env == null
+                || !env.waitBeforeModelRetry(Math.min(MODEL_REGISTRATION_POLL_MS, remaining)))
+            {
+                return snapshot;
+            }
+        }
+    }
+
+    /**
+     * Whether waiting for {@code project} to settle is pointless because it can never become ready:
+     * it is missing, closed, or permanently outside EDT (its description carries no BM-model
+     * nature). An unreadable description ({@code null}) is not proof of "outside EDT", so such a
+     * project is still waited for. Asking a missing or closed project anyway can also block on a
+     * project EDT is still disposing. None of these is the settle's error to report: the caller's
+     * own resolution names the value ("Project not found: X") instead of advising a retry that can
+     * never succeed.
+     */
+    private static boolean cannotSettle(IProject project, CascadeEnvironment env)
+    {
+        return project == null || !project.exists() || !project.isOpen()
+            || Boolean.FALSE.equals(env.hasBmModelProjectNature(project));
+    }
+
     /** Immutable search membership, extension-subset, and readiness snapshot. */
     public static final class SearchDependenciesResult
     {
@@ -1282,6 +1349,26 @@ public final class ProjectStateChecker
         public List<IProject> getExtensionProjects()
         {
             return extensionProjects != null ? extensionProjects : Collections.emptyList();
+        }
+
+        /** @return captured readiness in snapshot order, or an empty map when undetermined */
+        public Map<String, ProjectState> getReadiness()
+        {
+            return readiness != null ? readiness : Collections.emptyMap();
+        }
+
+        /** @return only non-ready project names, in snapshot order; empty when undetermined */
+        public List<String> getNotReadyProjectNames()
+        {
+            List<String> names = new ArrayList<>();
+            for (Map.Entry<String, ProjectState> entry : getReadiness().entrySet())
+            {
+                if (entry.getValue() != ProjectState.READY)
+                {
+                    names.add(entry.getKey());
+                }
+            }
+            return names;
         }
 
         /** @return captured project names, or an empty set when undetermined */

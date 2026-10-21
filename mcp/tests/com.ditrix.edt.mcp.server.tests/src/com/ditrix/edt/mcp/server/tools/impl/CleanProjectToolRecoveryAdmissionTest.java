@@ -37,6 +37,8 @@ import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool.ProjectCleanInfo;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool.RestartSupport;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter.ProjectRestartWaiter;
 import com.ditrix.edt.mcp.server.utils.RestartJobFailureSignal;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -134,6 +136,13 @@ public class CleanProjectToolRecoveryAdmissionTest
             boolean current = workspace.started.get(project);
             onProbe.accept(project);
             return current;
+        }
+
+        // Platform readiness is stubbed just like the derived-data wait.
+        @Override
+        ProjectStateResult stateOf(IProject project)
+        {
+            return new ProjectStateResult(ProjectState.READY, "ready");
         }
 
         JsonObject run(long timeoutMs)

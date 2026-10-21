@@ -22,6 +22,8 @@ The success envelope (ToolResult.success().put(...)) is:
     {"success": true,
      "projectsCleaned": <int>,            # == len(projects)
      "projects": [ "<name>", ... ],       # the cleaned project names
+     "dependentsStillBuilding": [ "<name> (<state>)", ... ],  # restarted dependents not
+                                          # settled when the wait ended; [] when all settled
      "message": "Clean and revalidation completed."}
 On error the envelope is {"success": false, "error": "<message>"} and the protocol
 layer marks the result isError; assert_error returns that error string.
@@ -83,6 +85,7 @@ from harness import (
     PROJECT,
     TESTS_PROJECT,
     ALL_FIXTURE_PROJECTS,
+    EXT_OBJECTS_PROJECT,
     settle_or_fail,
     wait_for_project_ready,
     wait_for_named_projects_ready,
@@ -363,3 +366,23 @@ def test_clean_names_a_dependent_the_platform_could_not_restart_and_brings_the_s
             except Exception as cleanup_error:
                 print("Best-effort cleanup after failed extension creation: %s" % cleanup_error)
     assert_no_diff("failed restart and sibling recovery must preserve committed fixture files")
+
+
+@e2e_test(tool="clean_project", kind="action")
+def test_clean_waits_for_the_dependents_it_restarted():
+    """The response covers derived data of both extension and external-object dependents."""
+    cleaned = call("clean_project", {"projectName": PROJECT})
+    assert_ok(cleaned, "clean with dependent settlement")
+    listed = call("list_projects", {"format": "json"})
+    assert_ok(listed, "dependent states immediately after clean")
+    sc = cleaned.structured
+    pending = sc.get("dependentsStillBuilding")
+    assert isinstance(pending, list), "clean must declare dependentsStillBuilding: %r" % sc
+    states = {row["name"]: row["state"] for row in listed.structured["projects"]}
+    for name in (TESTS_PROJECT, EXT_OBJECTS_PROJECT):
+        assert name in states, "required fixture dependent is missing: %r" % states
+        assert states[name] == "ready" or any(item.startswith(name + " (") for item in pending), \
+            "clean silently returned before %s settled: %r, %r" % (name, states, sc)
+    assert pending == [], "healthy fixture dependents must settle within the wait: %r" % sc
+    assert "still computing" not in sc.get("message", ""), sc
+    assert_no_diff("waiting for restarted dependents must not alter fixture sources")

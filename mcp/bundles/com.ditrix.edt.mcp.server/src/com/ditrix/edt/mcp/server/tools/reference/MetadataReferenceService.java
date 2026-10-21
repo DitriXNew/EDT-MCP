@@ -9,8 +9,13 @@ package com.ditrix.edt.mcp.server.tools.reference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
@@ -49,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
@@ -234,16 +240,30 @@ public class MetadataReferenceService
     }
 
     /**
-     * Formats output as markdown - sorted list similar to EDT.
+     * Formats output as markdown - sorted list similar to EDT. The scan-gap note comes from the gap the
+     * collector captured from the very search-scope snapshot its BSL step searched with.
+     * Package-visible so a headless test can drive the production rendering from a collector.
      */
-    private String formatOutput(String objectFqn, ReferenceCollector collector)
+    static String formatOutput(String objectFqn, ReferenceCollector collector)
+    {
+        return renderReport(objectFqn, collector.getAllReferences(),
+            incompleteScanNote(objectFqn, collector.bslScanGap));
+    }
+
+    /** Pure report assembly, including the caveat even when no references were collected. */
+    static String renderReport(String objectFqn, List<ReferenceInfo> refs, String note)
     {
         StringBuilder sb = new StringBuilder();
 
-        int totalCount = collector.getTotalCount();
+        int totalCount = refs.size();
 
         sb.append("# References to ").append(objectFqn).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("**Total references found:** ").append(totalCount).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        if (note != null)
+        {
+            sb.append(note).append("\n\n"); //$NON-NLS-1$
+        }
 
         if (totalCount == 0)
         {
@@ -252,7 +272,7 @@ public class MetadataReferenceService
         }
 
         // Get all references and merge BSL by module
-        List<ReferenceInfo> allRefs = collector.getAllReferences();
+        List<ReferenceInfo> allRefs = refs;
 
         // Separate BSL and metadata references
         java.util.Map<String, List<Integer>> bslModuleLines = new java.util.TreeMap<>();
@@ -270,6 +290,76 @@ public class MetadataReferenceService
         appendBslModules(sb, bslModuleLines);
 
         return sb.toString();
+    }
+
+    /** Why adopted copies were omitted from the diagnostic scan's target set. */
+    static final class ScanGap
+    {
+        enum Kind { NOT_READY, UNDETERMINED }
+
+        final Kind kind;
+        final Map<String, ProjectState> notReady;
+        final List<String> extensionNames;
+        final String projectName;
+
+        private ScanGap(Kind kind, Map<String, ProjectState> notReady,
+            List<String> extensionNames, String projectName)
+        {
+            this.kind = kind;
+            this.notReady = Collections.unmodifiableMap(new LinkedHashMap<>(notReady));
+            this.extensionNames = Collections.unmodifiableList(new ArrayList<>(extensionNames));
+            this.projectName = projectName;
+        }
+
+        static ScanGap of(String projectName, SearchDependenciesResult snapshot)
+        {
+            if (!snapshot.isDetermined())
+            {
+                return new ScanGap(Kind.UNDETERMINED, Collections.emptyMap(),
+                    Collections.emptyList(), projectName);
+            }
+            if (snapshot.isAllReady() || snapshot.getExtensionProjects().isEmpty())
+            {
+                return null;
+            }
+            Map<String, ProjectState> notReady = new LinkedHashMap<>();
+            for (String name : snapshot.getNotReadyProjectNames())
+            {
+                notReady.put(name, snapshot.getReadiness().get(name));
+            }
+            List<String> extensions = new ArrayList<>();
+            for (IProject extension : snapshot.getExtensionProjects())
+            {
+                extensions.add(extension.getName());
+            }
+            return new ScanGap(Kind.NOT_READY, notReady, extensions, projectName);
+        }
+    }
+
+    /** Exact diagnostic wording, separate from the reference count and grouping. */
+    static String incompleteScanNote(String objectFqn, ScanGap gap)
+    {
+        if (gap == null)
+        {
+            return null;
+        }
+        if (gap.kind == ScanGap.Kind.UNDETERMINED)
+        {
+            return "**Scan incomplete:** the search scope of project '" + gap.projectName //$NON-NLS-1$
+                + "' could not be determined (EDT project contexts are changing), so adopted copies of " //$NON-NLS-1$
+                + objectFqn + " in its extensions were not searched and the count above may be low. " //$NON-NLS-1$
+                + "Wait for list_projects to report every project 'ready' and retry."; //$NON-NLS-1$
+        }
+        List<String> states = new ArrayList<>();
+        for (Map.Entry<String, ProjectState> entry : gap.notReady.entrySet())
+        {
+            states.add(entry.getKey() + " (" + entry.getValue().getValue() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return "**Scan incomplete:** search-scope project(s) still not ready: " //$NON-NLS-1$
+            + String.join(", ", states) + ". Adopted copies of " + objectFqn + " in " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + String.join(", ", gap.extensionNames) //$NON-NLS-1$
+            + " were not searched, so the count above may be low. " //$NON-NLS-1$
+            + "Wait for list_projects to report them 'ready' and retry."; //$NON-NLS-1$
     }
 
     /**
@@ -507,7 +597,7 @@ public class MetadataReferenceService
         return projectName + "/" + modulePath; //$NON-NLS-1$
     }
 
-    private static class ReferenceCollector extends AbstractBmTask<Void>
+    static class ReferenceCollector extends AbstractBmTask<Void>
     {
 
         private final IProject sourceProject;
@@ -530,6 +620,8 @@ public class MetadataReferenceService
          * fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
          */
         private boolean bslScanComplete = true;
+        /** Search-scope evidence used only for the best-effort Markdown report. */
+        private ScanGap bslScanGap;
 
         /** See {@link #bslScanComplete}. */
         boolean isBslScanComplete()
@@ -824,10 +916,37 @@ public class MetadataReferenceService
 
         private void collectBslReferences(IBmObject target)
         {
+            collectBslReferences(target,
+                () -> IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(
+                    BslModuleUtils.BSL_LOOKUP_URI),
+                ProjectStateChecker::determineSearchDependencies);
+        }
+
+        /**
+         * Records the report's scan gap from {@code searchDependencies} - the same snapshot the BSL
+         * step derives its adopted targets and source scope from - and returns it.
+         *
+         * @param searchDependencies the snapshot the scan uses; its extension list names the copies
+         *     a gap leaves unsearched
+         * @return the captured gap, or {@code null} when nothing adopted was left out
+         */
+        ScanGap captureScanGap(SearchDependenciesResult searchDependencies)
+        {
+            bslScanGap = ScanGap.of(safeProjectName(sourceProject), searchDependencies);
+            return bslScanGap;
+        }
+
+        /**
+         * Package-visible seam of {@link #collectBslReferences(IBmObject)}: the index lookup and the
+         * search-scope snapshot are injected so a headless test can run this production step.
+         */
+        void collectBslReferences(IBmObject target,
+            Supplier<IResourceServiceProvider> resourceServiceProviderLookup,
+            Function<IProject, SearchDependenciesResult> searchScopeLookup)
+        {
             try
             {
-                IResourceServiceProvider resourceServiceProvider =
-                    IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(BslModuleUtils.BSL_LOOKUP_URI);
+                IResourceServiceProvider resourceServiceProvider = resourceServiceProviderLookup.get();
 
                 if (resourceServiceProvider == null)
                 {
@@ -846,8 +965,8 @@ public class MetadataReferenceService
                     return;
                 }
 
-                SearchDependenciesResult searchDependencies =
-                    ProjectStateChecker.determineSearchDependencies(sourceProject);
+                SearchDependenciesResult searchDependencies = searchScopeLookup.apply(sourceProject);
+                captureScanGap(searchDependencies);
 
                 // Collect target URIs (including produced types)
                 List<URI> targetURIs = new ArrayList<>();
