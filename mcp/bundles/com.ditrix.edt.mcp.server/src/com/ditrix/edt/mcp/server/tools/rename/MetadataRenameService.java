@@ -1378,7 +1378,9 @@ public class MetadataRenameService
             EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
             if (modifiedElement instanceof IBmObject ibm)
             {
-                scan.fqn = BmObjectAddress.metadataAddressOrNull(ibm);
+                // A top target keeps its own FQN, exactly as before #790: it enters the canonical
+                // signature, so shortening it would change the contentHash of existing previews.
+                scan.fqn = ibm.bmIsTop() ? BmObjectAddress.topFqnOrNull(ibm) : BmObjectAddress.metadataAddressOrNull(ibm);
             }
             String content = bmChange.getCurrentContent(new NullProgressMonitor());
             TextEdit edit = bmChange.getEdit();

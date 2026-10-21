@@ -153,6 +153,16 @@ public class MetadataRenameContainedTargetTest
     }
 
     @Test
+    public void testATopContentTargetKeepsItsOwnFqnInTheRowAndTheSignature() throws Exception
+    {
+        IBmObject target = top(OWNER);
+        String preview = preview(refactorings(change(target)), Map.of());
+
+        assertEquals(OWNER, row(preview, 0)[8]);
+        verify(target, never()).bmGetTopObject();
+    }
+
+    @Test
     public void testAContainedTargetWithExactMatchesNamesItsOwner() throws Exception
     {
         Object location = constructor("CodeLocation").newInstance(OWNER, PROJECT, 41, 9, "BSL module context", null); //$NON-NLS-1$
@@ -295,7 +305,7 @@ public class MetadataRenameContainedTargetTest
             "/TestConfiguration/src/CommonForms/F/Module.bsl", 16, location); //$NON-NLS-1$
         String preview = preview(refactorings(change(target)), Map.of("bsl", exact)); //$NON-NLS-1$
         String[] cells = row(preview, 0);
-        assertEquals("CommonForm.F", cells[8]); //$NON-NLS-1$
+        assertEquals("CommonForm.F.Form", cells[8]); //$NON-NLS-1$
         assertEquals("1", cells[3]); //$NON-NLS-1$
         assertEquals("17", cells[4]); //$NON-NLS-1$
         assertTrue(preview, preview.contains(CONTENT));
