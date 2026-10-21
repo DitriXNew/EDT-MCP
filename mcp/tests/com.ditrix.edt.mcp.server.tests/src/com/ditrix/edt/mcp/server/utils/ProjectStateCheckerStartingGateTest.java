@@ -38,9 +38,17 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
-/** Pins admission of registered, still-starting contexts across the build gate's consumers. */
+/**
+ * Pins every gate on a registered context that EDT has not started yet. The classifier keeps the
+ * derived-data verdict and its text, exactly as before the context state existed, so each gate gets
+ * the base outcome by itself: a quiet context reads ready everywhere, a busy one reads building and
+ * is refused with the base building text.
+ */
 public class ProjectStateCheckerStartingGateTest
 {
+    /** The derived-data BUILDING text the busy pipeline below produces (no polled status). */
+    private static final String BUSY = "Project is building: derived data is being computed";
+
     private Field plugin;
     private Object previousPlugin;
     private Activator activator;
@@ -80,21 +88,47 @@ public class ProjectStateCheckerStartingGateTest
         plugin.set(null, previousPlugin);
     }
 
-    @Test
-    public void aStartingContextIsRefusedWithItsMessageAndRetryAdvice()
+    private void quietDerivedData()
     {
-        ProjectStateResult starting = startingContext();
-        String error = ProjectStateChecker.buildingErrorOrNull(starting);
-        assertEquals(starting.getMessage() + ". Please wait and retry.", error);
-        assertTrue(error.endsWith("Please wait and retry."));
+        when(derivedData.isIdle()).thenReturn(true);
+        when(derivedData.isAllComputed()).thenReturn(true);
+    }
+
+    @Test
+    public void aStartingContextWithQuietDerivedDataIsAdmitted()
+    {
+        assertNull(ProjectStateChecker.buildingErrorOrNull(
+            startingContext(new ProjectStateResult(ProjectState.READY, "Project is ready"))));
+    }
+
+    @Test
+    public void aStartingContextWhoseDerivedDataReadsBuildingGetsTheBuildingRefusal()
+    {
+        assertEquals("Project is building: stage NORMAL. Please wait and retry.",
+            ProjectStateChecker.buildingErrorOrNull(startingContext(
+                new ProjectStateResult(ProjectState.BUILDING, "Project is building: stage NORMAL"))));
+    }
+
+    @Test
+    public void aStartingContextWithIncompleteDerivedDataGetsTheIncompleteBuildRefusal()
+    {
+        assertEquals("Project build in progress (derived data not complete). Please wait and retry.",
+            ProjectStateChecker.buildingErrorOrNull(startingContext(new ProjectStateResult(ProjectState.BUILDING,
+                "Project build in progress (derived data not complete)"))));
+    }
+
+    @Test
+    public void aStartingContextWithAnUnknownBuildStateIsAdmitted()
+    {
+        assertNull(ProjectStateChecker.buildingErrorOrNull(startingContext(
+            new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state"))));
     }
 
     @Test
     public void theBuildingRefusalIsByteIdentical()
     {
-        assertEquals("Project is building: X. Please wait and retry.",
-            ProjectStateChecker.buildingErrorOrNull(
-                new ProjectStateResult(ProjectState.BUILDING, "Project is building: X")));
+        assertEquals("Project is building: X. Please wait and retry.", ProjectStateChecker.buildingErrorOrNull(
+            new ProjectStateResult(ProjectState.BUILDING, "Project is building: X")));
     }
 
     @Test
@@ -136,29 +170,61 @@ public class ProjectStateCheckerStartingGateTest
     }
 
     @Test
-    public void theLiveProbeStillRefusesARegisteredStartingContextWithABusyPipeline()
+    public void theLiveProbeRefusesARegisteredStartingContextWithABusyPipelineWithTheBuildingText()
     {
-        assertEquals(ProjectState.BUILDING, ProjectStateChecker.checkDtProjectState(dtProject).getState());
+        assertEquals(BUSY, ProjectStateChecker.checkDtProjectState(dtProject).getMessage());
         ProjectStateResult actual = ProjectStateChecker.checkProjectState(project);
+        assertEquals(ProjectState.BUILDING, actual.getState());
+        assertEquals(BUSY, actual.getMessage());
         assertEquals(NotReadyReason.CONTEXT_STARTING, actual.getReason());
-        assertEquals(actual.getMessage() + ". Please wait and retry.",
-            ProjectStateChecker.buildingErrorOrNull(project));
+        assertEquals(BUSY + ". Please wait and retry.", ProjectStateChecker.buildingErrorOrNull(project));
     }
 
     @Test
-    public void theModelGateFallbackRefusesAStartingContextWhenTheProviderIsMissing()
+    public void aQuietStartingContextReadsReadyWithoutAReason()
+    {
+        quietDerivedData();
+        ProjectStateResult actual = ProjectStateChecker.checkProjectState(project);
+        assertEquals(ProjectState.READY, actual.getState());
+        assertEquals(NotReadyReason.NONE, actual.getReason());
+        assertEquals("Project is ready", actual.getMessage());
+        assertNull(actual.getContextDetail());
+    }
+
+    @Test
+    public void aNamedCleanProjectOnAStartingContextWithQuietDerivedDataIsAdmitted()
+    {
+        // clean_project resolves its name and then asks exactly this gate; the stranded-context
+        // recovery it offers must not be refused while derived data is quiet.
+        quietDerivedData();
+        assertNull(ProjectStateChecker.buildingErrorOrNull(project));
+    }
+
+    @Test
+    public void checkReadyOrErrorAdmitsAQuietStartingContext()
+    {
+        quietDerivedData();
+        assertNull(ProjectStateChecker.checkReadyOrError(project));
+    }
+
+    @Test
+    public void checkReadyOrErrorRefusesABusyStartingContextWithTheBaseBuildingText()
+    {
+        assertEquals(BUSY + ". Please wait and retry.", ProjectStateChecker.checkReadyOrError(project));
+    }
+
+    @Test
+    public void theModelGateFallbackAdmitsAStartingContextWhenTheProviderIsMissing()
     {
         when(activator.getDerivedDataManagerProvider()).thenReturn(null);
-        assertEquals(startingContext().getMessage() + ". Please wait and retry.",
-            ProjectStateChecker.modelBuildingErrorOrNull(project));
+        assertNull(ProjectStateChecker.modelBuildingErrorOrNull(project));
     }
 
     @Test
-    public void theModelGateFallbackRefusesAStartingContextWhenTheManagerIsMissing()
+    public void theModelGateFallbackAdmitsAStartingContextWhenTheManagerIsMissing()
     {
         when(provider.get(dtProject)).thenReturn(null);
-        assertEquals(startingContext().getMessage() + ". Please wait and retry.",
-            ProjectStateChecker.modelBuildingErrorOrNull(project));
+        assertNull(ProjectStateChecker.modelBuildingErrorOrNull(project));
     }
 
     @Test
@@ -173,15 +239,17 @@ public class ProjectStateCheckerStartingGateTest
     }
 
     @Test
-    public void theDefaultCascadeProbeRefusesAStartingContext()
+    public void theDefaultCascadeProbeRefusesAStartingContextOnlyWhileItsDerivedDataBuilds()
     {
-        assertEquals(startingContext().getMessage() + ". Please wait and retry.",
-            CascadeEnvironment.DEFAULT.buildingErrorOrNull(project));
+        assertEquals(BUSY + ". Please wait and retry.", CascadeEnvironment.DEFAULT.buildingErrorOrNull(project));
         assertTrue(CascadeEnvironment.DEFAULT.isBuilding(project));
+        quietDerivedData();
+        assertNull(CascadeEnvironment.DEFAULT.buildingErrorOrNull(project));
+        assertFalse(CascadeEnvironment.DEFAULT.isBuilding(project));
     }
 
     @Test
-    public void cascadeSettleRefusesAStartingBaseAfterItsDeadline()
+    public void cascadeSettleRefusesAStartingBaseWithABusyPipelineAfterItsDeadline()
     {
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.hasBmModelProjectNature(project)).thenReturn(true);
@@ -190,12 +258,12 @@ public class ProjectStateCheckerStartingGateTest
         when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(project));
         when(env.buildingErrorOrNull(project))
             .thenAnswer(invocation -> CascadeEnvironment.DEFAULT.buildingErrorOrNull(project));
-        assertEquals(startingContext().getMessage() + ". Please wait and retry.",
+        assertEquals(BUSY + ". Please wait and retry.",
             ProjectStateChecker.settleBeforeCascadeOrError(project, 0L, env));
     }
 
     @Test
-    public void cascadeSettleRefusesAStartingParticipantAfterItsDeadline()
+    public void cascadeSettleRefusesAStartingParticipantWithABusyPipelineAfterItsDeadline()
     {
         IProject base = mock(IProject.class);
         when(base.exists()).thenReturn(true);
@@ -215,16 +283,31 @@ public class ProjectStateCheckerStartingGateTest
     }
 
     @Test
-    public void searchDependenciesRemainNotReadyForAStartingContext()
+    public void searchDependenciesReadAQuietStartingContextAsReady()
+    {
+        quietDerivedData();
+        SearchDependenciesResult result = ProjectStateChecker.determineSearchDependencies(project, searchEnv());
+        assertTrue(result.isDetermined());
+        assertTrue(result.isAllReady());
+    }
+
+    @Test
+    public void searchDependenciesReadABusyStartingContextAsNotReady()
+    {
+        SearchDependenciesResult result = ProjectStateChecker.determineSearchDependencies(project, searchEnv());
+        assertTrue(result.isDetermined());
+        assertFalse(result.isAllReady());
+    }
+
+    private CascadeEnvironment searchEnv()
     {
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(project));
         when(env.getOpenDependentNatureProjects()).thenReturn(Collections.emptyList());
         when(env.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
-        when(env.getProjectState(project)).thenReturn(startingContext());
-        SearchDependenciesResult result = ProjectStateChecker.determineSearchDependencies(project, env);
-        assertTrue(result.isDetermined());
-        assertFalse(result.isAllReady());
+        when(env.getProjectState(project))
+            .thenAnswer(invocation -> CascadeEnvironment.DEFAULT.getProjectState(project));
+        return env;
     }
 
     private static BmModelResolver.Resolution availableModels(IProject project)
@@ -234,12 +317,11 @@ public class ProjectStateCheckerStartingGateTest
         return BmModelResolver.resolve(project, models);
     }
 
-    private static ProjectStateResult startingContext()
+    private static ProjectStateResult startingContext(ProjectStateResult derivedVerdict)
     {
         return ProjectStateChecker.classifyContext(true, true, true, true,
             () -> { throw new AssertionError("No nature lookup for a registered context"); },
-            () -> false, () -> false,
-            () -> { throw new AssertionError("No derived-data lookup before context start"); });
+            () -> false, () -> false, () -> derivedVerdict);
     }
 
     private static void assertNotRefused(NotReadyReason reason)

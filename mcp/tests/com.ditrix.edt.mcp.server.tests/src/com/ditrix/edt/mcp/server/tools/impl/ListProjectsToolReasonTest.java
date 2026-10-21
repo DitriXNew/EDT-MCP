@@ -105,4 +105,16 @@ public class ListProjectsToolReasonTest
         assertEquals(7, ListProjectsTool.TABLE_HEADER.split("\\|", -1).length - 2);
     }
 
+    @Test
+    public void aBusyStartingContextShowsBuildingWithTheStartingContextReason()
+    {
+        ProjectStateResult result = new ProjectStateResult(ProjectState.BUILDING,
+            NotReadyReason.CONTEXT_STARTING, "Project is building: stage SYNC", "EDT is starting it");
+        Map<String, Object> row = new LinkedHashMap<>();
+        ListProjectsTool.putReason(row, result);
+        assertEquals("Project is building: stage SYNC. EDT is starting it", row.get("reason"));
+        assertEquals("| Demo | building | /Demo | Yes | Yes | Nature | "
+            + "Project is building: stage SYNC. EDT is starting it |\n",
+            ListProjectsTool.tableRow("Demo", result, "/Demo", true, "Yes", "Nature"));
+    }
 }

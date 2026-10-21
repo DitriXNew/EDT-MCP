@@ -129,6 +129,7 @@ public final class ProjectStateChecker
         private final ProjectState state;
         private final NotReadyReason reason;
         private final String message;
+        private final String contextDetail;
         private final boolean ready;
         
         public ProjectStateResult(ProjectState state, String message)
@@ -151,9 +152,20 @@ public final class ProjectStateChecker
 
         public ProjectStateResult(ProjectState state, NotReadyReason reason, String message)
         {
+            this(state, reason, message, null);
+        }
+
+        /**
+         * @param contextDetail a sentence about the EDT context that explains the verdict without
+         *     changing its {@code message}, or {@code null}
+         */
+        public ProjectStateResult(ProjectState state, NotReadyReason reason, String message,
+            String contextDetail)
+        {
             this.state = state;
             this.reason = reason;
             this.message = message;
+            this.contextDetail = contextDetail;
             this.ready = state == ProjectState.READY;
         }
         
@@ -170,6 +182,21 @@ public final class ProjectStateChecker
         public String getMessage()
         {
             return message;
+        }
+
+        /** The context sentence attached to the verdict, or {@code null}. */
+        public String getContextDetail()
+        {
+            return contextDetail;
+        }
+
+        /**
+         * The full explanation a project listing shows: the verdict text, followed by the context
+         * sentence when there is one. Refusals keep using {@link #getMessage()}.
+         */
+        public String getReasonText()
+        {
+            return contextDetail == null ? message : message + ". " + contextDetail; //$NON-NLS-1$
         }
         
         public boolean isReady()
@@ -226,10 +253,11 @@ public final class ProjectStateChecker
      * <li>When no DT project is registered, reads the persistent BM nature lazily to distinguish
      * an unstarted EDT context from a plain project or an unreadable description. Only a known
      * EDT nature needs the lazy workspace-wide pending-restart-job snapshot.</li>
-     * <li>A registered DT project must have a started context before derived data is checked.
-     * A missing or throwing lifecycle service leaves that answer unknown and falls back to
-     * the derived-data check.</li>
-     * <li>Derived data computations must be complete (not building).</li>
+     * <li>A registered DT project is judged by its derived data, exactly as before the context
+     * state existed: the verdict (ready, building or unknown) and its text are unchanged. Only a
+     * NOT-ready verdict whose context EDT reports as not started yet additionally carries the
+     * {@link NotReadyReason#CONTEXT_STARTING} reason and a context sentence; a ready verdict never
+     * does. A missing or throwing lifecycle service leaves that answer unknown and adds nothing.</li>
      * </ul>
      * 
      * @param project the IProject to check
@@ -237,7 +265,12 @@ public final class ProjectStateChecker
      */
     public static ProjectStateResult checkProjectState(IProject project)
     {
-        boolean exists = project != null && project.exists();
+        if (project == null)
+        {
+            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.MISSING,
+                "Project is null"); //$NON-NLS-1$
+        }
+        boolean exists = project.exists();
         boolean open = exists && project.isOpen();
         Activator activator = open ? Activator.getDefault() : null;
         IDtProjectManager manager = activator == null ? null : activator.getDtProjectManager();
@@ -295,15 +328,20 @@ public final class ProjectStateChecker
             return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.NATURE_UNREADABLE,
                 "Project description could not be read, so it cannot be told from a non-EDT project"); //$NON-NLS-1$
         }
-        if (Boolean.FALSE.equals(started.get()))
+        ProjectStateResult verdict = derivedData.get();
+        if (verdict.isReady() || !Boolean.FALSE.equals(started.get()))
         {
-            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.CONTEXT_STARTING,
-                "EDT is starting this project's context (services are starting). If it stays here " //$NON-NLS-1$
-                    + "after clean_project reported a failed restart, run clean_project on it again - " //$NON-NLS-1$
-                    + "it recovers stranded contexts - or close and reopen the project in EDT"); //$NON-NLS-1$
+            return verdict;
         }
-        return derivedData.get();
+        return new ProjectStateResult(verdict.getState(), NotReadyReason.CONTEXT_STARTING,
+            verdict.getMessage(), STARTING_CONTEXT);
     }
+
+    /** Why a registered DT project whose derived data is not ready may stay that way. */
+    static final String STARTING_CONTEXT =
+        "EDT is starting this project's context (services are starting). If it stays here " //$NON-NLS-1$
+            + "after clean_project reported a failed restart, run clean_project on it again - " //$NON-NLS-1$
+            + "it recovers stranded contexts - or close and reopen the project in EDT"; //$NON-NLS-1$
 
     /** A missing lifecycle service or a failed snapshot must not turn an unknown answer into false. */
     static Boolean readStarted(Activator activator, IProject project)
@@ -334,14 +372,23 @@ public final class ProjectStateChecker
         return unstartedContextReasonOrNull(checkProjectState(project));
     }
 
+    /**
+     * The recovery sentence for a context state, with the retry rule of
+     * {@link #readyOrError(ProjectStateResult)}: a starting or restarting context is transient and
+     * ends with the retry advice, an unstarted context (which EDT does not restart by itself) does
+     * not. A starting context is named by its context sentence, not by its derived-data verdict;
+     * a registered context whose derived data reads ready carries no reason and gets none.
+     */
     static String unstartedContextReasonOrNull(ProjectStateResult result)
     {
         switch (result.getReason())
         {
             case CONTEXT_NOT_STARTED:
-            case CONTEXT_STARTING:
             case CONTEXT_RESTARTING:
-                return result.getMessage() + "."; //$NON-NLS-1$
+                return readyOrError(result);
+            case CONTEXT_STARTING:
+                return withRetryRule(result.getReason(), result.getContextDetail() == null
+                    ? result.getMessage() : result.getContextDetail());
             default:
                 return null;
         }
@@ -742,23 +789,34 @@ public final class ProjectStateChecker
         return readyOrError(checkProjectState(project));
     }
 
-    /** Retry advice is reserved for conditions EDT can resolve without caller intervention. */
+    /**
+     * Retry advice is reserved for conditions that may clear without caller intervention. A
+     * {@code .project} description that could not be read is one of them: the read can fail
+     * transiently, and the same input was refused with retry advice before the reasons existed.
+     * Missing, closed, non-EDT and unstarted-context projects are refused without it.
+     */
     static String readyOrError(ProjectStateResult result)
     {
         if (result.isReady())
         {
             return null;
         }
-        switch (result.getReason())
+        return withRetryRule(result.getReason(), result.getMessage());
+    }
+
+    private static String withRetryRule(NotReadyReason reason, String text)
+    {
+        switch (reason)
         {
             case BUILDING:
             case BUILD_STATE_UNKNOWN:
             case MANAGER_UNAVAILABLE:
+            case NATURE_UNREADABLE:
             case CONTEXT_STARTING:
             case CONTEXT_RESTARTING:
-                return result.getMessage() + ". Please wait and retry."; //$NON-NLS-1$
+                return text + ". Please wait and retry."; //$NON-NLS-1$
             default:
-                return result.getMessage() + "."; //$NON-NLS-1$
+                return text + "."; //$NON-NLS-1$
         }
     }
     
@@ -783,29 +841,32 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Returns a retryable error when the project's derived data (the reference index) is
-     * building or its registered DT context is still starting, otherwise {@code null}.
+     * Returns a "still building" error message ONLY when the project's derived data
+     * (the reference index) is actively building, otherwise {@code null}.
      * <p>
-     * Unlike {@link #checkReadyOrError(IProject)} this leaves missing, closed, unknown and
-     * non-EDT projects to the caller's own resolution and its value-naming error
-     * ("Project not found: X"). An unregistered context, including one with a pending restart,
-     * is also left to the caller. A registered context that is starting must be refused:
-     * its derived data could previously report BUILDING, and admitting a tool before those
-     * services start could yield partial results or silently miss cascade references.
+     * Unlike {@link #checkReadyOrError(IProject)} this does NOT reject a project that is
+     * merely missing / closed / unknown: those are PERMANENT conditions a retry will not
+     * fix, and the caller's own resolution yields a sharper, value-naming error
+     * ("Project not found: X"). Use this for a model-mutating or cascade pre-flight where
+     * the only state worth refusing for is a transient in-progress build (running the
+     * cascade against an incomplete index would silently miss references).
+     * <p>
+     * A registered context that EDT has not started yet needs no case here: the classifier
+     * keeps its derived-data verdict and text, so it is refused exactly while that reads
+     * building - {@code clean_project}, which recovers a stranded context, is gated here too.
      *
      * @param project the IProject to check
-     * @return the build or starting-context message with a retry hint, or {@code null}
+     * @return the building message with a retry hint, or {@code null} when not building
      */
     public static String buildingErrorOrNull(IProject project)
     {
         return buildingErrorOrNull(checkProjectState(project));
     }
 
-    /** Pure admission gate shared by the instant probe, model fallback and cascade checks. */
+    /** The admission rule of {@link #buildingErrorOrNull(IProject)} on an already classified state. */
     static String buildingErrorOrNull(ProjectStateResult result)
     {
-        if (result.getState() == ProjectState.BUILDING
-            || result.getReason() == NotReadyReason.CONTEXT_STARTING)
+        if (result.getState() == ProjectState.BUILDING)
         {
             return result.getMessage() + ". Please wait and retry."; //$NON-NLS-1$
         }
@@ -1769,7 +1830,7 @@ public final class ProjectStateChecker
      * handling to produce the proper error.
      *
      * @param projectName the project name to check
-     * @return the build or starting-context message with a retry hint, or {@code null}
+     * @return the building message with a retry hint, or {@code null} when not building
      */
     public static String buildingErrorOrNull(String projectName)
     {

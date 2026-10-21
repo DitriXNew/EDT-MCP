@@ -35,8 +35,9 @@ external translation provider). Source:
   dictionary/provider the LanguageTool API throws and the tool reports
   `Translate configuration failed: <message>`.
 - The project must resolve as an EDT project (`IDtProjectManager.getDtProject`
-  non-null) and pass `ProjectStateChecker.buildingErrorOrNull` (neither building
-  nor a registered EDT context still starting).
+  non-null) and pass `ProjectStateChecker.buildingErrorOrNull` (derived data not
+  building; a registered EDT context that is still starting is judged by its
+  derived data, so it is refused only while that reads building).
 - **Mutation safety.** Only ever run against **`TestConfiguration`** (repo path
   `TestConfiguration/src`), never against `IRP` or a real config. Mutate
   *through MCP* so the in-memory model and disk stay in sync, then revert (see

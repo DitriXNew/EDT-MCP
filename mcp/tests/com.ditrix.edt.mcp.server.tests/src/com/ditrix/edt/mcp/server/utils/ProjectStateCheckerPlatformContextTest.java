@@ -24,7 +24,9 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com._1c.g5.v8.derived.IDerivedDataManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
+import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
@@ -78,13 +80,30 @@ public class ProjectStateCheckerPlatformContextTest
     }
 
     @Test
-    public void theAdapterConsultsTheOrchestratorBeforeDerivedData()
+    public void theAdapterJudgesAStartingContextByItsDerivedDataAndNamesTheContext()
     {
         when(manager.getDtProject(project)).thenReturn(mock(IDtProject.class));
         when(orchestrator.isStarted(project)).thenReturn(false);
-        assertEquals(NotReadyReason.CONTEXT_STARTING,
-            ProjectStateChecker.checkProjectState(project).getReason());
-        verify(activator, never()).getDerivedDataManagerProvider();
+        ProjectStateChecker.ProjectStateResult result = ProjectStateChecker.checkProjectState(project);
+        assertEquals(NotReadyReason.CONTEXT_STARTING, result.getReason());
+        assertEquals("unknown", result.getStateValue());
+        assertEquals("Cannot determine build state", result.getMessage());
+        verify(activator).getDerivedDataManagerProvider();
+    }
+
+    @Test
+    public void theAdapterDoesNotAskTheOrchestratorAboutAReadyVerdict()
+    {
+        IDtProject dtProject = mock(IDtProject.class);
+        when(manager.getDtProject(project)).thenReturn(dtProject);
+        IDerivedDataManagerProvider provider = mock(IDerivedDataManagerProvider.class);
+        IDerivedDataManager derivedData = mock(IDerivedDataManager.class);
+        when(activator.getDerivedDataManagerProvider()).thenReturn(provider);
+        when(provider.get(dtProject)).thenReturn(derivedData);
+        when(derivedData.isIdle()).thenReturn(true);
+        when(derivedData.isAllComputed()).thenReturn(true);
+        assertEquals(NotReadyReason.NONE, ProjectStateChecker.checkProjectState(project).getReason());
+        verifyZeroInteractions(orchestrator);
     }
 
     @Test
@@ -100,6 +119,12 @@ public class ProjectStateCheckerPlatformContextTest
     public void aNullProjectHasTheMissingReason()
     {
         assertEquals(NotReadyReason.MISSING, ProjectStateChecker.checkProjectState(null).getReason());
+    }
+
+    @Test
+    public void aNullProjectKeepsTheBaseText()
+    {
+        assertEquals("Project is null", ProjectStateChecker.checkProjectState(null).getMessage());
     }
 
     @Test

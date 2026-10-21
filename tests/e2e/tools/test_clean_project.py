@@ -353,9 +353,13 @@ def test_clean_names_a_dependent_the_platform_could_not_restart_and_brings_the_s
         stranded_rows = (stranded_list.structured or {}).get("projects")
         assert isinstance(stranded_rows, list), stranded_list.structured
         stranded = next((row for row in stranded_rows if row.get("name") == name), None)
-        assert stranded and stranded.get("state") == "not_available", stranded
+        # A context without a DtProject reads not_available. A registered one that EDT has not
+        # started keeps its derived-data state (as before #797) and the reason names the start.
+        assert stranded and stranded.get("state") in ("not_available", "building", "unknown"), stranded
         reason = stranded.get("reason", "")
         low_reason = reason.lower()
+        if stranded.get("state") != "not_available":
+            assert "is starting this project's context" in reason, stranded
         assert "context" in low_reason and any(
             state in low_reason for state in ("not started", "starting", "restart")), stranded
         assert any(remedy in low_reason for remedy in (

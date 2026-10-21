@@ -36,6 +36,15 @@ public class ProjectStateCheckerContextTest
         throw new AssertionError("Derived data must not be read on this branch");
     };
 
+    private static final String BUSY = "Project is building: stage SYNC";
+
+    /** A registered DT project that EDT reports as not started, with the given derived-data verdict. */
+    private static ProjectStateResult starting(ProjectStateResult derivedVerdict)
+    {
+        return ProjectStateChecker.classifyContext(true, true, true, true,
+            UNUSED_BOOLEAN, () -> Boolean.FALSE, UNUSED_RESTART, () -> derivedVerdict);
+    }
+
     private static ProjectStateResult unregistered(Boolean nature, boolean restarting)
     {
         return ProjectStateChecker.classifyContext(true, true, true, false,
@@ -77,19 +86,60 @@ public class ProjectStateCheckerContextTest
     }
 
     @Test
-    public void aRegisteredContextThatIsNotStartedIsStartingAndSkipsDerivedData()
+    public void aStartingContextWithQuietDerivedDataReadsReadyWithoutAReason()
     {
-        AtomicInteger reads = new AtomicInteger();
-        ProjectStateResult result = ProjectStateChecker.classifyContext(true, true, true, true,
-            UNUSED_BOOLEAN, () -> Boolean.FALSE, UNUSED_RESTART, () -> {
-                reads.incrementAndGet();
-                return new ProjectStateResult(ProjectState.READY, "ready");
-            });
-        assertEquals(0, reads.get());
-        assertEquals(ProjectState.NOT_AVAILABLE, result.getState());
+        ProjectStateResult ready = new ProjectStateResult(ProjectState.READY, "Project is ready");
+        ProjectStateResult result = starting(ready);
+        assertSame(ready, result);
+        assertEquals("ready", result.getStateValue());
+        assertEquals(NotReadyReason.NONE, result.getReason());
+        assertNull(result.getContextDetail());
+        assertEquals("Project is ready", result.getReasonText());
+    }
+
+    @Test
+    public void aReadyVerdictDoesNotAskWhetherTheContextStarted()
+    {
+        ProjectStateResult ready = new ProjectStateResult(ProjectState.READY, "Project is ready");
+        assertSame(ready, ProjectStateChecker.classifyContext(true, true, true, true,
+            UNUSED_BOOLEAN, UNUSED_BOOLEAN, UNUSED_RESTART, () -> ready));
+    }
+
+    @Test
+    public void aStartingContextWithABusyPipelineKeepsTheBuildingVerdictAndNamesTheContext()
+    {
+        ProjectStateResult result = starting(new ProjectStateResult(ProjectState.BUILDING, BUSY));
+        assertEquals(ProjectState.BUILDING, result.getState());
+        assertEquals("building", result.getStateValue());
+        assertEquals(BUSY, result.getMessage());
         assertEquals(NotReadyReason.CONTEXT_STARTING, result.getReason());
-        assertTrue(result.getMessage().contains("clean_project"));
-        assertTrue(result.getMessage().contains("close and reopen"));
+        assertEquals(ProjectStateChecker.STARTING_CONTEXT, result.getContextDetail());
+        assertEquals(BUSY + ". " + ProjectStateChecker.STARTING_CONTEXT, result.getReasonText());
+        assertTrue(result.getReasonText().contains("services are starting"));
+        assertTrue(result.getReasonText().contains("clean_project"));
+        assertTrue(result.getReasonText().contains("close and reopen"));
+    }
+
+    @Test
+    public void aStartingContextWithAnUnknownBuildStateStaysUnknownAndNamesTheContext()
+    {
+        ProjectStateResult result = starting(
+            new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state"));
+        assertEquals(ProjectState.UNKNOWN, result.getState());
+        assertEquals("Cannot determine build state", result.getMessage());
+        assertEquals(NotReadyReason.CONTEXT_STARTING, result.getReason());
+        assertEquals(ProjectStateChecker.STARTING_CONTEXT, result.getContextDetail());
+    }
+
+    @Test
+    public void anUnknownStartedAnswerAddsNoReasonToABusyVerdict()
+    {
+        ProjectStateResult busy = new ProjectStateResult(ProjectState.BUILDING, BUSY);
+        ProjectStateResult result = ProjectStateChecker.classifyContext(true, true, true, true,
+            UNUSED_BOOLEAN, () -> null, UNUSED_RESTART, () -> busy);
+        assertSame(busy, result);
+        assertEquals(NotReadyReason.BUILDING, result.getReason());
+        assertEquals(BUSY, result.getReasonText());
     }
 
     @Test
@@ -210,11 +260,24 @@ public class ProjectStateCheckerContextTest
     }
 
     @Test
-    public void readyOrErrorRetriesAStartingContext()
+    public void readyOrErrorRefusesABusyStartingContextWithTheBaseBuildingText()
     {
-        ProjectStateResult result = ProjectStateChecker.classifyContext(true, true, true, true,
-            UNUSED_BOOLEAN, () -> Boolean.FALSE, UNUSED_RESTART, UNUSED_DERIVED_DATA);
-        assertEquals(result.getMessage() + ". Please wait and retry.", ProjectStateChecker.readyOrError(result));
+        assertEquals(BUSY + ". Please wait and retry.",
+            ProjectStateChecker.readyOrError(starting(new ProjectStateResult(ProjectState.BUILDING, BUSY))));
+    }
+
+    @Test
+    public void readyOrErrorAdmitsAQuietStartingContext()
+    {
+        assertNull(ProjectStateChecker.readyOrError(
+            starting(new ProjectStateResult(ProjectState.READY, "Project is ready"))));
+    }
+
+    @Test
+    public void readyOrErrorRetriesAStartingContextWithAnUnknownBuildState()
+    {
+        assertEquals("Cannot determine build state. Please wait and retry.", ProjectStateChecker.readyOrError(
+            starting(new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state"))));
     }
 
     @Test
@@ -254,10 +317,14 @@ public class ProjectStateCheckerContextTest
     }
 
     @Test
-    public void readyOrErrorDoesNotRetryAnUnreadableNature()
+    public void readyOrErrorRetriesAnUnreadableNature()
     {
         ProjectStateResult result = unregistered(null, false);
-        assertEquals(result.getMessage() + ".", ProjectStateChecker.readyOrError(result));
+        assertEquals(NotReadyReason.NATURE_UNREADABLE, result.getReason());
+        String refusal = ProjectStateChecker.readyOrError(result);
+        assertEquals("Project description could not be read, so it cannot be told from a non-EDT project. "
+            + "Please wait and retry.", refusal);
+        assertTrue(refusal, refusal.endsWith(". Please wait and retry."));
     }
 
     @Test
@@ -267,15 +334,38 @@ public class ProjectStateCheckerContextTest
     }
 
     @Test
-    public void contextReasonNamesAllThreeContextStates()
+    public void contextReasonForAStartingContextEndsWithRetryAdvice()
     {
-        for (ProjectStateResult result : new ProjectStateResult[] {
-            unregistered(Boolean.TRUE, false), unregistered(Boolean.TRUE, true),
-            ProjectStateChecker.classifyContext(true, true, true, true,
-                UNUSED_BOOLEAN, () -> Boolean.FALSE, UNUSED_RESTART, UNUSED_DERIVED_DATA) })
-        {
-            assertEquals(result.getMessage() + ".", ProjectStateChecker.unstartedContextReasonOrNull(result));
-        }
+        ProjectStateResult result = starting(new ProjectStateResult(ProjectState.BUILDING, BUSY));
+        assertEquals(NotReadyReason.CONTEXT_STARTING, result.getReason());
+        assertEquals(ProjectStateChecker.STARTING_CONTEXT + ". Please wait and retry.",
+            ProjectStateChecker.unstartedContextReasonOrNull(result));
+    }
+
+    @Test
+    public void aQuietStartingContextHasNoContextReason()
+    {
+        assertNull(ProjectStateChecker.unstartedContextReasonOrNull(
+            starting(new ProjectStateResult(ProjectState.READY, "Project is ready"))));
+    }
+
+    @Test
+    public void contextReasonForARestartingContextEndsWithRetryAdvice()
+    {
+        ProjectStateResult result = unregistered(Boolean.TRUE, true);
+        assertEquals(NotReadyReason.CONTEXT_RESTARTING, result.getReason());
+        assertEquals(result.getMessage() + ". Please wait and retry.",
+            ProjectStateChecker.unstartedContextReasonOrNull(result));
+    }
+
+    @Test
+    public void contextReasonForAnUnstartedContextHasNoRetryAdvice()
+    {
+        ProjectStateResult result = unregistered(Boolean.TRUE, false);
+        assertEquals(NotReadyReason.CONTEXT_NOT_STARTED, result.getReason());
+        String reason = ProjectStateChecker.unstartedContextReasonOrNull(result);
+        assertEquals(result.getMessage() + ".", reason);
+        assertFalse(reason, reason.contains("Please wait and retry"));
     }
 
     @Test

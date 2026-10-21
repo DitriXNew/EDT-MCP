@@ -21,7 +21,9 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com._1c.g5.v8.derived.IDerivedDataManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
+import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
@@ -108,5 +110,48 @@ public class MetadataWriteContextReasonTest
         String error = refusal(true);
         assertTrue(error, error.contains("services are starting"));
         assertTrue(error, error.contains("clean_project"));
+    }
+
+    @Test
+    public void aRegisteredStartingContextWriteRefusalEndsWithRetryAdvice()
+    {
+        when(manager.getDtProject(project)).thenReturn(mock(IDtProject.class));
+        when(activator.getWorkspaceOrchestrator()).thenReturn(mock(IWorkspaceOrchestrator.class));
+        for (boolean allowNoConfiguration : new boolean[] { true, false })
+        {
+            String error = refusal(allowNoConfiguration);
+            assertTrue(error, error.startsWith("Could not get configuration for project: Demo. EDT is starting"));
+            assertTrue(error, error.endsWith("close and reopen the project in EDT. Please wait and retry."));
+        }
+    }
+
+    @Test
+    public void aQuietRegisteredStartingContextKeepsTheBaseWriteRefusal()
+    {
+        IDtProject dtProject = mock(IDtProject.class);
+        when(manager.getDtProject(project)).thenReturn(dtProject);
+        IWorkspaceOrchestrator orchestrator = mock(IWorkspaceOrchestrator.class);
+        when(activator.getWorkspaceOrchestrator()).thenReturn(orchestrator);
+        IDerivedDataManagerProvider provider = mock(IDerivedDataManagerProvider.class);
+        IDerivedDataManager derivedData = mock(IDerivedDataManager.class);
+        when(activator.getDerivedDataManagerProvider()).thenReturn(provider);
+        when(provider.get(dtProject)).thenReturn(derivedData);
+        when(derivedData.isIdle()).thenReturn(true);
+        when(derivedData.isAllComputed()).thenReturn(true);
+        for (boolean allowNoConfiguration : new boolean[] { true, false })
+        {
+            assertEquals("Could not get configuration for project: Demo", refusal(allowNoConfiguration));
+        }
+    }
+
+    @Test
+    public void anUnstartedContextWriteRefusalHasNoRetryAdvice()
+    {
+        for (boolean allowNoConfiguration : new boolean[] { true, false })
+        {
+            String error = refusal(allowNoConfiguration);
+            assertTrue(error, error.endsWith("EDT does not restart it by itself."));
+            assertFalse(error, error.contains("Please wait and retry"));
+        }
     }
 }

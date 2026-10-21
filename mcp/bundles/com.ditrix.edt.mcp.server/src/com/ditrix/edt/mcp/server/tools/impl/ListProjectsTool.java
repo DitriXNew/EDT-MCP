@@ -216,14 +216,14 @@ public class ListProjectsTool implements IMcpTool
     {
         if (!result.isReady())
         {
-            row.put("reason", result.getMessage()); //$NON-NLS-1$
+            row.put("reason", result.getReasonText()); //$NON-NLS-1$
         }
     }
 
     /** The trailing reason must never introduce another table row or column. */
     static String reasonCell(ProjectStateResult result)
     {
-        return result.isReady() ? "" : MarkdownUtils.escapeForTable(result.getMessage()); //$NON-NLS-1$
+        return result.isReady() ? "" : MarkdownUtils.escapeForTable(result.getReasonText()); //$NON-NLS-1$
     }
 
     /**

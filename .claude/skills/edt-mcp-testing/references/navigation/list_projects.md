@@ -24,12 +24,12 @@ list_projects()
 ```
 Column meaning (from `ListProjectsTool` + `ProjectStateChecker`):
 - **Name** — the workspace project name (this is the value you pass as `projectName` to other tools).
-- **State** — one of `ready`, `building`, `not_available`, `unknown` (the `ProjectState` enum). `ready` = context started, derived data idle and all computed; `building` = pipeline busy or derived data incomplete; `not_available` = missing / closed / not an EDT project / unreadable natures / EDT context not started, starting or restarting; `unknown` = state services unavailable.
+- **State** — one of `ready`, `building`, `not_available`, `unknown` (the `ProjectState` enum). `ready` = context started, derived data idle and all computed; `building` = pipeline busy or derived data incomplete; `not_available` = missing / closed / not an EDT project / unreadable natures / no EDT context (not started, or a restart job pending); `unknown` = state services unavailable.
 - **Path** — absolute OS path of the project location (empty string if `getLocation()` is null).
 - **Open** — `Yes`/`No` (`project.isOpen()`).
 - **EDT Project** — `Yes` if the project has `V8ConfigurationNature` or `V8ExtensionNature`; `No` for a non-EDT open project; `-` when the project is closed.
 - **Natures** — short (last dotted segment) names of up to the first 3 natures; a 4th+ shows as `...+N`. `-` when closed or none.
-- **Reason** — the state explanation, escaped for the table and always the last column; empty for `ready`. A context that stays not started needs close/reopen in EDT or `delete_project` and re-import. Starting contexts and pending workspace restart jobs call for polling `list_projects` until `ready`.
+- **Reason** — the state explanation, escaped for the table and always the last column; empty for `ready`. A context that stays not started needs close/reopen in EDT or `delete_project` and re-import. A registered context that EDT has not finished starting keeps its derived-data state (`ready`, `building` or `unknown`); only when that is not `ready` does the reason add the starting-context sentence. Starting contexts and pending workspace restart jobs call for polling `list_projects` until `ready`.
 
 With `format="json"`, `structuredContent` contains `{"projects":[{"name", "state", "reason"?, "path", "open", "edtProject"?, "natures"}]}`. The optional string `reason` is present only for non-ready rows and contains the raw state explanation; ready rows omit it.
 
