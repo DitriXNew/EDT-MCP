@@ -174,7 +174,7 @@ public class InfobaseSessionsTool implements IMcpTool
         String action = JsonUtils.extractStringArgument(params, McpKeys.ACTION);
         action = action == null || action.isBlank() ? ACTION_LIST : action.toLowerCase(Locale.ROOT);
         String sessionId = JsonUtils.extractStringArgument(params, "sessionId"); //$NON-NLS-1$
-        sessionId = sessionId == null ? null : sessionId.trim();
+        sessionId = canonicalSessionSelector(sessionId);
         boolean all = JsonUtils.extractBooleanArgument(params, "all", false); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         String message = JsonUtils.extractStringArgument(params, McpKeys.MESSAGE);
@@ -229,6 +229,12 @@ public class InfobaseSessionsTool implements IMcpTool
             return ToolResult.error("Infobase sessions failed: " //$NON-NLS-1$
                 + PlatformFailures.describe(e)).toJson();
         }
+    }
+
+    /** Normalizes a numeric selector before both validation and session matching. */
+    static String canonicalSessionSelector(String sessionId)
+    {
+        return sessionId == null ? null : JsonUtils.canonicalIntegerText(sessionId.trim());
     }
 
     /** Validates action-specific safety and selector rules before platform access. */

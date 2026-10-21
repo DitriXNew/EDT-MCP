@@ -56,6 +56,7 @@ import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -482,18 +483,17 @@ public class MetadataRenameService
                 "the rename would update references inside", new ArrayList<>(locked)); //$NON-NLS-1$
     }
 
-    /** The FQN of the top object a support-lock problem names (bmGetFqn is for top objects only). */
+    /** The owner and local child label for a support lock, or the generic label without an owner. */
     private static String lockedObjectLabel(IRefactoringProblem problem)
     {
         try
         {
-            if (problem.getObject() instanceof IBmObject bmObject)
+            if (problem.getObject() instanceof IBmObject object && BmObjectAddress.topFqnOrNull(object) != null)
             {
-                IBmObject top = bmObject.bmIsTop() ? bmObject : bmObject.bmGetTopObject();
-                String fqn = top == null ? null : top.bmGetFqn();
-                if (fqn != null)
+                String label = BmObjectAddress.labelOrNull(object);
+                if (label != null)
                 {
-                    return fqn;
+                    return label;
                 }
             }
         }
@@ -894,7 +894,8 @@ public class MetadataRenameService
             org.eclipse.emf.ecore.EObject refObj = crp.getReferencingObject();
             if (refObj instanceof IBmObject bmObj)
             {
-                pb.append(bmObj.bmGetFqn());
+                String label = BmObjectAddress.labelOrNull(bmObj);
+                pb.append(label != null ? label : "an object EDT could not name"); //$NON-NLS-1$
             }
             org.eclipse.emf.ecore.EStructuralFeature feat = crp.getReference();
             if (feat != null)
@@ -906,7 +907,8 @@ public class MetadataRenameService
         if (obj instanceof IBmObject bmObj)
         {
             if (pb.length() > 0) pb.append(" | "); //$NON-NLS-1$
-            pb.append(bmObj.bmGetFqn());
+            String label = BmObjectAddress.labelOrNull(bmObj);
+            pb.append(label != null ? label : "an object EDT could not name"); //$NON-NLS-1$
         }
         return pb.toString();
     }
@@ -995,7 +997,7 @@ public class MetadataRenameService
     {
         String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
         String optionalMark = cp.optional && hasStableIdentity(cp) ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
-        String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
+        String fqnCell = cp.fqn != null ? escapeMarkdownCell(BmObjectAddress.metadataAddressOf(cp.fqn)) : DASH;
         String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
         String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
                     String column = cp.columnNumber > 0 ? String.valueOf(cp.columnNumber) : DASH;
@@ -1041,7 +1043,7 @@ public class MetadataRenameService
             if (cp.methodName != null)
                 sb.append(" \u2014 `").append(escapeMarkdownCell(cp.methodName)).append("`"); //$NON-NLS-1$ //$NON-NLS-2$
             if (cp.fqn != null && cp.lineNumber > 0)
-                sb.append(" \u00b7 ").append(escapeMarkdownCell(cp.fqn)) //$NON-NLS-1$
+                sb.append(" \u00b7 ").append(escapeMarkdownCell(BmObjectAddress.metadataAddressOf(cp.fqn))) //$NON-NLS-1$
                   .append(":").append(cp.lineNumber); //$NON-NLS-1$
             sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -1263,7 +1265,7 @@ public class MetadataRenameService
             Object modifiedElement = bmComposite.getModifiedElement();
             if (modifiedElement instanceof IBmObject bmObj)
             {
-                currentFqn = bmObj.bmGetFqn();
+                currentFqn = BmObjectAddress.topFqnOrNull(bmObj);
             }
         }
         if (change instanceof CompositeChange composite)
@@ -1376,7 +1378,9 @@ public class MetadataRenameService
             EObject bmObj = modifiedElement instanceof EObject ? (EObject) modifiedElement : null;
             if (modifiedElement instanceof IBmObject ibm)
             {
-                scan.fqn = ibm.bmGetFqn();
+                // The owning top's BM FQN, as before #790: it enters the canonical signature, so the
+                // metadata address is applied only where the row is rendered.
+                scan.fqn = BmObjectAddress.topFqnOrNull(ibm);
             }
             String content = bmChange.getCurrentContent(new NullProgressMonitor());
             TextEdit edit = bmChange.getEdit();
@@ -1767,7 +1771,7 @@ public class MetadataRenameService
             int lineNumber = computeLineNumber(content, textOffset);
             int columnNumber = computeColumnNumber(content, textOffset);
             String project = object instanceof IBmObject bmObject ? bmObject.bmGetEngine().getId() : null;
-            String fqn = object instanceof IBmObject bmObject ? bmObject.bmGetTopObject().bmGetFqn() : null;
+            String fqn = object instanceof IBmObject bmObject ? BmObjectAddress.topFqnOrNull(bmObject) : null;
             return new ExactMatchInfo(null, textOffset,
                 new CodeLocation(fqn, project, lineNumber, columnNumber, extractContext(content, lineNumber), null));
         }
@@ -1803,8 +1807,8 @@ public class MetadataRenameService
 
     /**
      * Collects the exact matches that belong to a {@link BmObjectTextContentChange}: model matches
-     * keyed by (object, feature, offset, length) and file-backed matches whose project / FQN equal the
-     * change's and whose offset falls inside one of the change's leaf edits. Pure lookup - adds the
+     * keyed by (object, feature, offset, length) and, for top targets only, file-backed matches whose
+     * project / FQN equal the change's and whose offset falls inside a leaf edit. Pure lookup - adds the
      * hits into {@code matches} keyed by their identity (no model mutation).
      */
     private void collectBmChangeMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
@@ -1837,14 +1841,19 @@ public class MetadataRenameService
     }
 
     /**
-     * Adds the file-backed exact matches whose project / FQN equal the BM change's and whose offset
-     * falls inside one of the change's leaf edits. Pure lookup - no model mutation.
+     * Adds the file-backed exact matches for a top BM target whose project / FQN equal the change's
+     * and whose offset falls inside a leaf edit. Contained model text has no BSL file offsets. Pure lookup - no model mutation.
      */
     private void collectBmFileOffsetMatches(BmObjectTextContentChange<?> bmChange, IBmObject bmObject,
         Map<String, ExactMatchInfo> exactMatches, Map<String, ExactMatchInfo> matches)
     {
+        // A BSL file offset cannot locate text in a contained model object's feature.
+        if (!bmObject.bmIsTop())
+        {
+            return;
+        }
         String projectName = bmChange.getProjectName();
-        String objectFqn = bmObject.bmGetFqn();
+        String objectFqn = BmObjectAddress.topFqnOrNull(bmObject);
         for (ExactMatchInfo info : exactMatches.values()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             if (info == null || info.filePath == null)
@@ -2170,11 +2179,18 @@ public class MetadataRenameService
         }
         if (target instanceof IBmObject bmObject)
         {
-            String fqn = bmObject.bmGetFqn();
-            if (fqn != null && !fqn.isBlank())
+            boolean top = bmObject.bmIsTop();
+            String address = top ? BmObjectAddress.topFqnOrNull(bmObject) : BmObjectAddress.uriOrNull(bmObject);
+            if (address != null && !address.isBlank())
             {
                 String engine = bmObject.bmGetEngine() != null ? bmObject.bmGetEngine().getId() : ""; //$NON-NLS-1$
-                return identityPart("bmEngine", engine) + identityPart("bmFqn", fqn); //$NON-NLS-1$ //$NON-NLS-2$
+                return identityPart("bmEngine", engine) //$NON-NLS-1$
+                    + identityPart(top ? "bmFqn" : "bmUri", address); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (!top)
+            {
+                // A detached EMF object's relative URI (such as #//) cannot identify a BM child.
+                return null;
             }
         }
         if (target instanceof EObject eObject)

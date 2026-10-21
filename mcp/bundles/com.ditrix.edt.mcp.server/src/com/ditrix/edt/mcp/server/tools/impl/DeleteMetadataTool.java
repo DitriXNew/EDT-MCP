@@ -92,6 +92,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -2086,51 +2087,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static String bmFqnSafe(IBmObject obj)
     {
-        if (obj == null)
-        {
-            return null;
-        }
-        try
-        {
-            if (obj.bmIsTop())
-            {
-                return obj.bmGetFqn();
-            }
-        }
-        catch (Exception e)
-        {
-            // fall through to top-object resolution
-        }
-
-        String localName = null;
-        if (obj instanceof MdObject mdo)
-        {
-            localName = mdo.getName();
-        }
-        else if (obj instanceof org.eclipse.emf.ecore.ENamedElement ene)
-        {
-            localName = ene.getName();
-        }
-
-        try
-        {
-            IBmObject top = obj.bmGetTopObject();
-            if (top != null && top != obj)
-            {
-                String topFqn = top.bmGetFqn();
-                if (topFqn != null)
-                {
-                    return (localName != null && !localName.isEmpty())
-                        ? topFqn + " (" + localName + ")" //$NON-NLS-1$ //$NON-NLS-2$
-                        : topFqn;
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            // ignore — fall back to the local name (or null)
-        }
-        return localName;
+        return BmObjectAddress.labelOrNull(obj);
     }
 
     // ==================== FORM members (cross-model hop) ====================
