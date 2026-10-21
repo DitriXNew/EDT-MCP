@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -815,26 +814,8 @@ public class GetComparisonNodeTool implements IMcpTool
         {
             // Not an integer literal. It may still be the double-shaped rendering of one.
         }
-        BigDecimal decimal;
-        try
-        {
-            decimal = new BigDecimal(text);
-        }
-        catch (NumberFormatException notANumber)
-        {
-            return null;
-        }
-        long value;
-        try
-        {
-            // Refuses a fractional part and anything outside long, rather than converting it.
-            value = decimal.longValueExact();
-        }
-        catch (ArithmeticException notAWholeId)
-        {
-            return null;
-        }
-        return Math.abs(value) >= EXACT_IN_DOUBLE ? null : Long.valueOf(value);
+        Long value = JsonUtils.parseIntegralLong(text);
+        return value == null || Math.abs(value.longValue()) >= EXACT_IN_DOUBLE ? null : value;
     }
 
     private static ComparisonSide parseSide(String raw)

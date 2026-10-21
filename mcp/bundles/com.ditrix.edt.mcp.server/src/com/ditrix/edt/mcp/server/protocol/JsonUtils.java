@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.protocol;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,9 @@ public final class JsonUtils
 
     /** JSON key for the status field. */
     private static final String KEY_STATUS = "status"; //$NON-NLS-1$
+
+    /** Maximum trimmed length accepted before constructing an integral decimal. */
+    private static final int MAX_INTEGRAL_NUMBER_LENGTH = 64;
 
     /**
      * Whether a serialized JSON-RPC response reports failure.
@@ -430,6 +434,87 @@ public final class JsonUtils
         return defaultValue;
     }
     
+    /**
+     * Reads an exact whole number from text, including a decimal or exponent rendering such as
+     * {@code "2.0"} or {@code "1.0E7"}. Null, blank, fractional, non-finite, non-numeric and
+     * out-of-range values, or trimmed text longer than 64 characters, return {@code null}.
+     * <p>
+     * The received digits are read exactly. A JSON number at or above 2^53 may already have been
+     * rounded by its transport Double; callers handing out such ids keep their own precision gate.
+     *
+     * @param raw the number text, may be {@code null}
+     * @return the whole number within {@code long}, or {@code null}
+     */
+    public static Long parseIntegralLong(String raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+        String text = raw.trim();
+        if (text.isEmpty() || text.length() > MAX_INTEGRAL_NUMBER_LENGTH)
+        {
+            return null;
+        }
+        try
+        {
+            return Long.valueOf(new BigDecimal(text).longValueExact());
+        }
+        catch (NumberFormatException | ArithmeticException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Reads a whole number with the same exact rules as {@link #parseIntegralLong(String)},
+     * restricted to {@code int}.
+     *
+     * @param raw the number text, may be {@code null}
+     * @return the whole number within {@code int}, or {@code null}
+     */
+    public static Integer parseIntegralInt(String raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+        String text = raw.trim();
+        if (text.isEmpty() || text.length() > MAX_INTEGRAL_NUMBER_LENGTH)
+        {
+            return null;
+        }
+        try
+        {
+            return Integer.valueOf(new BigDecimal(text).intValueExact());
+        }
+        catch (NumberFormatException | ArithmeticException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Renders a whole number within {@code long} as digits only when the input contains a decimal
+     * point or exponent marker. Thus {@code "2.0"}, {@code "1.0E7"} and {@code "-0.0"} become
+     * {@code "2"}, {@code "10000000"} and {@code "0"}, while {@code "+5"} and {@code "007"}
+     * stay verbatim. Other text, including integral values beyond {@code long} or the parsing
+     * length limit, stays unchanged.
+     * Conversion is bounded: exact long parsing refuses huge exponents before expanding digits.
+     *
+     * @param raw the original text, may be {@code null}
+     * @return the text for an echo or selector
+     */
+    public static String canonicalIntegerText(String raw)
+    {
+        if (raw == null || raw.indexOf('.') < 0 && raw.indexOf('e') < 0 && raw.indexOf('E') < 0)
+        {
+            return raw;
+        }
+        Long value = parseIntegralLong(raw);
+        return value == null ? raw : value.toString();
+    }
+
     /**
      * Extracts a long argument from params map.
      * Handles JSON number strings like "42.0" by parsing via double first.

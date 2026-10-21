@@ -676,9 +676,10 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_unparsable_disable_index_token_is_refused_before_rename():
-    # A non-numeric entry can never address a preview row, so #401 refuses it before the settle,
-    # refactoring build, consent gate, or cascade. expectedHash is deliberately absent: malformed
-    # disableIndices is the first bad value and must be the refusal the caller sees.
+    # An entry that is not a whole number within int can never address a preview row, so #401
+    # refuses it before the settle, refactoring build, consent gate, or cascade.
+    # expectedHash is deliberately absent: malformed disableIndices is the first bad value
+    # and must be the refusal the caller sees.
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",

@@ -6,15 +6,25 @@
 
 package com.ditrix.edt.mcp.server.tools.rename;
 
+import java.io.IOException;
+import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
+
 /**
  * The parsed {@code disableIndices} argument of {@code rename_metadata_object}: the change-point
- * indices that parsed as numbers, and HOW MANY entries did not.
+ * indices that parsed as whole numbers within int, and HOW MANY entries did not. The transport may
+ * render a JSON list as {@code [2.0,3.0]}; it is read by the same rules as comma-separated tokens.
  * <p>
  * The count exists because the refusal has to say that the caller supplied something which can never
  * address a preview row (#401). Parsing used to happen inline in the tool adapter and threw
@@ -64,8 +74,9 @@ public final class DisableRequest
     }
 
     /**
-     * Splits the raw comma-separated argument into indices and a count of what was not an index. Never
-     * throws and never refuses: an entry that is not an integer is counted, not rejected.
+     * Reads the comma-separated argument or a transport-rendered JSON array into indices and a count
+     * of entries that are not whole numbers within int. Never refuses: malformed entries are counted.
+     * A malformed or non-JSON array falls back to comma splitting; empty tokens remain separator noise.
      *
      * @param raw the argument as the caller sent it; {@code null} or empty yields an empty request
      * @return the parsed request, never {@code null}
@@ -78,29 +89,66 @@ public final class DisableRequest
         }
         Set<Integer> indices = new LinkedHashSet<>();
         int unparsed = 0;
-        for (String part : raw.split(",")) //$NON-NLS-1$
+        String stripped = raw.strip();
+        boolean arrayLike = stripped.startsWith("[") || stripped.endsWith("]"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (stripped.startsWith("[") && stripped.endsWith("]")) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            // strip(), not trim(): trim() removes every character <= U+0020, so an entry made only of
-            // a control character would come back empty and be dropped as separator noise instead of
-            // being counted. The boundary that remains is deliberate: an entry that is empty or ONLY
-            // whitespace is formatting - and Java counts tab and newline as whitespace - so "1,\t,2"
-            // reports nothing about its middle entry. Nobody means a tab as a change-point index; it is
-            // the same punctuation as the empty entry in "1,,2".
-            String token = part.strip();
-            if (token.isEmpty())
+            try (JsonReader reader = new JsonReader(new StringReader(stripped)))
             {
-                continue;
+                reader.setLenient(false);
+                JsonElement parsed = new Gson().getAdapter(JsonElement.class).read(reader);
+                if (parsed.isJsonArray() && reader.peek() == JsonToken.END_DOCUMENT)
+                {
+                    for (JsonElement entry : parsed.getAsJsonArray())
+                    {
+                        unparsed += entry.isJsonPrimitive() ? parseToken(entry.getAsString(), indices, true) : 1;
+                    }
+                    return new DisableRequest(Collections.unmodifiableSet(indices), unparsed);
+                }
             }
-            try
+            catch (IOException | JsonParseException e)
             {
-                indices.add(Integer.valueOf(Integer.parseInt(token)));
-            }
-            catch (NumberFormatException e)
-            {
-                unparsed++;
+                // Keep malformed array text on the original comma-separated path.
             }
         }
+        for (String part : raw.split(",")) //$NON-NLS-1$
+        {
+            // Malformed array text retains the original strict comma-token grammar.
+            unparsed += parseToken(part, indices, !arrayLike);
+        }
         return new DisableRequest(Collections.unmodifiableSet(indices), unparsed);
+    }
+
+    /** Adds a whole-number token, returning only the count of an unreadable entry. */
+    private static int parseToken(String part, Set<Integer> indices, boolean allowIntegralRendering)
+    {
+        // strip(), not trim(): a non-whitespace control is an entry, not separator noise. Tab and
+        // newline are whitespace, so "1,\t,2" and "1,,2" both ignore the middle token.
+        String token = part.strip();
+        if (token.isEmpty())
+        {
+            return 0;
+        }
+        // The shared number parser trims text. Do not let that erase a control beside digits.
+        if (!token.equals(token.trim()))
+        {
+            return 1;
+        }
+        Integer value;
+        try
+        {
+            value = allowIntegralRendering ? JsonUtils.parseIntegralInt(token) : Integer.valueOf(token);
+        }
+        catch (NumberFormatException e)
+        {
+            return 1;
+        }
+        if (value == null)
+        {
+            return 1;
+        }
+        indices.add(value);
+        return 0;
     }
 
     /** The change-point indices to skip. Immutable; iteration order is the order they were given. */
@@ -110,10 +158,9 @@ public final class DisableRequest
     }
 
     /**
- * How many entries never became indices at all - anything {@code Integer.parseInt} refused. A
- * negative value such as {@code -1} does parse and is rejected separately by
- * {@link #validationError()}, while {@code 2147483648} increments this count because it is outside
- * {@code int}.
+     * How many entries are not whole numbers within int, including non-primitive array elements.
+     * A negative value such as {@code -1} does parse and is rejected separately by
+     * {@link #validationError()}, while {@code 2147483648} is counted because it is outside int.
      */
     public int unparsedCount()
     {
@@ -130,8 +177,8 @@ public final class DisableRequest
      * Reports entries that cannot address a change point under ANY tree, so the caller is refused
      * before a configuration-wide cascade runs on a request they did not mean.
      * <p>
-     * Two kinds qualify, and only two. An entry {@code Integer.parseInt} refused is not an index in any
-     * reading - a word, or a number outside {@code int}. A NEGATIVE one parses, but preview indices
+     * Two kinds qualify, and only two. An entry that is not a whole number within int cannot be an
+     * index - a word, a fraction, or a number outside int. A NEGATIVE one parses, but preview indices
      * start at zero and count up, so no tree can ever produce it. A merely too-large index is
      * deliberately NOT here: the preview it came from may honestly have had more points than this one
      * does, which is a stale reference and is reported as an unknown index, not a malformed request.
