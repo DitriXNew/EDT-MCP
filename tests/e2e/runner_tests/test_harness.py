@@ -2842,5 +2842,55 @@ class ExtensionFixtureRestoreTest(unittest.TestCase):
                 self.assertIn("did not become ready", str(raised.exception))
 
 
+class ReadinessRowSkipTest(unittest.TestCase):
+    """V8-natured No rows still own derived data; the Servers container does not."""
+
+    @staticmethod
+    def table(state, *, name="ExternalObjects", natures="xtextNature, V8ExternalObjectsNature",
+              is_open="Yes", legacy=False, reason=False):
+        header = "| Name | State | Path | Open | EDT Project"
+        row = "| %s | %s | /w/E | %s | No" % (name, state, is_open)
+        if not legacy:
+            header += " | Natures"
+            row += " | " + natures
+        if reason:
+            header += " | Reason"
+            row += " | context is starting"
+        return header + " |\n" + row + " |\n"
+
+    def test_external_objects_building_and_not_available_both_block(self):
+        for state in ("building", "not_available"):
+            for reason in (False, True):
+                with self.subTest(state=state, reason=reason):
+                    not_ready = []
+                    self.assertFalse(HARNESS._all_edt_projects_ready(
+                        self.table(state, reason=reason), not_ready=not_ready))
+                    self.assertEqual([("ExternalObjects", state)], not_ready)
+
+    def test_the_servers_container_with_no_v8_nature_does_not_block(self):
+        for reason in (False, True):
+            with self.subTest(reason=reason):
+                not_ready = [("stale", "building")]
+                self.assertTrue(HARNESS._all_edt_projects_ready(self.table(
+                    "not_available", name="Servers", natures="-", reason=reason), not_ready=not_ready))
+                self.assertEqual([], not_ready)
+
+    def test_a_legacy_five_column_no_row_keeps_being_skipped(self):
+        not_ready = []
+        self.assertTrue(HARNESS._all_edt_projects_ready(
+            self.table("building", legacy=True), not_ready=not_ready))
+        self.assertEqual([], not_ready)
+
+    def test_closed_and_explicitly_ignored_v8_projects_keep_being_skipped(self):
+        self.assertTrue(HARNESS._all_edt_projects_ready(self.table("not_available", is_open="No")))
+        self.assertTrue(HARNESS._all_edt_projects_ready(
+            self.table("building"), ignore=("ExternalObjects",)))
+
+    def test_a_ready_v8_project_does_not_block(self):
+        not_ready = []
+        self.assertTrue(HARNESS._all_edt_projects_ready(self.table("ready"), not_ready=not_ready))
+        self.assertEqual([], not_ready)
+
+
 if __name__ == "__main__":
     unittest.main()
