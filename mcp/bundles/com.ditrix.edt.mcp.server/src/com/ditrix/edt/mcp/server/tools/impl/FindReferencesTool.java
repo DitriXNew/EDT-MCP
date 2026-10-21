@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -46,19 +47,29 @@ public class FindReferencesTool implements IMcpTool
 
     private final SearchScopeSettler searchScopeSettler;
     private final Consumer<Runnable> uiRunner;
+    /** Whether the calling thread is the SWT UI thread; there the settle must not sleep. */
+    private final BooleanSupplier onUiThread;
 
     public FindReferencesTool()
     {
         this(ProjectStateChecker::awaitSearchScopeReady, runnable -> {
             Display display = PlatformUI.getWorkbench().getDisplay();
             display.syncExec(runnable);
-        });
+        }, () -> Display.getCurrent() != null);
     }
 
-    FindReferencesTool(SearchScopeSettler searchScopeSettler, Consumer<Runnable> uiRunner)
+    FindReferencesTool(SearchScopeSettler searchScopeSettler, Consumer<Runnable> uiRunner,
+        BooleanSupplier onUiThread)
     {
         this.searchScopeSettler = searchScopeSettler;
         this.uiRunner = uiRunner;
+        this.onUiThread = onUiThread;
+    }
+
+    /** Package-visible so a headless test can prove what the public constructor wired. */
+    BooleanSupplier onUiThread()
+    {
+        return onUiThread;
     }
 
     /** Package-visible so a headless test can prove what the public constructor wired. */
@@ -139,8 +150,14 @@ public class FindReferencesTool implements IMcpTool
         // replacing the inline Double.parseDouble. Default 100, upper clamp 500 preserved.
         int limit = Math.min(JsonUtils.extractIntArgument(params, "limit", 100), 500); //$NON-NLS-1$
 
-        // EDT can need the UI thread while settling. The scan captures its own fresh snapshot.
-        searchScopeSettler.settle(projectName, SEARCH_SCOPE_SETTLE_TIMEOUT_MS);
+        // EDT can need the UI thread while settling, so the wait runs only off it. The in-process
+        // bridge dispatches on its caller's thread, which can be the UI thread: sleeping there would
+        // freeze EDT and stall the very derived-data work being awaited. The scan captures its own
+        // fresh snapshot either way, so a skipped wait still reports the adopted copies it missed.
+        if (!onUiThread.getAsBoolean())
+        {
+            searchScopeSettler.settle(projectName, SEARCH_SCOPE_SETTLE_TIMEOUT_MS);
+        }
 
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();

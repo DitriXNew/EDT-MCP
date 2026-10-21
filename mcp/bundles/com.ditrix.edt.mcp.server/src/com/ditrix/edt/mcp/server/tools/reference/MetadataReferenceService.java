@@ -240,14 +240,19 @@ public class MetadataReferenceService
     }
 
     /**
-     * Formats output as markdown - sorted list similar to EDT. The scan-gap note comes from the gap the
-     * collector captured from the very search-scope snapshot its BSL step searched with.
+     * Formats output as markdown - sorted list similar to EDT. The scan-gap note follows the BSL step's
+     * actual outcome: the specific text when the step captured a not-ready or undetermined search
+     * scope, otherwise the generic text whenever the step ended incomplete for any other reason.
      * Package-visible so a headless test can drive the production rendering from a collector.
      */
     static String formatOutput(String objectFqn, ReferenceCollector collector)
     {
-        return renderReport(objectFqn, collector.getAllReferences(),
-            incompleteScanNote(objectFqn, collector.bslScanGap));
+        String note = incompleteScanNote(objectFqn, collector.bslScanGap);
+        if (note == null && collector.bslScanIncompleteForReport)
+        {
+            note = genericIncompleteScanNote(objectFqn);
+        }
+        return renderReport(objectFqn, collector.getAllReferences(), note);
     }
 
     /** Pure report assembly, including the caveat even when no references were collected. */
@@ -334,6 +339,19 @@ public class MetadataReferenceService
             }
             return new ScanGap(Kind.NOT_READY, notReady, extensions, projectName);
         }
+    }
+
+    /**
+     * The note for an incomplete BSL step with no captured scope gap: the code index or finder was
+     * unavailable, an extension's adopted copy could not be inspected, the search scope changed
+     * during the search, or the step failed.
+     */
+    static String genericIncompleteScanNote(String objectFqn)
+    {
+        return "**Scan incomplete:** the BSL code scan for " + objectFqn //$NON-NLS-1$
+            + " could not inspect every module (the code index or adopted copies in extensions were " //$NON-NLS-1$
+            + "unavailable), so the count above may be low. " //$NON-NLS-1$
+            + "Retry once list_projects reports every project ready."; //$NON-NLS-1$
     }
 
     /** Exact diagnostic wording, separate from the reference count and grouping. */
@@ -622,11 +640,47 @@ public class MetadataReferenceService
         private boolean bslScanComplete = true;
         /** Search-scope evidence used only for the best-effort Markdown report. */
         private ScanGap bslScanGap;
+        /**
+         * Whether the Markdown report must say the BSL step was incomplete. It follows {@link
+         * #bslScanComplete} except where the incompleteness provably cost nothing: a determined scope
+         * with no extension project holds no adopted copy (see {@link #recordAdoptedTargetsOutcome}).
+         */
+        private boolean bslScanIncompleteForReport;
 
         /** See {@link #bslScanComplete}. */
         boolean isBslScanComplete()
         {
             return bslScanComplete;
+        }
+
+        /** Marks the BSL step incomplete for the strict caller and for the Markdown report alike. */
+        private void markBslScanIncomplete()
+        {
+            bslScanComplete = false;
+            bslScanIncompleteForReport = true;
+        }
+
+        /**
+         * Records whether the adopted-target augmentation completed. An incomplete one always makes
+         * the strict result incomplete; the report says so too unless {@code searchDependencies} is a
+         * determined scope with no extension project - then no adopted copy can exist, and the
+         * augmentation refused only because a non-extension project (e.g. external objects) was not
+         * ready yet. Package-visible so a headless test can drive it.
+         */
+        void recordAdoptedTargetsOutcome(boolean complete, SearchDependenciesResult searchDependencies)
+        {
+            if (complete)
+            {
+                return;
+            }
+            bslScanComplete = false;
+            boolean noAdoptedCopyCanExist = searchDependencies != null
+                && searchDependencies.isDetermined()
+                && searchDependencies.getExtensionProjects().isEmpty();
+            if (!noAdoptedCopyCanExist)
+            {
+                bslScanIncompleteForReport = true;
+            }
         }
 
         ReferenceCollector(IProject sourceProject, IBmModel bmModel, IBmObject target, int limit)
@@ -954,14 +1008,14 @@ public class MetadataReferenceService
                     // (possibly-incomplete) collection is still returned unchanged - but a destructive
                     // caller consulting isBslScanComplete() must know a BSL-only reference could have
                     // been MISSED here (see collectReferencesForObjectStrict).
-                    bslScanComplete = false;
+                    markBslScanIncomplete();
                     return;
                 }
 
                 IReferenceFinder finder = resourceServiceProvider.get(IReferenceFinder.class);
                 if (finder == null)
                 {
-                    bslScanComplete = false;
+                    markBslScanIncomplete();
                     return;
                 }
 
@@ -993,12 +1047,12 @@ public class MetadataReferenceService
                 AdoptedReferenceTargets.Resolution adoptedTargets =
                     AdoptedReferenceTargets.resolve(target, searchDependencies);
                 targetURIs.addAll(adoptedTargets.getTargetURIs());
+                recordAdoptedTargetsOutcome(adoptedTargets.isComplete(), searchDependencies);
                 if (!adoptedTargets.isComplete())
                 {
                     // find_references remains best-effort and still searches every target found.
                     // Strict destructive callers must not interpret a failed augmentation as proof
                     // that the missing extension contains no adopted counterpart or BSL reference.
-                    bslScanComplete = false;
                     Activator.logInfo("BSL adopted-target augmentation incomplete for project '" //$NON-NLS-1$
                         + safeProjectName(sourceProject) + "' (" //$NON-NLS-1$
                         + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
@@ -1015,7 +1069,7 @@ public class MetadataReferenceService
                 {
                     // The source search fell back and is complete, but its complete source set cannot
                     // repair adopted target URIs derived from a dependency snapshot that changed.
-                    bslScanComplete = false;
+                    markBslScanIncomplete();
                     Activator.logInfo("BSL dependency membership, extension kind, or readiness changed " //$NON-NLS-1$
                         + "during adopted-target " //$NON-NLS-1$
                         + "and source resolution for project '" + safeProjectName(sourceProject) //$NON-NLS-1$
@@ -1025,7 +1079,7 @@ public class MetadataReferenceService
             catch (Exception e)
             {
                 Activator.logError("Error finding BSL references", e); //$NON-NLS-1$
-                bslScanComplete = false;
+                markBslScanIncomplete();
             }
         }
 

@@ -35,7 +35,7 @@ References are grouped by where they were found, e.g.:
 - Wider budget: `{projectName, objectFqn: "Document.SalesOrder", limit: 500}`.
 
 ## Notes & gotchas
-- Before scanning, the tool waits up to 10 s for search-scope projects to become ready (not for an unknown, closed or non-EDT project, which errors at once). If adopted copies still cannot be searched, a `**Scan incomplete:**` paragraph after the count explains the gap and how to retry; the count may be low.
+- Before scanning, the tool waits up to 10 s for search-scope projects to become ready (not for an unknown, closed or non-EDT project, which errors at once, and not when called on the EDT UI thread). If adopted copies or the code index still cannot be searched, a `**Scan incomplete:**` paragraph after the count explains the gap and how to retry; the count may be low.
 - An unknown or malformed `objectFqn` (no `Type.Name`, or a type/name that does not exist) returns an error - check the type token and the programmatic name.
 - Resolution is by the object's `Name`, NOT by its synonym; passing a synonym will not match.
 - The result is a hint-limited snapshot: a truncation notice means there are more references than `limit*10` - raise `limit` to see them.

@@ -106,8 +106,9 @@ public class MetadataReferenceServiceScanGapWiringTest
         assertEquals(EMPTY_REPORT_WITH_NOTE, MetadataReferenceService.formatOutput(FQN, collector));
     }
 
+    /** No scope gap is captured, but the incomplete outcome still reaches the report (generic text). */
     @Test
-    public void anUnavailableIndexCapturesNoGap() throws Exception
+    public void anUnavailableIndexCapturesNoGapButStillCarriesTheGenericNote() throws Exception
     {
         ReferenceCollector collector = collector();
         collector.collectBslReferences(target(), () -> null, project -> {
@@ -116,6 +117,8 @@ public class MetadataReferenceServiceScanGapWiringTest
         });
 
         assertFalse(collector.isBslScanComplete());
-        assertFalse(MetadataReferenceService.formatOutput(FQN, collector).contains("**Scan incomplete:**"));
+        String report = MetadataReferenceService.formatOutput(FQN, collector);
+        assertTrue(report.contains(MetadataReferenceServiceScanOutcomeNoteTest.GENERIC));
+        assertFalse(report.contains("still not ready"));
     }
 }

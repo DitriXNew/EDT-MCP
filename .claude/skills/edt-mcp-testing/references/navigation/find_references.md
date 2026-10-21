@@ -11,7 +11,7 @@ find_references(projectName="TestConfiguration",
 ```
 Optional `limit` (integer, default 100, hard-clamped to max 500). Note it is a result-size *hint*: it caps the overall number of references collected before grouping at `limit*10` across all categories, NOT per category. The Russian type token also works: `objectFqn="Справочник.Catalog"` normalizes to `Catalog.Catalog`.
 
-**Result.** Returned as an embedded Markdown resource (`ResponseType.MARKDOWN`), not JSON. Header `# References to <fqn>`, a `**Total references found:** N` line, an optional `**Scan incomplete:** ...` paragraph directly after the count (only when adopted copies in extensions could not be searched because the search scope was not ready or could not be determined; the count may then be low), a flat list of metadata references (`- <path> - <feature>`), and, when present, a `### BSL Modules` section listing each module with `[Line X; Line Y; ...]`. Real output for `Catalog.Catalog` (9 refs):
+**Result.** Returned as an embedded Markdown resource (`ResponseType.MARKDOWN`), not JSON. Header `# References to <fqn>`, a `**Total references found:** N` line, an optional `**Scan incomplete:** ...` paragraph directly after the count (only when the BSL scan was incomplete: adopted copies in extensions could not be searched because the search scope was not ready or could not be determined, or the code index or an extension could not be inspected; the count may then be low), a flat list of metadata references (`- <path> - <feature>`), and, when present, a `### BSL Modules` section listing each module with `[Line X; Line Y; ...]`. Real output for `Catalog.Catalog` (9 refs):
 ```markdown
 # References to Catalog.Catalog
 

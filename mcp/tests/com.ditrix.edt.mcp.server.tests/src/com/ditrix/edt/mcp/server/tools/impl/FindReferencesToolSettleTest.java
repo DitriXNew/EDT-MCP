@@ -28,7 +28,7 @@ public class FindReferencesToolSettleTest
             assertSame(caller, Thread.currentThread());
             events.add("settle:" + name + ":" + budget);
             return null;
-        }, runnable -> events.add("ui"));
+        }, runnable -> events.add("ui"), () -> false);
 
         tool.execute(Map.of("projectName", "P", "objectFqn", "Catalog.X"));
 
@@ -42,7 +42,7 @@ public class FindReferencesToolSettleTest
         FindReferencesTool tool = new FindReferencesTool((name, budget) -> {
             fail("invalid input settled");
             return null;
-        }, runnable -> fail("invalid input reached the UI"));
+        }, runnable -> fail("invalid input reached the UI"), () -> false);
         assertTrue(tool.execute(Map.of("projectName", "P")).contains("objectFqn is required"));
         assertTrue(tool.execute(Map.of("objectFqn", "Catalog.X")).contains("projectName is required"));
     }
