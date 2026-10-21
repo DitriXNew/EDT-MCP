@@ -1467,6 +1467,24 @@ def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ig
     return False
 
 
+def wait_for_named_projects_ready(names, timeout=180, ctx=""):
+    """Poll list_projects(format=json) until every project in `names` reads 'ready'.
+
+    Returns the last {name: state} map so the caller asserts on it (and on what else it holds).
+    Unlike wait_for_project_ready this reads the JSON contract, not the markdown table, so a
+    project that the markdown wait skips as non-EDT (ExternalObjects is listed that way) is
+    still waited for: right after a restart it can read 'building' for a few seconds.
+    """
+    deadline = time.time() + timeout
+    while True:
+        listed = call("list_projects", {"format": "json"})
+        assert_ok(listed, "list_projects while waiting for %s" % (ctx or sorted(names)))
+        states = {row["name"]: row["state"] for row in listed.structured["projects"]}
+        if all(states.get(name) == "ready" for name in names) or time.time() > deadline:
+            return states
+        time.sleep(2)
+
+
 def settle_or_fail(what):
     """Wait for the project to be ready, and FAIL the test if it never is.
 

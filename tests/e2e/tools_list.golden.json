@@ -244,6 +244,12 @@
         "message": {
           "type": "string"
         },
+        "notRestarted": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "projects": {
           "items": {
             "type": "string"
@@ -252,6 +258,15 @@
         },
         "projectsCleaned": {
           "type": "integer"
+        },
+        "recovered": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "restartFailure": {
+          "type": "string"
         },
         "success": {
           "type": "boolean"
@@ -1518,6 +1533,9 @@
           "type": "string"
         },
         "project": {
+          "type": "string"
+        },
+        "state": {
           "type": "string"
         },
         "success": {
