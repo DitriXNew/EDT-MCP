@@ -304,7 +304,8 @@ public class RevalidateObjectsTool implements IMcpTool
 
         if (dtProject == null)
         {
-            services.error = ToolResult.error("Not an EDT project: " + projectName).toJson(); //$NON-NLS-1$
+            services.error = ToolResult.error(ProjectStateChecker.withUnstartedContextReason(project,
+                    "Not an EDT project: " + projectName)).toJson(); //$NON-NLS-1$
             return services;
         }
 

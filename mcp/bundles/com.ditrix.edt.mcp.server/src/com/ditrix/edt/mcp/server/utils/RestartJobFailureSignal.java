@@ -89,6 +89,20 @@ public class RestartJobFailureSignal implements AutoCloseable
     /** Uses exactly the classification used by the failure listener, including restart subclasses. */
     public boolean hasPendingRestartJobs()
     {
+        return hasPendingRestartJobs(manager, isRestartJob);
+    }
+
+    /**
+     * Non-blocking workspace-wide snapshot; does not identify which project's context is restarting
+     * and does not install a failure listener.
+     */
+    public static boolean anyRestartJobPending()
+    {
+        return hasPendingRestartJobs(Job.getJobManager(), RestartJobFailureSignal::isRestartJob);
+    }
+
+    private static boolean hasPendingRestartJobs(IJobManager manager, Predicate<Job> isRestartJob)
+    {
         for (Job job : manager.find(null))
         {
             if (isRestartJob.test(job) && job.getState() != Job.NONE)

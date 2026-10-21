@@ -282,8 +282,7 @@ public final class ProjectContext
         if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
         {
             return new ConfigurationResult(project, null, null,
-                ToolResult.error(noConfigurationMessage(projectName, scope.isExternalObjects()))
-                    .toJson());
+                ToolResult.error(noConfigurationMessage(projectName, project, scope)).toJson());
         }
 
         return new ConfigurationResult(project, config, scope, null);
@@ -323,6 +322,19 @@ public final class ProjectContext
 
     public static String noConfigurationMessage(String projectName, boolean externalObjects)
     {
+        return noConfigurationMessage(projectName, externalObjects, null);
+    }
+
+    /** Resolves context advice only for a configuration project, never for external objects. */
+    public static String noConfigurationMessage(String projectName, IProject project, MetadataScope scope)
+    {
+        return noConfigurationMessage(projectName, scope.isExternalObjects(),
+            scope.isExternalObjects() ? null : ProjectStateChecker.unstartedContextReasonOrNull(project));
+    }
+
+    /** Adds a context recovery sentence only to the generic configuration refusal. */
+    public static String noConfigurationMessage(String projectName, boolean externalObjects, String reasonOrNull)
+    {
         if (externalObjects)
         {
             return "Project '" + projectName + "' is an EXTERNAL-OBJECTS project with no base " //$NON-NLS-1$ //$NON-NLS-2$
@@ -331,7 +343,8 @@ public final class ProjectContext
                 + "create_metadata / modify_metadata / delete_metadata; link the project to a " //$NON-NLS-1$
                 + "configuration project to use the rest."; //$NON-NLS-1$
         }
-        return "Could not get configuration for project: " + projectName; //$NON-NLS-1$
+        String message = "Could not get configuration for project: " + projectName; //$NON-NLS-1$
+        return reasonOrNull == null ? message : message + ". " + reasonOrNull; //$NON-NLS-1$
     }
 
     /**

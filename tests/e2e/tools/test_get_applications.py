@@ -93,6 +93,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    split_markdown_row,
     e2e_test,
     PROJECT,
     TESTS_PROJECT,
@@ -113,14 +114,20 @@ def _project_natures():
     r = call("list_projects", {})
     assert_ok(r, "list_projects (dependent-fixture discovery)")
     natures = {}
+    columns = None
     for line in (r.text or "").splitlines():
-        if not line.startswith("|"):
+        cells = split_markdown_row(line)
+        if not cells:
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        # Header row is "| Name | State | ... | Natures |"; skip it and the separator.
-        if len(cells) < 6 or cells[0] in ("Name", "") or set(cells[0]) <= set("-"):
+        if columns is None:
+            # Locate Name/Natures by header; Reason may follow Natures.
+            lowered = [cell.lower() for cell in cells]
+            if "name" in lowered and "natures" in lowered:
+                columns = (lowered.index("name"), lowered.index("natures"))
             continue
-        natures[cells[0]] = cells[-1]
+        if len(cells) > max(columns) and set(cells[columns[0]]) - {"-"}:
+            natures[cells[columns[0]]] = cells[columns[1]]
+    assert columns is not None, "list_projects has no Name/Natures header: %s" % r.text
     return natures
 
 

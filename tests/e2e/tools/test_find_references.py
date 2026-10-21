@@ -22,6 +22,9 @@ Output shape (verified live against the committed TestConfiguration fixture):
 
   **Total references found:** <N>
 
+  [**Scan incomplete:** <why>]          (optional paragraph, only when adopted copies in
+                                        extensions could not be searched; the count may be low)
+
   - <metadata path> [ - <feature>]      (one per metadata reference, sorted)
   ...
   ### BSL Modules                       (only when BSL refs exist)
@@ -68,6 +71,9 @@ Real execute()/findReferences error paths exercised below (live-confirmed text):
                                   actionable variant)
 """
 
+import re
+import time
+
 from harness import (
     call,
     assert_ok,
@@ -78,6 +84,10 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
+    EXT_OBJECTS_PROJECT,
+    wait_for_project_ready,
+    wait_for_named_projects_ready,
 )
 
 
@@ -260,8 +270,13 @@ def test_nonexistent_project_errors_and_names_value():
     The error both names the bad value AND points at list_projects (the sibling
     tool that enumerates valid project names), so it is actionable."""
     bad = "NoSuchProject_ZZZ_e2e"
+    started = time.monotonic()
     r = call("find_references", {"projectName": bad, "objectFqn": "Catalog.Catalog"})
+    elapsed = time.monotonic() - started
     e = assert_error(r, "non-existent project")
+    # #800: the pre-scan readiness wait (up to 10 s) must not stand in front of this instant error;
+    # a missing project can never become ready.
+    assert elapsed < 8.0, "a non-existent project must error without the 10 s settle: %.1f s" % elapsed
     # Names the bad project AND is actionable: the migrated message carries the
     # list_projects discovery tail.
     assert_error_quality(e, names=[bad], suggests=["list_projects"],
@@ -363,3 +378,38 @@ def test_russian_token_nonexistent_object_normalizes_value_in_error():
     assert_not_contains(e, "Справочник",
                         "the not-found error must show the normalized token, not the Russian one")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="find_references", kind="action")
+def test_scan_right_after_clean_project_is_complete_or_says_so():
+    """A clean must not lead to a silent omission of the adopted Calc reference (#800)."""
+    cleaned = call("clean_project", {"projectName": PROJECT})
+    assert_ok(cleaned, "clean before the immediate reference scan")
+    result = call("find_references", {"projectName": PROJECT, "objectFqn": "CommonModule.Calc"})
+    assert_ok(result, "reference scan immediately after clean")
+    count = re.search(r"\*\*Total references found:\*\* (\d+)", result.text or "")
+    assert count, "find_references must preserve its parseable count line"
+    note = "**Scan incomplete:**" in result.text
+    assert int(count.group(1)) == 3 or note, "a silent count below 3 is the #800 defect: %s" % result.text
+    fixtures = {PROJECT, TESTS_PROJECT, EXT_OBJECTS_PROJECT}
+    if note:
+        paragraph = result.text.split("**Scan incomplete:**", 1)[1].split("\n\n", 1)[0]
+        assert any(name in paragraph for name in fixtures), paragraph
+        assert "were not searched" in paragraph, paragraph
+
+    failures = []
+    assert wait_for_project_ready(failure_details=failures), "fixture readiness failed: %s" % failures
+    listed = call("list_projects", {"format": "json"})
+    assert_ok(listed, "cross-check the markdown readiness gate")
+    states = {row["name"]: row["state"] for row in listed.structured["projects"]}
+    assert fixtures <= states.keys(), states
+    assert all(states[name] != "building" for name in fixtures), \
+        "the markdown readiness gate returned while a fixture was building: %r" % states
+    states = wait_for_named_projects_ready(fixtures, ctx="complete adopted-target reference scan")
+    assert all(states.get(name) == "ready" for name in fixtures), states
+    settled = call("find_references", {"projectName": PROJECT, "objectFqn": "CommonModule.Calc"})
+    assert_ok(settled, "reference scan after the complete search scope settled")
+    count = re.search(r"\*\*Total references found:\*\* (\d+)", settled.text or "")
+    assert count and int(count.group(1)) == 3, settled.text
+    assert_not_contains(settled.text, "**Scan incomplete:**", "ready scope has no incomplete-scan note")
+    assert_no_diff("clean and reference scans must preserve the fixture source files")

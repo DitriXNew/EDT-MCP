@@ -241,6 +241,12 @@
     "name": "clean_project",
     "outputSchema": {
       "properties": {
+        "dependentsStillBuilding": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "message": {
           "type": "string"
         },

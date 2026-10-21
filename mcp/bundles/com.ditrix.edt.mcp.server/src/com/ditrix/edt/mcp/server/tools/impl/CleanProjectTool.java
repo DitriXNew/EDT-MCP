@@ -127,6 +127,7 @@ public class CleanProjectTool implements IMcpTool
             .stringArrayProperty("projects", "Names of the projects that were cleaned") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("notRestarted", "Projects still stopped after a failed EDT restart and recovery.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty("recovered", "Dependent projects started after this call's recovery attempt following an incomplete EDT restart.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("dependentsStillBuilding", "Dependent projects restarted by this clean whose derived data had not settled when the wait ended.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("restartFailure", "Platform restart status and exception messages.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable completion message") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -299,6 +300,7 @@ public class CleanProjectTool implements IMcpTool
                             support.awaitDerivedData(target.info.project);
                         }
                     }
+                    List<String> dependentsStillBuilding = awaitStartedDependents(scope, support);
                     List<RestartProject> stillStopped = notStarted(scope.all(), support);
                     List<String> recovered = new ArrayList<>();
                     for (ProjectCleanInfo candidate : recoverable)
@@ -309,14 +311,16 @@ public class CleanProjectTool implements IMcpTool
                         }
                     }
                     return restartResult(collection, failure, names(stillStopped), recovered,
-                        recoveryNote);
+                        recoveryNote, dependentsStillBuilding);
                 }
 
                 for (ProjectCleanInfo info : collection.projectsToClean)
                 {
                     support.awaitDerivedData(info.project);
                 }
-                return cleanCompletedResult(collection.projectNamesList, collection.skippedUnstarted);
+                List<String> dependentsStillBuilding = awaitStartedDependents(scope, support);
+                return cleanCompletedResult(collection.projectNamesList, collection.skippedUnstarted,
+                    dependentsStillBuilding);
             }
             finally
             {
@@ -329,6 +333,36 @@ public class CleanProjectTool implements IMcpTool
             return (cleanCommitted ? ToolResult.errorAfterMutation(e.getMessage())
                 : ToolResult.error(e.getMessage())).toJson();
         }
+    }
+
+    /** Waits only for dependents that actually restarted; targets retain the #349 verdict policy. */
+    private static List<String> awaitStartedDependents(RestartScope scope, RestartSupport support)
+    {
+        List<String> dependentsStillBuilding = new ArrayList<>();
+        for (RestartProject sibling : scope.siblings)
+        {
+            if (sibling.info.dtProject != null && support.isStarted(sibling.info.dtProject))
+            {
+                support.awaitDerivedData(sibling.info.project);
+                ProjectStateChecker.ProjectStateResult state = support.stateOf(sibling.info.project);
+                if (!state.isReady())
+                {
+                    dependentsStillBuilding.add(sibling.info.name + " (" + state.getStateValue() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        return dependentsStillBuilding;
+    }
+
+    private static String dependentSettleNote(List<String> dependentsStillBuilding)
+    {
+        if (dependentsStillBuilding.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return " Dependent project(s) restarted by this clean had not settled when the wait ended: " //$NON-NLS-1$
+            + String.join(", ", dependentsStillBuilding) //$NON-NLS-1$
+            + ". Wait for list_projects to report them 'ready' before relying on their model."; //$NON-NLS-1$
     }
 
     /** ONE bounded recovery pass; a broken sibling must not prevent the others being started. */
@@ -440,7 +474,7 @@ public class CleanProjectTool implements IMcpTool
 
     private static String restartResult(CleanCollection collection, RestartJobFailureSignal failure,
         List<String> notRestarted,
-        List<String> recovered, String recoveryNote)
+        List<String> recovered, String recoveryNote, List<String> dependentsStillBuilding)
     {
         String outcome = failure.getSeverity() == IStatus.CANCEL ? "was cancelled" //$NON-NLS-1$
             : failure.getSeverity() == IStatus.WARNING || failure.getSeverity() == IStatus.INFO
@@ -454,6 +488,7 @@ public class CleanProjectTool implements IMcpTool
             message += "Skipped projects EDT has not started (no DtProject): " //$NON-NLS-1$
                 + String.join(", ", collection.skippedUnstarted) + ". "; //$NON-NLS-1$ //$NON-NLS-2$
         }
+        recoveryNote += dependentSettleNote(dependentsStillBuilding);
         ToolResult result;
         if (notRestarted.isEmpty())
         {
@@ -472,6 +507,7 @@ public class CleanProjectTool implements IMcpTool
         return result.put("projectsCleaned", collection.projectNamesList.size()) //$NON-NLS-1$
             .put("projects", collection.projectNamesList) //$NON-NLS-1$
             .put("recovered", recovered) //$NON-NLS-1$
+            .put("dependentsStillBuilding", dependentsStillBuilding) //$NON-NLS-1$
             .put("restartFailure", failure.getFailure()) //$NON-NLS-1$
             .toJson();
     }
@@ -661,7 +697,7 @@ public class CleanProjectTool implements IMcpTool
     static String unstartedProjectRefusalOrNull(String projectName, boolean managerAvailable,
         boolean dtProjectPresent, Boolean hasV8Nature)
     {
-        if (!managerAvailable || dtProjectPresent || !Boolean.TRUE.equals(hasV8Nature))
+        if (!ProjectStateChecker.isUnstartedEdtProject(managerAvailable, dtProjectPresent, hasV8Nature))
         {
             return null;
         }
@@ -755,17 +791,37 @@ public class CleanProjectTool implements IMcpTool
     }
 
     /**
-     * Builds the completion payload.
-     *
-     * <p>{@code projectsCleaned} counts the projects that were actually cleaned, and nothing else:
-     * a project EDT never started is named in the {@code message} as skipped rather than counted,
-     * because counting it would restate the very claim issue #647 is about.
+     * Convenience overload of {@link #cleanCompletedResult(List, List, List)} for a clean whose
+     * restarted dependents all settled (an empty {@code dependentsStillBuilding}).
      *
      * @param cleanedProjects  the projects the clean phases ran for
      * @param skippedUnstarted the open BM-model projects skipped because EDT never started them
      * @return the success JSON
      */
     static String cleanCompletedResult(List<String> cleanedProjects, List<String> skippedUnstarted)
+    {
+        return cleanCompletedResult(cleanedProjects, skippedUnstarted, Collections.emptyList());
+    }
+
+    /**
+     * Builds the completion payload.
+     *
+     * <p>{@code projectsCleaned} counts the projects that were actually cleaned, and nothing else:
+     * a project EDT never started is named in the {@code message} as skipped rather than counted,
+     * because counting it would restate the very claim issue #647 is about.
+     *
+     * <p>{@code dependentsStillBuilding} is always present: an empty list says every restarted
+     * dependent settled, a non-empty one names each unsettled dependent with its state and adds the
+     * matching sentence to the {@code message}. It does not change the success verdict (#349).
+     *
+     * @param cleanedProjects         the projects the clean phases ran for
+     * @param skippedUnstarted        the open BM-model projects skipped because EDT never started them
+     * @param dependentsStillBuilding the restarted dependents that had not settled, as
+     *     {@code "Name (state)"}
+     * @return the success JSON
+     */
+    static String cleanCompletedResult(List<String> cleanedProjects, List<String> skippedUnstarted,
+        List<String> dependentsStillBuilding)
     {
         StringBuilder message = new StringBuilder("Clean and revalidation completed."); //$NON-NLS-1$
         if (!skippedUnstarted.isEmpty())
@@ -778,9 +834,11 @@ public class CleanProjectTool implements IMcpTool
                 .append(". Wait for list_projects to report them 'ready', or close and reopen " //$NON-NLS-1$
                     + "them in EDT."); //$NON-NLS-1$
         }
+        message.append(dependentSettleNote(dependentsStillBuilding));
         return ToolResult.success()
             .put("projectsCleaned", cleanedProjects.size()) //$NON-NLS-1$
             .put("projects", cleanedProjects) //$NON-NLS-1$
+            .put("dependentsStillBuilding", dependentsStillBuilding) //$NON-NLS-1$
             .put("message", message.toString()) //$NON-NLS-1$
             .toJson();
     }
@@ -942,6 +1000,12 @@ public class CleanProjectTool implements IMcpTool
         void awaitDerivedData(IProject project)
         {
             BuildUtils.waitForDerivedData(project);
+        }
+
+        /** The project's current EDT readiness, read after its derived-data wait has returned. */
+        ProjectStateChecker.ProjectStateResult stateOf(IProject project)
+        {
+            return ProjectStateChecker.checkProjectState(project);
         }
     }
 

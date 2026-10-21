@@ -239,7 +239,7 @@ MODEL_SETTLE_ATTEMPTS = int(os.environ.get("E2E_MODEL_SETTLE_ATTEMPTS", "3"))
 # stabilizing the slower matrix legs without masking real results (a genuine success/error
 # returns unchanged on the next attempt). Override with E2E_BUILDING_RETRY_TIMEOUT.
 BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120"))
-# The server's derived-data "still building, retry" refusal, in any response channel.
+# The server's derived-data "still building, retry" refusal, in an error channel.
 _BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
 
 # Every transient building refusal call() received this run, as the server worded it. call()
@@ -543,11 +543,11 @@ def _is_transient_building(result):
     and retry" refusal — surfaced in any channel (an isError text, or a structured
     success=false envelope). The call was refused with NO side effect, so re-issuing it is
     safe and correct (it is never an assertion target)."""
-    try:
-        blob = json.dumps(result.raw, ensure_ascii=False)
-    except (TypeError, ValueError):
-        blob = str(result.raw)
-    return bool(_BUILDING_REFUSAL_RE.search(blob))
+    structured_error = (isinstance(result.structured, dict)
+                        and result.structured.get("success") is False)
+    if not result.is_error and not structured_error:
+        return False
+    return bool(_BUILDING_REFUSAL_RE.search(result.error_text()))
 
 
 def call(tool, arguments):
@@ -1354,7 +1354,10 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     """True when every EDT project in the list_projects table reads 'ready'.
 
     Two kinds of row are skipped, because neither can ever become ready and neither can serve a
-    tool: one KNOWN to be non-EDT (`EDT Project` = No), and one that is CLOSED (`Open` = No).
+    tool: one KNOWN to be non-EDT (`EDT Project` = No and no V8 nature), and one that is
+    CLOSED (`Open` = No). External-object projects carry V8ExternalObjectsNature and must settle
+    even though list_projects labels them `EDT Project` = No. Legacy five-column tables have
+    no nature evidence and keep skipping No rows.
     A closed project reads 'not_available' forever - EDT is deliberately not building it, which
     is the entire point of closing a heavy configuration - so blocking on it aborts every local
     run on such a workspace before the first test starts. A test that actually targets a closed
@@ -1375,6 +1378,11 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     fill it with the blocking (project name, state) pairs from this same parse so timeout callers
     can report which project prevented progress without parsing the table again. Project names
     explicitly supplied in `ignore` are skipped before their state is checked.
+
+    Known limit of the nature evidence: ListProjectsTool renders only the FIRST THREE natures of a
+    project and summarises the rest as '...+N', so a V8 nature in fourth place or later is not seen
+    here and that `EDT Project` = No row falls back to being skipped. Harmless for the fixture (its
+    projects carry two natures), but a project with more natures needs `ignore` or a wider cell.
     """
     rows = []
     for line in list_projects_markdown.splitlines():
@@ -1397,7 +1405,10 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
             continue
         state, is_open = cells[1].strip().lower(), cells[3].strip().lower()
         edt_project = cells[4].strip().lower()
-        if edt_project == "no":
+        natures = cells[5] if len(cells) > 5 else ""
+        edt_nature = any(token.strip().startswith("V8") and token.strip().endswith("Nature")
+                         for token in natures.split(","))
+        if edt_project == "no" and not edt_nature:
             continue  # a KNOWN non-EDT project (the standalone server's "Servers" container)
         if is_open == "no":
             continue  # closed on purpose: it will never leave 'not_available' by itself
@@ -1434,9 +1445,10 @@ def _store_project_ready_progress(progress, changed, observed, polls, start,
 
 def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ignore_projects=()):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
-    'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
-    are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
-    permanently 'not_available' and would otherwise block every run on such a workspace.
+    'building' its derived data AND none is 'not_available' (mid (re)load). V8-natured projects,
+    including external-object projects labeled `EDT Project` = No, participate. Non-EDT projects
+    without a V8 nature are ignored (see _all_edt_projects_ready): a standalone server's "Servers"
+    container is permanently 'not_available' and would otherwise block every run on such a workspace.
 
     After a `-clean` relaunch the MCP port opens (wait_for_server) BEFORE EDT finishes
     indexing, so a cascade/mutation tool (rename / delete / create) run too early would
@@ -1531,9 +1543,8 @@ def wait_for_named_projects_ready(names, timeout=180, ctx=""):
     """Poll list_projects(format=json) until every project in `names` reads 'ready'.
 
     Returns the last {name: state} map so the caller asserts on it (and on what else it holds).
-    Unlike wait_for_project_ready this reads the JSON contract, not the markdown table, so a
-    project that the markdown wait skips as non-EDT (ExternalObjects is listed that way) is
-    still waited for: right after a restart it can read 'building' for a few seconds.
+    Unlike wait_for_project_ready this reads the JSON contract and requires every named project
+    to exist and read 'ready', regardless of its EDT flag, nature, or open state.
     """
     deadline = time.time() + timeout
     while True:

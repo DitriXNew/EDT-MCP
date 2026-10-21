@@ -831,9 +831,15 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
     private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)
     {
+        return resolveProjectRoot(projectName,
+            ResourcesPlugin.getWorkspace().getRoot().getProject(projectName), allowNoConfiguration);
+    }
+
+    /** The same write gate with an already-resolved project, for lifecycle snapshot tests. */
+    ProjectContext resolveProjectRoot(String projectName, IProject project, boolean allowNoConfiguration)
+    {
         ProjectContext ctx = new ProjectContext();
 
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
             // FQN: this class has its own nested ProjectContext, so the shared resolver's
@@ -870,7 +876,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             ctx.error = ToolResult.error(
                 com.ditrix.edt.mcp.server.utils.ProjectContext.noConfigurationMessage(
-                    projectName, scope.isExternalObjects())).toJson();
+                    projectName, project, scope))
+                    .toJson();
             return ctx;
         }
 

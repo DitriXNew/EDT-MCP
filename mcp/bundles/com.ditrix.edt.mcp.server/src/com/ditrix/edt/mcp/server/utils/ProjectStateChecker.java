@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 
@@ -26,6 +28,7 @@ import com._1c.g5.v8.derived.pipeline.PipelineStatus;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
 
@@ -102,19 +105,67 @@ public final class ProjectStateChecker
         }
     }
     
+    /** Why a project is not ready, without changing the public state values. */
+    public enum NotReadyReason
+    {
+        NONE,
+        MISSING,
+        CLOSED,
+        MANAGER_UNAVAILABLE,
+        NOT_EDT_PROJECT,
+        NATURE_UNREADABLE,
+        CONTEXT_NOT_STARTED,
+        CONTEXT_STARTING,
+        CONTEXT_RESTARTING,
+        BUILDING,
+        BUILD_STATE_UNKNOWN
+    }
+
     /**
      * Result of project state check.
      */
     public static class ProjectStateResult
     {
         private final ProjectState state;
+        private final NotReadyReason reason;
         private final String message;
+        private final String contextDetail;
         private final boolean ready;
         
         public ProjectStateResult(ProjectState state, String message)
         {
+            this(state, defaultReason(state), message);
+        }
+
+        private static NotReadyReason defaultReason(ProjectState state)
+        {
+            if (state == ProjectState.BUILDING)
+            {
+                return NotReadyReason.BUILDING;
+            }
+            if (state == ProjectState.UNKNOWN)
+            {
+                return NotReadyReason.BUILD_STATE_UNKNOWN;
+            }
+            return NotReadyReason.NONE;
+        }
+
+        public ProjectStateResult(ProjectState state, NotReadyReason reason, String message)
+        {
+            this(state, reason, message, null);
+        }
+
+        /**
+         * @param contextDetail a sentence about the EDT context that explains the verdict without
+         *     changing its {@code message}, or {@code null}
+         */
+        public ProjectStateResult(ProjectState state, NotReadyReason reason, String message,
+            String contextDetail)
+        {
             this.state = state;
+            this.reason = reason;
             this.message = message;
+            this.contextDetail = contextDetail;
             this.ready = state == ProjectState.READY;
         }
         
@@ -123,9 +174,29 @@ public final class ProjectStateChecker
             return state;
         }
         
+        public NotReadyReason getReason()
+        {
+            return reason;
+        }
+
         public String getMessage()
         {
             return message;
+        }
+
+        /** The context sentence attached to the verdict, or {@code null}. */
+        public String getContextDetail()
+        {
+            return contextDetail;
+        }
+
+        /**
+         * The full explanation a project listing shows: the verdict text, followed by the context
+         * sentence when there is one. Refusals keep using {@link #getMessage()}.
+         */
+        public String getReasonText()
+        {
+            return contextDetail == null ? message : message + ". " + contextDetail; //$NON-NLS-1$
         }
         
         public boolean isReady()
@@ -176,11 +247,18 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Checks if a project is ready for operations.
-     * A project is ready when:
-     * - It exists and is open
-     * - It is a valid EDT project
-     * - Derived data computations are complete (not building)
+     * Checks whether a workspace project has a started EDT context and complete derived data.
+     * <ul>
+     * <li>The project must exist and be open, with an available DT project manager.</li>
+     * <li>When no DT project is registered, reads the persistent BM nature lazily to distinguish
+     * an unstarted EDT context from a plain project or an unreadable description. Only a known
+     * EDT nature needs the lazy workspace-wide pending-restart-job snapshot.</li>
+     * <li>A registered DT project is judged by its derived data, exactly as before the context
+     * state existed: the verdict (ready, building or unknown) and its text are unchanged. Only a
+     * NOT-ready verdict whose context EDT reports as not started yet additionally carries the
+     * {@link NotReadyReason#CONTEXT_STARTING} reason and a context sentence; a ready verdict never
+     * does. A missing or throwing lifecycle service leaves that answer unknown and adds nothing.</li>
+     * </ul>
      * 
      * @param project the IProject to check
      * @return ProjectStateResult with state and message
@@ -189,35 +267,168 @@ public final class ProjectStateChecker
     {
         if (project == null)
         {
-            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, "Project is null");
+            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.MISSING,
+                "Project is null"); //$NON-NLS-1$
         }
-        
-        if (!project.exists())
-        {
-            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, "Project does not exist");
-        }
-        
-        if (!project.isOpen())
-        {
-            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, "Project is closed");
-        }
-        
-        // Get DtProject
-        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-        if (dtProjectManager == null)
-        {
-            return new ProjectStateResult(ProjectState.UNKNOWN, "DtProjectManager not available");
-        }
-        
-        IDtProject dtProject = dtProjectManager.getDtProject(project);
-        if (dtProject == null)
-        {
-            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, "Not an EDT project");
-        }
-        
-        return checkDtProjectState(dtProject);
+        boolean exists = project.exists();
+        boolean open = exists && project.isOpen();
+        Activator activator = open ? Activator.getDefault() : null;
+        IDtProjectManager manager = activator == null ? null : activator.getDtProjectManager();
+        IDtProject dtProject = manager == null ? null : manager.getDtProject(project);
+        return classifyContext(exists, open, manager != null, dtProject != null,
+            () -> hasBmModelProjectNature(project), () -> readStarted(activator, project),
+            RestartJobFailureSignal::anyRestartJobPending, () -> checkDtProjectState(dtProject));
     }
-    
+
+    /** Snapshot classification; expensive platform facts are consulted only where needed. */
+    static ProjectStateResult classifyContext(boolean exists, boolean isOpen,
+        boolean managerAvailable, boolean dtProjectPresent, Supplier<Boolean> bmNature,
+        Supplier<Boolean> started, BooleanSupplier restartJobPending,
+        Supplier<ProjectStateResult> derivedData)
+    {
+        if (!exists)
+        {
+            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.MISSING,
+                "Project does not exist"); //$NON-NLS-1$
+        }
+        if (!isOpen)
+        {
+            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.CLOSED,
+                "Project is closed"); //$NON-NLS-1$
+        }
+        if (!managerAvailable)
+        {
+            return new ProjectStateResult(ProjectState.UNKNOWN, NotReadyReason.MANAGER_UNAVAILABLE,
+                "DtProjectManager not available"); //$NON-NLS-1$
+        }
+        if (!dtProjectPresent)
+        {
+            Boolean nature = bmNature.get();
+            if (isUnstartedEdtProject(managerAvailable, dtProjectPresent, nature))
+            {
+                if (restartJobPending.getAsBoolean())
+                {
+                    return new ProjectStateResult(ProjectState.NOT_AVAILABLE,
+                        NotReadyReason.CONTEXT_RESTARTING,
+                        "EDT context is unavailable: a project-restart job is pending in the workspace; " //$NON-NLS-1$
+                            + "poll list_projects until it reads 'ready'"); //$NON-NLS-1$
+                }
+                return new ProjectStateResult(ProjectState.NOT_AVAILABLE,
+                    NotReadyReason.CONTEXT_NOT_STARTED,
+                    "EDT project whose context is not started: it has an EDT nature but no DtProject. " //$NON-NLS-1$
+                        + "If it was just imported or created it is still starting - poll list_projects " //$NON-NLS-1$
+                        + "until it reads 'ready'. If it stays here, close and reopen the project in EDT, " //$NON-NLS-1$
+                        + "or delete_project it and import it again; EDT does not restart it by itself"); //$NON-NLS-1$
+            }
+            if (Boolean.FALSE.equals(nature))
+            {
+                return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.NOT_EDT_PROJECT,
+                    "Not an EDT project"); //$NON-NLS-1$
+            }
+            return new ProjectStateResult(ProjectState.NOT_AVAILABLE, NotReadyReason.NATURE_UNREADABLE,
+                "Project description could not be read, so it cannot be told from a non-EDT project"); //$NON-NLS-1$
+        }
+        ProjectStateResult verdict = derivedData.get();
+        if (verdict.isReady() || !Boolean.FALSE.equals(started.get()))
+        {
+            return verdict;
+        }
+        return new ProjectStateResult(verdict.getState(), NotReadyReason.CONTEXT_STARTING,
+            verdict.getMessage(), STARTING_CONTEXT);
+    }
+
+    /** Why a registered DT project whose derived data is not ready may stay that way. */
+    static final String STARTING_CONTEXT =
+        "EDT is starting this project's context (services are starting). If it stays here " //$NON-NLS-1$
+            + "after clean_project reported a failed restart, run clean_project on it again - " //$NON-NLS-1$
+            + "it recovers stranded contexts - or close and reopen the project in EDT"; //$NON-NLS-1$
+
+    /** A missing lifecycle service or a failed snapshot must not turn an unknown answer into false. */
+    static Boolean readStarted(Activator activator, IProject project)
+    {
+        try
+        {
+            IWorkspaceOrchestrator orchestrator = activator == null ? null : activator.getWorkspaceOrchestrator();
+            return orchestrator == null ? null : orchestrator.isStarted(project);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logInfo("Cannot read whether EDT has started project '" + project.getName() //$NON-NLS-1$
+                + "': " + e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /** The persistent EDT nature distinguishes a stopped context from a plain Eclipse project. */
+    public static boolean isUnstartedEdtProject(boolean managerAvailable, boolean dtProjectPresent,
+        Boolean hasBmNature)
+    {
+        return managerAvailable && !dtProjectPresent && Boolean.TRUE.equals(hasBmNature);
+    }
+
+    /** A context-specific recovery sentence, or null when a different condition explains the state. */
+    public static String unstartedContextReasonOrNull(IProject project)
+    {
+        return unstartedContextReasonOrNull(checkProjectState(project));
+    }
+
+    /**
+     * The recovery sentence for a context state, with the retry rule of
+     * {@link #readyOrError(ProjectStateResult)}: a starting or restarting context is transient and
+     * ends with the retry advice, an unstarted context (which EDT does not restart by itself) does
+     * not. A starting context is named by its context sentence, not by its derived-data verdict;
+     * a registered context whose derived data reads ready carries no reason and gets none.
+     */
+    static String unstartedContextReasonOrNull(ProjectStateResult result)
+    {
+        switch (result.getReason())
+        {
+            case CONTEXT_NOT_STARTED:
+            case CONTEXT_RESTARTING:
+                return readyOrError(result);
+            case CONTEXT_STARTING:
+                return withRetryRule(result.getReason(), result.getContextDetail() == null
+                    ? result.getMessage() : result.getContextDetail());
+            default:
+                return null;
+        }
+    }
+
+    /** Keeps a sibling tool's existing refusal and adds recovery advice only for a known EDT nature. */
+    public static String withUnstartedContextReason(IProject project, String refusal)
+    {
+        return withUnstartedContextReason(project, refusal, refusal);
+    }
+
+    /** Uses an alternate prefix only when context recovery advice is available. */
+    public static String withUnstartedContextReason(IProject project, String refusal, String contextRefusal)
+    {
+        return withUnstartedContextReason(refusal, contextRefusal, hasBmModelProjectNature(project),
+            () -> checkProjectState(project));
+    }
+
+    static String withUnstartedContextReason(String refusal, Boolean hasBmNature,
+        Supplier<ProjectStateResult> context)
+    {
+        return withUnstartedContextReason(refusal, refusal, hasBmNature, context);
+    }
+
+    private static String withUnstartedContextReason(String refusal, String contextRefusal, Boolean hasBmNature,
+        Supplier<ProjectStateResult> context)
+    {
+        if (!Boolean.TRUE.equals(hasBmNature))
+        {
+            return refusal;
+        }
+        String reason = unstartedContextReasonOrNull(context.get());
+        if (reason == null)
+        {
+            return refusal;
+        }
+        String separator = contextRefusal.endsWith(".") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return contextRefusal + separator + reason;
+    }
+
     /**
      * Checks if a DT project is ready for operations.
      * 
@@ -575,12 +786,38 @@ public final class ProjectStateChecker
      */
     public static String checkReadyOrError(IProject project)
     {
-        ProjectStateResult result = checkProjectState(project);
+        return readyOrError(checkProjectState(project));
+    }
+
+    /**
+     * Retry advice is reserved for conditions that may clear without caller intervention. A
+     * {@code .project} description that could not be read is one of them: the read can fail
+     * transiently, and the same input was refused with retry advice before the reasons existed.
+     * Missing, closed, non-EDT and unstarted-context projects are refused without it.
+     */
+    static String readyOrError(ProjectStateResult result)
+    {
         if (result.isReady())
         {
             return null;
         }
-        return result.getMessage() + ". Please wait and retry.";
+        return withRetryRule(result.getReason(), result.getMessage());
+    }
+
+    private static String withRetryRule(NotReadyReason reason, String text)
+    {
+        switch (reason)
+        {
+            case BUILDING:
+            case BUILD_STATE_UNKNOWN:
+            case MANAGER_UNAVAILABLE:
+            case NATURE_UNREADABLE:
+            case CONTEXT_STARTING:
+            case CONTEXT_RESTARTING:
+                return text + ". Please wait and retry."; //$NON-NLS-1$
+            default:
+                return text + "."; //$NON-NLS-1$
+        }
     }
     
     /**
@@ -613,13 +850,22 @@ public final class ProjectStateChecker
      * ("Project not found: X"). Use this for a model-mutating or cascade pre-flight where
      * the only state worth refusing for is a transient in-progress build (running the
      * cascade against an incomplete index would silently miss references).
+     * <p>
+     * A registered context that EDT has not started yet needs no case here: the classifier
+     * keeps its derived-data verdict and text, so it is refused exactly while that reads
+     * building - {@code clean_project}, which recovers a stranded context, is gated here too.
      *
      * @param project the IProject to check
      * @return the building message with a retry hint, or {@code null} when not building
      */
     public static String buildingErrorOrNull(IProject project)
     {
-        ProjectStateResult result = checkProjectState(project);
+        return buildingErrorOrNull(checkProjectState(project));
+    }
+
+    /** The admission rule of {@link #buildingErrorOrNull(IProject)} on an already classified state. */
+    static String buildingErrorOrNull(ProjectStateResult result)
+    {
         if (result.getState() == ProjectState.BUILDING)
         {
             return result.getMessage() + ". Please wait and retry."; //$NON-NLS-1$
@@ -715,17 +961,8 @@ public final class ProjectStateChecker
     static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
         CascadeEnvironment env, String operationName, String stateStatement)
     {
-        if (!project.exists() || !project.isOpen())
+        if (cannotSettle(project, env))
         {
-            // Nothing to drain, and asking anyway can block on a project EDT is still disposing.
-            // A missing / closed project is not this method's error to report either - the caller's
-            // own resolution names the value ("Project not found: X").
-            return null;
-        }
-        if (Boolean.FALSE.equals(env.hasBmModelProjectNature(project)))
-        {
-            // This is permanently outside EDT; let the caller's project/configuration validation
-            // produce its established error instead of advising a retry that can never succeed.
             return null;
         }
         long deadline = System.currentTimeMillis() + settleTimeoutMs;
@@ -1203,6 +1440,82 @@ public final class ProjectStateChecker
         }
     }
 
+    /**
+     * Waits within a caller-owned budget for every reference-search project to be ready.
+     * Must run outside the UI thread: derived-data work can need that thread to progress.
+     *
+     * @param projectName the base project name
+     * @param budgetMs the total polling budget in milliseconds
+     * @return the last dependency/readiness snapshot, including an incomplete one on expiry
+     */
+    public static SearchDependenciesResult awaitSearchScopeReady(String projectName, long budgetMs)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return SearchDependenciesResult.undetermined();
+        }
+        IProject project;
+        try
+        {
+            project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                .getRoot().getProject(projectName);
+        }
+        catch (RuntimeException e)
+        {
+            // A name the workspace cannot even form a handle for is the caller's validation error to
+            // report; the settle runs before that validation and must not pre-empt it.
+            return SearchDependenciesResult.undetermined();
+        }
+        return awaitSearchScopeReady(project, budgetMs, CascadeEnvironment.DEFAULT);
+    }
+
+    /**
+     * Package-visible polling seam; the snapshot predicate itself never waits.
+     * <p>
+     * A base that can never become ready (missing, closed, or permanently outside EDT - see
+     * {@link #cannotSettle(IProject, CascadeEnvironment)}) gets one snapshot and no wait: the
+     * settle runs BEFORE the caller's project validation, so waiting here would only put the full
+     * budget in front of an error the caller reports instantly ("Project not found: X").
+     */
+    static SearchDependenciesResult awaitSearchScopeReady(IProject base, long budgetMs,
+        CascadeEnvironment env)
+    {
+        if (env == null || cannotSettle(base, env))
+        {
+            return determineSearchDependencies(base, env);
+        }
+        long deadline = System.currentTimeMillis() + Math.max(0L, budgetMs);
+        while (true)
+        {
+            SearchDependenciesResult snapshot = determineSearchDependencies(base, env);
+            if (snapshot.isAllReady())
+            {
+                return snapshot;
+            }
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0L || env == null
+                || !env.waitBeforeModelRetry(Math.min(MODEL_REGISTRATION_POLL_MS, remaining)))
+            {
+                return snapshot;
+            }
+        }
+    }
+
+    /**
+     * Whether waiting for {@code project} to settle is pointless because it can never become ready:
+     * it is missing, closed, or permanently outside EDT (its description carries no BM-model
+     * nature). An unreadable description ({@code null}) is not proof of "outside EDT", so such a
+     * project is still waited for. Asking a missing or closed project anyway can also block on a
+     * project EDT is still disposing. None of these is the settle's error to report: the caller's
+     * own resolution names the value ("Project not found: X") instead of advising a retry that can
+     * never succeed.
+     */
+    private static boolean cannotSettle(IProject project, CascadeEnvironment env)
+    {
+        return project == null || !project.exists() || !project.isOpen()
+            || Boolean.FALSE.equals(env.hasBmModelProjectNature(project));
+    }
+
     /** Immutable search membership, extension-subset, and readiness snapshot. */
     public static final class SearchDependenciesResult
     {
@@ -1282,6 +1595,26 @@ public final class ProjectStateChecker
         public List<IProject> getExtensionProjects()
         {
             return extensionProjects != null ? extensionProjects : Collections.emptyList();
+        }
+
+        /** @return captured readiness in snapshot order, or an empty map when undetermined */
+        public Map<String, ProjectState> getReadiness()
+        {
+            return readiness != null ? readiness : Collections.emptyMap();
+        }
+
+        /** @return only non-ready project names, in snapshot order; empty when undetermined */
+        public List<String> getNotReadyProjectNames()
+        {
+            List<String> names = new ArrayList<>();
+            for (Map.Entry<String, ProjectState> entry : getReadiness().entrySet())
+            {
+                if (entry.getValue() != ProjectState.READY)
+                {
+                    names.add(entry.getKey());
+                }
+            }
+            return names;
         }
 
         /** @return captured project names, or an empty set when undetermined */

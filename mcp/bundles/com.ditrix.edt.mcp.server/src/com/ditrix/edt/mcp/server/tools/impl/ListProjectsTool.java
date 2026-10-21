@@ -32,6 +32,10 @@ public class ListProjectsTool implements IMcpTool
 {
     public static final String NAME = "list_projects"; //$NON-NLS-1$
 
+    /** Existing positional consumers require Reason to remain the last column. */
+    static final String TABLE_HEADER = "| Name | State | Path | Open | EDT Project | Natures | Reason |"; //$NON-NLS-1$
+    static final String TABLE_SEPARATOR = "|------|-------|------|------|-------------|--------|--------|"; //$NON-NLS-1$
+
     /** Output-format parameter: {@code md} (default, the human table) or {@code json}. */
     private static final String PARAM_FORMAT = "format"; //$NON-NLS-1$
 
@@ -61,7 +65,7 @@ public class ListProjectsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .enumProperty(PARAM_FORMAT,
                 "Output format: 'md' (default) renders the human Markdown table; 'json' returns " //$NON-NLS-1$
-                + "{projects:[{name, state, path, open, edtProject, natures}]} in structuredContent " //$NON-NLS-1$
+                + "{projects:[{name, state, reason?, path, open, edtProject, natures}]} in structuredContent " //$NON-NLS-1$
                 + "for a programmatic consumer.", //$NON-NLS-1$
                 FORMAT_MD, FORMAT_JSON)
             .build();
@@ -88,7 +92,7 @@ public class ListProjectsTool implements IMcpTool
 
     /**
      * The machine-readable project list ({@code format=json}): the SAME rows the Markdown table
-     * renders, as {@code {projects:[{name, state, path, open, edtProject, natures}]}}.
+     * renders, as {@code {projects:[{name, state, reason?, path, open, edtProject, natures}]}}.
      * {@code edtProject} is a boolean ONLY when the EDT nature was actually determined (an open
      * project whose read succeeded); a closed project, or one whose nature read failed, OMITS it -
      * mirroring the table's Yes/No/- tri-state, so a consumer can tell "not an EDT project" from
@@ -106,7 +110,9 @@ public class ListProjectsTool implements IMcpTool
             {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("name", project.getName()); //$NON-NLS-1$
-                row.put("state", ProjectStateChecker.checkProjectState(project).getStateValue()); //$NON-NLS-1$
+                ProjectStateResult stateResult = ProjectStateChecker.checkProjectState(project);
+                row.put("state", stateResult.getStateValue()); //$NON-NLS-1$
+                putReason(row, stateResult);
                 row.put("path", project.getLocation() != null //$NON-NLS-1$
                     ? project.getLocation().toOSString() : ""); //$NON-NLS-1$
                 row.put("open", project.isOpen()); //$NON-NLS-1$
@@ -162,27 +168,13 @@ public class ListProjectsTool implements IMcpTool
             }
             else
             {
-                // Table header - added State column
-                md.append("| Name | State | Path | Open | EDT Project | Natures |\n"); //$NON-NLS-1$
-                md.append("|------|-------|------|------|-------------|--------|\n"); //$NON-NLS-1$
+                md.append(TABLE_HEADER).append('\n');
+                md.append(TABLE_SEPARATOR).append('\n');
                 
                 for (IProject project : projects)
                 {
-                    md.append("| "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(project.getName()));
-                    md.append(" | "); //$NON-NLS-1$
-                    
-                    // Project state
                     ProjectStateResult stateResult = ProjectStateChecker.checkProjectState(project);
-                    md.append(stateResult.getStateValue());
-                    md.append(" | "); //$NON-NLS-1$
-                    
-                    md.append(MarkdownUtils.escapeForTable(project.getLocation() != null ? 
-                        project.getLocation().toOSString() : "")); //$NON-NLS-1$
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(project.isOpen() ? "Yes" : "No"); //$NON-NLS-1$ //$NON-NLS-2$
-                    md.append(" | "); //$NON-NLS-1$
-                    
+
                     // EDT project check and natures
                     String edtStatus = "-"; //$NON-NLS-1$
                     String naturesStr = "-"; //$NON-NLS-1$
@@ -194,10 +186,9 @@ public class ListProjectsTool implements IMcpTool
                         naturesStr = edtAndNatures[1];
                     }
 
-                    md.append(edtStatus);
-                    md.append(" | "); //$NON-NLS-1$
-                    md.append(MarkdownUtils.escapeForTable(naturesStr));
-                    md.append(" |\n"); //$NON-NLS-1$
+                    md.append(tableRow(project.getName(), stateResult,
+                        project.getLocation() == null ? "" : project.getLocation().toOSString(), //$NON-NLS-1$
+                        project.isOpen(), edtStatus, naturesStr));
                 }
             }
         }
@@ -208,6 +199,31 @@ public class ListProjectsTool implements IMcpTool
         }
 
         return md.toString();
+    }
+
+    /** Renders the seven columns in the same order as the header, with Reason last. */
+    static String tableRow(String name, ProjectStateResult state, String path, boolean open,
+        String edtStatus, String natures)
+    {
+        return "| " + MarkdownUtils.escapeForTable(name) + " | " + state.getStateValue() //$NON-NLS-1$ //$NON-NLS-2$
+            + " | " + MarkdownUtils.escapeForTable(path) + " | " + (open ? "Yes" : "No") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + " | " + edtStatus + " | " + MarkdownUtils.escapeForTable(natures) //$NON-NLS-1$ //$NON-NLS-2$
+            + " | " + reasonCell(state) + " |\n"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** JSON keeps the raw explanation, and ready rows omit the optional field. */
+    static void putReason(Map<String, Object> row, ProjectStateResult result)
+    {
+        if (!result.isReady())
+        {
+            row.put("reason", result.getReasonText()); //$NON-NLS-1$
+        }
+    }
+
+    /** The trailing reason must never introduce another table row or column. */
+    static String reasonCell(ProjectStateResult result)
+    {
+        return result.isReady() ? "" : MarkdownUtils.escapeForTable(result.getReasonText()); //$NON-NLS-1$
     }
 
     /**
