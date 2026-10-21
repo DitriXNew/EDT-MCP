@@ -58,6 +58,60 @@ public class DisableRequestIntegralNumberTest
     }
 
     @Test
+    public void emptyAndBlankArrayStringsAreUnparsed()
+    {
+        for (String raw : List.of("[\"\"]", "[\" \"]"))
+        {
+            DisableRequest parsed = DisableRequest.parse(raw);
+            assertTrue(raw, parsed.indices().isEmpty());
+            assertEquals(raw, 1, parsed.unparsedCount());
+            assertFalse(raw, parsed.isEmpty());
+            assertTrue(parsed.validationError(), parsed.validationError().contains("1 entry"));
+        }
+        DisableRequest mixed = DisableRequest.parse("[2.0,\" \"]");
+        assertEquals(Set.of(2), mixed.indices());
+        assertEquals(1, mixed.unparsedCount());
+    }
+
+    @Test
+    public void arrayStringsUseTheStrictIntegerGrammar()
+    {
+        for (String raw : List.of("[\"2.\"]", "[\"2.0\"]", "[\"1e0\"]"))
+        {
+            DisableRequest parsed = DisableRequest.parse(raw);
+            assertTrue(raw, parsed.indices().isEmpty());
+            assertEquals(raw, 1, parsed.unparsedCount());
+            assertTrue(parsed.validationError(), parsed.validationError().contains("1 entry"));
+            assertFalse(raw, parsed.validationError().contains(raw));
+        }
+        assertIndices("[\" +2 \",\"003\"]");
+        String control = "[\"2" + (char)92 + "u0007\"]";
+        assertEquals(1, DisableRequest.parse(control).unparsedCount());
+        assertTrue(DisableRequest.parse(control).indices().isEmpty());
+    }
+
+    @Test
+    public void jsonNumberPrimitiveKeepsItsIntegralRendering()
+    {
+        DisableRequest parsed = DisableRequest.parse("[2.0]");
+        assertEquals(Set.of(2), parsed.indices());
+        assertEquals(0, parsed.unparsedCount());
+        assertNull(parsed.validationError());
+    }
+
+    @Test
+    public void longZeroPaddedCommaIndexIsAccepted()
+    {
+        String raw = "0".repeat(69) + "2";
+        assertEquals(70, raw.length());
+        DisableRequest parsed = DisableRequest.parse(raw);
+        assertEquals(Set.of(2), parsed.indices());
+        assertEquals(0, parsed.unparsedCount());
+        assertNull(parsed.validationError());
+        assertEquals(1, DisableRequest.parse("0".repeat(67) + "2.0").unparsedCount());
+    }
+
+    @Test
     public void nonPrimitiveArrayEntriesAreCounted()
     {
         DisableRequest nested = DisableRequest.parse("[2.0,[3]]");
@@ -98,7 +152,7 @@ public class DisableRequestIntegralNumberTest
     public void whitespaceAndEmptyTokensStayFormatting()
     {
         assertIndices(" 2.0,\t,,3.0,");
-        assertIndices("[\" 2.0 \",\"\",\"3.0\"]");
+        assertIndices("[\" 2 \",\"3\"]");
         assertTrue(DisableRequest.parse("[]").isEmpty());
         assertEquals(1, DisableRequest.parse(String.valueOf((char)7)).unparsedCount());
         assertEquals(1, DisableRequest.parse("2" + (char)7).unparsedCount());

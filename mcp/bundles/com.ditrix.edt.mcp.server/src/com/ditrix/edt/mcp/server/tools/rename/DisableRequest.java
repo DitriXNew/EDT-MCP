@@ -18,13 +18,15 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 
 /**
  * The parsed {@code disableIndices} argument of {@code rename_metadata_object}: the change-point
  * indices that parsed as whole numbers within int, and HOW MANY entries did not. The transport may
- * render a JSON list as {@code [2.0,3.0]}; it is read by the same rules as comma-separated tokens.
+ * render a JSON list as {@code [2.0,3.0]}; number elements accept integral renderings, while
+ * string elements keep the strict integer grammar. Empty or blank array elements are unreadable.
  * <p>
  * The count exists because the refusal has to say that the caller supplied something which can never
  * address a preview row (#401). Parsing used to happen inline in the tool adapter and threw
@@ -76,7 +78,8 @@ public final class DisableRequest
     /**
      * Reads the comma-separated argument or a transport-rendered JSON array into indices and a count
      * of entries that are not whole numbers within int. Never refuses: malformed entries are counted.
-     * A malformed or non-JSON array falls back to comma splitting; empty tokens remain separator noise.
+     * A malformed or non-JSON array falls back to comma splitting. Empty tokens are separator noise
+     * only in the comma form; an empty or blank string in a JSON array counts as unreadable.
      *
      * @param raw the argument as the caller sent it; {@code null} or empty yields an empty request
      * @return the parsed request, never {@code null}
@@ -101,7 +104,15 @@ public final class DisableRequest
                 {
                     for (JsonElement entry : parsed.getAsJsonArray())
                     {
-                        unparsed += entry.isJsonPrimitive() ? parseToken(entry.getAsString(), indices, true) : 1;
+                        if (!entry.isJsonPrimitive())
+                        {
+                            unparsed++;
+                            continue;
+                        }
+                        JsonPrimitive primitive = entry.getAsJsonPrimitive();
+                        String token = primitive.getAsString();
+                        unparsed += primitive.isBoolean() || token.isBlank() ? 1
+                            : parseToken(token, indices, primitive.isNumber());
                     }
                     return new DisableRequest(Collections.unmodifiableSet(indices), unparsed);
                 }

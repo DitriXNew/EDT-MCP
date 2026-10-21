@@ -29,6 +29,16 @@ public class FormElementWriterIntegralNumberTest
     }
 
     @Test
+    public void zeroPaddedPositionHasNoLengthCap()
+    {
+        String raw = "0".repeat(69) + "2";
+        assertEquals(70, raw.length());
+        assertEquals(2, FormElementWriter.resolveMovePosition(raw, SIBLINGS, "X"));
+        String decimal = "0".repeat(67) + "2.0";
+        assertTrue(refusal(decimal).contains("Invalid position '" + decimal + "'"));
+    }
+
+    @Test
     public void negativeDecimalPositionEchoesTheInteger()
     {
         String message = refusal("-1.0");

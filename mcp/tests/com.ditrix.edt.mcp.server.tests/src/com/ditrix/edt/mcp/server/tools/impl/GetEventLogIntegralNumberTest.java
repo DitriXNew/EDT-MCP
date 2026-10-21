@@ -36,6 +36,16 @@ public class GetEventLogIntegralNumberTest
     }
 
     @Test
+    public void zeroPaddedSessionHasNoLengthCap()
+    {
+        String raw = "0".repeat(69) + "2";
+        assertEquals(70, raw.length());
+        assertAccepted(raw);
+        String decimal = "0".repeat(67) + "2.0";
+        assertEquals("Invalid session: '" + decimal + "'. It must be an integer session number.", error(decimal));
+    }
+
+    @Test
     public void fractionalSessionIsRefusedVerbatim()
     {
         assertEquals("Invalid session: '5.5'. It must be an integer session number.", error("5.5"));
