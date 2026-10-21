@@ -105,3 +105,37 @@ def test_readiness_gate_examines_every_row_not_just_the_last():
         "an unparseable output naming a blocking state must not read as ready"
     assert blockers and blockers[0][1] == "building", \
         "the fallback must still report the state it saw: %r" % (blockers,)
+
+
+@e2e_test(tool="list_projects", kind="read")
+def test_readiness_gate_tolerates_the_trailing_reason_column():
+    """Offline: the seventh column must preserve all six-column readiness verdicts."""
+    header = ("| Name | State | Path | Open | EDT Project | Natures |\n"
+              "|---|---|---|---|---|---|\n")
+    reason_header = ("| Name | State | Path | Open | EDT Project | Natures | Reason |\n"
+                     "|---|---|---|---|---|---|---|\n")
+    rows = [
+        ("| Ready | ready | /w/Ready | Yes | Yes | 1c |", ""),
+        ("| Busy | building | /w/Busy | Yes | Yes | 1c |", "Computing derived data"),
+        ("| Stopped | not_available | /w/Stopped | Yes | Yes | 1c |",
+         "EDT context is not started; close and reopen"),
+        ("| Closed | not_available | /w/Closed | No | - | - |", "Project is closed"),
+        ("| Servers | not_available | /w/Servers | Yes | No | - |", "Not an EDT project"),
+    ]
+    for selected, ignore, expected in [
+        ([0, 3, 4], (), []),
+        ([1, 0, 4], (), [("Busy", "building")]),
+        ([2, 0, 4], (), [("Stopped", "not_available")]),
+        ([1, 2, 0], (), [("Busy", "building"), ("Stopped", "not_available")]),
+        ([2, 0, 4], ("Stopped",), []),
+    ]:
+        original = header + "".join(rows[index][0] + "\n" for index in selected)
+        trailing = reason_header + "".join(
+            rows[index][0] + " " + rows[index][1] + " |\n" for index in selected)
+        original_blockers = []
+        trailing_blockers = []
+        original_ready = harness._all_edt_projects_ready(original, not_ready=original_blockers, ignore=ignore)
+        trailing_ready = harness._all_edt_projects_ready(trailing, not_ready=trailing_blockers, ignore=ignore)
+        assert original_blockers == expected, (selected, original_blockers)
+        assert trailing_blockers == expected, (selected, trailing_blockers)
+        assert original_ready == trailing_ready == (not expected), (selected, trailing_blockers)

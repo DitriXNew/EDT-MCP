@@ -58,8 +58,8 @@ This matches the source error literal at `GetTranslationProjectInfoTool.java:119
 - **Error contract.** Genuine failures arrive as `{success:false, error:"…"}` with `isError:true` (the protocol diverts the JSON error payload). The tool maps its branches to `ToolResult.error(...)`:
   - `projectName is required` (missing/empty `projectName`)
   - `Project not found or closed: <name>` (resolved via `ProjectContext.of(...)`, `!ctx.isOpen()` — a specific diagnostic, on purpose, instead of the generic "Not an EDT project")
-  - the `ProjectStateChecker.checkReadyOrError(...)` message (project not ready / still indexing)
-  - `Not an EDT project: <name>` (resolves as an IProject but has no `IDtProject`)
+  - the `ProjectStateChecker.buildingErrorOrNull(...)` message (building or a registered EDT context still starting)
+  - `Not an EDT project: <name>` (resolves as an IProject but has no `IDtProject`). An EDT-nature project whose context is unstarted gets the shared context recovery sentence appended; a plain project keeps the bare text.
   - `LanguageTool IProjectInformationApi is not available. Install LanguageTool in EDT.` (service absent — seen live here)
   - `Get info failed: <cause>` (reflection `InvocationTargetException` — the wrapped LanguageTool call threw)
   - `LanguageTool API mismatch: <msg>` (`NoSuchMethodException`/`IllegalAccessException` — the reflected method names `getProjectStorages`/`getTranslationProvidersIds` don't match the installed LanguageTool version)

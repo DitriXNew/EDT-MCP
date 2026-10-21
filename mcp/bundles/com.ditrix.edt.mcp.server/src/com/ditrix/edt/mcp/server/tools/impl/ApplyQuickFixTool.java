@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
@@ -223,8 +224,9 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         IDtProject dtProject = dtProjectManager.getDtProject(project);
         if (dtProject == null)
         {
-            return ToolResult.error("Project '" + projectName //$NON-NLS-1$
-                + "' is not an EDT project (no IDtProject); quick-fixes apply to configuration/extension projects.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ProjectStateChecker.withUnstartedContextReason(project,
+                "Project '" + projectName //$NON-NLS-1$
+                + "' is not an EDT project (no IDtProject); quick-fixes apply to configuration/extension projects.")).toJson(); //$NON-NLS-1$
         }
 
         List<MarkerMatch> matches = findMatches(markerManager, checkRepository, project,

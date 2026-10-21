@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 
@@ -99,6 +100,12 @@ public class TranslateConfigurationTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        return execute(params, ProjectContext::of);
+    }
+
+    /** The same execution path with project lookup supplied for lifecycle snapshot tests. */
+    String execute(Map<String, String> params, Function<String, ProjectContext> projectResolver)
+    {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> targetLanguages = JsonUtils.extractArrayArgument(params, TARGET_LANGUAGES);
 
@@ -119,7 +126,7 @@ public class TranslateConfigurationTool implements IMcpTool
             // Resolve the IProject first so AI clients get the most specific
             // diagnostic ("Project not found" / "Project is closed", naming the
             // value) for bad names.
-            ProjectContext ctx = ProjectContext.of(projectName);
+            ProjectContext ctx = projectResolver.apply(projectName);
             if (!ctx.exists())
             {
                 return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
@@ -132,7 +139,7 @@ public class TranslateConfigurationTool implements IMcpTool
 
             // The project is resolved and open above; refuse only the transient
             // BUILDING state here (a missing/closed name was already named above).
-            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            String building = ProjectStateChecker.buildingErrorOrNull(project);
             if (building != null)
             {
                 return ToolResult.error(building).toJson();
@@ -142,7 +149,8 @@ public class TranslateConfigurationTool implements IMcpTool
             IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
             if (dtProject == null)
             {
-                return ToolResult.error("Not an EDT project: " + projectName).toJson(); //$NON-NLS-1$
+                return ToolResult.error(ProjectStateChecker.withUnstartedContextReason(project,
+                    "Not an EDT project: " + projectName)).toJson(); //$NON-NLS-1$
             }
 
             // Vendor support (#642), before LanguageTool is touched: synchronizing a language the
