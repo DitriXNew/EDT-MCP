@@ -797,8 +797,8 @@ public class MetadataRenameService
         allChanges.stream().filter(c -> "text".equals(c.kind)).forEach(c -> textIndices.add(c.index)); //$NON-NLS-1$
         if (!textIndices.isEmpty())
         {
-            sb.append("> Text occurrences (whole-word matches of the old name in comments, string " //$NON-NLS-1$
-                + "literals and names EDT could not resolve) are change points ") //$NON-NLS-1$
+            sb.append("> Text occurrences (whole-word matches of the old name that EDT's text search kept, " //$NON-NLS-1$
+                + "such as comments) are change points ") //$NON-NLS-1$
                 .append(join(textIndices, index -> "#" + index)) //$NON-NLS-1$
                 .append(excludeTextOccurrences
                     ? "; textOccurrences=exclude has already switched them off, and a confirm with " //$NON-NLS-1$

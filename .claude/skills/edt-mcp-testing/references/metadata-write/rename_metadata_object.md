@@ -28,7 +28,7 @@ rename_metadata_object(
 - `maxResults` (integer, default 20, `0` = no limit) caps how many change points the preview *table* shows; the YAML `totalChanges` still reports the full count.
 - **The preview runs as a background job** (#803). The call waits up to `waitSeconds` (default 45, accepted 0..45). A preview that finishes within the wait is answered inline, byte-identical to the job's Result. Otherwise the answer starts with `**Pending:**` and carries a `jobId`: poll `get_job_status(jobId=..., waitSeconds=45)` until `# Background job: done`, and take the preview (its `contentHash` and `#` indices) from the `## Result` section. A failed preview job carries the stage-named timeout advice under `## Error`. `waitSeconds=0` returns the jobId at once; `waitSeconds` together with `confirm=true` is refused, because a confirm stays synchronous. In e2e, route every call through `harness.rename_call(...)`, which follows a Pending answer to its Result.
 - `timeout` (default 420, clamped 60..3600) bounds the server-side computation, not the HTTP call. For a preview the job budget is settle (60 s) + `timeout` + a 30 s margin, so its stage-named error fires before the job's own deadline. A confirm that times out still answers synchronously, and EDT may finish the rename afterwards: verify the model before retrying.
-- `textOccurrences` (`include` default / `exclude`): EDT's full-text participant adds a whole-word match of the old name in comments, string literals and unresolved names as its own change point (`Kind: text`), one per match. `exclude` switches those points off in both the preview and the confirm. Pass the same value to both calls, because it is part of `contentHash`.
+- `textOccurrences` (`include` default / `exclude`): EDT's full-text participant adds each whole-word match of the old name its text search keeps (comments; string literals and unresolved names depending on the EDT version) as its own change point (`Kind: text`), one per match. `exclude` switches those points off in both the preview and the confirm. Pass the same value to both calls, because it is part of `contentHash`.
 
 Phase 2 — apply (DESTRUCTIVE; explicit-request-only):
 ```
@@ -103,7 +103,7 @@ Kind: reference
 
 > To execute, call with `confirm=true`.
 > Use `disableIndices='1,2,3'` to skip change points by their `#` index (optional only; one index may span several context rows - skipping it skips them all).
-> Text occurrences (whole-word matches of the old name in comments, string literals and names EDT could not resolve) are change points #3; pass them in disableIndices with this preview's contentHash to leave them untouched.
+> Text occurrences (whole-word matches of the old name that EDT's text search kept, such as comments) are change points #3; pass them in disableIndices with this preview's contentHash to leave them untouched.
 ```
 
 The footer line is omitted when there are no text points; under `textOccurrences: exclude` it says instead that `textOccurrences=exclude` has already switched them off. Kind is the LAST column, so a parser that reads the first nine cells by position keeps working.
