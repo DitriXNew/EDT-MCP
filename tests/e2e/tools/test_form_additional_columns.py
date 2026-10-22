@@ -225,7 +225,8 @@ def test_delete_additional_column_preview_and_confirm():
     assert_contains(_details(_address("E2EExtra"), True), "E2EExtra")
     result = call("delete_metadata", {"projectName": PROJECT, "fqn": _address("E2EExtra"), "confirm": True})
     assert_ok(result, "delete additional column")
-    assert result.structured.get("persisted") is True, result.structured
+    assert "persisted" not in result.structured, \
+        "a completed form-member delete leaves persisted out: %r" % (result.structured,)
     root = ET.fromstring(read_disk(FILE))
     assert not _entries(root), "last column must remove the additionalColumns entry"
     assert "E2EAdditionalField" not in ET.tostring(root, encoding="unicode")
@@ -244,7 +245,8 @@ def test_delete_additional_column_keeps_a_sibling_entry_column():
     settle_or_fail("the additional-column sibling deletion")
     result = call("delete_metadata", {"projectName": PROJECT, "fqn": _address("E2EFirstExtra"), "confirm": True})
     assert_ok(result, "delete one additional column")
-    assert result.structured.get("persisted") is True, result.structured
+    assert "persisted" not in result.structured, \
+        "a completed form-member delete leaves persisted out: %r" % (result.structured,)
     assert [_text(c, "name") for c in _children(_entry(), "columns")] == ["E2ESecondExtra"]
     text = _details()
     assert_contains(text, "E2ESecondExtra")
@@ -320,5 +322,6 @@ def test_additional_column_project_errors_address_is_resolved():
     before = tree_snapshot()
     r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [_address("E2EExtra")]})
     assert_ok(r, "additional-column member error scope")
-    assert_not_contains(str(r.structured) + r.text, "objectsNotFound")
+    assert r.structured.get("objectsNotFound") == [], r.structured
+    assert _address("E2EExtra") in (r.structured.get("objectsResolved") or []), r.structured
     assert_tree_unchanged(before, "scoped error read")

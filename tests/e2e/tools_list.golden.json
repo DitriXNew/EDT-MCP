@@ -792,6 +792,9 @@
         "synonym": {
           "type": "string"
         },
+        "tablePath": {
+          "type": "string"
+        },
         "targetNamespace": {
           "type": "string"
         },
