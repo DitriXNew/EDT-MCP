@@ -9,7 +9,10 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -137,20 +140,24 @@ public class RenameMetadataObjectTool implements IMcpTool
      * it started has actually ended. A hand-off timeout only stops the WAITING: EDT keeps building
      * the preview on its UI thread, so freeing the place together with the FAILED job would let
      * retries stack new previews on top of ones EDT is still building. Options are retained so
-     * attaching cannot silently return another requested plan or slice.
+     * attaching cannot silently return another requested plan or slice; the target (the key
+     * without the timeout) is retained so such a still-building preview refuses a new preview of
+     * the same rename whatever its timeout.
      */
     static final class PreviewSubmission
     {
         private final BackgroundJobs owner;
+        private final String target;
         private final boolean excludeText;
         private final int maxResults;
         private String jobId; // guarded by PREVIEW_JOBS_LOCK; set right after the job is admitted
         private int handOffsInFlight; // guarded by this
         private boolean released; // guarded by this
 
-        PreviewSubmission(BackgroundJobs owner, boolean excludeText, int maxResults)
+        PreviewSubmission(BackgroundJobs owner, String target, boolean excludeText, int maxResults)
         {
             this.owner = owner;
+            this.target = target;
             this.excludeText = excludeText;
             this.maxResults = maxResults;
         }
@@ -434,6 +441,7 @@ public class RenameMetadataObjectTool implements IMcpTool
     String startOrAttachJob(String projectName, String objectFqn, String newName, boolean excludeText,
         int maxResults, int waitSeconds, long timeoutMs, IRenameAction action)
     {
+        String target = previewTarget(projectName, objectFqn, newName);
         String key = previewKey(projectName, objectFqn, newName, timeoutMs);
         JobSnapshot started;
         try
@@ -448,11 +456,6 @@ public class RenameMetadataObjectTool implements IMcpTool
                 {
                     submission = null; // another registry's preview (a restarted registry, a test)
                 }
-                if (submission != null && submission.isOrphaned())
-                {
-                    return ToolResult.error(orphanedPreviewRefusal(objectFqn, newName,
-                        submission.jobId)).toJson();
-                }
                 started = submission == null ? null : findRunningJob(submission.jobId);
                 if (started != null && (submission.excludeText != excludeText
                     || submission.maxResults != maxResults))
@@ -464,6 +467,15 @@ public class RenameMetadataObjectTool implements IMcpTool
                 }
                 if (started == null)
                 {
+                    // Keyed WITHOUT the timeout: a retry with a larger timeout - what the timeout
+                    // error suggests - would otherwise queue a second build of the same preview
+                    // behind the one EDT is still building on its UI thread.
+                    PreviewSubmission orphan = orphanedPreviewOf(target);
+                    if (orphan != null)
+                    {
+                        return ToolResult.error(orphanedPreviewRefusal(objectFqn, newName,
+                            orphan.jobId)).toJson();
+                    }
                     int held = 0;
                     int orphaned = 0;
                     for (PreviewSubmission other : SUBMISSION_JOBS.values())
@@ -481,11 +493,13 @@ public class RenameMetadataObjectTool implements IMcpTool
                 }
                 if (started == null)
                 {
-                    PreviewSubmission placed = new PreviewSubmission(jobs, excludeText, maxResults);
+                    PreviewSubmission placed = new PreviewSubmission(jobs, target, excludeText,
+                        maxResults);
                     long jobBudgetMs = SETTLE_TIMEOUT_MS + timeoutMs + PREVIEW_JOB_MARGIN_MS;
                     long jobDeadlineNanos = System.nanoTime() + jobBudgetMs * 1_000_000L;
-                    // Placed BEFORE the job starts: the job can end before start() returns, and a
-                    // place given back before it was taken would leak.
+                    // Placed under the admission lock before start, so the limit count and the
+                    // attach entry exist the moment the job can run; removed below if start
+                    // refused it.
                     SUBMISSION_JOBS.put(key, placed);
                     try
                     {
@@ -493,7 +507,8 @@ public class RenameMetadataObjectTool implements IMcpTool
                         // then never refuse a preview while a worker is free, and a preview is never
                         // admitted to wait in the queue while its registry deadline runs down.
                         started = jobs.start(NAME, jobBudgetMs, jobs.getWorkerThreads(),
-                            "Accepted the rename preview for " + objectFqn //$NON-NLS-1$
+                            "Accepted the rename preview for " //$NON-NLS-1$
+                                + MetadataTypeUtils.normalizeFqn(objectFqn) // shared by attached calls
                                 + " -> " + newName + ".", progress -> { //$NON-NLS-1$ //$NON-NLS-2$
                                     progress.add("Draining the derived-data pipeline"); //$NON-NLS-1$
                                     String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
@@ -503,8 +518,11 @@ public class RenameMetadataObjectTool implements IMcpTool
                                     }
                                     if (!placed.beginHandOff())
                                     {
-                                        // The job already ended (its deadline) and gave its place
-                                        // back: building the preview now would run uncounted.
+                                        // The job already left RUNNING (its registry deadline, or
+                                        // EDT-MCP stopping) and gave its place back: building the
+                                        // preview now would run uncounted. The registry has already
+                                        // published that terminal outcome, so this failure only
+                                        // stops the work; its text is a fallback.
                                         throw new BackgroundJobs.MarkedFailure("The rename preview " //$NON-NLS-1$
                                             + "ended before its hand-off to EDT's UI thread began. " //$NON-NLS-1$
                                             + "Nothing was renamed. Start a new preview.", null); //$NON-NLS-1$
@@ -575,6 +593,23 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
     }
 
+    /**
+     * A preview of the same rename (project, target, new name - any timeout) of this registry whose
+     * job already ended while its UI-thread hand-off is still running. Called under
+     * {@link #PREVIEW_JOBS_LOCK}.
+     */
+    private PreviewSubmission orphanedPreviewOf(String target)
+    {
+        for (PreviewSubmission other : SUBMISSION_JOBS.values())
+        {
+            if (other.owner == jobs && other.target.equals(target) && other.isOrphaned())
+            {
+                return other;
+            }
+        }
+        return null;
+    }
+
     private static String previewLimitRefusal(int orphaned)
     {
         String text = MAX_RUNNING_PREVIEWS + " other rename previews are already running, the limit " //$NON-NLS-1$
@@ -583,19 +618,20 @@ public class RenameMetadataObjectTool implements IMcpTool
         {
             return text + "Poll them with get_job_status and retry when one finishes."; //$NON-NLS-1$
         }
-        return text + orphaned + " of them already reported a timeout, but EDT is still building " //$NON-NLS-1$
-            + "that preview on its UI thread: a timeout stops the waiting, not EDT's work, so its " //$NON-NLS-1$
-            + "place is freed only when EDT finishes it. Nothing was renamed. Retry later; " //$NON-NLS-1$
+        return text + orphaned + " of them already ended (timeout or cancellation), but EDT is " //$NON-NLS-1$
+            + "still building " + (orphaned == 1 ? "that preview" : "those previews") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " on its UI thread: ending a job stops the waiting, not EDT's work, so such a place " //$NON-NLS-1$
+            + "is freed only when EDT finishes. Nothing was renamed. Retry after EDT finishes; " //$NON-NLS-1$
             + "get_job_status shows the state of the others."; //$NON-NLS-1$
     }
 
     private static String orphanedPreviewRefusal(String objectFqn, String newName, String jobId)
     {
         return "A previous preview of '" + objectFqn + "' -> '" + newName + "' (job '" + jobId //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "') already reported a timeout, but EDT is still building it on its UI thread: a " //$NON-NLS-1$
-            + "timeout stops the waiting, not EDT's work. A new preview of the same rename is not " //$NON-NLS-1$
-            + "started on top of it. Nothing was renamed. Retry later; this refusal stops once EDT " //$NON-NLS-1$
-            + "finishes that work."; //$NON-NLS-1$
+            + "') already ended (timeout or cancellation), but EDT is still building it on its UI " //$NON-NLS-1$
+            + "thread: ending the job stops the waiting, not EDT's work. A new preview of the same " //$NON-NLS-1$
+            + "rename is not started on top of it, whatever its timeout. Nothing was renamed. Retry " //$NON-NLS-1$
+            + "after EDT finishes that work; this refusal stops then."; //$NON-NLS-1$
     }
 
     /**
@@ -624,12 +660,22 @@ public class RenameMetadataObjectTool implements IMcpTool
      * exactly the answer its own call would have produced. Spellings the service echoes
      * differently (a form element written with Russian form or kind tokens) are different keys
      * and run their own previews. The bound is part of the key because an attached call would
-     * otherwise run under another caller's {@code timeout}.
+     * otherwise run under another caller's {@code timeout}; it is NOT part of the
+     * {@link #previewTarget target} the still-building refusal is keyed by.
      */
     static String previewKey(String projectName, String objectFqn, String newName, long timeoutMs)
     {
-        return projectName + "|" + MetadataTypeUtils.normalizeFqn(objectFqn) + "|" + newName //$NON-NLS-1$ //$NON-NLS-2$
-            + "|" + timeoutMs; //$NON-NLS-1$
+        return previewTarget(projectName, objectFqn, newName) + "|" + timeoutMs; //$NON-NLS-1$
+    }
+
+    /**
+     * The rename a preview computes, whatever its bound: project, the target as the preview echoes
+     * it and the new name. A preview whose job ended while EDT still builds it refuses every new
+     * preview of the same target.
+     */
+    static String previewTarget(String projectName, String objectFqn, String newName)
+    {
+        return projectName + "|" + MetadataTypeUtils.normalizeFqn(objectFqn) + "|" + newName; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private JobSnapshot findRunningJob(String jobId)
@@ -730,23 +776,32 @@ public class RenameMetadataObjectTool implements IMcpTool
         RenameProgress progress = new RenameProgress();
         AtomicReference<String> resultRef = new AtomicReference<>();
 
+        AtomicBoolean endObserved = new AtomicBoolean();
         BoundedJob.DeferredCleanup ended = workEnded == null ? null
-            : new BoundedJob.DeferredCleanup(workEnded, HAND_OFF_RELEASE_CAP_MS,
-                NAME + " preview place cap"); //$NON-NLS-1$
+            : new BoundedJob.DeferredCleanup(capAwareRelease(objectFqn, workEnded, endObserved::get,
+                Activator::logWarning), HAND_OFF_RELEASE_CAP_MS, NAME + " preview place cap"); //$NON-NLS-1$
         BoundedJob.Result result = null;
         try
         {
             result = BoundedJob.run(NAME + ": " + objectFqn, timeoutMs, //$NON-NLS-1$
-                monitor -> resultRef.set(action.rename(progress)), ended == null ? null : ended::jobFinished);
+                monitor -> resultRef.set(action.rename(progress)), ended == null ? null : () -> {
+                    endObserved.set(true);
+                    ended.jobFinished();
+                });
         }
         finally
         {
             if (ended != null)
             {
                 // NOT_RUN is not conclusive either: a suspended Job manager may still run the job.
-                ended.afterBoundedWait(result != null
+                boolean conclusive = result != null
                     && (result.getOutcome() == BoundedJob.Outcome.COMPLETED
-                        || result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START));
+                        || result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
+                if (conclusive)
+                {
+                    endObserved.set(true);
+                }
+                ended.afterBoundedWait(conclusive);
             }
         }
 
@@ -786,6 +841,34 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
         String answer = resultRef.get();
         return markCompletedMutationError(answer, confirm, progress.getPhase());
+    }
+
+    /**
+     * The place release handed to the {@link BoundedJob.DeferredCleanup}: when it runs before the
+     * work was seen to end - the {@link #HAND_OFF_RELEASE_CAP_MS} cap fired instead of the Job's
+     * done notification - it logs a warning first, because EDT may still be building the preview
+     * whose place is now free.
+     *
+     * @param objectFqn the rename target, for the warning
+     * @param workEnded the place release itself
+     * @param endObserved whether a conclusive outcome or the Job's done notification was seen
+     * @param warning the warning sink (production: {@link Activator#logWarning})
+     * @return the release to run exactly once
+     */
+    static Runnable capAwareRelease(String objectFqn, Runnable workEnded, BooleanSupplier endObserved,
+        Consumer<String> warning)
+    {
+        return () -> {
+            if (!endObserved.getAsBoolean())
+            {
+                warning.accept(NAME + ": the UI-thread hand-off of the preview of '" + objectFqn //$NON-NLS-1$
+                    + "' was not reported done within " + HAND_OFF_RELEASE_CAP_MS / 1000L //$NON-NLS-1$
+                    + " seconds after its wait ended, so its preview place was released by the " //$NON-NLS-1$
+                    + "cap. EDT may still be building it, and a new preview queues behind it on " //$NON-NLS-1$
+                    + "EDT's UI thread."); //$NON-NLS-1$
+            }
+            workEnded.run();
+        };
     }
 
     /**
@@ -931,7 +1014,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             // the model - and warning that it "may still apply" would be plainly false.
             return "This was a PREVIEW (confirm was not set): nothing was renamed and this call " //$NON-NLS-1$
                 + "cannot rename anything. EDT did not finish computing the change points in " //$NON-NLS-1$
-                + "time - retry, or raise the bound."; //$NON-NLS-1$
+                + "time and keeps building them on its UI thread, so a new preview of this rename, " //$NON-NLS-1$
+                + "with any timeout, is refused until EDT finishes. Then retry, or raise the bound."; //$NON-NLS-1$
         }
         switch (phase)
         {
