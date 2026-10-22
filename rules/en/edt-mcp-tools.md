@@ -81,11 +81,12 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `export_configuration_to_xml` | Export configuration to XML files (EDT menu: Export -> Configuration to XML Files) | On user request |
 | `import_configuration_from_xml` | Import configuration from XML files (reverse of export) | On user request |
 
-### 2. Errors & Problems (3)
+### 2. Errors & Problems (4)
 
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_problem_summary` | Problem counts by project and severity | **First** — gives the full picture in one call |
+| `project_checks` | List/change validation checks; list, switch, create, copy or delete check-settings profiles (`createProfile`, `copyProfile`, `deleteProfile`). Writes require consent; deletion is destructive | Read settings before changing them; new names use EDT validation, `copyProfile` requires `from`, and active profiles cannot be deleted |
 | `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (loose FQN-fragment array) OR `objectFqns` (exact addresses, reports `objectsNotFound` / `objectsUnsupported`; mutually exclusive with `objects`), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
 | `get_markers` | Workspace markers — bookmarks and/or TODO/FIXME task markers. Filters: `markerKind` (`bookmark`/`task`; omit = both), `projectName`, `filePath`, `priority` (task-only) | On request or during a technical-debt audit |
 

@@ -14,15 +14,15 @@ import java.util.Set;
 import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.Test;
 
-/** The project-checks step follows v14 locally and is independently renumberable at merge. */
+/** Version 17 adds project_checks after the independently owned v15/v16 migrations. */
 public class ProjectChecksMigrationTest
 {
     @Test
-    public void testAlreadyPreviousVersionReadOnlyStoresGainProjectChecksAndKeepOwnerEdits()
+    public void testVersion17ReadOnlyStoresGainProjectChecksAndKeepOwnerEdits()
     {
         for (String preset : List.of("analysis-only", "code-review"))
         {
-            PreferenceStore store = stored(preset, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION - 1);
+            PreferenceStore store = stored(preset, 16);
             ToolSettingsService.ensureMigratedForTest(store);
             assertEquals(Set.of("owner_disabled_tool", "project_checks"), disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
@@ -55,7 +55,7 @@ public class ProjectChecksMigrationTest
     {
         for (String preset : List.of("development", "custom", "future-preset", "all-tools", ""))
         {
-            PreferenceStore store = stored(preset, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION - 1);
+            PreferenceStore store = stored(preset, 16);
             ToolSettingsService.ensureMigratedForTest(store);
             assertEquals(Set.of("owner_disabled_tool"), disabled(store));
         }
@@ -75,7 +75,7 @@ public class ProjectChecksMigrationTest
     @Test
     public void testMigrationWritesTheDisabledSetOnceAndIsIdempotent()
     {
-        PreferenceStore store = stored("analysis-only", PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION - 1);
+        PreferenceStore store = stored("analysis-only", 16);
         int[] writes = {0};
         store.addPropertyChangeListener(event -> {
             if (PreferenceConstants.PREF_DISABLED_TOOLS.equals(event.getProperty()))

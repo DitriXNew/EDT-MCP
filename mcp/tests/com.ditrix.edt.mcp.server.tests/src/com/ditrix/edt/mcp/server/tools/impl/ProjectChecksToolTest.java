@@ -102,16 +102,16 @@ public class ProjectChecksToolTest
         assertTrue(production.getDescription().contains("get_tool_guide('project_checks')"));
         JsonObject schema = json(production.getInputSchema());
         assertEquals(Set.of("projectName", "action", "checkIds", "onlyCustomized", "limit", "offset",
-            "changes", "profile"), schema.getAsJsonObject("properties").keySet());
+            "changes", "profile", "from"), schema.getAsJsonObject("properties").keySet());
         assertEquals("[\"projectName\",\"action\"]", schema.getAsJsonArray("required").toString());
-        assertEquals("[\"list\",\"set\",\"profiles\",\"switch\"]",
+        assertEquals("[\"list\",\"set\",\"profiles\",\"switch\",\"createProfile\",\"copyProfile\",\"deleteProfile\"]",
             schema.getAsJsonObject("properties").getAsJsonObject("action").getAsJsonArray("enum").toString());
         assertEquals("string", schema.getAsJsonObject("properties").getAsJsonObject("changes").get("type").getAsString());
         JsonObject output = json(production.getOutputSchema());
         assertTrue(output.getAsJsonObject("properties").keySet().containsAll(Set.of("success", "project",
             "activeProfile", "checks", "profiles", "before", "after", "changed", "persisted")));
         assertEquals(Boolean.FALSE, production.getAnnotations().getReadOnlyHint());
-        assertEquals(Boolean.FALSE, production.getAnnotations().getDestructiveHint());
+        assertEquals(Boolean.TRUE, production.getAnnotations().getDestructiveHint());
         assertEquals(Boolean.FALSE, production.getAnnotations().getOpenWorldHint());
         assertTrue(production.getGuide().contains(".settings/<profile>.cset"));
     }

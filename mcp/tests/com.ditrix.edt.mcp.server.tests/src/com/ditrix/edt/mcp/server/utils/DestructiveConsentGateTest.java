@@ -245,7 +245,7 @@ public class DestructiveConsentGateTest
         // evaluate_expression (arbitrary BSL: usually a read, occasionally a mutation, and nothing
         // in the call says which - which is exactly why the GATE asks every time while the HINT,
         // one per tool, keeps describing the typical read), plus project_checks (only effective
-        // set/switch writes). Those five carry their own annotations
+        // set/switch writes and profile create/copy/delete). Those five carry their own annotations
         // and are deliberately NOT in the always-destructive classifier list.
         //
         // merge_rules is gated conditionally too - only the same-path rewrite asks - and yet it IS

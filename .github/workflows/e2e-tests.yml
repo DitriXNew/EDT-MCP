@@ -368,6 +368,16 @@ jobs:
           WS="$RUNNER_TEMP/edt-ws"
           LOG="$RUNNER_TEMP/edt.log"
           mkdir -p "$WS"
+          # Screenshot coverage is an explicit opt-in on this disposable e2e workspace.
+          # Stamp v15 with the choice so its one-shot default-off migration does not undo it.
+          # git and Workmate retain their normal opt-in gates.
+          PREFS="$WS/.metadata/.plugins/org.eclipse.core.runtime/.settings"
+          mkdir -p "$PREFS"
+          cat > "$PREFS/com.ditrix.edt.mcp.server.prefs" <<'EOF'
+          eclipse.preferences.version=1
+          mcpDisabledTools=git,ask_workmate
+          mcpToolPrefsMigration=15
+          EOF
           echo "edt_log=$LOG" >> "$GITHUB_ENV"
           export EDT_MCP_AUTO_START=true
           export EDT_MCP_PORT="$MCP_PORT"

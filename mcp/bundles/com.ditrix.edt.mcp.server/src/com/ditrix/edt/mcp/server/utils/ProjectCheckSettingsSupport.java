@@ -399,6 +399,91 @@ public final class ProjectCheckSettingsSupport
         return Map.of("activeProfile", active, "profiles", profiles);
     }
 
+    /** The public repository has no create method: start from Default unless a source is supplied. */
+    public static String validateProfileCopy(ICheckRepository repo, IProject project, String profile,
+        String from, boolean requireFrom)
+    {
+        if (profile == null || profile.isBlank())
+        {
+            throw new IllegalArgumentException("profile is required for createProfile/copyProfile; "
+                + "use project_checks profiles to inspect existing names.");
+        }
+        // The validator returns a boolean. These are EDT's English validation dialog messages
+        // (ValidationPreferencePage_Invalid_settings_profile_name / Non_unique_settings_profile_name).
+        if (!repo.validateProfileName(profile))
+        {
+            throw new IllegalArgumentException("EDT: The profile name " + profile
+                + " is invalid. The profile name should not contain spaces, $ or %");
+        }
+        if (repo.getAvailableSettingsProfiles(project).stream()
+            .anyMatch(profile::equalsIgnoreCase))
+        {
+            throw new IllegalArgumentException("EDT: The profile with the name " + profile
+                + " already exists. Please enter another name");
+        }
+        String source = from == null && !requireFrom ? "Default" : from;
+        if (source == null || source.isBlank())
+        {
+            throw new IllegalArgumentException("from is required for copyProfile; "
+                + "use project_checks profiles and choose an existing source.");
+        }
+        if ((requireFrom || from != null) && !repo.getAvailableSettingsProfiles(project).contains(source))
+        {
+            throw new IllegalArgumentException("Unknown from profile '" + source
+                + "'; use project_checks profiles and choose an existing source.");
+        }
+        return source;
+    }
+
+    /** Refuse unavailable and active profiles before asking for destructive consent. */
+    public static void validateProfileDelete(ICheckRepository repo, IProject project, String profile)
+    {
+        if (profile == null || profile.isBlank())
+        {
+            throw new IllegalArgumentException("profile is required for deleteProfile; use project_checks profiles.");
+        }
+        if (!repo.getAvailableSettingsProfiles(project).contains(profile))
+        {
+            throw new IllegalArgumentException("Unknown profile '" + profile
+                + "'; use project_checks profiles and choose an existing name.");
+        }
+        if (profile.equalsIgnoreCase(repo.getActiveSettingsProfile(project)))
+        {
+            throw new IllegalArgumentException("Cannot delete active profile '" + profile
+                + "'; switch to another profile with project_checks switch first.");
+        }
+    }
+
+    public static Map<String, Object> copyProfile(ICheckRepository repo, IProject project, String profile,
+        String source, boolean implicitDefault)
+    {
+        // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
+        validateProfileCopy(repo, project, profile, implicitDefault ? null : source, !implicitDefault);
+        repo.duplicateSettingsProfile(source, profile, project);
+        Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
+            repo.getActiveSettingsProfile(project)));
+        result.put("profile", profile);
+        result.put("from", source);
+        result.put("changed", true);
+        result.put("persisted", repo.getAvailableSettingsProfiles(project).contains(profile));
+        return result;
+    }
+
+    public static Map<String, Object> deleteProfile(ICheckRepository repo, IProject project, String profile)
+    {
+        validateProfileDelete(repo, project, profile);
+        int customized = repo.getCustomizedSettingsFromProfile(profile, project).size();
+        repo.deleteSettingsProfile(profile, project);
+        Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
+            repo.getActiveSettingsProfile(project)));
+        result.put("profile", profile);
+        result.put("deletedProfile", profile);
+        result.put("deletedCustomizedChecks", customized);
+        result.put("changed", true);
+        result.put("persisted", !repo.getAvailableSettingsProfiles(project).contains(profile));
+        return result;
+    }
+
     /** Availability is mandatory: the platform otherwise creates an empty profile on switch. */
     public static boolean validateSwitch(ICheckRepository repo, IProject project, String active, String profile)
     {

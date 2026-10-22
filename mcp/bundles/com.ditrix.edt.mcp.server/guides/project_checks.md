@@ -1,7 +1,9 @@
 Inspect or change a project's EDT validation checks and its active check-settings profile.
-Read the current values first. `set` and `switch` ask for consent when they change anything;
+Read the current values first. `set` and `switch` ask for consent when they change anything.
+`createProfile`, `copyProfile`, and destructive `deleteProfile` also ask for consent;
 `list`, `profiles`, and effective no-ops do not. The tool is disabled in the Analysis Only
 and Code Review presets because it includes writes.
+Its MCP annotation is `destructiveHint:true` because profile deletion can discard stored settings.
 
 ### Actions
 
@@ -10,7 +12,8 @@ and Code Review presets because it includes writes.
   `total` counts all matching checks; `returned` counts this page. The header includes
   `project` and `activeProfile`. Follow pages until `offset + returned >= total`.
 - `profiles`: list existing profiles with `name`, `active`, and `customizedChecks`.
-  `Default` is always available. Other profiles come from `.settings/*.cset`.
+  EDT may omit an inactive, unsaved `Default`; use the returned list as authoritative.
+  Saved profiles come from `.settings/*.cset`.
 - `set`: validate the complete `changes` batch, preview it for consent, then apply it
   in one repository write. The response includes `profile`, `before`, `after`, `changed`,
   `persisted`, and `markersRefresh`. `changed` and the consent preview count only checks
@@ -20,6 +23,40 @@ and Code Review presets because it includes writes.
   is the active profile read back after the switch. Switching to the
   already active profile returns `changed:false`. A missing profile is refused;
   this action does not create profiles.
+- `createProfile`: require a new `profile` name. Optional `from` chooses an existing source;
+  omitting it copies the stored `Default` profile, including its customizations. When `Default`
+  has no saved file, EDT creates an empty profile using default check settings. An explicit
+  `from` must name a listed profile. EDT's public
+  repository provides duplication for both creation and copying. The active profile stays unchanged.
+- `copyProfile`: require both a new `profile` and an existing `from`. Copy the source's stored
+  settings, including check parameters, without switching profiles.
+- `deleteProfile`: require an existing, inactive `profile`. This is destructive and uses the
+  destructive consent gate. Missing and active profiles, including case aliases of the active name,
+  are refused before consent; switch away
+  first to delete a user profile. EDT's own storage refusals, including for a default profile,
+  are returned as errors. The response includes `deletedProfile` and `deletedCustomizedChecks`,
+  the number of customized checks removed. Save the original settings separately to recreate
+  them; the count alone is not a restore recipe.
+
+Each create/copy/delete response includes the resulting `activeProfile` and `profiles` list in
+the same shape as `profiles`, plus the affected `profile`, `changed`, and a `persisted` verdict
+for the profile's presence or absence. Create/copy also reports `from`. New names are checked
+by EDT's own `validateProfileName`; invalid and duplicate names include EDT's English refusal.
+Existing names are compared without regard to case to prevent a Windows file alias from
+overwriting another profile during creation or copying.
+Source and target availability are checked again after consent, before the write.
+
+```json
+{"projectName":"TestConfiguration","action":"createProfile","profile":"TemporaryChecks"}
+```
+
+```json
+{"projectName":"TestConfiguration","action":"copyProfile","from":"TemporaryChecks","profile":"CopiedChecks"}
+```
+
+```json
+{"projectName":"TestConfiguration","action":"deleteProfile","profile":"CopiedChecks"}
+```
 
 ### Check identifiers and filters
 
@@ -107,6 +144,5 @@ available so the change can still be restored.
 
 This version lists parameter values only; parameter writes using
 `ICheckParameterSettings.setValue` and `validateParameterValue` are follow-up work.
-Profile create, duplicate, rename, delete, import, and export are also follow-ups;
-manage those in EDT today. `ICheckProcessPreferences` (manual rebuilds and hiding
-legacy results) is outside these four actions.
+Profile rename, import, and export are also follow-ups; manage those in EDT today.
+`ICheckProcessPreferences` (manual rebuilds and hiding legacy results) is outside these actions.

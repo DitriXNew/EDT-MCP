@@ -73,7 +73,7 @@ public class ToolPresetLegacyRecognitionTest
             "infobase_sessions", "cancel_job", "delete_infobase", "delete_metadata", "debug_pause",
             "import_project_from_file", "export_configuration_to_file"));
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
-            "create_project", "resync_to_disk", "clean_project"));
+            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot"));
         ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.CODE_REVIEW, expected);
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PRESET_ID));
@@ -100,7 +100,7 @@ public class ToolPresetLegacyRecognitionTest
     {
         Set<String> before = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         before.remove("cancel_job");
-        assertStampWithoutSetWrite(before, "code-review");
+        assertStampWithOnlyDefaultOffAddition(before, "code-review");
     }
 
     @Test
@@ -122,13 +122,13 @@ public class ToolPresetLegacyRecognitionTest
     {
         Set<String> before = new HashSet<>(ToolSettingsService.DEVELOPMENT_RECOGNITION_SHAPE);
         before.add("renamed_away_tool");
-        assertStampWithoutSetWrite(before, "development");
+        assertStampWithOnlyDefaultOffAddition(before, "development");
     }
 
     @Test
     public void testEmptyLegacySetHasNoPresetPromise()
     {
-        assertStampWithoutSetWrite(Set.of(), "custom");
+        assertStampWithOnlyDefaultOffAddition(Set.of(), "custom");
     }
 
     @Test
@@ -136,7 +136,7 @@ public class ToolPresetLegacyRecognitionTest
     {
         Set<String> before = new HashSet<>(ToolSettingsService.CODE_REVIEW_RECOGNITION_SHAPE);
         before.remove("wait_for_break");
-        assertStampWithoutSetWrite(before, "custom");
+        assertStampWithOnlyDefaultOffAddition(before, "custom");
     }
 
     @Test
@@ -164,7 +164,7 @@ public class ToolPresetLegacyRecognitionTest
         PreferenceStore store = stored(before, 12);
         Set<String> expected = new HashSet<>(before);
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
-            "create_project", "resync_to_disk", "clean_project"));
+            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot"));
         ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.fromId(id), expected);
         int[] disabledWrites = {0};
         store.addPropertyChangeListener(event -> {
@@ -187,10 +187,12 @@ public class ToolPresetLegacyRecognitionTest
         assertEquals("the stamp and owed additions are one-shot", 0, writes[0]);
     }
 
-    private static void assertStampWithoutSetWrite(Set<String> before, String id)
+    private static void assertStampWithOnlyDefaultOffAddition(Set<String> before, String id)
     {
         PreferenceStore store = stored(before, 12);
-        String serialized = store.getString(PreferenceConstants.PREF_DISABLED_TOOLS);
+        Set<String> expected = new HashSet<>(before);
+        expected.add("get_form_screenshot");
+        String serialized = ToolSettingsService.serializeDisabledTools(expected);
         int[] disabledWrites = {0};
         store.addPropertyChangeListener(event -> {
             if (PreferenceConstants.PREF_DISABLED_TOOLS.equals(event.getProperty()))
@@ -201,8 +203,9 @@ public class ToolPresetLegacyRecognitionTest
         ToolSettingsService.ensureMigratedForTest(store);
         assertEquals(id, store.getString(PRESET_ID));
         assertEquals(serialized, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
-        assertEquals(before, disabled(store));
-        assertEquals(0, disabledWrites[0]);
+        assertEquals(expected, disabled(store));
+        assertEquals("only the universal v15 addition may write this set",
+            expected.equals(before) ? 0 : 1, disabledWrites[0]);
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
             store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         int[] writes = {0};

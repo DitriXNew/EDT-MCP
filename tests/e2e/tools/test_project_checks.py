@@ -11,8 +11,8 @@ The profile test deletes only the file it created. No clean_project/restart is
 used, so marker tests exercise the live CheckScheduler listener.
 
 Consent denial is covered by the Java seam: the harness cannot change the EDT
-process's EDT_MCP_DESTRUCTIVE_CONSENT per call. Profile creation/management and
-parameter writes are follow-ups. get_project_errors displays symbolic Check code
+process's EDT_MCP_DESTRUCTIVE_CONSENT per call. Parameter writes are follow-ups.
+get_project_errors displays symbolic Check code
 when available and has no severity column: we test severity via its severity
 filter, and resolve its discovered id through project_checks for a shortUid.
 """
@@ -21,6 +21,7 @@ import json
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from harness import (
     PROJECT, PROJECT_DIR, E2ESkip, call, assert_ok, assert_error,
@@ -368,3 +369,55 @@ def test_required_parameters_unknown_actions_and_malformed_batches_are_actionabl
         assert_error_quality(assert_error(call("project_checks", params)), names=names, suggests=suggests)
     assert _snapshot() == before
     assert_no_diff()
+
+
+@e2e_test(tool="project_checks", kind="action")
+def test_profile_create_copy_delete_round_trip_restores_the_repository_and_cset_files():
+    original = _success("profiles")
+    original_files = _snapshot()
+    created = "E2e757_" + uuid4().hex
+    copied = created + "_copy"
+    names = (created, copied)
+    paths = {name: SETTINGS / (name + ".cset") for name in names}
+    assert all(not path.exists() for path in paths.values())
+    try:
+        result = _success("createProfile", profile=created)
+        assert result["from"] == "Default" and result["profile"] == created, result
+        assert result["activeProfile"] == original["activeProfile"], result
+        assert any(row["name"] == created for row in result["profiles"]), result
+        _poll(paths[created].exists, bool, "created profile .cset appears")
+        assert _stored(created) == _stored("Default")
+
+        result = _success("copyProfile", profile=copied, **{"from": created})
+        assert result["from"] == created and result["profile"] == copied, result
+        assert result["activeProfile"] == original["activeProfile"], result
+        _poll(paths[copied].exists, bool, "copied profile .cset appears")
+        assert _stored(copied) == _stored(created)
+
+        listed = _success("profiles")
+        by_name = {row["name"]: row for row in listed["profiles"]}
+        assert all(name in by_name for name in names), listed
+        for name in names:
+            assert by_name[name]["customizedChecks"] == len(_stored(name)), listed
+
+        for name in (copied, created):
+            customized = len(_stored(name))
+            result = _success("deleteProfile", profile=name)
+            assert result["deletedProfile"] == name, result
+            assert result["deletedCustomizedChecks"] == customized, result
+            assert result["activeProfile"] == original["activeProfile"], result
+            assert all(row["name"] != name for row in result["profiles"]), result
+            _poll(paths[name].exists, lambda exists: not exists, "deleted profile .cset disappears")
+
+        assert _success("profiles") == original
+        assert _snapshot() == original_files
+    finally:
+        # A failed assertion may follow a successful write; discover names before cleaning up.
+        remaining = {row["name"] for row in _success("profiles")["profiles"]}
+        for name in (copied, created):
+            if name in remaining:
+                _success("deleteProfile", profile=name)
+            _poll(paths[name].exists, lambda exists: not exists, "temporary profile removed in cleanup")
+        assert _success("profiles") == original
+        assert _snapshot() == original_files, "profile round-trip changed the original ignored settings"
+        assert_no_diff()

@@ -82,11 +82,12 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `export_configuration_to_xml` | Экспорт конфигурации в XML (EDT menu: Export → Configuration to XML Files) | По запросу пользователя |
 | `import_configuration_from_xml` | Импорт конфигурации из XML (обратный к экспорту) | По запросу пользователя |
 
-### 2. Errors & Problems — ошибки и задачи (3)
+### 2. Errors & Problems — ошибки и задачи (4)
 
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_problem_summary` | Сводка по числу проблем по проектам и severity | **Первым** — даёт картину одним вызовом |
+| `project_checks` | Чтение/изменение проверок; список, переключение, создание, копирование и удаление профилей (`createProfile`, `copyProfile`, `deleteProfile`). Запись требует согласия; удаление разрушительно | Сначала прочитать настройки; имена проверяет EDT, для `copyProfile` нужен `from`, активный профиль удалить нельзя |
 | `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN-фрагментов, неточный) ЛИБО `objectFqns` (точные адреса, возвращает `objectsNotFound` / `objectsUnsupported`; взаимоисключаются с `objects`), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
 | `get_markers` | Маркеры workspace — закладки и/или TODO/FIXME-маркеры. Фильтры: `markerKind` (`bookmark`/`task`; без него — оба), `projectName`, `filePath`, `priority` (только для задач) | По запросу или при аудите технического долга |
 

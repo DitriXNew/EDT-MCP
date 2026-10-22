@@ -1516,8 +1516,7 @@ public class GetMetadataDetailsTool implements IMcpTool
                 // this view never renders handlers anyway - only a MEMBER address gets kind advice.
                 if (!FormElementWriter.isHandlerToken(ref.kindToken))
                 {
-                    kindAdviceOut[0] = FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
-                        ref.name, normFqn);
+                    kindAdviceOut[0] = FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn);
                 }
                 return null;
             }

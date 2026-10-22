@@ -90,7 +90,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "resync_to_disk", //$NON-NLS-1$
         "clean_project"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_PROJECT_CHECKS_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
+    private static final Set<String> STORED_PROFILE_V15_ADDITIONS = Set.of(
+        "get_form_screenshot"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V17_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -106,7 +109,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
-        Map.entry(PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION, READ_ONLY_PROJECT_CHECKS_ADDITIONS));
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -122,7 +126,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
-        Map.entry(PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION, READ_ONLY_PROJECT_CHECKS_ADDITIONS));
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -294,7 +299,14 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * one pass. Owner edits and provenance are retained; post-v13 stores without an ID are custom.
      * The disabled set is written once, after both steps; later reads never reapply v14.
      * <p>
-     * Keep v1-v12 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
+     * Version 15 follows version 1: every explicit list gains {@code get_form_screenshot}.
+     * Buffered screenshots require a launch flag that affects the human designer for the
+     * whole session, so upgrades require a fresh opt-in. The v15 stamp lets a later deliberate
+     * re-enable survive every subsequent read. It runs after v14 in the same single set write.
+     * <p>
+     * Version 17 adds project_checks to recorded read-only profiles.
+     * <p>
+     * Keep v1-v14 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
      * {@link ToolPreset#isReadOnly()} / {@link ToolPreset#isNoDebug()} promises, independent of owner
      * edits. Universal default-off additions (like v1 and v3) still apply to every explicit list.
      * Keep each historical threshold: versions 6 and 7 were originally described as the same
@@ -408,9 +420,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             {
                 changed |= migrateMutatingToolsIntoReadOnlyPresets(store, disabled);
             }
-            if (storedVersion < PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION)
+            if (storedVersion < 15)
             {
-                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_PROJECT_CHECKS_ADDITIONS);
+                changed |= disabled.addAll(STORED_PROFILE_V15_ADDITIONS);
+            }
+            if (storedVersion < 17)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V17_ADDITIONS);
             }
             if (changed)
             {

@@ -11,7 +11,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import org.eclipse.swt.graphics.ImageData;
@@ -21,9 +20,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
-import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
-import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
 /** Pure advice decisions and the existing render gate and image-read refusals, without a workbench. */
 public class GetFormScreenshotRenderRefusalTest
@@ -49,47 +46,57 @@ public class GetFormScreenshotRenderRefusalTest
         }
     }
 
+    private static final String FLAG_ADVICE =
+        "On Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
+        + "and restart EDT. Use this flag only for screenshot sessions: EDT's own form designer " //$NON-NLS-1$
+        + "shows a grey rectangle for the whole session. " + BUFFER_PATH_ADVICE; //$NON-NLS-1$
+
     @Test
-    public void testBufferedOnWindowsStartupOnKeepsBufferPathAdvice() throws Exception
+    public void testKnownBufferedOnWindowsGetsOnlyBufferPathAdviceForEveryStartupMode() throws Exception
+    {
+        // The mode is read once at class initialization and nothing writes it, so a readable live ON is
+        // the launch state whatever the startup snapshot says.
+        for (NativeRenderMode startup : NativeRenderMode.values())
+        {
+            assertEquals("live=ON, startup=" + startup, //$NON-NLS-1$
+                "EDT could not produce the offscreen form image. " + BUFFER_PATH_ADVICE, //$NON-NLS-1$
+                GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, startup, true));
+        }
+    }
+
+    @Test
+    public void testUnreadableLiveModeFallsBackToTheStartupSnapshot() throws Exception
     {
         assertEquals("EDT could not produce the offscreen form image. " + BUFFER_PATH_ADVICE, //$NON-NLS-1$
-            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.ON, true));
+            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.UNKNOWN, NativeRenderMode.ON, true));
+        assertEquals(FLAG_ADVICE,
+            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.UNKNOWN, NativeRenderMode.OFF, true));
+        assertEquals(FLAG_ADVICE,
+            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.UNKNOWN, NativeRenderMode.UNKNOWN, true));
     }
 
     @Test
-    public void testBufferedOnWindowsStartupOffNamesTheLaunchFlagFirst() throws Exception
+    public void testLiveOffOnWindowsKeepsFlagAdviceForEveryStartupMode() throws Exception
     {
-        String expected = "EDT could not produce the offscreen form image. EDT was not launched with " //$NON-NLS-1$
-            + "buffered native render, and switching it on at runtime may not reach the renderer: " //$NON-NLS-1$
-            + "on Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
-            + "and restart EDT. If the image is still missing, check the buffer path. " + BUFFER_PATH_ADVICE; //$NON-NLS-1$
-        assertEquals(expected,
-            GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.OFF, true));
+        for (NativeRenderMode startup : NativeRenderMode.values())
+        {
+            assertEquals("live=OFF, startup=" + startup, FLAG_ADVICE, //$NON-NLS-1$
+                GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.OFF, startup, true));
+        }
     }
 
     @Test
-    public void testBufferedOnWindowsUnknownStartupIsConditional() throws Exception
+    public void testNoAdviceDescribesALiveModeThatDiffersFromTheLaunch() throws Exception
     {
-        String advice = GetFormScreenshotTool.renderFailureAdvice(NativeRenderMode.ON, NativeRenderMode.UNKNOWN, true);
-        assertFalse(advice, advice.contains("EDT was not launched with buffered native render")); //$NON-NLS-1$
-        assertEquals("EDT could not produce the offscreen form image. If EDT was not launched with " //$NON-NLS-1$
-            + "-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini, add it and restart EDT " //$NON-NLS-1$
-            + "(switching it on at runtime may not reach the renderer); otherwise check the buffer path. " //$NON-NLS-1$
-            + BUFFER_PATH_ADVICE, advice);
-    }
-
-    @Test
-    public void testLiveOffOrUnknownOnWindowsKeepsFlagAdviceForEveryStartupMode() throws Exception
-    {
-        String expected = "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
-            + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$
-            + "and can leave it gray if no buffer is available) and try again."; //$NON-NLS-1$
-        for (NativeRenderMode live : new NativeRenderMode[] { NativeRenderMode.OFF, NativeRenderMode.UNKNOWN })
+        // The runtime-force era texts ("EDT was not launched with buffered native render" while the live
+        // mode was on, and the conditional "If EDT was not launched with ...") are unreachable now.
+        for (NativeRenderMode live : NativeRenderMode.values())
         {
             for (NativeRenderMode startup : NativeRenderMode.values())
             {
-                assertEquals("live=" + live + ", startup=" + startup, expected, //$NON-NLS-1$ //$NON-NLS-2$
-                    GetFormScreenshotTool.renderFailureAdvice(live, startup, true));
+                String advice = GetFormScreenshotTool.renderFailureAdvice(live, startup, true);
+                assertFalse(advice, advice.contains("was not launched with")); //$NON-NLS-1$
+                assertFalse(advice, advice.contains("at runtime")); //$NON-NLS-1$
             }
         }
     }
@@ -130,16 +137,7 @@ public class GetFormScreenshotRenderRefusalTest
     /** Each refusal must preserve its envelope and include exactly the advice selected in this JVM. */
     private static void assertRefusalUsesCurrentAdvice(String path, String prefix, String suffix) throws Exception
     {
-        for (boolean enabled : new boolean[] { false, true })
-        {
-            for (NativeRenderMode startup : NativeRenderMode.values())
-            {
-                try (RenderModeScope ignored = new RenderModeScope(enabled, startup))
-                {
-                    assertEquals(prefix + currentAdvice() + suffix, refusal(path));
-                }
-            }
-        }
+        assertEquals(prefix + currentAdvice() + suffix, refusal(path));
     }
 
     private static String currentAdvice() throws Exception
@@ -202,75 +200,6 @@ public class GetFormScreenshotRenderRefusalTest
         public Object getControl()
         {
             return null;
-        }
-    }
-
-    /**
-     * Changes only the build JVM's EDT flags and restores both even after a failed assertion.
-     * Disabling native render for the OFF case also works on Unix, where buffering is otherwise on.
-     * No render service singleton or workbench is opened.
-     */
-    private static final class RenderModeScope implements AutoCloseable
-    {
-        private final Class<?> service;
-        private final String[] flags = { "NATIVE_FORM_LAYOUT_RENDER", "NATIVE_FORM_BUFFERED_LAYOUT_RENDER" }; //$NON-NLS-1$ //$NON-NLS-2$
-        private final boolean[] original = new boolean[flags.length];
-        private final Field startupCaptured;
-        private final Field startupBuffered;
-        private final Object originalCaptured;
-        private final Object originalBuffered;
-
-        RenderModeScope(boolean enabled, NativeRenderMode startup) throws Exception
-        {
-            startupCaptured = NativeRenderModeProbe.class.getDeclaredField("startupModesCaptured"); //$NON-NLS-1$
-            startupBuffered = NativeRenderModeProbe.class.getDeclaredField("startupBufferedRenderMode"); //$NON-NLS-1$
-            startupCaptured.setAccessible(true);
-            startupBuffered.setAccessible(true);
-            originalCaptured = startupCaptured.get(null);
-            originalBuffered = startupBuffered.get(null);
-            startupCaptured.set(null, Boolean.TRUE);
-            startupBuffered.set(null, startup);
-            service = Class.forName("com._1c.g5.v8.dt.form.layout.service.NativeRenderService"); //$NON-NLS-1$
-            for (int i = 0; i < flags.length; i++)
-            {
-                Field field = service.getDeclaredField(flags[i]);
-                field.setAccessible(true);
-                original[i] = field.getBoolean(null);
-            }
-            try
-            {
-                for (String flag : flags)
-                {
-                    assertTrue(flag, ReflectionUtils.forceStaticFinalBoolean(service, flag, enabled));
-                }
-                assertEquals(enabled ? NativeRenderMode.ON : NativeRenderMode.OFF,
-                    NativeRenderModeProbe.getBufferedRenderMode());
-            }
-            catch (AssertionError failure)
-            {
-                close();
-                throw failure;
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            try
-            {
-                startupCaptured.set(null, originalCaptured);
-                startupBuffered.set(null, originalBuffered);
-            }
-            catch (IllegalAccessException e)
-            {
-                throw new AssertionError("restore the startup render snapshot", e); //$NON-NLS-1$
-            }
-            boolean restored = true;
-            for (int i = 0; i < flags.length; i++)
-            {
-                restored &= ReflectionUtils.forceStaticFinalBoolean(service, flags[i], original[i]);
-            }
-            assertTrue("restore the build JVM's EDT render flags", restored); //$NON-NLS-1$
         }
     }
 }

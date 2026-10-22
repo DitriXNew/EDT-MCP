@@ -95,9 +95,6 @@ public final class PreferenceConstants
      */
     public static final String PREF_TOOL_PREFS_MIGRATION = "mcpToolPrefsMigration"; //$NON-NLS-1$
 
-    /** Local v15; renumber to v17 after #810 and #449. */
-    public static final int PROJECT_CHECKS_MIGRATION_VERSION = 15;
-
     /**
      * Migration version this build applies: 1 = the 'git' tool ships disabled; 2 = a stored
      * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
@@ -115,13 +112,13 @@ public final class PreferenceConstants
      * 13 = record preset provenance after the legacy migrations, without adding disabled tools;
      * 14 = a stored read-only profile, identified by its recorded provenance, gains the six
      * workspace/git writers the presets had missed;
-     * the project-checks step adds project_checks to stored read-only profiles (v15 locally,
-     * v17 after the pending v15/v16 migrations merge).
+     * 15 = every stored list gains the now-default-disabled {@code get_form_screenshot}.
+     * 17 = a stored read-only profile gains {@code project_checks}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = PROJECT_CHECKS_MIGRATION_VERSION;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 17;
 
-    /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
-    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
+    /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
+    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$
 
     // === Progressive tool disclosure (dynamic toolsets) ===
 

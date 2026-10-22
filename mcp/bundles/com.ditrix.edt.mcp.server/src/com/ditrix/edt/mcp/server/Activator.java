@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -428,11 +429,13 @@ public class Activator extends AbstractUIPlugin
         return services.getFormRefactoringService();
     }
 
-    /**
-     * Returns EDT's own form-attribute delete (the form designer's) with its read-only prediction.
-     *
-     * @return the deletion or null if not available
-     */
+    /** Returns EDT's form-attribute management service, including its column-support predicate. */
+    public FormAttributeManagementService getFormAttributeManagementService()
+    {
+        return services.getFormAttributeManagementService();
+    }
+
+    /** Returns the designer's attribute delete and its read-only prediction, or null if unavailable. */
     public FormAttributeDeletion getFormAttributeDeletion()
     {
         return services.getFormAttributeDeletion();

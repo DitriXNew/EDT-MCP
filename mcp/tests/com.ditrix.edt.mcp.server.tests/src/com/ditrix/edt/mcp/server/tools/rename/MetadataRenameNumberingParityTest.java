@@ -689,9 +689,11 @@ public class MetadataRenameNumberingParityTest
     {
         Object identity = onlyConstructor(nested("ChangePointIdentity")) //$NON-NLS-1$
             .newInstance("supplemental"); //$NON-NLS-1$
-        return onlyConstructor(nested("ChangePoint")) //$NON-NLS-1$
-            .newInstance(Integer.valueOf(index), BSL_REF, description, Boolean.TRUE, Boolean.TRUE,
-                Boolean.TRUE, location, identity);
+        Constructor<?> constructor = onlyConstructor(nested("ChangePoint")); //$NON-NLS-1$
+        Object[] arguments = constructor.getParameterCount() == 9
+            ? new Object[] {index, BSL_REF, "reference", description, true, true, true, location, identity} //$NON-NLS-1$
+            : new Object[] {index, BSL_REF, description, true, true, true, location, identity};
+        return constructor.newInstance(arguments);
     }
 
     private static String renderPreview(MetadataRenameService service,

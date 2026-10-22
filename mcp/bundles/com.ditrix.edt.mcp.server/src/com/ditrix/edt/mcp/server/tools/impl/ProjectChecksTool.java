@@ -34,7 +34,8 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 public class ProjectChecksTool implements IMcpTool
 {
     public static final String NAME = "project_checks";
-    private static final Set<String> ACTIONS = Set.of("list", "set", "profiles", "switch");
+    private static final Set<String> ACTIONS = Set.of("list", "set", "profiles", "switch",
+        "createProfile", "copyProfile", "deleteProfile");
 
     @Override
     public String getName()
@@ -45,8 +46,8 @@ public class ProjectChecksTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List, enable/disable or re-grade EDT validation checks of a project and switch its "
-            + "check-settings profile; set/switch ask for consent and return before/after. "
+        return "List or change EDT validation checks; switch, create, copy or delete check-settings profiles. "
+            + "Writes ask for consent; profile deletion is destructive. "
             + "Parameters: get_tool_guide('project_checks').";
     }
 
@@ -59,7 +60,7 @@ public class ProjectChecksTool implements IMcpTool
     @Override
     public ToolAnnotations getAnnotations()
     {
-        return new ToolAnnotations(null, Boolean.FALSE, Boolean.FALSE, null, Boolean.FALSE);
+        return new ToolAnnotations(null, Boolean.FALSE, Boolean.TRUE, null, Boolean.FALSE);
     }
 
     @Override
@@ -67,13 +68,15 @@ public class ProjectChecksTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "EDT project name", true)
-            .enumProperty("action", "Operation", true, "list", "set", "profiles", "switch")
+            .enumProperty("action", "Operation", true, "list", "set", "profiles", "switch",
+                "createProfile", "copyProfile", "deleteProfile")
             .stringArrayProperty("checkIds", "Check ids to list; includes parameters when supplied")
             .booleanProperty("onlyCustomized", "List only checks customized in the active profile")
             .integerProperty("limit", "Page size (default 50, maximum 100)")
             .integerProperty("offset", "Zero-based page offset (default 0)")
             .stringProperty("changes", "For set: JSON array of {checkId, enabled?, severity?}")
-            .stringProperty("profile", "For switch: an existing profile name from profiles")
+            .stringProperty("profile", "Profile name: existing for switch/deleteProfile, new for createProfile/copyProfile")
+            .stringProperty("from", "Source profile: required for copyProfile; createProfile defaults to Default")
             .build();
     }
 
@@ -86,6 +89,10 @@ public class ProjectChecksTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true)
             .stringProperty("project", "EDT project name")
             .stringProperty("activeProfile", "Active check-settings profile")
+            .stringProperty("profile", "Affected check-settings profile")
+            .stringProperty("from", "Source of a created or copied profile")
+            .stringProperty("deletedProfile", "Deleted check-settings profile")
+            .integerProperty("deletedCustomizedChecks", "Customized checks in the deleted profile")
             .objectArrayProperty("checks", "Validation checks in the requested page")
             .objectArrayProperty("profiles", "Available check-settings profiles")
             .booleanProperty("persisted", "Repository read-back matches the requested state")
@@ -110,7 +117,8 @@ public class ProjectChecksTool implements IMcpTool
         String action = JsonUtils.extractStringArgument(params, "action");
         if (!ACTIONS.contains(action))
         {
-            return ToolResult.error("Unknown action '" + action + "'; use list, set, profiles or switch.").toJson();
+            return ToolResult.error("Unknown action '" + action
+                + "'; use list, set, profiles, switch, createProfile, copyProfile or deleteProfile.").toJson();
         }
         try
         {
@@ -226,8 +234,45 @@ public class ProjectChecksTool implements IMcpTool
                 data = ProjectCheckSettingsSupport.switchProfile(repo, project, active, profile);
                 refreshWarning = refreshSettings(project);
                 break;
+            case "createProfile":
+            case "copyProfile":
+                String newProfile = JsonUtils.extractStringArgument(params, "profile");
+                String from = JsonUtils.extractStringArgument(params, "from");
+                String source = ProjectCheckSettingsSupport.validateProfileCopy(repo, project, newProfile,
+                    from, "copyProfile".equals(action));
+                ConsentPreview copyPreview = new ConsentPreview(
+                    ("createProfile".equals(action) ? "Create" : "Copy")
+                        + " check profile of " + project.getName(),
+                    "'" + source + "' -> '" + newProfile
+                        + "'; copies stored check settings without switching the active profile", 1, List.of(newProfile));
+                String copyDenied = consentErrorOrNull(copyPreview);
+                if (copyDenied != null)
+                {
+                    return copyDenied;
+                }
+                data = ProjectCheckSettingsSupport.copyProfile(repo, project, newProfile, source,
+                    "createProfile".equals(action) && from == null);
+                refreshWarning = refreshSettings(project);
+                break;
+            case "deleteProfile":
+                String deletedProfile = JsonUtils.extractStringArgument(params, "profile");
+                ProjectCheckSettingsSupport.validateProfileDelete(repo, project, deletedProfile);
+                int customized = repo.getCustomizedSettingsFromProfile(deletedProfile, project).size();
+                ConsentPreview deletePreview = new ConsentPreview("Delete check profile of " + project.getName(),
+                    "Delete '" + deletedProfile + "' with " + customized
+                        + " customized checks; deletion is destructive; the active profile stays unchanged",
+                    1, List.of(deletedProfile));
+                String deleteDenied = consentErrorOrNull(deletePreview);
+                if (deleteDenied != null)
+                {
+                    return deleteDenied;
+                }
+                data = ProjectCheckSettingsSupport.deleteProfile(repo, project, deletedProfile);
+                refreshWarning = refreshSettings(project);
+                break;
             default:
-                throw new IllegalArgumentException("Use list, set, profiles or switch.");
+                throw new IllegalArgumentException(
+                    "Use list, set, profiles, switch, createProfile, copyProfile or deleteProfile.");
         }
         ToolResult result = ToolResult.success().put("action", action).put("project", project.getName())
             .put("profile", "switch".equals(action) && data.containsKey("after")
@@ -247,7 +292,7 @@ public class ProjectChecksTool implements IMcpTool
             : ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
     }
 
-    /** Single consent call site for both write actions; overridable without an EDT workbench. */
+    /** Single consent gate for all writes, including destructive deletion; overridable in unit tests. */
     protected ConsentDecision requireConsent(ConsentPreview preview)
     {
         return DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
