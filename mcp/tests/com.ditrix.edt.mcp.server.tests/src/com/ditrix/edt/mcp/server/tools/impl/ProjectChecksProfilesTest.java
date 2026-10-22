@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFolder;
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -59,6 +60,9 @@ public class ProjectChecksProfilesTest
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         when(project.getFolder(".settings")).thenReturn(folder);
+        IFile profileFile = mock(IFile.class);
+        when(folder.getFile(anyString())).thenReturn(profileFile);
+        when(profileFile.getParent()).thenReturn(folder);
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active);
         when(repo.getAvailableSettingsProfiles(project)).thenAnswer(call -> List.copyOf(profiles.keySet()));
         when(repo.getCustomizedSettingsFromProfile(anyString(), same(project)))

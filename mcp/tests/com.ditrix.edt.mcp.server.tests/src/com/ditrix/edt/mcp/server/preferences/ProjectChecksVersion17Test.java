@@ -19,7 +19,7 @@ public class ProjectChecksVersion17Test
     @Test
     public void version17IsRegisteredWithoutTakingTheVersion16Step()
     {
-        assertEquals(17, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertTrue(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION >= 17);
         for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
         {

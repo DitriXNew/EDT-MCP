@@ -380,6 +380,8 @@ def test_profile_create_copy_delete_round_trip_restores_the_repository_and_cset_
     names = (created, copied)
     paths = {name: SETTINGS / (name + ".cset") for name in names}
     assert all(not path.exists() for path in paths.values())
+    original_error = None
+    cleanup_errors = []
     try:
         result = _success("createProfile", profile=created)
         assert result["from"] == "Default" and result["profile"] == created, result
@@ -411,13 +413,36 @@ def test_profile_create_copy_delete_round_trip_restores_the_repository_and_cset_
 
         assert _success("profiles") == original
         assert _snapshot() == original_files
+    except BaseException as error:
+        original_error = error
     finally:
-        # A failed assertion may follow a successful write; discover names before cleaning up.
-        remaining = {row["name"] for row in _success("profiles")["profiles"]}
+        # Attempt every owned profile even when discovery or another delete fails.
         for name in (copied, created):
-            if name in remaining:
-                _success("deleteProfile", profile=name)
-            _poll(paths[name].exists, lambda exists: not exists, "temporary profile removed in cleanup")
-        assert _success("profiles") == original
-        assert _snapshot() == original_files, "profile round-trip changed the original ignored settings"
-        assert_no_diff()
+            try:
+                remaining = {row["name"] for row in _success("profiles")["profiles"]}
+                if name in remaining:
+                    _success("deleteProfile", profile=name)
+                _poll(paths[name].exists, lambda exists: not exists, "temporary profile removed in cleanup")
+            except Exception as error:
+                cleanup_errors.append(error)
+                try:
+                    paths[name].unlink(missing_ok=True)
+                except Exception as unlink_error:
+                    cleanup_errors.append(unlink_error)
+        for verify_cleanup in (
+            lambda: _poll(lambda: _success("profiles"), lambda result: result == original,
+                          "original profiles restored after cleanup"),
+            lambda: _snapshot() == original_files,
+            assert_no_diff,
+        ):
+            try:
+                assert verify_cleanup() is not False, "profile round-trip changed the original ignored settings"
+            except Exception as error:
+                cleanup_errors.append(error)
+    if original_error is not None:
+        if cleanup_errors:
+            raise BaseExceptionGroup("Profile round-trip failed; cleanup errors follow the original failure",
+                                     [original_error, *cleanup_errors])
+        raise original_error
+    if cleanup_errors:
+        raise ExceptionGroup("Profile cleanup failed", cleanup_errors)

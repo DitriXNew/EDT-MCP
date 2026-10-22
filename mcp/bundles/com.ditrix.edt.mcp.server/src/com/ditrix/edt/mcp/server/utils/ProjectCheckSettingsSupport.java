@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
@@ -415,6 +416,7 @@ public final class ProjectCheckSettingsSupport
             throw new IllegalArgumentException("EDT: The profile name " + profile
                 + " is invalid. The profile name should not contain spaces, $ or %");
         }
+        validateProfileFile(project, profile);
         if (repo.getAvailableSettingsProfiles(project).stream()
             .anyMatch(profile::equalsIgnoreCase))
         {
@@ -427,12 +429,25 @@ public final class ProjectCheckSettingsSupport
             throw new IllegalArgumentException("from is required for copyProfile; "
                 + "use project_checks profiles and choose an existing source.");
         }
+        validateProfileFile(project, source);
         if ((requireFrom || from != null) && !repo.getAvailableSettingsProfiles(project).contains(source))
         {
             throw new IllegalArgumentException("Unknown from profile '" + source
                 + "'; use project_checks profiles and choose an existing source.");
         }
         return source;
+    }
+
+    /** A profile is one file stem directly in .settings, never a path. */
+    private static void validateProfileFile(IProject project, String profile)
+    {
+        IFolder settingsFolder = project.getFolder(".settings");
+        if (profile.indexOf('/') >= 0 || profile.indexOf('\\') >= 0 || profile.indexOf(':') >= 0
+            || !settingsFolder.getFile(profile + ".cset").getParent().equals(settingsFolder))
+        {
+            throw new IllegalArgumentException("Invalid profile name '" + profile
+                + "': a profile name is a file stem in .settings, not a path; '/', '\\' and ':' are not allowed.");
+        }
     }
 
     /** Refuse unavailable and active profiles before asking for destructive consent. */
@@ -442,6 +457,7 @@ public final class ProjectCheckSettingsSupport
         {
             throw new IllegalArgumentException("profile is required for deleteProfile; use project_checks profiles.");
         }
+        validateProfileFile(project, profile);
         if (!repo.getAvailableSettingsProfiles(project).contains(profile))
         {
             throw new IllegalArgumentException("Unknown profile '" + profile
@@ -484,14 +500,15 @@ public final class ProjectCheckSettingsSupport
         return result;
     }
 
-    /** Availability is mandatory: the platform otherwise creates an empty profile on switch. */
+    /** Default is implicit; every other switch target must already be available. */
     public static boolean validateSwitch(ICheckRepository repo, IProject project, String active, String profile)
     {
         if (profile == null || profile.isBlank())
         {
             throw new IllegalArgumentException("profile is required for switch; use project_checks profiles.");
         }
-        if (!repo.getAvailableSettingsProfiles(project).contains(profile))
+        validateProfileFile(project, profile);
+        if (!"Default".equals(profile) && !repo.getAvailableSettingsProfiles(project).contains(profile))
         {
             throw new IllegalArgumentException("Unknown profile '" + profile
                 + "'; use project_checks profiles and choose an existing name.");

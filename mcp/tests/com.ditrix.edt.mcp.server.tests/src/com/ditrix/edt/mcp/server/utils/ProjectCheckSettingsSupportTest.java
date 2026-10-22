@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.junit.Before;
 import org.junit.Test;
@@ -45,6 +47,11 @@ public class ProjectCheckSettingsSupportTest
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         when(project.getName()).thenReturn("TestConfiguration");
+        IFolder folder = mock(IFolder.class);
+        when(project.getFolder(".settings")).thenReturn(folder);
+        IFile profileFile = mock(IFile.class);
+        when(folder.getFile(anyString())).thenReturn(profileFile);
+        when(profileFile.getParent()).thenReturn(folder);
         descriptions = new LinkedHashMap<>();
         when(repo.getChecksWithDescriptions()).thenAnswer(call -> descriptions);
         describe(uid, "Begin", true);

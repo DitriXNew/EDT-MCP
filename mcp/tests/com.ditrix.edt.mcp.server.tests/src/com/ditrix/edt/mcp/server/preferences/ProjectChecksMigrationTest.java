@@ -43,11 +43,11 @@ public class ProjectChecksMigrationTest
     @Test
     public void testTheStepIsRegisteredInBothHistoricalAdditionMaps()
     {
-        int current = PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION;
-        assertTrue(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION.get(current)
-            .contains("project_checks"));
-        assertTrue(ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION.get(current)
-            .contains("project_checks"));
+        for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
+            ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
+        {
+            assertTrue(additions.get(17).contains("project_checks"));
+        }
     }
 
     @Test

@@ -12,17 +12,17 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   `total` counts all matching checks; `returned` counts this page. The header includes
   `project` and `activeProfile`. Follow pages until `offset + returned >= total`.
 - `profiles`: list existing profiles with `name`, `active`, and `customizedChecks`.
-  EDT may omit an inactive, unsaved `Default`; use the returned list as authoritative.
+  EDT may omit an inactive, unsaved `Default`; that built-in profile is always a valid switch target.
   Saved profiles come from `.settings/*.cset`.
 - `set`: validate the complete `changes` batch, preview it for consent, then apply it
   in one repository write. The response includes `profile`, `before`, `after`, `changed`,
   `persisted`, and `markersRefresh`. `changed` and the consent preview count only checks
   with an effective change; unchanged entries are omitted from the preview names.
-- `switch`: require `profile` to name an existing profile from `profiles`. Return
+- `switch`: require `profile` to name a listed profile or the implicit built-in `Default`. Return
   `before.activeProfile`, `after.activeProfile`, and `persisted`; top-level `profile`
   is the active profile read back after the switch. Switching to the
-  already active profile returns `changed:false`. A missing profile is refused;
-  this action does not create profiles.
+  already active profile returns `changed:false`. Every other unlisted profile is refused;
+  this action does not create user profiles.
 - `createProfile`: require a new `profile` name. Optional `from` chooses an existing source;
   omitting it copies the stored `Default` profile, including its customizations. When `Default`
   has no saved file, EDT creates an empty profile using default check settings. An explicit
@@ -42,6 +42,7 @@ Each create/copy/delete response includes the resulting `activeProfile` and `pro
 the same shape as `profiles`, plus the affected `profile`, `changed`, and a `persisted` verdict
 for the profile's presence or absence. Create/copy also reports `from`. New names are checked
 by EDT's own `validateProfileName`; invalid and duplicate names include EDT's English refusal.
+Every profile name, including `from`, must be a file stem directly in `.settings`; `/`, `\` and `:` are refused.
 Existing names are compared without regard to case to prevent a Windows file alias from
 overwriting another profile during creation or copying.
 Source and target availability are checked again after consent, before the write.
@@ -120,7 +121,7 @@ loading for a reason.
 {"projectName":"TestConfiguration","action":"switch","profile":"Default"}
 ```
 
-To undo a switch, switch back to the profile named in `before.activeProfile`.
+To undo a switch, switch back to `before.activeProfile`; `Default` is accepted even when absent from `profiles`.
 Switches apply the target profile as stored, with no extra settings overlaid.
 
 ### Persistence and live markers

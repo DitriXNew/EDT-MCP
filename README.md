@@ -210,7 +210,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All **100 tools** are organized into 11 semantic groups; **97 are enabled by default**.
+All **101 tools** are organized into 11 semantic groups; **98 are enabled by default**.
 `git`, `ask_workmate`, and `get_form_screenshot` require explicit opt-in:
 
 | Group | Description | Tools |
