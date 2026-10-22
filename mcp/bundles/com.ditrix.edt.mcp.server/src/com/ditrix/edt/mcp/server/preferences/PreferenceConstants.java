@@ -111,12 +111,13 @@ public final class PreferenceConstants
      * 12 = they gain the new {@code export_configuration_to_file} infobase dump;
      * 13 = record preset provenance after the legacy migrations, without adding disabled tools;
      * 14 = a stored read-only profile, identified by its recorded provenance, gains the six
-     * workspace/git writers the presets had missed.
+     * workspace/git writers the presets had missed;
+     * 15 = every stored list gains the now-default-disabled {@code get_form_screenshot}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 14;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 15;
 
-    /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
-    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
+    /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
+    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$
 
     // === Progressive tool disclosure (dynamic toolsets) ===
 

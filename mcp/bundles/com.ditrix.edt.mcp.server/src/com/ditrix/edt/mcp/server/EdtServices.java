@@ -747,11 +747,42 @@ public class EdtServices
      */
     public FormAttributeDeletion getFormAttributeDeletion()
     {
+        try
+        {
+            Injector injector = formInjector();
+            return injector == null ? null : new FormAttributeDeletion(
+                injector.getInstance(FormAttributeManagementService.class),
+                injector.getInstance(IDataSourceInfoAssociationService.class),
+                injector.getInstance(IFormExtensionService.class), deleteItemCollectorConstructor());
+        }
+        catch (Exception | LinkageError e) // NOSONAR preserve the service-unavailable contract
+        {
+            Activator.logError("Failed to obtain EDT's form-attribute delete from the form injector", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /** EDT's complete column-support predicate uses the same injector as the designer's delete. */
+    public FormAttributeManagementService getFormAttributeManagementService()
+    {
+        try
+        {
+            Injector injector = formInjector();
+            return injector == null ? null : injector.getInstance(FormAttributeManagementService.class);
+        }
+        catch (Exception | LinkageError e) // NOSONAR a missing service is a readiness refusal
+        {
+            Activator.logError("Failed to obtain EDT's form-attribute management service", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    private Injector formInjector()
+    {
         Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
         if (formBundle == null)
         {
-            Activator.logError("form bundle '" + FORM_BUNDLE_ID //$NON-NLS-1$
-                + "' not found in the running platform", null); //$NON-NLS-1$
+            Activator.logError("form bundle '" + FORM_BUNDLE_ID + "' not found in the running platform", null); //$NON-NLS-1$ //$NON-NLS-2$
             return null;
         }
         try
@@ -762,16 +793,13 @@ public class EdtServices
             Object injector = plugin == null ? null : pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
             if (injector instanceof Injector)
             {
-                Injector formInjector = (Injector)injector;
-                return new FormAttributeDeletion(formInjector.getInstance(FormAttributeManagementService.class),
-                    formInjector.getInstance(IDataSourceInfoAssociationService.class),
-                    formInjector.getInstance(IFormExtensionService.class), deleteItemCollectorConstructor());
+                return (Injector)injector;
             }
             Activator.logError("form bundle injector is not available", null); //$NON-NLS-1$
         }
         catch (Exception | LinkageError e) // NOSONAR an EDT that moved this internal API must answer null, not throw
         {
-            Activator.logError("Failed to obtain EDT's form-attribute delete from the form injector", e); //$NON-NLS-1$
+            Activator.logError("Failed to obtain EDT's form injector", e); //$NON-NLS-1$
         }
         return null;
     }

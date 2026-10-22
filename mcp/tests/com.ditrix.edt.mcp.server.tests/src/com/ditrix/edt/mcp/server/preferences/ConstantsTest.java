@@ -50,11 +50,12 @@ public class ConstantsTest
     @Test
     public void testDisabledToolsDefault()
     {
-        // Two tools ship DISABLED by default (opt-in): the powerful raw 'git' command tool,
+        // Three tools ship DISABLED by default (opt-in): the powerful raw 'git' command tool,
         // and 'ask_workmate', which hands the question to an external plugin that reaches a
-        // cloud service and can change the configuration with its own tools.
+        // cloud service and can change the configuration with its own tools; screenshots
+        // require a launch flag that affects the designer for the whole session.
         assertNotNull(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
-        assertEquals("git,ask_workmate", PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        assertEquals("git,ask_workmate,get_form_screenshot", PreferenceConstants.DEFAULT_DISABLED_TOOLS);
     }
 
     @Test
