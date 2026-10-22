@@ -22,12 +22,13 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.InputParameters;
-import com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.core.ParameterValues;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
@@ -46,14 +47,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
-import com._1c.g5.v8.dt.mcore.BooleanValue;
-import com._1c.g5.v8.dt.mcore.ColorValue;
-import com._1c.g5.v8.dt.mcore.DateValue;
-import com._1c.g5.v8.dt.mcore.EnumValue;
-import com._1c.g5.v8.dt.mcore.FontValue;
-import com._1c.g5.v8.dt.mcore.NullValue;
-import com._1c.g5.v8.dt.mcore.NumberValue;
-import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
@@ -324,18 +318,30 @@ public final class DcsReadProjection
         return new ArrayList<>(result);
     }
 
-    /** Lists schema/settings subtypes that the writer cannot reproduce, with canonical addresses. */
-    public static List<String> unmodellableNodes(EObject root, String rootFqn)
+    /** An unsupported node and its loss reason; toString preserves the historical class/address form. */
+    public record Unmodellable(String className, String address, String reason)
     {
+        @Override
+        public String toString()
+        {
+            return className + " at " + address; //$NON-NLS-1$
+        }
+    }
+
+    /** Lists schema/settings subtypes the container writers cannot reproduce, with canonical addresses. */
+    public static List<Unmodellable> unmodellableNodes(EObject root, String rootFqn,
+        DcsWriterCatalogues catalogues)
+    {
+        java.util.Objects.requireNonNull(catalogues);
         if (root == null) return Collections.emptyList();
-        List<String> result = new ArrayList<>();
+        List<Unmodellable> result = new ArrayList<>();
         collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-            "", false, result); //$NON-NLS-1$
+            "", false, catalogues, result); //$NON-NLS-1$
         return result;
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,
-        boolean inAdditionalProperties, List<String> result)
+        boolean inAdditionalProperties, DcsWriterCatalogues catalogues, List<Unmodellable> result)
     {
         boolean additionalProperties = inAdditionalProperties
             || "additionalProperties".equals(collection); //$NON-NLS-1$
@@ -359,18 +365,18 @@ public final class DcsReadProjection
             || object.eContainer() instanceof DataCompositionFilterItem
                 && ("left".equals(collection) || "right".equals(collection)); //$NON-NLS-1$ //$NON-NLS-2$
         if (untypedValueSlot && object instanceof Value
-            && !isAuthorableUntypedValue((Value)object))
+            && !DcsSettingsWriter.isAuthorableUntypedValue((Value)object))
         {
             unsupported = true;
         }
-        if (object instanceof DataCompositionParameterValue
-            && !isAuthorableParameterValue((DataCompositionParameterValue)object))
+        String reason = unsupported ? "this node is outside the writer's model" : null; //$NON-NLS-1$
+        if (object instanceof DataCompositionParameterValue)
         {
-            unsupported = true;
+            reason = parameterValueRefusal((DataCompositionParameterValue)object, catalogues);
         }
-        if (unsupported)
+        if (reason != null)
         {
-            result.add(object.eClass().getName() + " at " + address); //$NON-NLS-1$
+            result.add(new Unmodellable(object.eClass().getName(), address, reason));
             return;
         }
         for (EReference reference : object.eClass().getEAllContainments())
@@ -394,49 +400,73 @@ public final class DcsReadProjection
                                 : child(featureAddress,
                                     selector(feature, object, childObject, i));
                         collectUnmodellable(childObject, childAddress, feature,
-                            additionalProperties, result);
+                            additionalProperties, catalogues, result);
                     }
                 }
             }
             else if (value instanceof EObject)
             {
                 collectUnmodellable((EObject)value, featureAddress, feature,
-                    additionalProperties, result);
+                    additionalProperties, catalogues, result);
             }
         }
     }
 
-    /**
-     * Output-parameter and appearance items are rebuilt from a single typed 'value'; schema input
-     * parameters keep a full values array, and data parameters stay with their untyped writer.
-     */
-    private static boolean isAuthorableParameterValue(DataCompositionParameterValue item)
+    /** Tests each item against the constructor of its containing parameter collection. */
+    private static String parameterValueRefusal(DataCompositionParameterValue item,
+        DcsWriterCatalogues catalogues)
     {
-        if (!item.getNestedParameterValues().isEmpty()) return false;
+        if (!item.getNestedParameterValues().isEmpty())
+        {
+            return "nested parameter values cannot be written"; //$NON-NLS-1$
+        }
         EObject holder = item.eContainer();
-        if (holder instanceof InputParameters || holder instanceof DataCompositionDataParameterValues)
+        List<Value> values = item.getValues();
+        if (holder instanceof InputParameters)
         {
-            return true;
-        }
-        if (item.getValues().size() > 1) return false;
-        for (Value value : item.getValues())
-        {
-            if (!isAuthorableUntypedValue(value) && !(value instanceof LocalString)
-                && !(value instanceof EnumValue) && !(value instanceof ColorValue)
-                && !(value instanceof FontValue))
+            for (int i = 0; i < values.size(); i++)
             {
-                return false;
+                if (!DcsSettingsWriter.isAuthorableUntypedValue(values.get(i)))
+                {
+                    return "value #" + i + " is " + values.get(i).eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                        + "; input-parameter values are untyped ValueSpecs"; //$NON-NLS-1$
+                }
             }
+            return null;
         }
-        return true;
-    }
-
-    private static boolean isAuthorableUntypedValue(Value value)
-    {
-        return value instanceof DataCompositionField || value instanceof DataCompositionParameter
-            || value instanceof DesignTimeValueValue || value instanceof StringValue
-            || value instanceof NumberValue || value instanceof BooleanValue
-            || value instanceof DateValue || value instanceof NullValue;
+        if (holder instanceof DataCompositionDataParameterValues)
+        {
+            if (values.size() > 1)
+            {
+                return values.size() + " values; a data parameter body carries one 'value'"; //$NON-NLS-1$
+            }
+            return values.isEmpty() || DcsSettingsWriter.isAuthorableUntypedValue(values.get(0))
+                ? null : values.get(0).eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+        }
+        DcsWriterCatalogues.Lookup catalogue = holder instanceof DataCompositionAppearance
+            ? catalogues.appearanceCatalogue() : holder instanceof ParameterValues
+                ? catalogues.outputCatalogue((ParameterValues)holder) : null;
+        if (catalogue == null || catalogue.failure() != null)
+        {
+            return "typed catalogue for platform " + catalogues.version() + " unavailable: " //$NON-NLS-1$ //$NON-NLS-2$
+                + (catalogue == null ? "missing parameter-value holder" : catalogue.failure()); //$NON-NLS-1$
+        }
+        String name = item.getParameter() == null ? null : item.getParameter().getValue();
+        if (name == null)
+        {
+            return "the item has no parameter name; the typed writer needs one"; //$NON-NLS-1$
+        }
+        DcsAvailableParameter declared = catalogue.parameters().findItem(name);
+        if (declared == null)
+        {
+            return "'" + name + "' is not in the platform catalogue for " + catalogues.version(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (values.size() > 1)
+        {
+            return values.size() + " values; a typed parameter body carries one 'value'"; //$NON-NLS-1$
+        }
+        return values.isEmpty() ? null
+            : DcsSettingsWriter.typedValueRefusal(declared.defValue(), values.get(0));
     }
 
     private static void collectReferences(EObject object, String address, String kind,

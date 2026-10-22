@@ -227,6 +227,29 @@ public final class StyleValueBuilder
             "Color RGB(" + red + ", " + green + ", " + blue + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
+    /** The inverse of buildFont: only explicit fonts with an integer height and default scale. */
+    static String fontRefusal(Font font)
+    {
+        if (!(font instanceof FontDef))
+        {
+            return "font form " + (font == null ? "null" : font.eClass().getName()) //$NON-NLS-1$ //$NON-NLS-2$
+                + " cannot be written; the font writer emits FontDef"; //$NON-NLS-1$
+        }
+        FontDef definition = (FontDef)font;
+        float height = definition.getHeight();
+        if (!Float.isFinite(height) || height < 0 || height > (float)Integer.MAX_VALUE
+            || height != Math.rint(height))
+        {
+            return "font height " + height //$NON-NLS-1$
+                + " is not a whole number in the supported range; the font writer takes an integer height"; //$NON-NLS-1$
+        }
+        if (definition.getScale() != 100)
+        {
+            return "font scale " + definition.getScale() + " cannot be written; the font writer uses scale 100"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
+    }
+
     private static Result buildFont(JsonElement fontEl)
     {
         if (fontEl == null || !fontEl.isJsonObject())

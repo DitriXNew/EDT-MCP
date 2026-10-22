@@ -20,24 +20,27 @@ public final class DcsMutationGuard
     }
 
     /** Refuses authoritative replacement when it would discard an unmodellable descendant. */
-    public static String replaceError(EObject root, DcsAddress target)
+    public static String replaceError(EObject root, DcsAddress target,
+        DcsWriterCatalogues catalogues)
     {
         if (root == null || target == null) return null;
         String targetAddress = target.toString();
         List<String> blocked = new ArrayList<>();
         String deliberateRefusal = null;
-        for (String node : DcsReadProjection.unmodellableNodes(root, target.rootFqn()))
+        boolean parameterRefusal = false;
+        for (DcsReadProjection.Unmodellable node :
+            DcsReadProjection.unmodellableNodes(root, target.rootFqn(), catalogues))
         {
-            int marker = node.indexOf(" at "); //$NON-NLS-1$
-            String address = marker < 0 ? "" : node.substring(marker + 4); //$NON-NLS-1$
+            String address = node.address();
             if (!target.hasPointer() || address.equals(targetAddress)
                 || address.startsWith(targetAddress + "/")) //$NON-NLS-1$
             {
-                blocked.add(node);
+                blocked.add(node + " (" + node.reason() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                parameterRefusal |= "SettingsParameterValue".equals(node.className()) //$NON-NLS-1$
+                    || "DataCompositionParameterValue".equals(node.className()); //$NON-NLS-1$
                 if (deliberateRefusal == null)
                 {
-                    String className = marker < 0 ? node : node.substring(0, marker);
-                    deliberateRefusal = DcsUnsupportedAuthoring.refusal(className, address);
+                    deliberateRefusal = DcsUnsupportedAuthoring.refusal(node.className(), address);
                 }
             }
         }
@@ -46,7 +49,24 @@ public final class DcsMutationGuard
         return "action='replace' refuses target '" + target //$NON-NLS-1$
             + "' because it contains content this writer cannot model: " //$NON-NLS-1$
             + String.join(", ", blocked) //$NON-NLS-1$
-            + ". Remove or relocate those nodes in the DCS designer, or replace a narrower " //$NON-NLS-1$
+            + (parameterRefusal ? parameterWayOut(catalogues != null && catalogues.isSchemaRoot())
+                : ". Remove or relocate those nodes in the DCS designer, or replace a narrower " //$NON-NLS-1$
+                    + "fully modelled node."); //$NON-NLS-1$
+    }
+
+    /**
+     * The way out of a parameter-value refusal. The lossless XML channel replaces a bare
+     * DataCompositionSchema root only, so it is named only when the scanned root is a schema; a
+     * form's conditional appearance and a dynamic list have no such channel.
+     */
+    private static String parameterWayOut(boolean schemaRoot)
+    {
+        return ". Use action='update' on those items \u2014 it keeps every member the body does not name" //$NON-NLS-1$
+            + (schemaRoot
+                ? " \u2014 or carry the whole schema through the lossless XML channel (action='replace', " //$NON-NLS-1$
+                    + "type='schema', body={xml:...} on the bare schema root)" //$NON-NLS-1$
+                : "") //$NON-NLS-1$
+            + "; otherwise remove or relocate those nodes in the DCS designer, or replace a narrower " //$NON-NLS-1$
             + "fully modelled node."; //$NON-NLS-1$
     }
 

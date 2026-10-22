@@ -15,7 +15,16 @@ existing ones and their addresses read-only; carry a schema containing them thro
 XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a bare schema root),
 which preserves them untouched. A chart's appearance values nested under its `ChartType` output
 parameter (label type, legend, axes and the like) are not authorable either: an update keeps them,
-and a `replace` that would drop them is refused.
+and a `replace` that would drop them is refused. A `replace` is also refused when it would drop a
+parameter value its writer cannot restate, in settings data parameters and output parameters
+(including grouping, table and chart output parameters), conditional appearance, and input
+parameters: more values than its body carries, an untyped value kind the writer cannot build, a name
+absent from the platform catalogue for the project's version (including an older alias), a value
+that does not match the declared type, or a font other than an explicit font with an integer height
+and the default scale of 100. Use `action='update'` on those items to keep every member the body
+does not name; on a schema root you can also carry the whole schema through the lossless XML
+channel. A schema parameter's own default and available values (`values`, `availableValues`) are
+not checked by this refusal.
 
 ### Lossless XML round-trip
 

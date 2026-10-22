@@ -43,6 +43,11 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceI
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroupOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroupOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
@@ -93,6 +98,10 @@ import com._1c.g5.v8.dt.dcs.parameters.output.DcsTableOutputParameters;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
+import com._1c.g5.v8.dt.mcore.Color;
+import com._1c.g5.v8.dt.mcore.AutoColor;
+import com._1c.g5.v8.dt.mcore.ColorDef;
+import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
@@ -3697,6 +3706,48 @@ public final class DcsSettingsWriter
         return value;
     }
 
+    /** The inverse of typedParameterValue -- keep in step. */
+    static String typedValueRefusal(Value declared, Value stored)
+    {
+        if (stored == null) return "the stored value is null"; //$NON-NLS-1$
+        if (declared instanceof LocalString)
+        {
+            return stored instanceof LocalString ? null : typedValueTypeRefusal(declared, stored);
+        }
+        if (declared instanceof EnumValue)
+        {
+            if (!(stored instanceof EnumValue)) return typedValueTypeRefusal(declared, stored);
+            Enumerator literal = ((EnumValue)stored).getValue();
+            Enumerator selected = literal == null ? null
+                : findEnumerator(((EnumValue)declared).getValue(), literal.getLiteral());
+            return selected != null && selected.equals(literal) ? null
+                : "the enum literal is not in the declared platform enum"; //$NON-NLS-1$
+        }
+        if (declared instanceof ColorValue)
+        {
+            if (!(stored instanceof ColorValue)) return typedValueTypeRefusal(declared, stored);
+            Color color = ((ColorValue)stored).getValue();
+            return color instanceof AutoColor || color instanceof ColorDef
+                || color instanceof ColorRef && ((ColorRef)color).getColor() != null ? null
+                    : "the color writer needs AutoColor, ColorDef or a ColorRef with a referent"; //$NON-NLS-1$
+        }
+        if (declared instanceof FontValue)
+        {
+            return stored instanceof FontValue
+                ? StyleValueBuilder.fontRefusal(((FontValue)stored).getValue())
+                : typedValueTypeRefusal(declared, stored);
+        }
+        if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
+        return isAuthorableUntypedValue(stored) ? null
+            : stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+    }
+
+    private static String typedValueTypeRefusal(Value declared, Value stored)
+    {
+        return "declared " + declared.eClass().getName() + ", stored " //$NON-NLS-1$ //$NON-NLS-2$
+            + stored.eClass().getName() + "; the typed writer requires the declared value type"; //$NON-NLS-1$
+    }
+
     /** Shared schema/settings seam for a ValueSpec constrained by a declared platform value type. */
     static ValueResult buildTypedParameterValue(JsonElement raw, Value expected,
         DcsPresentationParser.LanguageContext languages, String path)
@@ -3779,7 +3830,7 @@ public final class DcsSettingsWriter
         }
     }
 
-    enum AppearanceCatalogue
+    public enum AppearanceCatalogue
     {
         SCHEMA,
         FORM,
@@ -3851,6 +3902,18 @@ public final class DcsSettingsWriter
         CHART,
         CHART_GROUP;
 
+        /** The holder-to-writer mapping used by the replace guard. */
+        static OutputParameterCatalogue forHolder(ParameterValues holder)
+        {
+            if (holder instanceof DataCompositionOutputParameterValues) return SETTINGS;
+            if (holder instanceof DataCompositionGroupOutputParameterValues) return GROUP;
+            if (holder instanceof DataCompositionTableOutputParameterValues) return TABLE;
+            if (holder instanceof DataCompositionTableGroupOutputParameterValues) return TABLE_GROUP;
+            if (holder instanceof DataCompositionChartOutputParameterValues) return CHART;
+            if (holder instanceof DataCompositionChartGroupOutputParameterValues) return CHART_GROUP;
+            return null;
+        }
+
         DcsParameterValuesBase create(Version version, String language) throws DcsPathException
         {
             switch (this)
@@ -3863,6 +3926,17 @@ public final class DcsSettingsWriter
                 default: return new DcsChartGroupOutputParameters(version, language);
             }
         }
+    }
+
+    /** Captures the same project version, language and sources as the typed writers. */
+    public static DcsWriterCatalogues catalogues(Version version,
+        DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance)
+    {
+        return new DcsWriterCatalogues(platformVersion(version), appearance,
+            languages == null ? "en" : languages.resolvedCode(), //$NON-NLS-1$
+            (kind, platform, language) -> kind instanceof OutputParameterCatalogue
+                ? outputParameters((OutputParameterCatalogue)kind, platform, language)
+                : appearanceParameters((AppearanceCatalogue)kind, platform, language));
     }
 
     static DcsAvailableParameterCollection outputParameters(OutputParameterCatalogue catalogue,
@@ -4817,6 +4891,15 @@ public final class DcsSettingsWriter
                 + "' must use kind='field'. Change its kind and pass the field path in 'value'."); //$NON-NLS-1$
         }
         return FieldResult.success((DataCompositionField)result.value);
+    }
+
+    /** The value classes emitted by value(), also shared by schema input-parameter writes. */
+    static boolean isAuthorableUntypedValue(Value value)
+    {
+        return value instanceof DataCompositionField || value instanceof DataCompositionParameter
+            || value instanceof com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue
+            || value instanceof StringValue || value instanceof NumberValue
+            || value instanceof BooleanValue || value instanceof DateValue || value instanceof NullValue;
     }
 
     private static ValueResult value(JsonElement element, String path)

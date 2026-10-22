@@ -50,7 +50,9 @@ import com.ditrix.edt.mcp.server.utils.DcsRootReader;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaContent;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaWriter;
 import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
+import com.ditrix.edt.mcp.server.utils.DcsWriterCatalogues;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
+import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
@@ -765,13 +767,15 @@ public class DcsTool implements IMcpTool
                     }
                     DcsChartReferences.Census chartsBefore =
                         DcsChartReferences.census(content.schema(), address.rootFqn());
+                    DcsWriterCatalogues catalogues = replaceCatalogues(target.kind(), services.version(),
+                        languages, null);
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
                         if (ACTION_REPLACE.equals(action))
                         {
                             String refusal = replaceRefusal(content.schema(),
-                                content.schema().getDefaultSettings(), type, address);
+                                content.schema().getDefaultSettings(), type, address, catalogues);
                             if (refusal != null) throw DcsWriteFailure.message(refusal);
                         }
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
@@ -788,7 +792,7 @@ public class DcsTool implements IMcpTool
                     {
                         DcsSchemaWriter.Result applied =
                             DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver,
-                                services.version(), namedColors);
+                                services.version(), namedColors, catalogues);
                         if (!applied.isSuccess())
                         {
                             throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
@@ -952,7 +956,8 @@ public class DcsTool implements IMcpTool
                 if (ACTION_REPLACE.equals(action))
                 {
                     String refusal = replaceRefusal(extInfo,
-                        extInfo == null ? null : extInfo.getListSettings(), type, address);
+                        extInfo == null ? null : extInfo.getListSettings(), type, address,
+                        replaceCatalogues(target.kind(), version, languages, null));
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1125,7 +1130,7 @@ public class DcsTool implements IMcpTool
                 if (ACTION_REPLACE.equals(action))
                 {
                     String refusal = DcsMutationGuard.replaceError(
-                        current, address);
+                        current, address, replaceCatalogues(target.kind(), version, languages, null));
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1282,6 +1287,19 @@ public class DcsTool implements IMcpTool
             : expectedHashError(expected, current, address);
     }
 
+    /** Uses the root's writer catalogue; the source seam also exercises tool routing headlessly. */
+    static DcsWriterCatalogues replaceCatalogues(TargetKind kind, Version version,
+        DcsPresentationParser.LanguageContext languages, DcsWriterCatalogues.Source source)
+    {
+        DcsSettingsWriter.AppearanceCatalogue appearance = kind == TargetKind.FORM
+            ? DcsSettingsWriter.AppearanceCatalogue.FORM : kind == TargetKind.DYNAMIC_LIST
+                ? DcsSettingsWriter.AppearanceCatalogue.DYNAMIC_LIST
+                : DcsSettingsWriter.AppearanceCatalogue.SCHEMA;
+        return source == null ? DcsSettingsWriter.catalogues(version, languages, appearance)
+            : new DcsWriterCatalogues(version, appearance,
+                languages == null ? "en" : languages.resolvedCode(), source); //$NON-NLS-1$
+    }
+
     /**
      * The unmodellable-content refusal for a replace, scoped to the node the planner will actually
      * rewrite.
@@ -1299,10 +1317,11 @@ public class DcsTool implements IMcpTool
      * @param settingsRoot the settings the bare-root form resolves into, possibly {@code null}
      * @param type the requested type token
      * @param address the caller's address
+     * @param catalogues the platform catalogue snapshot shared by this mutation
      * @return the refusal message, or {@code null} when nothing blocks the replacement
      */
     static String replaceRefusal(EObject whole, EObject settingsRoot, String type,
-        DcsAddress address)
+        DcsAddress address, DcsWriterCatalogues catalogues)
     {
         if (!address.hasPointer())
         {
@@ -1312,14 +1331,14 @@ public class DcsTool implements IMcpTool
                     DcsAddress.render(address.rootFqn(), List.of("variants"))); //$NON-NLS-1$
                 if (parsed.isSuccess())
                 {
-                    return DcsMutationGuard.replaceError(whole, parsed.address());
+                    return DcsMutationGuard.replaceError(whole, parsed.address(), catalogues);
                 }
             }
             if ("userSettings".equals(type)) //$NON-NLS-1$
             {
                 // DynamicListExtInfo.listSettings is not an EMF containment, so scan the actual
                 // settings object rather than trying to reach it by walking the whole ext-info.
-                return DcsMutationGuard.replaceError(settingsRoot, address);
+                return DcsMutationGuard.replaceError(settingsRoot, address, catalogues);
             }
             List<String> scoped = DcsSettingsWriter.defaultSettingsPath(type);
             if (!scoped.isEmpty())
@@ -1332,7 +1351,7 @@ public class DcsTool implements IMcpTool
                     DcsAddress.parse(DcsAddress.render(address.rootFqn(), scoped));
                 if (parsed.isSuccess())
                 {
-                    return DcsMutationGuard.replaceError(settingsRoot, parsed.address());
+                    return DcsMutationGuard.replaceError(settingsRoot, parsed.address(), catalogues);
                 }
             }
         }
@@ -1348,10 +1367,10 @@ public class DcsTool implements IMcpTool
                 DcsAddress.render(address.rootFqn(), relative));
             if (parsed.isSuccess())
             {
-                return DcsMutationGuard.replaceError(settingsRoot, parsed.address());
+                return DcsMutationGuard.replaceError(settingsRoot, parsed.address(), catalogues);
             }
         }
-        return DcsMutationGuard.replaceError(whole, address);
+        return DcsMutationGuard.replaceError(whole, address, catalogues);
     }
 
     private static JsonObject schemaLayerMembers(JsonObject body)

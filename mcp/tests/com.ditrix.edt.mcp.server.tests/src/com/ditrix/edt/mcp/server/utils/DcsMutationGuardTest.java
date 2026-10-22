@@ -51,7 +51,7 @@ public class DcsMutationGuardTest
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
         assertNull("a fully modelled chart must not block a ROOT replacement", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT)));
+            DcsMutationGuard.replaceError(schema, address(ROOT), DcsReplaceTestCatalogues.schema()));
 
         DataCompositionChartOutputParameterValues output =
             factory.createDataCompositionChartOutputParameterValues();
@@ -61,19 +61,19 @@ public class DcsMutationGuardTest
         chart.setOutputParameters(output);
 
         // Unscoped: the whole schema against a pointerless address - the nested values count.
-        String whole = DcsMutationGuard.replaceError(schema, address(ROOT));
+        String whole = DcsMutationGuard.replaceError(schema, address(ROOT), DcsReplaceTestCatalogues.schema());
         assertNotNull("nested chart output values must block a ROOT replacement", whole); //$NON-NLS-1$
         assertTrue(whole, whole.contains("#/defaultSettings/items/0/outputParameters/items/0")); //$NON-NLS-1$
 
         // Scoped the way the tool now scopes it: the settings root, addressed at 'selection'.
         assertNull("the chart in the structure must NOT block a selection-only replacement", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(settings, address(ROOT + "#/selection"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(settings, address(ROOT + "#/selection"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         // ...and it still blocks when the address genuinely covers it.
         assertNotNull("content under the addressed node must still block", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         assertNotNull("replacing the chart itself must still block", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items/0"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     /**
@@ -98,7 +98,7 @@ public class DcsMutationGuardTest
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
         assertNull("a date bound is authorable", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         EnumValue bound = McoreFactory.eINSTANCE.createEnumValue();
         bound.setValue(DataCompositionPeriodAdditionType.MONTH);
@@ -107,13 +107,13 @@ public class DcsMutationGuardTest
         for (String target : new String[] {"#/defaultSettings/items/0", //$NON-NLS-1$
             "#/defaultSettings/items/0/points/0", "#/defaultSettings"}) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            String error = DcsMutationGuard.replaceError(schema, address(ROOT + target));
+            String error = DcsMutationGuard.replaceError(schema, address(ROOT + target), DcsReplaceTestCatalogues.schema());
             assertNotNull(target, error);
             assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
                 + "/points/0/groupFields/items/0/periodAdditionEnd")); //$NON-NLS-1$
         }
         assertNull("a sibling replace does not reach the bound", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     /** A filter's left operand is written only through an untyped ValueSpec, like a period bound. */
@@ -136,14 +136,14 @@ public class DcsMutationGuardTest
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
         assertNull("a field operand is authorable", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         EnumValue left = McoreFactory.eINSTANCE.createEnumValue();
         left.setValue(DataCompositionPeriodAdditionType.MONTH);
         item.setLeft(left);
 
         String error = DcsMutationGuard.replaceError(schema,
-            address(ROOT + "#/defaultSettings/items/0/series/0")); //$NON-NLS-1$
+            address(ROOT + "#/defaultSettings/items/0/series/0"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(error);
         assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
             + "/series/0/filter/items/0/left")); //$NON-NLS-1$
@@ -153,12 +153,12 @@ public class DcsMutationGuardTest
             .createDataCompositionField());
         item.getRight().add(McoreFactory.eINSTANCE.createStringValue());
         assertNull("a string operand is authorable", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         EnumValue right = McoreFactory.eINSTANCE.createEnumValue();
         right.setValue(DataCompositionPeriodAdditionType.MONTH);
         item.getRight().add(right);
         error = DcsMutationGuard.replaceError(schema,
-            address(ROOT + "#/defaultSettings/items/0")); //$NON-NLS-1$
+            address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(error);
         assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
             + "/series/0/filter/items/0/right")); //$NON-NLS-1$
@@ -176,17 +176,18 @@ public class DcsMutationGuardTest
         DataCompositionChartOutputParameterValues output =
             factory.createDataCompositionChartOutputParameterValues();
         SettingsParameterValue parameter = factory.createSettingsParameterValue();
-        parameter.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        parameter.setParameter(DcsReplaceTestCatalogues.parameter("Title"));
+        parameter.getValues().add(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString());
         output.getItems().add(parameter);
         chart.setOutputParameters(output);
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
         assertNull("a single value is authorable", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         parameter.getValues().add(McoreFactory.eINSTANCE.createStringValue());
         String error = DcsMutationGuard.replaceError(schema,
-            address(ROOT + "#/defaultSettings/items/0")); //$NON-NLS-1$
+            address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(error);
         assertTrue(error, error.contains("SettingsParameterValue at Report.Sales#/defaultSettings" //$NON-NLS-1$
             + "/items/0/outputParameters/items/0")); //$NON-NLS-1$
@@ -204,18 +205,29 @@ public class DcsMutationGuardTest
         DataCompositionChartOutputParameterValues output =
             factory.createDataCompositionChartOutputParameterValues();
         SettingsParameterValue parameter = factory.createSettingsParameterValue();
-        parameter.getValues().add(McoreFactory.eINSTANCE.createEnumValue());
+        parameter.setParameter(DcsReplaceTestCatalogues.parameter("ChartType"));
+        try
+        {
+            parameter.getValues().add(org.eclipse.emf.ecore.util.EcoreUtil.copy(
+                DcsReplaceTestCatalogues.load(DcsSettingsWriter.OutputParameterCatalogue.CHART,
+                    com._1c.g5.v8.dt.platform.version.Version.V8_3_27, "en")
+                    .findItem("ChartType").defValue()));
+        }
+        catch (com._1c.g5.v8.dt.dcs.path.DcsPathException e)
+        {
+            throw new AssertionError(e);
+        }
         output.getItems().add(parameter);
         chart.setOutputParameters(output);
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
         DcsAddress target = address(ROOT + "#/defaultSettings/items/0"); //$NON-NLS-1$
-        assertNull("an enum is authorable", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+        assertNull("an enum is authorable", DcsMutationGuard.replaceError(schema, target, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         parameter.getValues().set(0, McoreFactory.eINSTANCE.createTypeValue());
-        assertNotNull("a TypeValue is not", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+        assertNotNull("a TypeValue is not", DcsMutationGuard.replaceError(schema, target, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         parameter.getValues().set(0, McoreFactory.eINSTANCE.createReferenceValue());
-        assertNotNull("a ReferenceValue is not", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+        assertNotNull("a ReferenceValue is not", DcsMutationGuard.replaceError(schema, target, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     /** Schema input parameters are written from a full values array, so a list is authorable. */
@@ -237,7 +249,7 @@ public class DcsMutationGuardTest
         parameter.setInputParameters(inputs);
         schema.getParameters().add(parameter);
 
-        assertNull(DcsMutationGuard.replaceError(schema, address(ROOT)));
+        assertNull(DcsMutationGuard.replaceError(schema, address(ROOT), DcsReplaceTestCatalogues.schema()));
     }
 
     @Test
@@ -259,7 +271,7 @@ public class DcsMutationGuardTest
         parameter.setInputParameters(inputs);
         schema.getParameters().add(parameter);
 
-        String error = DcsMutationGuard.replaceError(schema, address(ROOT));
+        String error = DcsMutationGuard.replaceError(schema, address(ROOT), DcsReplaceTestCatalogues.schema());
 
         assertNotNull(error);
         assertTrue(error, error.contains("DataCompositionParameterValue")); //$NON-NLS-1$
