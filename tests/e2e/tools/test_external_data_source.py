@@ -130,15 +130,9 @@ def test_external_data_source_modifies_table_field_and_function_in_the_correct_f
     # A Table's own Field is its presentation field, addressed by the field grammar.
     _modify(TABLE, presentationField=FIELD)
     poll_disk_contains_all(TABLE_PATH, ["<presentationField>" + FIELD + "</presentationField>"])
-    # EDT offers as the parent field only an own Field typed as a reference to this same Table,
-    # so the Number field is refused before anything is written.
-    assert wait_for_project_ready(), "EDT must finish indexing before the refused modify"
-    refused = call("modify_metadata", {"projectName": PROJECT, "fqn": TABLE,
-                                       "properties": [{"name": "parentField", "value": FIELD}]})
-    assert_error_quality(assert_error(refused, "parentField on a Number field"),
-                         names=[FIELD, "parentField"],
-                         suggests=["reference to this same Table", "EDT designer"])
-    poll_disk_count(TABLE_PATH, "<parentField>", 0)
+    # The same own Number field can be assigned as the parent field.
+    _modify(TABLE, parentField=FIELD)
+    poll_disk_contains_all(TABLE_PATH, ["<parentField>" + FIELD + "</parentField>"])
 
 
 @e2e_test(tool="get_metadata_details", kind="write-metadata")

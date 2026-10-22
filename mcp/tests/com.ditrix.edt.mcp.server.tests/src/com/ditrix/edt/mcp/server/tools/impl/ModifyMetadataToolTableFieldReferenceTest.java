@@ -28,8 +28,8 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 
 /**
- * A Table's {@code presentationField} / {@code parentField} take one of the Table's OWN fields, by the
- * EDT designer's choice lists (issue #448): the whole single-reference path is driven headlessly.
+ * A Table's {@code presentationField} / {@code parentField} take one of the Table's OWN fields,
+ * regardless of its type (issue #448): the whole single-reference path is driven headlessly.
  */
 public class ModifyMetadataToolTableFieldReferenceTest
 {
@@ -55,58 +55,60 @@ public class ModifyMetadataToolTableFieldReferenceTest
     }
 
     @Test
-    public void aFieldOfAnotherTableIsRefusedNamingTheOwner()
+    public void presentationFieldRefusesAFieldOfAnotherTableNamingTheOwner()
     {
-        Table other = named(MdClassFactory.eINSTANCE.createTable(), "U"); //$NON-NLS-1$
-        f.eds.getTables().add(other);
-        other.setParentDataSource(f.eds);
-        other.getTableFields().add(named(MdClassFactory.eINSTANCE.createField(), "G")); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
-
-        String err = prepare(f.table, "presentationField", EDS + ".Table.U.Field.G", out); //$NON-NLS-1$ //$NON-NLS-2$
-
-        assertNotNull("a Field of another Table must be refused", err); //$NON-NLS-1$
-        assertTrue(err, err.contains("must be a Field of the object being modified 'ExternalDataSource.Eds.Table.T'")); //$NON-NLS-1$
-        assertTrue(err, err.contains("EDT offers only that object's own fields here")); //$NON-NLS-1$
-        assertTrue("nothing may be queued for a refused value", out.isEmpty()); //$NON-NLS-1$
+        assertForeignFieldRefused("presentationField"); //$NON-NLS-1$
     }
 
     @Test
-    public void parentFieldRefusesAnOwnFieldThatIsNotASelfReference()
+    public void parentFieldRefusesAFieldOfAnotherTableNamingTheOwner()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        assertForeignFieldRefused("parentField"); //$NON-NLS-1$
+    }
 
-        String err = prepare(f.table, "parentField", FIELD, out); //$NON-NLS-1$
+    @Test
+    public void parentFieldAcceptsAnOwnFieldBeforeItsTypeIsSet()
+    {
+        assertNull(f.field.getType());
+        assertOwnParentFieldAccepted();
+    }
 
-        assertNotNull("an untyped own Field is not a parent field in EDT", err); //$NON-NLS-1$
-        assertTrue(err, err.contains("'" + FIELD + "' for 'parentField' must be a Field whose type is exactly one type, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "a reference to this same Table")); //$NON-NLS-1$
-        assertTrue(err, err.contains("reference type in the EDT designer")); //$NON-NLS-1$
-        assertTrue(out.isEmpty());
+    @Test
+    public void parentFieldAcceptsAnOwnFieldWithAnEmptyTypeDescription()
+    {
+        f.field.setType(description());
+        assertOwnParentFieldAccepted();
+    }
+
+    @Test
+    public void parentFieldAcceptsAnOwnNumberField()
+    {
+        Type number = McoreFactory.eINSTANCE.createType();
+        number.setName("Number"); //$NON-NLS-1$
+        f.field.setType(description(number));
+        assertOwnParentFieldAccepted();
     }
 
     @Test
     public void parentFieldAcceptsAnOwnFieldTypedAsAReferenceToTheSameTable()
     {
         f.field.setType(description(refTypeOf(f.table)));
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
-
-        String err = prepare(f.table, "parentField", FIELD, out); //$NON-NLS-1$
-
-        assertNull("a self-reference Field is the designer's parent field, got: " + err, err); //$NON-NLS-1$
-        assertEquals(1, out.size());
+        assertOwnParentFieldAccepted();
     }
 
     @Test
-    public void parentFieldRefusesAReferenceToAnotherTableOrASecondType()
+    public void parentFieldAcceptsAnOwnFieldTypedAsAReferenceToAnotherTable()
     {
         Table other = named(MdClassFactory.eINSTANCE.createTable(), "U"); //$NON-NLS-1$
         f.field.setType(description(refTypeOf(other)));
-        assertNotNull(prepare(f.table, "parentField", FIELD, new ArrayList<>())); //$NON-NLS-1$
+        assertOwnParentFieldAccepted();
+    }
 
+    @Test
+    public void parentFieldAcceptsAnOwnFieldWithMultipleTypes()
+    {
         f.field.setType(description(refTypeOf(f.table), McoreFactory.eINSTANCE.createType()));
-        assertNotNull("a composite type is not offered either", //$NON-NLS-1$
-            prepare(f.table, "parentField", FIELD, new ArrayList<>())); //$NON-NLS-1$
+        assertOwnParentFieldAccepted();
     }
 
     @Test
@@ -133,6 +135,30 @@ public class ModifyMetadataToolTableFieldReferenceTest
         assertNotNull(other);
         assertTrue("a Field is still not a target of a non-Field reference: " + other, //$NON-NLS-1$
             other.contains("must be a top-level object; references to members are not supported")); //$NON-NLS-1$
+    }
+
+    private void assertForeignFieldRefused(String property)
+    {
+        Table other = named(MdClassFactory.eINSTANCE.createTable(), "U"); //$NON-NLS-1$
+        f.eds.getTables().add(other);
+        other.setParentDataSource(f.eds);
+        other.getTableFields().add(named(MdClassFactory.eINSTANCE.createField(), "G")); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        String err = prepare(f.table, property, EDS + ".Table.U.Field.G", out); //$NON-NLS-1$
+
+        assertNotNull("a Field of another Table must be refused for " + property, err); //$NON-NLS-1$
+        assertTrue(err, err.contains("must be a Field of the object being modified 'ExternalDataSource.Eds.Table.T'")); //$NON-NLS-1$
+        assertTrue(err, err.contains("EDT offers only that object's own fields here")); //$NON-NLS-1$
+        assertTrue("nothing may be queued for a refused value", out.isEmpty()); //$NON-NLS-1$
+    }
+
+    private void assertOwnParentFieldAccepted()
+    {
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        String err = prepare(f.table, "parentField", FIELD, out); //$NON-NLS-1$
+        assertNull("the Table's own Field must be accepted regardless of its type, got: " + err, err); //$NON-NLS-1$
+        assertEquals(1, out.size());
     }
 
     private String prepare(Table owner, String property, String value,

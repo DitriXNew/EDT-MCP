@@ -7584,7 +7584,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * The full single-reference check, with the object the property is being set on. Besides a top
      * object, a form and a template, it admits the owner's OWN Field for a {@code refers Field}
      * property (an external data source Table's {@code presentationField} / {@code parentField},
-     * issue #448) under the EDT designer's rules - see {@link TableFieldReferences}. A list reference
+     * issue #448) with the owner check in {@link TableFieldReferences}. A list reference
      * passes no owner, so a Field never passes there.
      *
      * @param prop the property name
@@ -7617,7 +7617,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "top-level object; references to members are not supported (forms and templates " //$NON-NLS-1$
                 + "are the supported member references because BM can re-fetch both by id).").toJson(); //$NON-NLS-1$
         }
-        String fieldRefusal = isField ? TableFieldReferences.refusal(prop, feature, owner, target, fqn) : null;
+        String fieldRefusal = isField ? TableFieldReferences.refusal(prop, owner, target, fqn) : null;
         if (fieldRefusal != null)
         {
             return ToolResult.error(fieldRefusal).toJson();
