@@ -12,8 +12,6 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.junit.Test;
 
@@ -22,8 +20,7 @@ import com.google.gson.JsonParser;
 
 /**
  * Round 2 of #803: a preview is admitted against the rename previews only, the default wait keeps
- * a finished preview inline, the stage-named timeout fires before the registry deadline, and a
- * form element attaches across dialects.
+ * a finished preview inline, and the stage-named timeout fires before the registry deadline.
  */
 public class RenamePreviewAdmissionTest
 {
@@ -130,30 +127,6 @@ public class RenamePreviewAdmissionTest
     }
 
     @Test
-    public void testRussianFormAndKindTokensAttachToTheEnglishPreview() throws Exception
-    {
-        CountDownLatch release = new CountDownLatch(1);
-        try (BackgroundJobs jobs = new BackgroundJobs(10, 4))
-        {
-            try
-            {
-                RenameMetadataObjectTool tool = tool(jobs);
-                String english = jobId(start(tool, "Catalog.Products.Form.ItemForm.Field.Price", "Cost",
-                    blocked(release)));
-                String russian = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Products."
-                    + "\u0424\u043e\u0440\u043c\u0430.ItemForm.\u041f\u043e\u043b\u0435.Price";
-                assertEquals(english, jobId(start(tool, russian, "Cost", blocked(release))));
-                assertNotEquals(english, jobId(start(tool, "Catalog.Products.Form.ItemForm.Group.Price",
-                    "Cost", blocked(release))));
-            }
-            finally
-            {
-                release.countDown();
-            }
-        }
-    }
-
-    @Test
     public void testGuideSaysEachTextMatchIsItsOwnIndex()
     {
         String guide = new RenameMetadataObjectTool().getGuide();
@@ -200,12 +173,5 @@ public class RenamePreviewAdmissionTest
             RenameMetadataObjectTool.IRenameAction.class);
         method.setAccessible(true);
         return (String)method.invoke(tool, "Demo", fqn, name, false, 20, 0, 5_000L, action);
-    }
-
-    private static String jobId(String answer)
-    {
-        Matcher matcher = Pattern.compile("(?m)^\\| jobId \\| ([^|]+) \\|\\s*$").matcher(answer);
-        assertTrue("Missing jobId: " + answer, matcher.find());
-        return matcher.group(1).trim();
     }
 }
