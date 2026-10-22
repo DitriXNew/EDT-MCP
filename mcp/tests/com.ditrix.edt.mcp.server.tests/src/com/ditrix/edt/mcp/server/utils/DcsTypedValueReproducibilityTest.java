@@ -111,14 +111,16 @@ public class DcsTypedValueReproducibilityTest
         McoreFactory f = McoreFactory.eINSTANCE;
         ColorValue declared = f.createColorValue();
         ColorValue stored = f.createColorValue();
-        assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
+        // A color value with no color is EDT's automatic color ("auto" in Template.dcs).
+        assertNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         ColorRef reference = f.createColorRef();
         stored.setValue(reference);
         assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         reference.setColor(f.createColorDef());
         assertNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         stored.setValue(f.createAutoColor());
-        assertNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
+        // An AutoColor is a ColorDef that EDT saves as black; 'auto' rebuilds the colorless value.
+        assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         stored.setValue(f.createColorDef());
         assertNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         EnumValue enumeration = f.createEnumValue();

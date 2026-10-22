@@ -177,7 +177,10 @@ public class DcsMutationGuardTest
             factory.createDataCompositionChartOutputParameterValues();
         SettingsParameterValue parameter = factory.createSettingsParameterValue();
         parameter.setParameter(DcsReplaceTestCatalogues.parameter("Title"));
-        parameter.getValues().add(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString());
+        com._1c.g5.v8.dt.dcs.model.core.LocalString title =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString();
+        title.getContent().put("en", "Sales"); //$NON-NLS-1$ //$NON-NLS-2$
+        parameter.getValues().add(title);
         output.getItems().add(parameter);
         chart.setOutputParameters(output);
         settings.getItems().add(chart);
@@ -243,8 +246,13 @@ public class DcsMutationGuardTest
         com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue item =
             com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                 .createDataCompositionParameterValue();
-        item.getValues().add(McoreFactory.eINSTANCE.createStringValue());
-        item.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        item.setParameter(DcsReplaceTestCatalogues.parameter("Owner")); //$NON-NLS-1$
+        for (String text : new String[] {"A", "B"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            com._1c.g5.v8.dt.mcore.StringValue value = McoreFactory.eINSTANCE.createStringValue();
+            value.setValue(text);
+            item.getValues().add(value);
+        }
         inputs.getItems().add(item);
         parameter.setInputParameters(inputs);
         schema.getParameters().add(parameter);

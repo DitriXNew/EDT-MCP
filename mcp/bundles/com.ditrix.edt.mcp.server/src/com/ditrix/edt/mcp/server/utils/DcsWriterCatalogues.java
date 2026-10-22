@@ -31,21 +31,40 @@ public final class DcsWriterCatalogues
     private final Version version;
     private final AppearanceCatalogue appearance;
     private final String language;
+    private final DcsPresentationParser.LanguageContext languages;
     private final Source source;
     private final Map<Enum<?>, Lookup> cache = new HashMap<>();
 
     public DcsWriterCatalogues(Version version, AppearanceCatalogue appearance, String language,
         Source source)
     {
+        this(version, appearance, language, null, source);
+    }
+
+    /**
+     * @param languages the language context this mutation's writers parse localized values with, so
+     *        the guard's dry run judges a stored text by the same declared codes; may be
+     *        {@code null}, exactly as for the writers
+     */
+    public DcsWriterCatalogues(Version version, AppearanceCatalogue appearance, String language,
+        DcsPresentationParser.LanguageContext languages, Source source)
+    {
         this.version = version == null ? Version.LATEST : version;
         this.appearance = Objects.requireNonNull(appearance);
         this.language = language == null ? "en" : language; //$NON-NLS-1$
+        this.languages = languages;
         this.source = Objects.requireNonNull(source);
     }
 
     public Version version()
     {
         return version;
+    }
+
+    /** The writers' language context, or {@code null} when they run without one. */
+    public DcsPresentationParser.LanguageContext languages()
+    {
+        return languages;
     }
 
     /**

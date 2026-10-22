@@ -1297,7 +1297,7 @@ public class DcsTool implements IMcpTool
                 : DcsSettingsWriter.AppearanceCatalogue.SCHEMA;
         return source == null ? DcsSettingsWriter.catalogues(version, languages, appearance)
             : new DcsWriterCatalogues(version, appearance,
-                languages == null ? "en" : languages.resolvedCode(), source); //$NON-NLS-1$
+                languages == null ? "en" : languages.resolvedCode(), languages, source); //$NON-NLS-1$
     }
 
     /**

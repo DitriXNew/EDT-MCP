@@ -41,9 +41,9 @@ public class DcsParameterReplaceGuardTest
     public void testMultiValuedDataParameterBlocksReplace()
     {
         DataCompositionSchema schema = schema();
-        SettingsParameterValue item = dataItem(schema, VALUES.createStringValue());
+        SettingsParameterValue item = dataItem(schema, text("A"));
         assertNull(refusal(schema));
-        item.getValues().add(VALUES.createStringValue());
+        item.getValues().add(text("B"));
         String error = refusal(schema);
         contains(error, "SettingsParameterValue at Report.Sales#/defaultSettings/dataParameters/items/0",
             "(2 values; a data parameter body carries one 'value')", "action='update'", "lossless XML channel");
@@ -61,7 +61,7 @@ public class DcsParameterReplaceGuardTest
             DataCompositionSchema schema = schema();
             SettingsParameterValue item = dataItem(schema, value);
             contains(refusal(schema), value.eClass().getName() + " is not an untyped ValueSpec kind");
-            item.getValues().set(0, VALUES.createNumberValue());
+            item.getValues().set(0, number(1));
             assertNull(value.eClass().getName(), refusal(schema));
         }
     }
@@ -76,17 +76,19 @@ public class DcsParameterReplaceGuardTest
         InputParameters holder = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createInputParameters();
         DataCompositionParameterValue item = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
             .createDataCompositionParameterValue();
+        item.setParameter(DcsReplaceTestCatalogues.parameter("Owner"));
         holder.getItems().add(item);
         parameter.setInputParameters(holder);
         schema.getParameters().add(parameter);
-        item.getValues().add(VALUES.createStringValue());
-        item.getValues().add(VALUES.createNumberValue());
+        item.getValues().add(text("A"));
+        item.getValues().add(number(1));
         assertNull(refusal(schema));
         for (Value value : List.of(VALUES.createReferenceValue(), VALUES.createTypeValue()))
         {
             item.getValues().set(1, value);
-            contains(refusal(schema), "#/parameters/P/inputParameters/items/0", "value #1 is "
-                + value.eClass().getName(), "input-parameter values are untyped ValueSpecs");
+            contains(refusal(schema), "#/parameters/P/inputParameters/items/0", "value #1: "
+                + value.eClass().getName() + " is not an untyped ValueSpec kind",
+                "input-parameter values are untyped ValueSpecs");
         }
     }
 
@@ -94,7 +96,7 @@ public class DcsParameterReplaceGuardTest
     public void testUnknownAndMissingCatalogueNamesBlockReplaceAndBilingualAliasPasses()
     {
         DataCompositionSchema schema = schema();
-        SettingsParameterValue item = outputItem(schema, "NotInCatalogue", VALUES.createStringValue());
+        SettingsParameterValue item = outputItem(schema, "NotInCatalogue", text("A"));
         DcsAvailableParameterCollection parameters = DcsReplaceTestCatalogues.available("Known",
             "\u0418\u043c\u044f", VALUES.createStringValue());
         DcsWriterCatalogues context = context(AppearanceCatalogue.SCHEMA, (kind, version, language) -> parameters);
@@ -117,7 +119,7 @@ public class DcsParameterReplaceGuardTest
             (kind, version, language) -> DcsReplaceTestCatalogues.available("Known", "Alias", VALUES.createStringValue()));
         contains(DcsMutationGuard.replaceError(schema, address(ROOT), context),
             "declared StringValue, stored DesignTimeValueValue");
-        item.getValues().set(0, VALUES.createStringValue());
+        item.getValues().set(0, text("A"));
         assertNull(DcsMutationGuard.replaceError(schema, address(ROOT), context));
     }
 
@@ -132,7 +134,8 @@ public class DcsParameterReplaceGuardTest
         SettingsParameterValue item = outputItem(schema, "Known", stored);
         DcsWriterCatalogues context = context(AppearanceCatalogue.SCHEMA,
             (kind, version, language) -> DcsReplaceTestCatalogues.available("Known", "Alias", declared));
-        contains(DcsMutationGuard.replaceError(schema, address(ROOT), context), "not in the declared platform enum");
+        contains(DcsMutationGuard.replaceError(schema, address(ROOT), context),
+            "the writer would rebuild it as a different EnumValue");
         item.getValues().set(0, EcoreUtil.copy(declared));
         assertNull(DcsMutationGuard.replaceError(schema, address(ROOT), context));
     }
@@ -168,7 +171,7 @@ public class DcsParameterReplaceGuardTest
         for (boolean checked : new boolean[] {true, false})
         {
             DataCompositionSchema schema = schema();
-            outputItem(schema, "First", VALUES.createStringValue());
+            outputItem(schema, "First", text("A"));
             SettingsParameterValue second = SETTINGS.createSettingsParameterValue();
             second.setParameter(DcsReplaceTestCatalogues.parameter("Second"));
             schema.getDefaultSettings().getOutputParameters().getItems().add(second);
@@ -186,7 +189,7 @@ public class DcsParameterReplaceGuardTest
             DcsMutationGuard.replaceError(schema, address(ROOT), context);
             assertEquals(1, loads.get());
             schema.getDefaultSettings().setOutputParameters(null);
-            dataItem(schema, VALUES.createNumberValue());
+            dataItem(schema, number(1));
             assertNull(DcsMutationGuard.replaceError(schema, address(ROOT), context));
             assertEquals(1, loads.get());
         }
@@ -210,7 +213,7 @@ public class DcsParameterReplaceGuardTest
                 .createDataCompositionAppearance();
             DataCompositionParameterValue item = SETTINGS.createSettingsParameterValue();
             item.setParameter(DcsReplaceTestCatalogues.parameter("Known"));
-            item.getValues().add(VALUES.createStringValue());
+            item.getValues().add(text("A"));
             holder.getItems().add(item);
             assertNull(DcsMutationGuard.replaceError(holder, address(ROOT), context));
             assertNull(DcsMutationGuard.replaceError(holder, address(ROOT), context));
@@ -222,7 +225,7 @@ public class DcsParameterReplaceGuardTest
     public void testSchemaAndSettingsGuardsShareTheSameCatalogueSnapshot()
     {
         DataCompositionSchema schema = schema();
-        outputItem(schema, "Known", VALUES.createStringValue());
+        outputItem(schema, "Known", text("A"));
         AtomicInteger loads = new AtomicInteger();
         DcsWriterCatalogues context = context(AppearanceCatalogue.SCHEMA, (kind, version, language) ->
         {
@@ -277,6 +280,20 @@ public class DcsParameterReplaceGuardTest
             contains(refusal(schema), value.eClass().getName()
                 + " at Report.Sales#/defaultSettings/items/0/filter/items/0/right");
         }
+    }
+
+    private static StringValue text(String value)
+    {
+        StringValue result = VALUES.createStringValue();
+        result.setValue(value);
+        return result;
+    }
+
+    private static NumberValue number(long value)
+    {
+        NumberValue result = VALUES.createNumberValue();
+        result.setValue(java.math.BigDecimal.valueOf(value));
+        return result;
     }
 
     private static DataCompositionSchema schema()

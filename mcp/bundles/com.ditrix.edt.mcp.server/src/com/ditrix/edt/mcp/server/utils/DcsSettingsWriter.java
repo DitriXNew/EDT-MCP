@@ -115,7 +115,9 @@ import com._1c.g5.v8.dt.mcore.StructureProperty;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 /**
  * The single typed authoring implementation for {@link DataCompositionSettings}. Schema default
@@ -3638,6 +3640,13 @@ public final class DcsSettingsWriter
                 if (supplied.error != null) return supplied;
                 return typedValueMismatch(expected, supplied.value, path);
             }
+            if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().size() == 0)
+            {
+                // {} is the empty localized text: what EDT stores for a cleared Title, Format or
+                // Text (<dcscor:value xsi:type="v8:LocalStringType"/>) and how a read restates it.
+                return ValueResult.success(
+                    com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString());
+            }
             JsonElement localized = raw;
             if (raw != null && raw.isJsonPrimitive()
                 && raw.getAsJsonPrimitive().isString())
@@ -3653,7 +3662,8 @@ public final class DcsSettingsWriter
             if (parsed.plan() == null)
             {
                 return ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
-                    + "' must be a string or a non-empty {languageCode:text} object."); //$NON-NLS-1$
+                    + "' must be a string, a {languageCode:text} object, or {} for an " //$NON-NLS-1$
+                    + "empty localized text."); //$NON-NLS-1$
             }
             LocalString value = DcsPresentationParser.build(parsed.plan()).getLocalValue();
             return value == null ? ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
@@ -3673,6 +3683,13 @@ public final class DcsSettingsWriter
                 return ValueResult.failure("Parameter at '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
                     + (expected instanceof ColorValue ? "a color" : "a font") //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Pass the matching {color:...} or {font:...} object."); //$NON-NLS-1$
+            }
+            if (built.value instanceof ColorValue && ((ColorValue)built.value).getValue() instanceof AutoColor)
+            {
+                // In a DCS value the automatic color is a ColorValue with no color: EDT's XML reader
+                // turns "auto" into exactly that, while its color writer saves an AutoColor - a
+                // ColorDef - as "#000000", so keeping the AutoColor would store black.
+                ((ColorValue)built.value).setValue(null);
             }
             return ValueResult.success(built.value);
         }
@@ -3706,40 +3723,205 @@ public final class DcsSettingsWriter
         return value;
     }
 
-    /** The inverse of typedParameterValue -- keep in step. */
+    /** {@link #typedValueRefusal(Value, Value, DcsPresentationParser.LanguageContext)} with no language context. */
     static String typedValueRefusal(Value declared, Value stored)
     {
+        return typedValueRefusal(declared, stored, null);
+    }
+
+    /**
+     * The replace guard's question, put to the typed writer itself: is there a body that
+     * typedParameterValue accepts and that rebuilds exactly the stored value? The stored value is
+     * projected to the body forms the writer reads and run through the writer in a dry run, with the
+     * same declared type and the same languages; the rebuilt value must then equal the stored one.
+     * So every content rule the writer applies - a declared language, the RGB range, a non-empty
+     * name or expression - is the guard's rule too, and a member no body can carry refuses instead of
+     * being dropped.
+     *
+     * <p>Two value forms keep their own rules: a font is judged by
+     * {@link StyleValueBuilder#fontRefusal}, and a ColorRef with a referent passes unchecked because
+     * the guard has no project in which to name the referent - the boundary declared for #682.</p>
+     */
+    static String typedValueRefusal(Value declared, Value stored,
+        DcsPresentationParser.LanguageContext languages)
+    {
         if (stored == null) return "the stored value is null"; //$NON-NLS-1$
-        if (declared instanceof LocalString)
-        {
-            return stored instanceof LocalString ? null : typedValueTypeRefusal(declared, stored);
-        }
-        if (declared instanceof EnumValue)
-        {
-            if (!(stored instanceof EnumValue)) return typedValueTypeRefusal(declared, stored);
-            Enumerator literal = ((EnumValue)stored).getValue();
-            Enumerator selected = literal == null ? null
-                : findEnumerator(((EnumValue)declared).getValue(), literal.getLiteral());
-            return selected != null && selected.equals(literal) ? null
-                : "the enum literal is not in the declared platform enum"; //$NON-NLS-1$
-        }
-        if (declared instanceof ColorValue)
-        {
-            if (!(stored instanceof ColorValue)) return typedValueTypeRefusal(declared, stored);
-            Color color = ((ColorValue)stored).getValue();
-            return color instanceof AutoColor || color instanceof ColorDef
-                || color instanceof ColorRef && ((ColorRef)color).getColor() != null ? null
-                    : "the color writer needs AutoColor, ColorDef or a ColorRef with a referent"; //$NON-NLS-1$
-        }
+        if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
         if (declared instanceof FontValue)
         {
-            return stored instanceof FontValue
-                ? StyleValueBuilder.fontRefusal(((FontValue)stored).getValue())
-                : typedValueTypeRefusal(declared, stored);
+            return StyleValueBuilder.fontRefusal(((FontValue)stored).getValue());
         }
-        if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
-        return isAuthorableUntypedValue(stored) ? null
-            : stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+        if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof ColorRef)
+        {
+            return ((ColorRef)((ColorValue)stored).getValue()).getColor() != null ? null
+                : "the color writer needs auto, a ColorDef or a ColorRef with a referent"; //$NON-NLS-1$
+        }
+        List<JsonElement> bodies = typedBodies(stored);
+        if (bodies.isEmpty())
+        {
+            return stored instanceof ColorValue
+                ? "the color writer needs auto, a ColorDef or a ColorRef with a referent" //$NON-NLS-1$
+                : stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+        }
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return rebuildRefusal(stored, bodies,
+            body -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+    }
+
+    /**
+     * The untyped writer's own verdict on a stored value: value() - the parser every untyped
+     * ValueSpec slot uses - must rebuild it exactly from its {kind, value} form.
+     */
+    static String untypedValueRefusal(Value stored)
+    {
+        if (stored == null) return "the stored value is null"; //$NON-NLS-1$
+        JsonElement body = untypedBody(stored);
+        if (body == null) return stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+        return rebuildRefusal(stored, List.of(body), raw -> value(raw, STORED_VALUE_PATH));
+    }
+
+    /** Where a dry-run error says the projected body came from. */
+    private static final String STORED_VALUE_PATH = "value"; //$NON-NLS-1$
+
+    /** Passes when one projected body rebuilds an equal value; otherwise names the first failure. */
+    private static String rebuildRefusal(Value stored, List<JsonElement> bodies,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
+        String refusal = null;
+        for (JsonElement body : bodies)
+        {
+            ValueResult rebuilt = writer.apply(body);
+            if (rebuilt.error == null && EcoreUtil.equals(rebuilt.value, stored)) return null;
+            if (refusal == null)
+            {
+                refusal = rebuilt.error != null ? "the writer refuses its body: " + rebuilt.error //$NON-NLS-1$
+                    : "the writer would rebuild it as a different " + stored.eClass().getName() //$NON-NLS-1$
+                        + ": a member no body can carry differs"; //$NON-NLS-1$
+            }
+        }
+        return refusal;
+    }
+
+    /**
+     * The body forms typedParameterValue reads, projected from a stored value: a localized text as
+     * its {languageCode:text} object (and, with one language, also as a plain string), an enum as its
+     * literal, an automatic or RGB color as its color object, and anything else as its untyped
+     * ValueSpec. An empty localized text projects to {}, and a color value with no color - EDT's
+     * automatic color - to {color:'auto'}. Members are carried as they are, null included, so the
+     * writer judges them.
+     */
+    private static List<JsonElement> typedBodies(Value stored)
+    {
+        List<JsonElement> bodies = new ArrayList<>();
+        if (stored instanceof LocalString)
+        {
+            JsonObject localized = new JsonObject();
+            for (Map.Entry<String, String> entry : ((LocalString)stored).getContent())
+            {
+                localized.add(entry.getKey(), nullableText(entry.getValue()));
+            }
+            bodies.add(localized);
+            if (((LocalString)stored).getContent().size() == 1)
+            {
+                bodies.add(nullableText(((LocalString)stored).getContent().get(0).getValue()));
+            }
+            return bodies;
+        }
+        if (stored instanceof EnumValue)
+        {
+            Enumerator literal = ((EnumValue)stored).getValue();
+            bodies.add(literal == null ? JsonNull.INSTANCE : new JsonPrimitive(literal.getLiteral()));
+            return bodies;
+        }
+        if (stored instanceof ColorValue)
+        {
+            Color color = ((ColorValue)stored).getValue();
+            JsonObject style = new JsonObject();
+            if (color == null || color instanceof AutoColor)
+            {
+                // The writer rebuilds 'auto' as a color value with no color, so a stored AutoColor
+                // (which EDT saves as black) differs and refuses.
+                style.addProperty("color", "auto"); //$NON-NLS-1$ //$NON-NLS-2$
+                bodies.add(style);
+            }
+            else if (color instanceof ColorDef)
+            {
+                JsonObject rgb = new JsonObject();
+                rgb.addProperty("red", ((ColorDef)color).getRed()); //$NON-NLS-1$
+                rgb.addProperty("green", ((ColorDef)color).getGreen()); //$NON-NLS-1$
+                rgb.addProperty("blue", ((ColorDef)color).getBlue()); //$NON-NLS-1$
+                style.add("color", rgb); //$NON-NLS-1$
+                bodies.add(style);
+            }
+            return bodies;
+        }
+        JsonElement untyped = untypedBody(stored);
+        if (untyped != null) bodies.add(untyped);
+        return bodies;
+    }
+
+    /** The {kind, value} form value() reads, projected from a stored value; null when it has none. */
+    private static JsonElement untypedBody(Value stored)
+    {
+        String kind;
+        JsonElement payload;
+        if (stored instanceof DataCompositionField)
+        {
+            kind = "field"; //$NON-NLS-1$
+            payload = nullableText(((DataCompositionField)stored).getValue());
+        }
+        else if (stored instanceof DataCompositionParameter)
+        {
+            kind = "parameter"; //$NON-NLS-1$
+            payload = nullableText(((DataCompositionParameter)stored).getValue());
+        }
+        else if (stored instanceof com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue)
+        {
+            com._1c.g5.v8.dt.dcs.model.core.DesignTimeValue design =
+                ((com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue)stored).getValue();
+            kind = "expression"; //$NON-NLS-1$
+            payload = design == null ? JsonNull.INSTANCE : nullableText(design.getValue());
+        }
+        else if (stored instanceof StringValue)
+        {
+            kind = "string"; //$NON-NLS-1$
+            payload = nullableText(((StringValue)stored).getValue());
+        }
+        else if (stored instanceof NumberValue)
+        {
+            java.math.BigDecimal number = ((NumberValue)stored).getValue();
+            kind = "number"; //$NON-NLS-1$
+            payload = number == null ? JsonNull.INSTANCE : new JsonPrimitive(number);
+        }
+        else if (stored instanceof BooleanValue)
+        {
+            kind = "boolean"; //$NON-NLS-1$
+            payload = new JsonPrimitive(((BooleanValue)stored).isValue());
+        }
+        else if (stored instanceof DateValue)
+        {
+            com._1c.g5.v8.dt.mcore.util.Date date = ((DateValue)stored).getValue();
+            kind = "date"; //$NON-NLS-1$
+            payload = date == null ? JsonNull.INSTANCE : new JsonPrimitive(date.toString());
+        }
+        else if (stored instanceof NullValue)
+        {
+            kind = "null"; //$NON-NLS-1$
+            payload = null;
+        }
+        else
+        {
+            return null;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty(KEY_KIND, kind);
+        if (payload != null) body.add("value", payload); //$NON-NLS-1$
+        return body;
+    }
+
+    private static JsonElement nullableText(String text)
+    {
+        return text == null ? JsonNull.INSTANCE : new JsonPrimitive(text);
     }
 
     private static String typedValueTypeRefusal(Value declared, Value stored)
@@ -3933,7 +4115,7 @@ public final class DcsSettingsWriter
         DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance)
     {
         return new DcsWriterCatalogues(platformVersion(version), appearance,
-            languages == null ? "en" : languages.resolvedCode(), //$NON-NLS-1$
+            languages == null ? "en" : languages.resolvedCode(), languages, //$NON-NLS-1$
             (kind, platform, language) -> kind instanceof OutputParameterCatalogue
                 ? outputParameters((OutputParameterCatalogue)kind, platform, language)
                 : appearanceParameters((AppearanceCatalogue)kind, platform, language));

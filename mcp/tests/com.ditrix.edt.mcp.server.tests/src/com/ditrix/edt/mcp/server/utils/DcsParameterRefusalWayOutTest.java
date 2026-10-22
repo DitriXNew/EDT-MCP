@@ -84,7 +84,9 @@ public class DcsParameterRefusalWayOutTest
             .createDataCompositionAppearance();
         SettingsParameterValue item = DcsFactory.eINSTANCE.createSettingsParameterValue();
         if (name != null) item.setParameter(DcsReplaceTestCatalogues.parameter(name));
-        item.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        com._1c.g5.v8.dt.mcore.StringValue text = McoreFactory.eINSTANCE.createStringValue();
+        text.setValue("Text");
+        item.getValues().add(text);
         holder.getItems().add(item);
         return holder;
     }

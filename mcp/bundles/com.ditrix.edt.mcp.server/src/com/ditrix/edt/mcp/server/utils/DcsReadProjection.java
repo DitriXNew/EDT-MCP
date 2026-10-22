@@ -422,13 +422,22 @@ public final class DcsReadProjection
         }
         EObject holder = item.eContainer();
         List<Value> values = item.getValues();
+        // The parameter name is written through the same untyped 'parameter' ValueSpec everywhere.
+        String identity = item.getParameter() == null ? null
+            : DcsSettingsWriter.untypedValueRefusal(item.getParameter());
         if (holder instanceof InputParameters)
         {
+            if (item.getParameter() == null)
+            {
+                return "the item has no parameter; an input-parameter body needs a parameter ValueSpec"; //$NON-NLS-1$
+            }
+            if (identity != null) return "its parameter: " + identity; //$NON-NLS-1$
             for (int i = 0; i < values.size(); i++)
             {
-                if (!DcsSettingsWriter.isAuthorableUntypedValue(values.get(i)))
+                String refusal = DcsSettingsWriter.untypedValueRefusal(values.get(i));
+                if (refusal != null)
                 {
-                    return "value #" + i + " is " + values.get(i).eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                    return "value #" + i + ": " + refusal //$NON-NLS-1$ //$NON-NLS-2$
                         + "; input-parameter values are untyped ValueSpecs"; //$NON-NLS-1$
                 }
             }
@@ -436,12 +445,12 @@ public final class DcsReadProjection
         }
         if (holder instanceof DataCompositionDataParameterValues)
         {
+            if (identity != null) return "its parameter: " + identity; //$NON-NLS-1$
             if (values.size() > 1)
             {
                 return values.size() + " values; a data parameter body carries one 'value'"; //$NON-NLS-1$
             }
-            return values.isEmpty() || DcsSettingsWriter.isAuthorableUntypedValue(values.get(0))
-                ? null : values.get(0).eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+            return values.isEmpty() ? null : DcsSettingsWriter.untypedValueRefusal(values.get(0));
         }
         DcsWriterCatalogues.Lookup catalogue = holder instanceof DataCompositionAppearance
             ? catalogues.appearanceCatalogue() : holder instanceof ParameterValues
@@ -465,8 +474,15 @@ public final class DcsReadProjection
         {
             return values.size() + " values; a typed parameter body carries one 'value'"; //$NON-NLS-1$
         }
-        return values.isEmpty() ? null
-            : DcsSettingsWriter.typedValueRefusal(declared.defValue(), values.get(0));
+        if (values.isEmpty())
+        {
+            // An output-parameter body may omit 'value'; an appearance key always restates one.
+            return holder instanceof DataCompositionAppearance
+                ? "no value; an appearance body has no valueless form - each key writes exactly one typed value" //$NON-NLS-1$
+                : null;
+        }
+        return DcsSettingsWriter.typedValueRefusal(declared.defValue(), values.get(0),
+            catalogues.languages());
     }
 
     private static void collectReferences(EObject object, String address, String kind,
