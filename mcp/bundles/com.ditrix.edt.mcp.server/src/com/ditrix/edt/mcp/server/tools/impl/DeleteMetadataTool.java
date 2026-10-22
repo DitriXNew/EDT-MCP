@@ -1599,7 +1599,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 RegistrationState formState = formAttributeState(formBytes(projectName, formFile),
-                    resultString(formCheck, FORM_CHECK_ATTRIBUTE), resultString(formCheck, FORM_CHECK_COLUMN));
+                    resultString(formCheck, FORM_CHECK_ATTRIBUTE), resultString(formCheck, FORM_CHECK_COLUMN),
+                    resultString(formCheck, FORM_CHECK_TABLE_PATH));
                 if (formState != RegistrationState.ABSENT)
                 {
                     confirmed = false;
@@ -1691,6 +1692,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** ABSENT when the Form.form bytes no longer declare the attribute (or column), PRESENT when they do. */
     static RegistrationState formAttributeState(byte[] form, String attribute, String column)
     {
+        return formAttributeState(form, attribute, column, null);
+    }
+
+    static RegistrationState formAttributeState(byte[] form, String attribute, String column, String tablePath)
+    {
         if (form == null || attribute == null)
         {
             return RegistrationState.UNVERIFIABLE;
@@ -1699,7 +1705,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             Element root = SecureXml.documentBuilderFactory().newDocumentBuilder()
                 .parse(new ByteArrayInputStream(form)).getDocumentElement();
-            return declaresFormAttribute(root, attribute, column) ? RegistrationState.PRESENT
+            return declaresFormAttribute(root, attribute, column, tablePath) ? RegistrationState.PRESENT
                 : RegistrationState.ABSENT;
         }
         catch (Exception e)
@@ -1712,6 +1718,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Whether a Form.form root declares the attribute ({@code <attributes><name>}), or its column. */
     static boolean declaresFormAttribute(Element root, String attribute, String column)
     {
+        return declaresFormAttribute(root, attribute, column, null);
+    }
+
+    static boolean declaresFormAttribute(Element root, String attribute, String column, String tablePath)
+    {
         for (Element candidate : directChildren(root, "attributes")) //$NON-NLS-1$
         {
             if (!attribute.equalsIgnoreCase(directChildText(candidate, "name"))) //$NON-NLS-1$
@@ -1722,11 +1733,37 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return true;
             }
-            for (Element columnElement : directChildren(candidate, "columns")) //$NON-NLS-1$
+            List<Element> containers = new ArrayList<>();
+            if (tablePath == null)
             {
-                if (column.equalsIgnoreCase(directChildText(columnElement, "name"))) //$NON-NLS-1$
+                containers.add(candidate);
+            }
+            else
+            {
+                for (Element entry : directChildren(candidate, "additionalColumns")) //$NON-NLS-1$
                 {
-                    return true;
+                    for (Element path : directChildren(entry, "tablePath")) //$NON-NLS-1$
+                    {
+                        List<String> segments = new ArrayList<>();
+                        for (Element segment : directChildren(path, "segments")) //$NON-NLS-1$
+                        {
+                            segments.add(segment.getTextContent().trim());
+                        }
+                        if (tablePath.equalsIgnoreCase(String.join(".", segments))) //$NON-NLS-1$
+                        {
+                            containers.add(entry);
+                        }
+                    }
+                }
+            }
+            for (Element container : containers)
+            {
+                for (Element columnElement : directChildren(container, "columns")) //$NON-NLS-1$
+                {
+                    if (column.equalsIgnoreCase(directChildText(columnElement, "name"))) //$NON-NLS-1$
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -2166,7 +2203,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
-                    + "Decoration / Table / Column on a collection attribute / " //$NON-NLS-1$
+                    + "Decoration / Table / Column ('...Attribute.A.Column.Name' or " //$NON-NLS-1$
+                    + "'...Attribute.A.Column.TabularSection.Name') / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
             // The #343 advice may quote a corrected handler address, and whether the corrected
             // owner really carries that event is a question only the platform type can answer.
@@ -2272,7 +2310,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 ? "" //$NON-NLS-1$
                 : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn, version);
         }
-        return FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken, ref.name, normFqn);
+        return FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn);
     }
 
     /**
@@ -2608,6 +2646,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final String FORM_CHECK_FILES = "files"; //$NON-NLS-1$
     private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
+    private static final String FORM_CHECK_TABLE_PATH = "tablePath"; //$NON-NLS-1$
 
     /**
      * Internal result member: the project-relative resource folder of a deleted form, whose removal
@@ -3230,6 +3269,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             if (column)
             {
                 check.put(FORM_CHECK_COLUMN, ref.name);
+                if (ref.isAdditionalColumn())
+                {
+                    check.put(FORM_CHECK_TABLE_PATH, String.join(".", ref.additionalTablePath())); //$NON-NLS-1$
+                }
             }
             return check;
         }

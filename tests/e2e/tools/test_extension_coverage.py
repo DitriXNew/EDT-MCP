@@ -25,6 +25,7 @@ Extension fixture ground truth (tests/tests, English module names):
 """
 
 from harness import (
+    rename_call,
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
 )
@@ -272,7 +273,7 @@ def test_rename_adopted_object_preview_succeeds():
     """Previewing a rename of an ADOPTED object succeeds (builds a refactoring preview),
     proving the tool does NOT refuse adopted objects — their base link is by UUID, not by
     name, so the rename is valid. confirm is omitted, so nothing is mutated on disk."""
-    r = call("rename_metadata_object",
+    r = rename_call(
              {"projectName": TESTS_PROJECT, "objectFqn": "CommonModule.Calc", "newName": "CalcRenamed"})
     assert_ok(r, "rename preview of an adopted object")
     assert_contains(r.text, "action: preview", "the response must be a refactoring preview")

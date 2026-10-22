@@ -8,6 +8,7 @@ and model after these write-metadata tests through the shared reset helpers.
 import xml.etree.ElementTree as ET
 
 from harness import (
+    rename_call,
     PROJECT,
     assert_contains,
     assert_not_contains,
@@ -51,7 +52,7 @@ def _create(fqn):
 def _preview(document_name, new_name):
     settle_or_fail("previewing a rename with a contained query reference")
     before = tree_snapshot()
-    result = call("rename_metadata_object", {
+    result = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Document." + document_name,
         "newName": new_name,
@@ -104,7 +105,7 @@ def test_rename_contained_dynamic_list_preview_and_confirm_keep_the_query_change
     # An out-of-range index keeps every real row enabled while making the request
     # non-empty, so confirm MUST traverse expectedHashError's contained targets.
     disabled_index = 99
-    result = call("rename_metadata_object", {
+    result = rename_call({
         "projectName": PROJECT,
         "objectFqn": source,
         "newName": destination_name,

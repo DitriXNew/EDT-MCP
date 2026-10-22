@@ -29,6 +29,7 @@ import os
 import time
 
 from harness import (
+    rename_call,
     PROJECT, REPO_ROOT, SUPPORTED_PROJECT, SUPPORTED_REL, _fail, assert_contains, assert_error,
     assert_error_quality, assert_no_diff, assert_no_diff_rel, assert_not_contains, assert_ok,
     call, e2e_test, poll_diff_contains_rel, read_fixture_file, settle_or_fail,
@@ -175,7 +176,7 @@ def test_vendor_rename_of_the_configuration_root_answers_not_found():
     A regression guard, green on a build without #741 by construction: it turns red only when the
     guard's root branch reaches the rename."""
     before = _start()
-    err = assert_error(call("rename_metadata_object",
+    err = assert_error(rename_call(
                             {"projectName": SUPPORTED_PROJECT, "objectFqn": "Configuration",
                              "newName": "E2EVendorRenamedRoot"}),
                        "rename the locked configuration root")

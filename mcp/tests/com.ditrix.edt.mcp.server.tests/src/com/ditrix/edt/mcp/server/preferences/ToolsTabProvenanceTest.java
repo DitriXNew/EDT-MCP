@@ -114,10 +114,10 @@ public class ToolsTabProvenanceTest
     {
         tab.performDefaults();
         assertEquals("defaults are pending until save", "code-review", store.getString(PRESET_ID));
-        assertEquals(Set.of("git", "ask_workmate"), selection);
+        assertEquals(Set.of("git", "ask_workmate", "get_form_screenshot"), selection);
         tab.performOk();
         assertEquals("custom", store.getString(PRESET_ID));
-        assertEquals(Set.of("git", "ask_workmate"), ToolSettingsService.parseDisabledTools(
+        assertEquals(Set.of("git", "ask_workmate", "get_form_screenshot"), ToolSettingsService.parseDisabledTools(
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS)));
     }
 

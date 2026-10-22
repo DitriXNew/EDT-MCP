@@ -677,6 +677,7 @@ public class ToolSettingsServiceTest
         Set<String> expected = new HashSet<>(overlap);
         expected.remove("debug_launch"); //$NON-NLS-1$
         expected.add("launch"); //$NON-NLS-2$
+        expected.add("get_form_screenshot"); // The universal v15 opt-in migration.
         assertEquals(expected, disabledTools(store));
     }
 
@@ -1091,7 +1092,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of("git", "ask_workmate"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Set.of("git", "ask_workmate", "get_form_screenshot"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1308,7 +1309,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test
@@ -1401,7 +1402,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test
@@ -1463,7 +1464,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test

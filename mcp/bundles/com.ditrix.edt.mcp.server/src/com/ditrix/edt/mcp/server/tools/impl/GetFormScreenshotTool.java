@@ -47,10 +47,10 @@ public class GetFormScreenshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Visually inspect an EDT form as rendered by the designer. Requires EDT launched " //$NON-NLS-1$
-            + "with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image can " //$NON-NLS-1$
-            + "also mean the offscreen buffer is unavailable. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
+        return "Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started " //$NON-NLS-1$
+            + "with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show " //$NON-NLS-1$
+            + "a grey rectangle instead of the form for the whole session (EDT behaviour); changing the " //$NON-NLS-1$
+            + "flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
     }
 
     @Override
@@ -134,10 +134,6 @@ public class GetFormScreenshotTool implements IMcpTool
         {
             boolean formRequested = formPath != null && !formPath.isEmpty();
 
-            if (formRequested)
-            {
-                EditorScreenshotHelper.ensureBufferedNativeRenderMode();
-            }
             // Opens the requested form (or takes the active editor) and runs both identity guards: the
             // image is rendered from the representation's own form model into an offscreen buffer every
             // form shares, so only that model proves whose pixels these are.
@@ -353,11 +349,14 @@ public class GetFormScreenshotTool implements IMcpTool
     }
 
     /**
-     * Diagnoses image failures without treating an unknown startup mode as a known launch setting.
-     * A mode this tool forced at runtime may not reach EDT's renderer; the launch flag and the
-     * buffer-path advice are specific to Windows. Linux and macOS buffer native render without the
-     * flag, so there every failure, including an unreadable live mode, gets the neutral log and
-     * display hint.
+     * Diagnoses image failures without treating an unknown mode as a known launch setting. EDT reads
+     * its buffered render mode once, at class initialization, and nothing in this plugin changes it,
+     * so the live mode and the startup snapshot can differ only when one of them could not be read:
+     * the live mode decides, and the startup snapshot stands in only for an unreadable live mode. A
+     * known buffered mode gets the buffer-path advice; an off or unreadable one gets the launch flag
+     * plus the buffer path. The launch flag and the buffer-path advice are specific to Windows. Linux
+     * and macOS buffer native render without the flag, so there every failure, including an
+     * unreadable mode, gets the neutral log and display hint.
      */
     static String renderFailureAdvice(NativeRenderMode live, NativeRenderMode startup, boolean windows)
     {
@@ -366,31 +365,18 @@ public class GetFormScreenshotTool implements IMcpTool
             return "EDT could not produce the offscreen form image. Check the EDT log for errors around " //$NON-NLS-1$
                 + "the offscreen buffer (dtgraphics-form.bin) and ensure EDT has a working display."; //$NON-NLS-1$
         }
-        if (live == NativeRenderMode.ON)
+        String bufferPath = "A common cause on Windows is -Djava.io.tmpdir without a trailing " //$NON-NLS-1$
+            + "separator: check the EDT log for AccessDeniedException on dtgraphics-form.bin. End " //$NON-NLS-1$
+            + "-Djava.io.tmpdir with a backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) " //$NON-NLS-1$
+            + "and restart EDT."; //$NON-NLS-1$
+        NativeRenderMode mode = live != NativeRenderMode.UNKNOWN ? live : startup;
+        if (mode == NativeRenderMode.ON)
         {
-            String bufferPath = "A common cause on Windows is -Djava.io.tmpdir without a trailing " //$NON-NLS-1$
-                + "separator: check the EDT log for AccessDeniedException on dtgraphics-form.bin. End " //$NON-NLS-1$
-                + "-Djava.io.tmpdir with a backslash (for example, -Djava.io.tmpdir=C:\\edt_tmp\\) " //$NON-NLS-1$
-                + "and restart EDT."; //$NON-NLS-1$
-            if (startup == NativeRenderMode.ON)
-            {
-                return "EDT could not produce the offscreen form image. " + bufferPath; //$NON-NLS-1$
-            }
-            if (startup == NativeRenderMode.OFF)
-            {
-                return "EDT could not produce the offscreen form image. EDT was not launched with " //$NON-NLS-1$
-                    + "buffered native render, and switching it on at runtime may not reach the renderer: " //$NON-NLS-1$
-                    + "on Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
-                    + "and restart EDT. If the image is still missing, check the buffer path. " + bufferPath; //$NON-NLS-1$
-            }
-            return "EDT could not produce the offscreen form image. If EDT was not launched with " //$NON-NLS-1$
-                + "-DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini, add it and restart EDT " //$NON-NLS-1$
-                + "(switching it on at runtime may not reach the renderer); otherwise check the buffer path. " //$NON-NLS-1$
-                + bufferPath;
+            return "EDT could not produce the offscreen form image. " + bufferPath; //$NON-NLS-1$
         }
-        return "Ensure EDT runs with buffered native render (on Windows, VM option " //$NON-NLS-1$
-            + "-DnativeFormBufferedLayoutRender=true; this switches the designer to offscreen images " //$NON-NLS-1$
-            + "and can leave it gray if no buffer is available) and try again."; //$NON-NLS-1$
+        return "On Windows, add -DnativeFormBufferedLayoutRender=true after -vmargs in 1cedt.ini " //$NON-NLS-1$
+            + "and restart EDT. Use this flag only for screenshot sessions: EDT's own form designer " //$NON-NLS-1$
+            + "shows a grey rectangle for the whole session. " + bufferPath; //$NON-NLS-1$
     }
 
     /**

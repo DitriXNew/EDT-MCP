@@ -1432,34 +1432,7 @@ public class McpProtocolHandler
      */
     private boolean isJsonErrorPayload(String result)
     {
-        if (result == null)
-        {
-            return false;
-        }
-
-        try
-        {
-            JsonElement element = JsonParser.parseString(result);
-            if (!element.isJsonObject())
-            {
-                return false;
-            }
-
-            // An error is detected ONLY by an explicit success==false boolean (the
-            // canonical ToolResult.error payload is {"success":false,"error":...}).
-            // Deliberately NOT flagged on mere "error" key presence: a SUCCESSFUL
-            // JSON result that happens to carry an "error" field (e.g. a diagnostics
-            // list) must stay isError:false, otherwise every future field name would
-            // be latently coupled to the error-detection contract.
-            com.google.gson.JsonObject obj = element.getAsJsonObject();
-            return obj.has(KEY_SUCCESS) && obj.get(KEY_SUCCESS).isJsonPrimitive()
-                && obj.get(KEY_SUCCESS).getAsJsonPrimitive().isBoolean()
-                && !obj.get(KEY_SUCCESS).getAsBoolean();
-        }
-        catch (Exception e)
-        {
-            return false;
-        }
+        return ToolResult.isErrorPayload(result);
     }
     
     /**
