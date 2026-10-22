@@ -3,6 +3,7 @@
 import xml.etree.ElementTree as ET
 
 from harness import (
+    rename_call,
     E2ESkip,
     PROJECT,
     assert_contains,
@@ -75,7 +76,7 @@ def test_integral_number_negative_position_echoes_the_integer():
 def test_integral_number_disableindices_and_array_are_accepted_for_preview():
     before = tree_snapshot()
     for indices in (2, [2, 3]):
-        result = call("rename_metadata_object", {
+        result = rename_call({
             "projectName": PROJECT,
             "objectFqn": "CommonModule.CascadeEn",
             "newName": "Reckoner",

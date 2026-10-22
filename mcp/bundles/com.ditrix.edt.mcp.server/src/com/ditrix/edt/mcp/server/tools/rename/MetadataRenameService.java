@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.common.StringUtils;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.mcore.NamedElement;
+import com._1c.g5.v8.dt.lcore.refactoring.IFullTextSearchChange;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -124,6 +125,78 @@ public class MetadataRenameService
     /** EDT search-core SearchIn enum class name. */
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
+    private final boolean excludeTextOccurrences;
+
+    /** Default preserves EDT's checked text occurrences. */
+    public MetadataRenameService()
+    {
+        this(false);
+    }
+
+    /** Per-call policy; each adapter action owns its own service instance. */
+    public MetadataRenameService(boolean excludeTextOccurrences)
+    {
+        this.excludeTextOccurrences = excludeTextOccurrences;
+    }
+
+    /**
+     * The only text-policy mutation point, shared by preview and confirm before either signs the
+     * tree. The existing leaf walk preserves numbering and never disables composites or plain items.
+     * EDT makes every whole-word match its own leaf: the file-level composite that groups a file's
+     * matches carries no full-text marker, and each child edit becomes a separate full-text leaf
+     * with its own '#' index, so the policy (like disableIndices) skips matches one by one.
+     * Ambiguous model-side text edits stay references.
+     *
+     * @return excluded leaf count, or -1 when the caller kept the default include policy
+     */
+    private int applyTextOccurrencePolicy(Collection<IRefactoring> refactorings)
+    {
+        if (!excludeTextOccurrences)
+        {
+            return -1;
+        }
+        int[] skipped = {0};
+        int[] index = {0};
+        for (IRefactoring refactoring : refactorings)
+        {
+            Collection<IRefactoringItem> items = refactoring.getItems();
+            if (items == null)
+            {
+                continue;
+            }
+            for (IRefactoringItem item : items)
+            {
+                if (item instanceof INativeChangeRefactoringItem nativeItem
+                    && nativeItem.getNativeChange() != null)
+                {
+                    walkLeafChanges(nativeItem.getNativeChange(), index, (leaf, idx) -> {
+                        if (isTextOccurrence(leaf))
+                        {
+                            leaf.setEnabled(false);
+                            skipped[0]++;
+                        }
+                    });
+                }
+            }
+        }
+        return skipped[0];
+    }
+
+    /**
+     * EDT also marks BmObjectTextContentChange as full text; that class cannot distinguish
+     * model-side textual hits from semantic edits. Keep those leaves as references on every version.
+     */
+    private static boolean isTextOccurrence(Change leaf)
+    {
+        return leaf instanceof IFullTextSearchChange && !(leaf instanceof BmObjectTextContentChange<?>);
+    }
+
+    /** Marker is asserted per leaf, subject to the model-side ambiguity above. */
+    private static String changeKind(Change leaf)
+    {
+        return isTextOccurrence(leaf) ? "text" : "reference"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
      * Runs the rename (preview or execute), reporting how far it got to {@code progress}.
      *
@@ -207,7 +280,8 @@ public class MetadataRenameService
                 "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
                 "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
                 "Table (an " + //$NON-NLS-1$
-                "attribute column as '...Attribute.AttrName.Column.ColName'). A form itself " + //$NON-NLS-1$
+                "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
+                "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
                 "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
 
@@ -372,7 +446,8 @@ public class MetadataRenameService
                 ref.formPath, "Form not found for '" + normFqn //$NON-NLS-1$
                     + "'. Address a form element as 'Type.Object.Form.FormName.<Kind>.Name' or " //$NON-NLS-1$
                     + "'CommonForm.FormName.<Kind>.Name' (Kind = Attribute / Command / Field / " //$NON-NLS-1$
-                    + "Button / Group / Decoration / Table / Column on a collection attribute)."); //$NON-NLS-1$
+                    + "Button / Group / Decoration / Table / Column ('...Attribute.A.Column.Name' or " //$NON-NLS-1$
+                    + "'...Attribute.A.Column.TabularSection.Name'))."); //$NON-NLS-1$
 
             // Only the old name and the refactoring leave the read transaction - never the element.
             FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
@@ -381,7 +456,7 @@ public class MetadataRenameService
                     if (member == null)
                     {
                         return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
-                            formModel, ref.kindToken, ref.name, normFqn));
+                            formModel, ref, normFqn));
                     }
                     String designerChild = designerChildRefusal(member, ref);
                     if (designerChild != null)
@@ -595,8 +670,7 @@ public class MetadataRenameService
         }
         else if (kind == FormElementWriter.Kind.COLUMN)
         {
-            EObject owner = FormElementWriter.findFormAttribute(formModel, ref.ownerAttributeName);
-            clash = owner == null ? null : FormElementWriter.findColumn(owner, newName);
+            clash = FormElementWriter.findColumn(formModel, ref, newName);
         }
         else if (kind == FormElementWriter.Kind.COMMAND)
         {
@@ -616,7 +690,7 @@ public class MetadataRenameService
         }
         if (clash == null || clash == member)
         {
-            return null;
+            return FormElementWriter.additionalColumnNameError(formModel, ref, newName);
         }
         return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
             + ". Pick a different name."; //$NON-NLS-1$
@@ -691,6 +765,7 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings, int maxResults,
         Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> edtBslPreviewChanges)
     {
+        applyTextOccurrencePolicy(refactorings);
         // Phase 1: collect all changes and problems
         List<ChangePoint> allChanges = new ArrayList<>();
         List<String> allProblems = new ArrayList<>();
@@ -709,7 +784,9 @@ public class MetadataRenameService
         // refuses only requested indices whose rows cannot be proven to denote the same leaf.
         String contentHash = changePointContentHash(refactorings);
         PreviewSummary summary = new PreviewSummary(objectFqn, newName, allChanges.size(), enabledCount,
-            allProblems.size(), exactMatches.size(), shown, contentHash);
+            allProblems.size(), exactMatches.size(), shown, contentHash,
+            allChanges.stream().filter(c -> "reference".equals(c.kind)).map(c -> c.index).distinct().count(), //$NON-NLS-1$
+            allChanges.stream().filter(c -> "text".equals(c.kind)).map(c -> c.index).distinct().count()); //$NON-NLS-1$
         appendFrontmatter(sb, summary);
         appendChangePointsTable(sb, allChanges, shown);
         appendCodeContext(sb, allChanges, shown);
@@ -717,6 +794,18 @@ public class MetadataRenameService
         boolean hasUnverifiableRows = allChanges.subList(0, shown).stream()
             .anyMatch(changePoint -> !hasStableIdentity(changePoint));
         appendFooter(sb, hasUnverifiableRows);
+        SortedSet<Integer> textIndices = new TreeSet<>();
+        allChanges.stream().filter(c -> "text".equals(c.kind)).forEach(c -> textIndices.add(c.index)); //$NON-NLS-1$
+        if (!textIndices.isEmpty())
+        {
+            sb.append("> Text occurrences (whole-word matches of the old name that EDT's text search kept, " //$NON-NLS-1$
+                + "such as comments) are change points ") //$NON-NLS-1$
+                .append(join(textIndices, index -> "#" + index)) //$NON-NLS-1$
+                .append(excludeTextOccurrences
+                    ? "; textOccurrences=exclude has already switched them off, and a confirm with " //$NON-NLS-1$
+                        + "the same textOccurrences leaves them untouched.\n" //$NON-NLS-1$
+                    : "; pass them in disableIndices with this preview's contentHash to leave them untouched.\n"); //$NON-NLS-1$
+        }
 
         return sb.toString();
     }
@@ -772,9 +861,11 @@ public class MetadataRenameService
      * leaves whose rendered fields happen to be equal; a point without one remains signed but cannot
      * itself be named in {@code disableIndices}.
      */
-    private static String changePointSignature(List<ChangePoint> changePoints)
+    private String changePointSignature(List<ChangePoint> changePoints)
     {
-        StringBuilder signature = new StringBuilder();
+        // Lock the per-call policy even when no text leaf exists or EDT already disabled it.
+        StringBuilder signature = new StringBuilder("textOccurrences=") //$NON-NLS-1$
+            .append(excludeTextOccurrences ? "exclude" : "include").append(HASH_POINT_SEPARATOR); //$NON-NLS-1$ //$NON-NLS-2$
         boolean first = true;
         for (ChangePoint changePoint : changePoints)
         {
@@ -786,6 +877,7 @@ public class MetadataRenameService
                 ? changePoint.signatureIdentity.stableValue : null;
             signature.append(changePoint.index).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.type)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.kind)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.description)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.project)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.fqn)).append(HASH_FIELD_SEPARATOR)
@@ -856,7 +948,7 @@ public class MetadataRenameService
                 // run unconditionally. Which of the two a given item stands for is not observable
                 // from here, so promising a skip would be promising something we cannot deliver.
                 allChanges.add(new ChangePoint(
-                    indexCounter[0]++, "rename", //$NON-NLS-1$
+                    indexCounter[0]++, "rename", "rename", //$NON-NLS-1$
                     item.getName(), false, item.isChecked(),
                     null, CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
             }
@@ -929,9 +1021,12 @@ public class MetadataRenameService
         final int exactMatchCount;
         final int shown;
         final String contentHash;
+        final long referenceChanges;
+        final long textChanges;
 
         PreviewSummary(String objectFqn, String newName, int totalChanges, long enabledCount,
-            int problemCount, int exactMatchCount, int shown, String contentHash)
+            int problemCount, int exactMatchCount, int shown, String contentHash,
+            long referenceChanges, long textChanges)
         {
             this.objectFqn = objectFqn;
             this.newName = newName;
@@ -941,6 +1036,8 @@ public class MetadataRenameService
             this.exactMatchCount = exactMatchCount;
             this.shown = shown;
             this.contentHash = contentHash;
+            this.referenceChanges = referenceChanges;
+            this.textChanges = textChanges;
         }
     }
 
@@ -953,6 +1050,8 @@ public class MetadataRenameService
         sb.append("newName: ").append(summary.newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("totalChanges: ").append(summary.totalChanges).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("enabledChanges: ").append(summary.enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("referenceChanges: ").append(summary.referenceChanges).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("textChanges: ").append(summary.textChanges).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("problems: ").append(summary.problemCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("debugExactMatches: ").append(summary.exactMatchCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         // Always present: opaque rows carry a distinct no-identity signature marker and are marked
@@ -978,8 +1077,8 @@ public class MetadataRenameService
     private void appendChangePointsTable(StringBuilder sb, List<ChangePoint> allChanges, int shown)
     {
         sb.append("## Change Points\n\n"); //$NON-NLS-1$
-                sb.append("| # | Type | Description | Line | Col | Default | Skippable | Project | FQN |\n"); //$NON-NLS-1$
-                sb.append("|---|------|-------------|------|-----|---------|-----------|---------|-----|\n"); //$NON-NLS-1$
+        sb.append("| # | Type | Description | Line | Col | Default | Skippable | Project | FQN | Kind |\n"); //$NON-NLS-1$
+        sb.append("|---|------|-------------|------|-----|---------|-----------|---------|-----|------|\n"); //$NON-NLS-1$
         for (int i = 0; i < shown; i++)
         {
             appendChangePointRow(sb, allChanges.get(i));
@@ -987,7 +1086,7 @@ public class MetadataRenameService
         if (allChanges.size() > shown)
         {
                         sb.append("| ... | | | | | | | | _").append(allChanges.size() - shown) //$NON-NLS-1$
-              .append(" more_ |\n"); //$NON-NLS-1$
+              .append(" more_ | |\n"); //$NON-NLS-1$
         }
         sb.append("\n"); //$NON-NLS-1$
     }
@@ -1011,6 +1110,7 @@ public class MetadataRenameService
           .append(" | ").append(optionalMark) //$NON-NLS-1$
           .append(" | ").append(projectCell) //$NON-NLS-1$
           .append(" | ").append(fqnCell) //$NON-NLS-1$
+          .append(" | ").append(escapeMarkdownCell(cp.kind)) //$NON-NLS-1$
           .append(" |\n"); //$NON-NLS-1$
     }
 
@@ -1045,7 +1145,7 @@ public class MetadataRenameService
             if (cp.fqn != null && cp.lineNumber > 0)
                 sb.append(" \u00b7 ").append(escapeMarkdownCell(BmObjectAddress.metadataAddressOf(cp.fqn))) //$NON-NLS-1$
                   .append(":").append(cp.lineNumber); //$NON-NLS-1$
-            sb.append("\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("\n\nKind: ").append(escapeMarkdownCell(cp.kind)).append("\n\n```bsl\n").append(cp.codeContext).append("```\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -1140,6 +1240,7 @@ public class MetadataRenameService
     {
         final int index;
         final String type;
+        final String kind;
         final String fqn;
         final String project;
         final String description;
@@ -1153,12 +1254,13 @@ public class MetadataRenameService
         final String methodName;
         final ChangePointIdentity signatureIdentity;
 
-        ChangePoint(int index, String type, String description,
+        ChangePoint(int index, String type, String kind, String description,
             boolean optional, boolean enabled, Boolean nativeItemChecked, CodeLocation location,
             ChangePointIdentity signatureIdentity)
         {
             this.index = index;
             this.type = type;
+            this.kind = kind;
             this.fqn = location.fqn;
             this.project = location.project;
             this.description = description;
@@ -1341,7 +1443,7 @@ public class MetadataRenameService
         // the leaf consume two, shifting every later index away from walkLeafChanges() and
         // pointing disableIndices at a different change point than the caller saw. (issue #388)
         ctx.result.add(new ChangePoint(
-            leafIndex, BSL_REF,
+            leafIndex, BSL_REF, changeKind(change),
             change.getName(), ctx.optional, change.isEnabled(),
             Boolean.valueOf(ctx.nativeItemChecked), CodeLocation.of(scan.fqn, scan.project),
             scan.signatureIdentity));
@@ -1356,7 +1458,7 @@ public class MetadataRenameService
             String exactFqn = exactMatch.fqn != null ? exactMatch.fqn : scan.fqn;
             String exactProject = exactMatch.project != null ? exactMatch.project : scan.project;
             ctx.result.add(new ChangePoint(
-                leafIndex, BSL_REF,
+                leafIndex, BSL_REF, changeKind(change),
                 change.getName(), ctx.optional, change.isEnabled(),
                 Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
@@ -1452,7 +1554,7 @@ public class MetadataRenameService
             String matchedCodeContext = extractContext(content, matchedLineNumber);
             String matchedMethodName = resolveContainingMethod(module, content, matchedLineNumber);
             ctx.result.add(new ChangePoint(
-                leafIndex, BSL_REF,
+                leafIndex, BSL_REF, changeKind(change),
                 change.getName(), ctx.optional, change.isEnabled(),
                 Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
@@ -1663,7 +1765,7 @@ public class MetadataRenameService
             ChangePoint original = allChanges.get(changeIndex);
             ChangePoint edt = edtBslPreviewChanges.get(i);
             allChanges.set(changeIndex, new ChangePoint(
-                original.index, original.type,
+                original.index, original.type, original.kind,
                 original.description,
                 original.optional,
                 original.enabled,
@@ -2541,6 +2643,7 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
         RenameProgress progress, String subject)
     {
+        int textOccurrencesSkipped = applyTextOccurrencePolicy(refactorings);
         String hashError = expectedHashError(refactorings, disableRequest, expectedHash);
         if (hashError != null)
         {
@@ -2586,6 +2689,7 @@ public class MetadataRenameService
         // Apply disableIndices by traversing items and their native changes. Malformed entries cannot
         // reach this point: the tool refuses them before the cascade starts (#401).
         DisableOutcome disableOutcome = new DisableOutcome(disableRequest);
+        disableOutcome.textOccurrencesSkipped = textOccurrencesSkipped;
         if (!disableRequest.indices().isEmpty())
         {
             applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome);
@@ -2707,6 +2811,7 @@ public class MetadataRenameService
      */
     private static final class DisableOutcome
     {
+        int textOccurrencesSkipped = -1;
         private enum Status
         {
             /**
@@ -2955,6 +3060,10 @@ public class MetadataRenameService
         sb.append("objectFqn: ").append(objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("newName: ").append(newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("disabledCount: ").append(disableOutcome.disabledCount()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (disableOutcome.textOccurrencesSkipped >= 0)
+        {
+            sb.append("textOccurrencesSkipped: ").append(disableOutcome.textOccurrencesSkipped).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         if (!notSkippable.isEmpty())
         {
             sb.append("notSkippableIndices: ").append(formatIndexList(notSkippable)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$

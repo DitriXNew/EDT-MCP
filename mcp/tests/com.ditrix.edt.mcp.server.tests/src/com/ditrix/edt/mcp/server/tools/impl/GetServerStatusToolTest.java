@@ -206,7 +206,7 @@ public class GetServerStatusToolTest
     }
 
     @Test
-    public void testFormRenderFlagsOmitForcedAtRuntimeWhenLiveModesMatchStartup()
+    public void testFormRenderFlagsOmitRuntimeMutationMarker()
     {
         NativeRenderModeProbe.captureStartupModes();
         assertEquals(NativeRenderModeProbe.getStartupNativeRenderMode(),
@@ -218,9 +218,9 @@ public class GetServerStatusToolTest
             .parseString(new GetServerStatusTool().execute(java.util.Collections.emptyMap()))
             .getAsJsonObject().getAsJsonObject("formRenderFlags"); //$NON-NLS-1$
 
-        assertFalse("unchanged native mode must not be marked as runtime-forced", //$NON-NLS-1$
+        assertFalse("native mode has no runtime mutation marker", //$NON-NLS-1$
             flags.getAsJsonObject("nativeFormLayoutRender").has("forcedAtRuntime")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("unchanged buffered mode must not be marked as runtime-forced", //$NON-NLS-1$
+        assertFalse("buffered mode has no runtime mutation marker", //$NON-NLS-1$
             flags.getAsJsonObject("nativeFormBufferedLayoutRender").has("forcedAtRuntime")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

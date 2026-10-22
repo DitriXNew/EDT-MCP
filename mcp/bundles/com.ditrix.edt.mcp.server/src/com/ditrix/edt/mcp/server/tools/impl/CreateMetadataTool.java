@@ -306,6 +306,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("tablePath", "Table path of the additional-column entry the column landed in (canonical for a new entry, the stored spelling for a reused one)") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
                 "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
                     + "export queue to drain before answering, so a success normally means the write has "
@@ -1872,8 +1873,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
                 + normFqn + "'. Supported form kinds: Attribute, Command, Parameter, Group, " //$NON-NLS-1$
-                + "Decoration, Field, Button, Table, Column (a collection attribute's column, " //$NON-NLS-1$
-                + "addressed as '...Attribute.AttrName.Column.ColName') and Handler for events.") //$NON-NLS-1$
+                + "Decoration, Field, Button, Table, Column ('...Attribute.AttrName.Column.ColName' " //$NON-NLS-1$
+                + "or '...Attribute.AttrName.Column.TabularSection.ColName') and Handler for events.") //$NON-NLS-1$
                 .toJson();
         }
         if (!isValidIdentifier(ref.name))
@@ -1899,6 +1900,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         MetadataScope scope = ctx.scope;
 
         final FormElementWriter.Kind fKind = kind;
+        final String[] createdTablePath = new String[1];
         // A COLUMN's owner is named by the FQN itself ('...Attribute.AttrName.Column.ColName'), so it
         // takes the parent slot; every other kind nests via the optional `parent` property (#295).
         final String parent = ref.isAttributeColumn() ? ref.ownerAttributeName : fmProps.parentName;
@@ -1953,11 +1955,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormMember", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    String err = fKind == FormElementWriter.Kind.TABLE
-                        ? FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
-                            writeTitleLanguage, titleText, russianAutoNames, createdKind)
-                        : FormElementWriter.createMember(formModel, fKind, ref.name, parent, bind,
-                            titleLanguage, titleText, russianAutoNames, createdKind);
+                    String err = writeFormMember(formModel, ref, fKind, parent, bind, tableColumns,
+                        titleLanguage, writeTitleLanguage, titleText, russianAutoNames, createdKind,
+                        createdTablePath);
                     if (err != null)
                     {
                         // A refusal. The writers RAISE a model/platform failure (modelLacks) and
@@ -1977,12 +1977,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create form element: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        ToolResult formResult = ToolResult.success()
-            .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", normFqn) //$NON-NLS-1$
-            .put("kind", createdKind[0] != null ? createdKind[0] : fKind.name()) //$NON-NLS-1$
-            .put("name", ref.name) //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted);
+        ToolResult formResult = formMemberResult(normFqn,
+            createdKind[0] != null ? createdKind[0] : fKind.name(), ref.name, persisted, createdTablePath[0]);
         // The locale a title actually landed under: the caller's when it supplied one, otherwise the
         // resolved fallback for a TABLE, which always gets a GENERATED title (its own name). Any other
         // kind without a title writes nothing localized, so it reports nothing.
@@ -2004,6 +2000,53 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // it, after a look into the form module for a method of the command's name (issue #628).
         return formResult.put(McpKeys.MESSAGE,
             formMemberSuccessMessage(project, fKind, normFqn, ref, editedForm)).toJson();
+    }
+
+    /**
+     * Writes one form member into the tx-bound form model. This is the one place the parsed address's
+     * table token reaches the writer; it never travels in the binding slot. A created additional column
+     * reports the table path of the entry it landed in through {@code createdTablePath[0]} (issue #737).
+     * Creation takes ONE table segment: a nested table path is read, modified, renamed and deleted by its
+     * full address, but not created here.
+     */
+    static String writeFormMember(EObject formModel, FormElementWriter.FormMemberRef ref, // NOSONAR the out-parameters mirror the writer's
+        FormElementWriter.Kind kind, String parent, String bind, List<String> tableColumns, String titleLanguage,
+        String writeTitleLanguage, String titleText, boolean russianAutoNames, String[] createdKind,
+        String[] createdTablePath)
+    {
+        if (kind == FormElementWriter.Kind.TABLE)
+        {
+            return FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
+                writeTitleLanguage, titleText, russianAutoNames, createdKind);
+        }
+        List<String> tableSegments = ref.tablePathSegments;
+        if (tableSegments != null && tableSegments.size() > 1)
+        {
+            return "Nested table path '" + String.join(".", ref.additionalTablePath()) //$NON-NLS-1$ //$NON-NLS-2$
+                + "': nested tables are not created by this tool. Create an additional column under a " //$NON-NLS-1$
+                + "tabular section directly below the attribute ('...Attribute." + ref.ownerAttributeName //$NON-NLS-1$
+                + ".Column.<TabularSection>.<Name>'); a nested column that already exists can be read, " //$NON-NLS-1$
+                + "modified, renamed and deleted by its full address."; //$NON-NLS-1$
+        }
+        return FormElementWriter.createMember(formModel, kind, ref.name, parent, bind, titleLanguage, titleText,
+            russianAutoNames, createdKind, tableSegments == null ? null : tableSegments.get(0), createdTablePath);
+    }
+
+    /** The common part of a created form member's response; {@code tablePath} only for an additional column. */
+    static ToolResult formMemberResult(String normFqn, String kind, String name, boolean persisted,
+        String tablePath)
+    {
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("kind", kind) //$NON-NLS-1$
+            .put("name", name) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted);
+        if (tablePath != null)
+        {
+            result.put("tablePath", tablePath); //$NON-NLS-1$
+        }
+        return result;
     }
 
     // ---- a created form command's unbound action (issue #628) ------------------------------------

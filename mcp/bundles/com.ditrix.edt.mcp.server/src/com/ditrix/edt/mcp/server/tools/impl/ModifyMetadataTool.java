@@ -4249,7 +4249,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
                     + "Decoration / Table, " //$NON-NLS-1$
-                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
+                    + "or Column: '...Attribute.AttrName.Column.ColName' / " //$NON-NLS-1$
+                    + "'...Attribute.AttrName.Column.TabularSection.ColName')."); //$NON-NLS-1$
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
             final Version version = platformVersionOf(ctx);
@@ -4310,8 +4311,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     // otherwise "not found" contradicts what get_metadata_details lists.
                     throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
                         + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
-                            ref.name, normFqn),
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn),
                             ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
                 // A form COMMAND's action is its handler member ('...Command.<Name>.Handler.Action'),
@@ -4615,8 +4615,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     // of another kind, say so instead of advising a create that would collide.
                     throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
                         + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
-                            ref.name, normFqn),
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn),
                             ". Create it with create_metadata, then set its query.")).toJson()); //$NON-NLS-1$
                 }
                 // This branch retypes the attribute to DynamicList without going through the

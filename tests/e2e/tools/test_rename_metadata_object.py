@@ -55,6 +55,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from harness import (
+    rename_call,
     call,
     assert_ok,
     assert_error,
@@ -138,7 +139,7 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
     # rewrite and re-index extension code; that cross-project work can exceed the settle budget on
     # a slow runner. Metadata-only adoption is tolerable. DrySignal and Compute share no substring,
     # so the old row-marker absence check stays unambiguous.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.DrySignal",
         "newName": "Compute",
@@ -174,7 +175,7 @@ def test_confirm_renames_catalog_and_readback_shows_new_name():
     _settle_before_rename()  # executes a real rename - see the helper
     # Rename Catalog.Catalog -> Goods. New name shares no substring with "Catalog",
     # so the row-marker absence check is clean.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Catalog.Catalog",
         "newName": "Goods",
@@ -202,7 +203,7 @@ def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name()
     # DIFFERENT read tool (get_metadata_details full=true), whose ### Attributes table
     # lists attribute Names. The new attribute name must appear and the old one must
     # be gone from the table.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Catalog.Catalog.Attribute.Attribute",
         "newName": "Title",
@@ -255,7 +256,7 @@ def test_cascade_rewrites_english_named_module_reference_in_bsl():
     assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
                     "fixture precondition: CascadeUser references CascadeEn.Marker before the rename")
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -298,7 +299,7 @@ def test_cascade_rewrites_russian_named_module_reference_in_bsl():
     assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
                     "fixture precondition: CascadeUser references Вычисление.Маркер before the rename")
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Вычисление",
         "newName": "Вычислитель",
@@ -350,7 +351,8 @@ def test_cascade_rewrites_russian_named_module_reference_in_bsl():
 def _change_points(preview_text):
     """Parse the preview's Change Points table into one dict per row.
 
-    Columns: # | Type | Description | Line | Col | Default | Skippable | Project | FQN.
+    Columns: # | Type | Description | Line | Col | Default | Skippable | Project | FQN | Kind
+    (Kind is appended last, so the first nine positions are unchanged).
     Rows are identified by a numeric first cell, so the header and separator lines are
     skipped. Cells go through the harness' split_markdown_row — a description may carry
     an escaped '\\|', and a naive split on every pipe would shift every later column.
@@ -382,7 +384,7 @@ def _cascade_preview_and_reference_index():
     The fixture gives this rename exactly one SKIPPABLE change point — the reference
     CascadeUser makes to CascadeEn — plus the (non-skippable) object rename itself.
     """
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -410,7 +412,7 @@ def test_disableindices_skips_the_change_point_shown_under_that_index():
 
     _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -457,7 +459,7 @@ def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
             "fixture precondition: expected exactly one non-skippable rename row distinct "
             "from the reference row #%d, got %r" % (reference_index, rows))
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -487,7 +489,7 @@ def test_stale_expected_hash_refuses_before_anything_is_renamed():
     _settle_before_rename()
     _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -520,7 +522,7 @@ def test_preview_lists_change_points_and_does_not_mutate_module():
     # the "confirm=true" instruction, and the model must stay UNCHANGED (Calc still
     # present, Compute absent). A preview that secretly renamed would fail the
     # read-back below; a preview that produced nothing would fail the markers above.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
         "newName": "Compute",
@@ -544,7 +546,7 @@ def test_preview_lists_change_points_and_does_not_mutate_module():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_preview_for_catalog_does_not_mutate_catalog():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Catalog.Catalog",
         "newName": "Goods",
@@ -585,7 +587,7 @@ def test_unknown_disable_index_is_not_counted_as_a_skip():
     # "disabledCount: 1" and "1 change point(s) were skipped as requested" while the
     # cascade applied in full — the report contradicted the disk.
     _rows, _reference_index, content_hash = _cascade_preview_and_reference_index()
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -627,14 +629,14 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
     # Establish from the PREVIEW which index is the required one rather than hard-coding it:
     # the assertion is about the contract, and reading the number from the same table the
     # caller reads is what makes this a test of that contract.
-    preview = call("rename_metadata_object", {
+    preview = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
         "confirm": False,
     })
     assert_ok(preview, "preview rename CommonModule.CascadeEn")
-    # | # | Type | Description | Line | Col | Default | Skippable | Project | FQN |
+    # | # | Type | Description | Line | Col | Default | Skippable | Project | FQN | Kind |
     required = []
     for line in preview.text.splitlines():
         cells = split_markdown_row(line)
@@ -647,7 +649,7 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
 
     index = required[0]
     content_hash = _frontmatter_value(preview.text, "contentHash")
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -680,7 +682,7 @@ def test_unparsable_disable_index_token_is_refused_before_rename():
     # refuses it before the settle, refactoring build, consent gate, or cascade.
     # expectedHash is deliberately absent: malformed disableIndices is the first bad value
     # and must be the refusal the caller sees.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
@@ -716,7 +718,7 @@ def test_unparsable_disable_index_token_is_refused_before_rename():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_explicit_timeout_is_accepted_and_preview_still_works():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
         "newName": "Compute",
@@ -731,7 +733,7 @@ def test_explicit_timeout_is_accepted_and_preview_still_works():
 def test_out_of_range_timeout_is_clamped_not_rejected():
     # The schema promises clamping, not rejection: 1 second is below the 60s floor and
     # must be raised, so the call behaves exactly like the default one above.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
         "newName": "Compute",
@@ -749,7 +751,7 @@ def test_out_of_range_timeout_is_clamped_not_rejected():
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_nonexistent_object_errors_and_is_actionable():
     bad = "Catalog.NoSuchCatalog_e2e"
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": bad,
         "newName": "Whatever",
@@ -768,7 +770,7 @@ def test_nonexistent_object_errors_and_is_actionable():
 def test_malformed_fqn_without_dot_errors():
     # No "Type.Name" separator -> resolveObject returns null -> "Object not found".
     bad = "JustAName"
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": bad,
         "newName": "Whatever",
@@ -784,7 +786,7 @@ def test_nonexistent_child_attribute_errors():
     # Top-level resolves but the nested Attribute does not -> findChild returns null
     # -> resolveObject null -> "Object not found".
     bad = "Catalog.Catalog.Attribute.NoSuchAttr_e2e"
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": bad,
         "newName": "Whatever",
@@ -799,7 +801,7 @@ def test_nonexistent_child_attribute_errors():
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_nonexistent_project_errors_and_names_value():
     bogus = "NoSuchProject_zzz_e2e"
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": bogus,
         "objectFqn": "Catalog.Catalog",
         "newName": "Goods",
@@ -817,7 +819,7 @@ def test_nonexistent_project_errors_and_names_value():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_missing_projectname_errors():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         # projectName omitted on purpose
         "objectFqn": "Catalog.Catalog",
         "newName": "Goods",
@@ -834,7 +836,7 @@ def test_missing_projectname_errors():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_missing_objectfqn_errors():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         # objectFqn omitted on purpose
         "newName": "Goods",
@@ -848,7 +850,7 @@ def test_missing_objectfqn_errors():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_missing_newname_errors():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Catalog.Catalog",
         # newName omitted on purpose
@@ -913,7 +915,7 @@ def _await_preview_change_point(object_fqn, new_name, marker, timeout=90):
     deadline = time.time() + timeout
     last = ""
     while time.time() < deadline:
-        r = call("rename_metadata_object", {
+        r = rename_call({
             "projectName": PROJECT, "objectFqn": object_fqn, "newName": new_name})
         assert_ok(r, "preview the rename while waiting for the %s change point" % marker)
         last = r.text
@@ -971,7 +973,7 @@ def test_form_element_preview_lists_change_points_and_does_not_mutate():
     # The preview half of the two-phase contract on a FORM target: same YAML action, same
     # "Change Points" table, same confirm instruction - and nothing written.
     _seed_form_attribute("RNPreviewAttr")
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Attribute", "RNPreviewAttr"),
         "newName": "RNPreviewAttrRenamed",
@@ -998,7 +1000,7 @@ def test_confirm_renames_a_form_attribute_and_the_form_on_disk_follows():
     _settle_before_rename()  # executes a real rename - see the helper
     _seed_form_attribute("RNAttr")
     poll_disk_contains(_FORM, "<name>RNAttr</name>", ctx="the seeded attribute must be on disk")
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Attribute", "RNAttr"),
         "newName": "RNAttrRenamed",
@@ -1049,7 +1051,7 @@ def test_confirm_renames_a_form_group_and_the_module_reference_follows():
     _await_preview_change_point(_form_fqn("Group", grp), "RNProbeGroupRenamed",
                                 "Элементы." + grp)
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Group", grp),
         "newName": "RNProbeGroupRenamed",
@@ -1085,7 +1087,7 @@ def test_renaming_a_form_element_also_refreshes_its_derived_title():
     before = _form_item_titles(grp)
     assert before == [], "the seeded group must start untitled, got %r" % (before,)
 
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Group", grp),
         "newName": grp + "Renamed",
@@ -1113,7 +1115,7 @@ def test_form_handler_address_is_refused_with_the_rebind_path():
     # A handler FQN names an EVENT BINDING; its leaf is the event name, which the platform
     # owns. Refusing it as "not found" would send an agent hunting for an element that is
     # right there, so the refusal has to name the operation the caller actually wants.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
         "newName": "OnOpened",
@@ -1128,7 +1130,7 @@ def test_form_handler_address_is_refused_with_the_rebind_path():
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_bare_column_address_is_refused_with_the_owner_shape():
     # A column belongs to a collection form ATTRIBUTE, so a bare Column.X addresses nothing.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Column", "RNBareColumn"),
         "newName": "RNBareColumnRenamed",
@@ -1150,7 +1152,7 @@ def test_designer_owned_child_is_refused_and_points_at_its_owner():
     # CodeExtendedTooltip IS addressable (an ExtendedTooltip is a Decoration), which is
     # precisely why the refusal cannot be made by address - it is made by the resolved
     # element's ECLASS. The fixture carries it, so nothing is seeded here.
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Decoration", "CodeExtendedTooltip"),
         "newName": "RenamedTooltip",
@@ -1167,7 +1169,7 @@ def test_designer_owned_child_is_refused_and_points_at_its_owner():
 def test_a_name_a_sibling_already_bears_is_refused():
     _seed_form_attribute("RNDupA")
     _seed_form_attribute("RNDupB")
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Attribute", "RNDupA"),
         "newName": "RNDupB",
@@ -1182,7 +1184,7 @@ def test_a_name_a_sibling_already_bears_is_refused():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_a_missing_form_element_is_reported_as_such():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Field", "RNNoSuchField_e2e"),
         "newName": "Whatever",
@@ -1209,7 +1211,7 @@ def test_a_missing_form_element_is_reported_as_such():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_a_dotted_new_name_is_refused_on_the_mdclass_path():
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
         "newName": "Bad.Name",
@@ -1227,7 +1229,7 @@ def test_a_dotted_new_name_is_refused_on_the_mdclass_path():
 def test_a_dotted_new_name_is_refused_on_the_form_path_too():
     # Same rule, other branch: one point of judgment, so the form path cannot drift.
     _seed_form_attribute("RNBadNameAttr")
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Attribute", "RNBadNameAttr"),
         "newName": "Bad.Name",
@@ -1248,7 +1250,7 @@ def test_a_cyrillic_new_name_is_accepted():
     # rejecting half the configurations in the country.
     _seed_form_attribute("RNCyrillicAttr")
     new_name = "РеквизитE2E"
-    r = call("rename_metadata_object", {
+    r = rename_call({
         "projectName": PROJECT,
         "objectFqn": _form_fqn("Attribute", "RNCyrillicAttr"),
         "newName": new_name,
