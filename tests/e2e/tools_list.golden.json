@@ -2268,7 +2268,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true on Windows; a blank or gray image can also mean the offscreen buffer is unavailable. Parameters and examples: get_tool_guide('get_form_screenshot').",
+    "description": "Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show a grey rectangle instead of the form for the whole session (EDT behaviour); changing the flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot').",
     "inputSchema": {
       "properties": {
         "formPath": {

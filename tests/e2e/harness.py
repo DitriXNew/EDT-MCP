@@ -2767,21 +2767,16 @@ def native_form_layout_render_mode():
 
     formRenderFlags.nativeFormLayoutRender.atStartup is EDT's own
     NativeRenderService.isNativeRender() at plugin activation, so EDT's default (native
-    when the property is absent) is reported correctly, and forcedAtRuntime marks a
-    later change of the live mode. Tests branch on this instead of accepting whichever
-    outcome a form tool happens to return. Opening an editor and resolving a name need
-    no particular mode."""
-    state = _form_render_flag("nativeFormLayoutRender")
-    mode = state["atStartup"]
-    if state.get("forcedAtRuntime") is True:
-        mode = "off" if mode == "on" else "on"
-    return mode
+    when the property is absent) is reported correctly. Tests branch on this instead of
+    accepting whichever outcome a form tool happens to return. Opening an editor and
+    resolving a name need no particular mode."""
+    return _form_render_flag("nativeFormLayoutRender")["atStartup"]
 
 
 def buffered_form_render_at_startup():
     """-DnativeFormBufferedLayoutRender at plugin activation, 'on' or 'off'; fails the
     test when unreadable. Only the startup value counts: EDT builds its offscreen buffer
-    once, so a later runtime force does not give a native render an image. It governs
+    once, so changing the launch flag requires an EDT restart. It governs
     the IMAGE only - an editor opens and resolves names without it."""
     return _form_render_flag("nativeFormBufferedLayoutRender")["atStartup"]
 

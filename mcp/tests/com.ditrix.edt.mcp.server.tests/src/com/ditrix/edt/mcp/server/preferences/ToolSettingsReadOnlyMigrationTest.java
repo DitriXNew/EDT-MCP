@@ -47,6 +47,7 @@ public class ToolSettingsReadOnlyMigrationTest
         ToolSettingsService.ensureMigratedForTest(store);
         Set<String> expected = new HashSet<>(before);
         expected.addAll(WRITERS);
+        expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
     }
@@ -61,6 +62,7 @@ public class ToolSettingsReadOnlyMigrationTest
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
+            expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
             assertEquals(id, expected, disabled(store));
         }
     }
@@ -109,6 +111,7 @@ public class ToolSettingsReadOnlyMigrationTest
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
+            expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
             assertEquals(preset.name(), expected, disabled(store));
             assertEquals(preset.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals("stamp, then exactly one owed set write, then version",
@@ -169,6 +172,7 @@ public class ToolSettingsReadOnlyMigrationTest
         ToolSettingsService.ensureMigratedForTest(store);
         Set<String> expected = new HashSet<>(before);
         expected.addAll(WRITERS);
+        expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
         assertEquals(preset.name(), expected, disabled(store));
         assertEquals(preset.getDisabledTools(), disabled(store));
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
@@ -179,9 +183,11 @@ public class ToolSettingsReadOnlyMigrationTest
     private static void assertUnchanged(Set<String> before, String id)
     {
         PreferenceStore store = stored(before, 13, id);
-        String serialized = store.getString(PreferenceConstants.PREF_DISABLED_TOOLS);
+        Set<String> expected = new HashSet<>(before);
+        expected.add("get_form_screenshot");
+        String serialized = ToolSettingsService.serializeDisabledTools(expected);
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(before, disabled(store));
+        assertEquals(expected, disabled(store));
         assertEquals(serialized, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertEquals(id != null, store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID));
         if (id != null)

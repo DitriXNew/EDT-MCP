@@ -28,7 +28,8 @@ public class FormRenderDescriptionTest
     {
         String description = new GetFormScreenshotTool().getDescription();
 
-        assertTrue(description, description.contains("-DnativeFormBufferedLayoutRender=true on Windows")); //$NON-NLS-1$
-        assertTrue(description, description.contains("offscreen buffer is unavailable")); //$NON-NLS-1$
+        assertTrue(description, description.contains("-DnativeFormBufferedLayoutRender=true")); //$NON-NLS-1$
+        assertTrue(description, description.contains("1cedt.ini"));
+        assertTrue(description, description.contains("on Windows")); //$NON-NLS-1$
     }
 }

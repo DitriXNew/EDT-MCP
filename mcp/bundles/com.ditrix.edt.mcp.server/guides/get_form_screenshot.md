@@ -1,4 +1,4 @@
-Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders (the same visual EDT shows in the form designer). The response type is IMAGE - the tool returns the PNG, not text.
+Captures a **PNG screenshot** of a form's WYSIWYG editor as rendered by EDT. The response type is IMAGE - the tool returns the PNG, not text.
 
 ## When to use
 - See what a form looks like rendered, verify a layout/visibility change visually, or attach a before/after image.
@@ -6,11 +6,9 @@ Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders 
 - To inspect the declarative form definition, read the `.form` model; this tool is only the rendered bitmap.
 
 ## Buffered rendering (read this first)
-On **Windows**, launch EDT with `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`, then fully restart EDT. Linux and macOS already use buffered native rendering; this flag changes nothing there. `get_form_layout_snapshot` does not need it.
+**ATTENTION:** `get_form_screenshot` is disabled by default. Enable it in **Window > Preferences > MCP Server > Tools**. On Windows it works only when EDT starts with `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`. On Windows, with this flag, EDT's own form designer shows a **grey rectangle instead of the form** for the **whole session**. This is EDT behaviour. Changing the flag requires an **EDT restart**; use it only for screenshot sessions. Linux and macOS already buffer native rendering. `get_form_layout_snapshot` does not need the flag.
 
-On Windows, buffered mode also switches the human designer to offscreen images: if EDT cannot create `<java.io.tmpdir>dtgraphics-form.bin`, it paints nothing and the designer turns **gray**. Blank or gray output can mean either a missing flag or an unusable buffer path. Check the EDT log for `AccessDeniedException` on `dtgraphics-form.bin`, possibly followed by `NoClassDefFoundError: org/eclipse/core/runtime/Plugin`. EDT concatenates the directory and filename without a separator: change `-Djava.io.tmpdir=C:\edt_tmp` to `-Djava.io.tmpdir=C:\edt_tmp\` and restart EDT. If nothing helps, remove the buffered-render flag and restart EDT. Even with a usable buffer path, buffered mode can distort the human designer on a scaled Windows display (larger elements, clicks selecting a different element), so tell the user the flag is for screenshot sessions, not for everyday designer work.
-
-The screenshot path attempts to force buffered mode at runtime. This can affect the human designer too and does not guarantee a usable buffer; it is not a substitute for the launch configuration.
+On Windows, EDT concatenates `<java.io.tmpdir>dtgraphics-form.bin` without inserting a separator. If screenshots fail, check the EDT log for `AccessDeniedException` on that file: change `-Djava.io.tmpdir=C:\edt_tmp` to `-Djava.io.tmpdir=C:\edt_tmp\` and restart EDT. Buffered rendering can also distort the designer on a scaled display.
 
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
