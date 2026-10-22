@@ -93,6 +93,46 @@ True/False` at the end; a dirty fixture fails the run even if every functional t
 tools are covered by `test_create_metadata.py`, `test_modify_metadata.py`,
 `test_delete_metadata.py`, and `test_get_metadata_details.py` (basic / full / `assignable`).
 
+### Launch-preset wire checks
+
+Set `EDT_MCP_TOOL_PRESET=analysis-only` or `EDT_MCP_TOOL_PRESET=code-review` on the **EDT
+process before startup**, alongside the other `EDT_MCP_*` launch overrides. Set
+`EDT_MCP_PROGRESSIVE_DISCLOSURE=false` there to expose the complete preset. The preset is
+session-only: stored Tools preferences are untouched by launch-preset resolution and registry
+reads, including migration state. Valid IDs are `all-tools`, `analysis-only`, `code-review`,
+`development`, and `custom` (use the stored selection). IDs are case-insensitive and trimmed.
+Resolution happens once on first use, including bridge calls and manual starts without early
+startup. An unknown ID is ignored with one WARNING listing the valid IDs at resolution;
+unset/blank values use the stored selection.
+
+The Tools tab loads saved settings, runs their normal migrations, and shows the active launch
+preset in a read-only note. Unchanged OK/Apply preserves the saved selection and preset ID;
+intentional edits are saved for a launch without the override and do not change this session.
+Use a fresh workspace for each CI preset launch: these wire checks prove the advertised
+catalogue, while the unit tests prove that a session override is not persisted.
+
+Launch EDT separately for each read-only preset, and pass the **same** preset to the test
+process. With clean fixtures, run from `tests/e2e`:
+
+```bash
+EDT_MCP_TOOL_PRESET=analysis-only python -m tools.test_preset_launch
+# Restart EDT with EDT_MCP_TOOL_PRESET=code-review, then:
+EDT_MCP_TOOL_PRESET=code-review python -m tools.test_preset_launch
+```
+
+Use `MCP_HOST`, `MCP_PORT`, and `MCP_PROJECT` for non-default harness settings. The module
+uses the shared MCP handshake and HTTP client to check `tools/list`: every tool lacking
+`readOnlyHint=true` is absent except `compare_configurations`, `enable_toolset`, and
+`revalidate_objects`; all six #641 writers are absent. Read-tool controls distinguish the
+two presets and reject an empty or narrowed catalogue. It never calls a writer and checks
+fixture cleanliness before and after. Without the preset variable it reports a clear skip;
+other presets skip this read-only policy check.
+
+Run this module directly for preset launches: `run_all.py` always invokes `clean_project`
+during model setup/cleanup, and the read-only presets disable that tool. A normal default
+suite discovers these tests and skips them when `EDT_MCP_TOOL_PRESET` is unset. Presets cannot
+be switched by the test; each wire check requires an EDT restart.
+
 ## Test Configuration
 
 The `TestConfiguration/` directory contains a minimal 1C:Enterprise configuration for testing:

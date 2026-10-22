@@ -251,6 +251,31 @@ python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2
 - **Per-test timeout / hang protection:** each test runs under a wall-clock timeout (`--test-timeout`, default **600s**, env `MCP_TEST_TIMEOUT`; the per-CALL HTTP timeout is `MCP_CALL_TIMEOUT`, default 180s). If a test exceeds it, EDT is almost certainly **hung** (the classic case: `clean_project` → `ProjectRestartJob` wedges and the call never returns). That test is reported **`[TIMEOUT]` = a FAILURE** (`<failure type="timeout">` in JUnit) with a clear message, and **every remaining test is `[SKIP]`ped** — a wedged EDT would make them all hang too, so the run aborts fast instead of stalling for minutes. There is **no auto-relaunch**: restart EDT and re-run (optionally `--filter` from where it stopped). Keep the timeout comfortably above the slowest legit test — a `write-metadata` unit chains the test call + `clean_project` + `wait_for_project_ready` (each ≤ `MCP_CALL_TIMEOUT`), so the default 600 sits well above that ~3× budget. **Gotcha:** do not start a full run right after a `-clean` relaunch — let the project finish indexing first, or an early `clean_project` can legitimately run long.
 - **Clean tree at session end (`final_cleanup`):** a run STARTS and ENDS with `harness.final_cleanup()` so `git status` is empty afterward — "no diff" is the visible "the session passed and left nothing behind" signal. It reverts **BOTH** fixtures (base `tests/TestConfiguration` + extension `tests/tests`) and `clean_project`s both so EDT's in-memory model is re-synced from the clean disk; without that model sync, a stale model (a manual edit made in the EDT editor, or an unflushed metadata write) would **autosave the change back after the run** and silently re-dirty the tree. The final cleanliness gate is `all_fixtures_status()` (covers both fixtures). NB it WILL wipe an uncommitted manual experiment under either fixture — that is intentional (a session must end clean). On a timeout-abort it reverts git-only (EDT is wedged; model-sync would hang), so post-abort cleanliness is point-in-time only. **Per-test** `assert_no_diff` stays base-scoped (tests only mutate the base, read the extension) — if you ever add an extension-MUTATING tool, give it its own extension-scoped diff assertion, since the per-test gate won't see extension dirt (only the final gate will).
 
+### Launch-preset tools/list checks
+
+`tools/test_preset_launch.py` checks read-only presets selected at EDT startup through
+`EDT_MCP_TOOL_PRESET=analysis-only` or `EDT_MCP_TOOL_PRESET=code-review`. Pass the same
+variable to the test process and launch EDT with `EDT_MCP_PROGRESSIVE_DISCLOSURE=false`.
+The launch preset is session-only; stored Tools preferences are untouched by its resolution
+and registry reads, including migration state. IDs are case-insensitive and trimmed. The value
+is resolved once on first use, including bridge calls and manual starts without early startup.
+Unknown IDs produce one WARNING listing the valid IDs at resolution and are ignored.
+Missing/blank values and `custom` use the stored selection, and the wire tests report a clear
+skip without a selected read-only preset. The Tools tab edits saved settings and shows a
+read-only launch-preset note; its normal migrations still run. Unchanged OK/Apply preserves
+the saved selection and preset ID; deliberate edits apply on a launch without the override.
+Use a fresh workspace for CI launches: wire checks prove the catalogue, and unit tests prove
+that the launch override is not persisted.
+
+From `tests/e2e`, run `EDT_MCP_TOOL_PRESET=analysis-only python -m tools.test_preset_launch`;
+restart EDT with `code-review` and repeat with that value. This module's read-only entry
+point uses the shared handshake, transport and cleanliness helpers. It checks the complete
+`tools/list` annotations, the three explicit keep-list tools, all six #641 writers and a
+preset-specific source-reading control. It requires clean fixtures and verifies them at
+both ends without calling a writer. Do not use `run_all.py` for a read-only launch: its
+mandatory `clean_project` setup/cleanup is disabled by these presets. See
+[`tests/TESTING.md`](../TESTING.md#launch-preset-wire-checks) for the full recipe.
+
 ### 8.1 The gated live-infobase round-trip suite (`tools/test_live_roundtrip.py`)
 
 Most runtime tools (YAXUnit, debug, profiling) have **no infobase/session in CI**, so their per-tool files assert the realistic *no-session SENTINEL* (see §4 env-dependent). What a headless run **cannot** prove is a real **end-to-end round-trip**: a real YAXUnit run → parsed pass/fail counts, a real breakpoint **suspend → inspect → resume**, and a launch/session **id minted by one tool and consumed by its siblings**. Those live in **one deliberately cross-tool file** — the only exception to the "one file per tool" rule (the tools it touches are already covered by their own sentinel files; this file is *supplementary* round-trip coverage).

@@ -1,10 +1,10 @@
 """Default-profile wire regressions for the read-only preset repair (#641).
 
-The server has no runtime preset-selection contract. Java's
-ReadOnlyPresetVisibilityTest applies both presets and exercises the exact
-getVisibleTools path used by tools/list. This module checks the complementary
-stand contract: the default profile keeps the six writers and the three explicit
-write-hint exceptions keep their annotations. It never executes a workspace or
+Launch-selected preset wire checks live in test_preset_launch.py. Java's
+ReadOnlyPresetVisibilityTest also applies both presets through getVisibleTools.
+This module checks the complementary default-profile stand contract: the default
+profile keeps the six writers and the three explicit write-hint exceptions keep
+their annotations. It never executes a workspace or
 git writer. Run with --filter read_only_presets on a default-profile stand with
 progressive disclosure off, like the tools/list golden slice.
 """

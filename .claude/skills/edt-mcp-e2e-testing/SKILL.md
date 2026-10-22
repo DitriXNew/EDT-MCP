@@ -16,6 +16,22 @@ python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2
 ```
 Needs a LIVE server on `:8765` + `TestConfiguration` loaded (the dev EDT copy — see the project memory / edt-redeploy loop). Execution is **serial** (one fixture, one git tree); authoring can be parallel (one agent per tool file). `--filter <substr>` runs a subset.
 
+## Launch-preset wire checks
+
+For `EDT_MCP_TOOL_PRESET=analysis-only` or `code-review`, restart EDT for each value and
+pass the same variable to `python -m tools.test_preset_launch` from `tests/e2e`. Set
+`EDT_MCP_PROGRESSIVE_DISCLOSURE=false` on EDT. IDs are case-insensitive and trimmed.
+The override is resolved once on first use, including bridge calls and manual starts without
+early startup; stored Tools preferences are untouched by resolution and registry reads,
+including migration state. Unknown IDs warn once with the valid IDs, then use stored settings.
+The Tools tab loads saved settings with their normal migrations and shows a read-only launch
+note. Unchanged OK/Apply preserves the saved selection and preset ID; deliberate edits apply
+on a launch without the override. Use a fresh workspace for each CI preset launch; wire checks
+prove the catalogue, and unit tests prove that the override is not persisted.
+The module skips without a selected read-only preset. Use its direct entry point: the full runner's mandatory
+`clean_project` setup/cleanup is disabled by these presets. See the launch-preset section
+of `tests/e2e/SKILL.md` and `tests/TESTING.md` for the wire assertions and clean-fixture recipe.
+
 ## The rules in brief (details in tests/e2e/SKILL.md)
 1. **One file per tool**, `tests/e2e/tools/test_<tool>.py`, importing ONLY from `harness`. Adding a new MCP tool? add its test file — the **coverage ratchet** fails the suite otherwise.
 2. **git-fixture isolation:** `TestConfiguration` is a committed fixture. The orchestrator resets it before every test (`git reset` + `git checkout HEAD --` + `git clean -fd`). Read tools must leave it clean (`assert_no_diff()`).

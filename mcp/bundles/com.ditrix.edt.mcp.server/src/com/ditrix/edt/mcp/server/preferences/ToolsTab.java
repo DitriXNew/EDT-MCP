@@ -56,7 +56,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
  */
 public class ToolsTab
 {
-    private final Composite composite;
+    private Composite composite;
     private CheckboxTreeViewer treeViewer;
     private Combo presetCombo;
     private Label countLabel;
@@ -92,18 +92,24 @@ public class ToolsTab
      */
     private GeneralTab generalTab;
 
-    public ToolsTab(Composite parent)
+    /** Loads the editable stored model independently of SWT control creation. */
+    ToolsTab()
     {
-        disabledTools = new HashSet<>(ToolSettingsService.getInstance().getDisabledTools());
-        selectedPreset = ToolPreset.fromId(ToolSettingsService.getInstance().getPresetId());
+        disabledTools = new HashSet<>(ToolSettingsService.getInstance().getStoredDisabledTools());
+        selectedPreset = ToolPreset.fromId(ToolSettingsService.getInstance().getStoredPresetId());
         destructiveAllowedTools = new HashSet<>(ConsentSettingsService.getInstance().getAllowedTools());
         loadAllValues();
+    }
 
+    public ToolsTab(Composite parent)
+    {
+        this();
         composite = new Composite(parent, SWT.NONE);
         GridLayout layout = new GridLayout(1, false);
         layout.marginWidth = 0;
         layout.marginHeight = 0;
         composite.setLayout(layout);
+        createSessionPresetNote();
 
         SashForm sash = new SashForm(composite, SWT.HORIZONTAL);
         GridData sashGd = new GridData(SWT.FILL, SWT.FILL, true, true);
@@ -142,6 +148,25 @@ public class ToolsTab
     public void setGeneralTab(GeneralTab generalTab)
     {
         this.generalTab = generalTab;
+    }
+
+    String getSessionPresetNote()
+    {
+        ToolPreset preset = ToolSettingsService.getInstance().getSessionPreset();
+        return preset == null ? null
+            : NLS.bind("Launch preset {0} is active via EDT_MCP_TOOL_PRESET; " //$NON-NLS-1$
+                + "saved changes apply on a launch without it.", preset.getDisplayName()); //$NON-NLS-1$
+    }
+
+    private void createSessionPresetNote()
+    {
+        String text = getSessionPresetNote();
+        if (text != null)
+        {
+            Label note = new Label(composite, SWT.WRAP);
+            note.setText(text);
+            note.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        }
     }
 
     private void createPresetBar(Composite parent)
@@ -739,7 +764,7 @@ public class ToolsTab
      */
     public boolean hasChanges()
     {
-        return !disabledTools.equals(ToolSettingsService.getInstance().getDisabledTools());
+        return !disabledTools.equals(ToolSettingsService.getInstance().getStoredDisabledTools());
     }
 
     /**
