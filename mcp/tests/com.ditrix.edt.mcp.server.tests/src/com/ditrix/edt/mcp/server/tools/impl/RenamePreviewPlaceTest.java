@@ -9,6 +9,7 @@ import static org.junit.Assert.*;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -134,7 +135,7 @@ public class RenamePreviewPlaceTest
                 String third = start(tool, "Catalog.Third", "More", 0, 500L, stuck);
                 assertTrue("Two orphaned hand-offs still hold both places: " + third,
                     third.contains("2 other rename previews are already running, the limit for rename "
-                        + "previews. 2 of them already ended (timeout or cancellation), but EDT is still "
+                        + "previews. 2 of them already ended (typically a timeout), but EDT is still "
                         + "building those previews on its UI thread: ending a job stops the waiting, not "
                         + "EDT's work, so such a place is freed only when EDT finishes. Nothing was "
                         + "renamed. Retry after EDT finishes;"));
@@ -142,7 +143,7 @@ public class RenamePreviewPlaceTest
                 String again = start(tool, "Catalog.Products", "Goods", 0, 500L, stuck);
                 assertTrue("The same preview must not start on top of the orphaned one: " + again,
                     again.contains("A previous preview of 'Catalog.Products' -> 'Goods' (job '" + first
-                        + "') already ended (timeout or cancellation), but EDT is still building it on "
+                        + "') already ended (typically a timeout), but EDT is still building it on "
                         + "its UI thread"));
                 assertEquals(2, heldPlaces(tool));
 
@@ -168,7 +169,11 @@ public class RenamePreviewPlaceTest
         String guide = new RenameMetadataObjectTool().getGuide();
         assertTrue(guide.contains("the same project, objectFqn, newName and effective `timeout` attaches"));
         assertTrue(guide.contains("runs its own preview, and so does a different timeout"));
-        assertTrue(guide.contains("A preview whose job ended (timeout or cancellation) while EDT was still "
+        assertTrue(guide.contains("`cancel_job` stops a preview only before its work is handed to EDT's "
+            + "UI thread (while it settles); after that hand-off the work cannot be recalled, so "
+            + "`cancel_job` reports `alreadyCommitted` and the preview runs to its own outcome"));
+        assertFalse(guide.contains("(timeout or cancellation)"));
+        assertTrue(guide.contains("A preview whose job ended (typically a timeout) while EDT was still "
             + "building it on its UI thread keeps its place until EDT finishes building that preview "
             + "(ending the job stops the waiting, not EDT's work)"));
         assertTrue(guide.contains("a new preview of the same project, objectFqn and newName is refused "
@@ -315,7 +320,7 @@ public class RenamePreviewPlaceTest
                 });
                 assertTrue("A larger timeout must not start on top of the still-building preview: " + larger,
                     larger.contains("A previous preview of 'Catalog.Products' -> 'Goods' (job '" + first
-                        + "') already ended (timeout or cancellation), but EDT is still building it on its "
+                        + "') already ended (typically a timeout), but EDT is still building it on its "
                         + "UI thread: ending the job stops the waiting, not EDT's work. A new preview of the "
                         + "same rename is not started on top of it, whatever its timeout. Nothing was renamed. "
                         + "Retry after EDT finishes that work; this refusal stops then."));
@@ -460,6 +465,103 @@ public class RenamePreviewPlaceTest
             if (!closer.isAlive())
             {
                 jobs.close();
+            }
+        }
+    }
+
+    /**
+     * Once the preview's work is handed to EDT's UI thread it cannot be recalled, so the job is
+     * committed at that hand-off: a cancel_job after it reports alreadyCommitted, never a clean
+     * stop, and the preview still completes with its own result.
+     */
+    @Test(timeout = 60_000)
+    public void testACancelAfterTheHandOffReportsAlreadyCommittedAndThePreviewStillCompletes()
+        throws Exception
+    {
+        CountDownLatch inUiWork = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger completed = new AtomicInteger();
+        try (BackgroundJobs jobs = new BackgroundJobs(10, 4))
+        {
+            RenameMetadataObjectTool tool = tool(jobs);
+            try
+            {
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 20_000L, progress -> {
+                    inUiWork.countDown();
+                    await(release);
+                    completed.incrementAndGet();
+                    return PREVIEW;
+                }));
+                assertTrue("The preview must reach EDT's UI-thread work", inUiWork.await(20, TimeUnit.SECONDS));
+
+                String outcome = new CancelJobTool(jobs).execute(Map.of("jobId", id, "confirm", "true"));
+                assertTrue("A handed-over preview cannot be recalled: " + outcome,
+                    outcome.startsWith("# Background job cancellation: alreadyCommitted"));
+                assertTrue(outcome, outcome.contains("had already handed the work over"));
+                assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(id).getStatus());
+
+                release.countDown();
+                JobSnapshot done = jobs.await(id, 20_000L);
+                assertEquals("The preview runs to its own outcome", BackgroundJobs.Status.DONE, done.getStatus());
+                assertEquals(PREVIEW, done.getResult());
+                assertEquals(1, completed.get());
+                long deadline = System.nanoTime() + 20_000_000_000L;
+                while (heldPlaces(tool) != 0 && System.nanoTime() < deadline)
+                {
+                    Thread.sleep(20L);
+                }
+                assertEquals(0, heldPlaces(tool));
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A cancel_job that wins the commit handshake while the preview still settles keeps its word:
+     * the hand-off is aborted, EDT's UI-thread work never runs, and the job ends cancelled.
+     */
+    @Test(timeout = 60_000)
+    public void testACancelThatWinsBeforeTheHandOffNeverRunsTheUiThreadWork() throws Exception
+    {
+        CountDownLatch settle = new CountDownLatch(1);
+        CountDownLatch inSettle = new CountDownLatch(1);
+        AtomicInteger uiWork = new AtomicInteger();
+        try (BackgroundJobs jobs = new BackgroundJobs(10, 4))
+        {
+            RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> {
+                inSettle.countDown();
+                awaitSwallowingInterrupts(settle);
+                return null;
+            });
+            try
+            {
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+                    uiWork.incrementAndGet();
+                    return PREVIEW;
+                }));
+                assertTrue("The job must reach its settle", inSettle.await(20, TimeUnit.SECONDS));
+
+                String outcome = new CancelJobTool(jobs).execute(Map.of("jobId", id, "confirm", "true"));
+                assertTrue("The cancel wins before the hand-off: " + outcome,
+                    outcome.startsWith("# Background job cancellation: cancelled"));
+
+                settle.countDown();
+                JobSnapshot ended = jobs.await(id, 20_000L);
+                assertEquals(BackgroundJobs.Status.CANCELLED, ended.getStatus());
+                long quiet = System.nanoTime() + 3_000_000_000L;
+                while (uiWork.get() == 0 && System.nanoTime() < quiet)
+                {
+                    Thread.sleep(10L);
+                }
+                assertEquals("A cancelled preview must not hand off to EDT's UI thread", 0, uiWork.get());
+                assertEquals("No hand-off holds the place", 0, heldPlaces(tool));
+            }
+            finally
+            {
+                settle.countDown();
             }
         }
     }

@@ -157,24 +157,32 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
 
         /**
-         * Starts a hand-off only while the job is still RUNNING in its registry. The released flag
-         * alone is not enough: the registry deadline or {@link BackgroundJobs#close()} can end the
-         * job while nobody calls {@link #releaseIfIdle()}, and a hand-off begun then would build a
-         * preview after its FAILED outcome was already published. The status is read under
+         * Starts a hand-off only while the job is still RUNNING in its registry, and commits the
+         * job in the same step. The released flag alone is not enough: the registry deadline or
+         * {@link BackgroundJobs#close()} can end the job while nobody calls
+         * {@link #releaseIfIdle()}, and a hand-off begun then would build a preview after its
+         * FAILED outcome was already published. The status is read under
          * {@link #PREVIEW_JOBS_LOCK} and this submission's monitor - the locks the release takes,
          * in the same order - so the check and the count are one step against the release, and
          * {@link #jobId} (set under that lock right after admission) is visible.
+         * <p>
+         * Work handed to EDT's UI thread cannot be recalled, so the registry's commit handshake
+         * ({@link BackgroundJobs.ProgressReporter#tryCommit()}) is taken under the same locks
+         * before the count: a {@code cancel_job} that already won it aborts the hand-off, and the
+         * job ends cancelled without the UI-thread work ever running; once the commit wins, a
+         * later {@code cancel_job} reports {@code alreadyCommitted} instead of a false stop.
          *
-         * @return {@code false} when the job already left RUNNING or the place was given back, so
-         *     no hand-off may start
+         * @param progress the job's reporter, whose {@code tryCommit} is the registry handshake
+         * @return {@code false} when the job already left RUNNING, the place was given back, or a
+         *     cancellation won the commit handshake, so no hand-off may start
          */
-        boolean beginHandOff()
+        boolean beginHandOff(BackgroundJobs.ProgressReporter progress)
         {
             synchronized (PREVIEW_JOBS_LOCK)
             {
                 synchronized (this)
                 {
-                    if (released || !jobRunning())
+                    if (released || !jobRunning() || !progress.tryCommit())
                     {
                         return false;
                     }
@@ -527,13 +535,14 @@ public class RenameMetadataObjectTool implements IMcpTool
                                     {
                                         throw new BackgroundJobs.MarkedFailure(building, null);
                                     }
-                                    if (!placed.beginHandOff())
+                                    if (!placed.beginHandOff(progress))
                                     {
                                         // The job already left RUNNING (its registry deadline, or
                                         // EDT-MCP stopping), whether or not a later request gave
-                                        // its place back: building the preview now would run after
-                                        // its FAILED outcome was published. That outcome stands, so
-                                        // this failure only stops the work; its text is a fallback.
+                                        // its place back, or a cancel_job won the commit handshake:
+                                        // building the preview now would run after its FAILED or
+                                        // cancelled outcome. That outcome stands, so this failure
+                                        // only stops the work; its text is a fallback.
                                         throw new BackgroundJobs.MarkedFailure("The rename preview " //$NON-NLS-1$
                                             + "ended before its hand-off to EDT's UI thread began. " //$NON-NLS-1$
                                             + "Nothing was renamed. Start a new preview.", null); //$NON-NLS-1$
@@ -629,7 +638,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         {
             return text + "Poll them with get_job_status and retry when one finishes."; //$NON-NLS-1$
         }
-        return text + orphaned + " of them already ended (timeout or cancellation), but EDT is " //$NON-NLS-1$
+        return text + orphaned + " of them already ended (typically a timeout), but EDT is " //$NON-NLS-1$
             + "still building " + (orphaned == 1 ? "that preview" : "those previews") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " on its UI thread: ending a job stops the waiting, not EDT's work, so such a place " //$NON-NLS-1$
             + "is freed only when EDT finishes. Nothing was renamed. Retry after EDT finishes; " //$NON-NLS-1$
@@ -639,7 +648,7 @@ public class RenameMetadataObjectTool implements IMcpTool
     private static String orphanedPreviewRefusal(String objectFqn, String newName, String jobId)
     {
         return "A previous preview of '" + objectFqn + "' -> '" + newName + "' (job '" + jobId //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "') already ended (timeout or cancellation), but EDT is still building it on its UI " //$NON-NLS-1$
+            + "') already ended (typically a timeout), but EDT is still building it on its UI " //$NON-NLS-1$
             + "thread: ending the job stops the waiting, not EDT's work. A new preview of the same " //$NON-NLS-1$
             + "rename is not started on top of it, whatever its timeout. Nothing was renamed. Retry " //$NON-NLS-1$
             + "after EDT finishes that work; this refusal stops then."; //$NON-NLS-1$
