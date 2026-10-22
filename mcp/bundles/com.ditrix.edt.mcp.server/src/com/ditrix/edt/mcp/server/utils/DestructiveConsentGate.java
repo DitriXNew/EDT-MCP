@@ -150,6 +150,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "infobase_sessions", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
+        "business_process_route_map", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
         // whether one destroys work depends on git's per-subcommand option grammar - see

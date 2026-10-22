@@ -48,6 +48,7 @@ public class ToolSettingsReadOnlyMigrationTest
         Set<String> expected = new HashSet<>(before);
         expected.addAll(WRITERS);
         expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
+        expected.add("business_process_route_map"); // v16 follows the recorded read-only promise.
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
     }
@@ -63,6 +64,7 @@ public class ToolSettingsReadOnlyMigrationTest
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
             expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
+            expected.add("business_process_route_map"); // v16 follows the recorded read-only promise.
             assertEquals(id, expected, disabled(store));
         }
     }
@@ -112,6 +114,7 @@ public class ToolSettingsReadOnlyMigrationTest
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
             expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
+            expected.add("business_process_route_map"); // v16 follows the recorded read-only promise.
             assertEquals(preset.name(), expected, disabled(store));
             assertEquals(preset.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals("stamp, then exactly one owed set write, then version",
@@ -173,6 +176,7 @@ public class ToolSettingsReadOnlyMigrationTest
         Set<String> expected = new HashSet<>(before);
         expected.addAll(WRITERS);
         expected.add("get_form_screenshot"); // The universal v15 addition follows v14.
+        expected.add("business_process_route_map"); // v16 follows the recorded read-only promise.
         assertEquals(preset.name(), expected, disabled(store));
         assertEquals(preset.getDisabledTools(), disabled(store));
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
@@ -202,6 +206,7 @@ public class ToolSettingsReadOnlyMigrationTest
     {
         Set<String> result = new HashSet<>(preset.getDisabledTools());
         result.removeAll(WRITERS);
+        result.remove("business_process_route_map");
         return result;
     }
 

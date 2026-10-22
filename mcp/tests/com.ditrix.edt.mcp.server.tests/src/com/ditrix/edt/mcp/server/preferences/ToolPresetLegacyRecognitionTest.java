@@ -73,7 +73,8 @@ public class ToolPresetLegacyRecognitionTest
             "infobase_sessions", "cancel_job", "delete_infobase", "delete_metadata", "debug_pause",
             "import_project_from_file", "export_configuration_to_file"));
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
-            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot"));
+            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot",
+            "business_process_route_map"));
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(disabled(store).contains("dcs"));
@@ -163,7 +164,8 @@ public class ToolPresetLegacyRecognitionTest
         PreferenceStore store = stored(before, 12);
         Set<String> expected = new HashSet<>(before);
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
-            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot"));
+            "create_project", "resync_to_disk", "clean_project", "get_form_screenshot",
+            "business_process_route_map"));
         int[] disabledWrites = {0};
         store.addPropertyChangeListener(event -> {
             if (PreferenceConstants.PREF_DISABLED_TOOLS.equals(event.getProperty()))

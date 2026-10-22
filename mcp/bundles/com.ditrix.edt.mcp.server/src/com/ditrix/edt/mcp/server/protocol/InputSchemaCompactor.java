@@ -160,6 +160,9 @@ public final class InputSchemaCompactor
         // action=get + type=schema + a bare root. Without this one clause a schema-valid
         // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.
         keep.put("dcs", asSet("format")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Cross-field requirements are absent from the shape: replace needs both arrays,
+        // even when empty, and a Condition source requires an explicit branch.
+        keep.put("business_process_route_map", asSet("action", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database
