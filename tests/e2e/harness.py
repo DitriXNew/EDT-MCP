@@ -596,6 +596,66 @@ def call(tool, arguments):
         time.sleep(min(2 * attempt, 10))
 
 
+# ── Background-job answers: a long rename preview continues as a job (#803) ────────────
+PENDING_PREFIX = "**Pending:**"
+_JOB_ID_RE = re.compile(r"^\| jobId \| ([^|]+) \|\s*$", re.MULTILINE)
+_JOB_STATUS_RE = re.compile(r"^# Background job: (\S+)", re.MULTILINE)
+_JOB_RESULT_MARKER = "\n## Result\n\n"
+_JOB_ERROR_MARKER = "\n## Error\n\n"
+_JOB_POLL_WAIT_SECONDS = 45
+
+
+def _text_result(text, is_error=False):
+    """A Result carrying `text` as the tool's own answer, the shape a direct call would return."""
+    result = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        result["isError"] = True
+    return Result({"result": result})
+
+
+def follow_pending(result, ctx=""):
+    """Return what the call would have answered had it not continued as a background job.
+
+    A `**Pending:**` answer names a jobId; this polls get_job_status until the job is terminal
+    (bounded by MCP_CALL_TIMEOUT overall) and returns its Result as an ordinary success, or its
+    Error as an ordinary error. Any other answer - an inline preview, a confirm report, a refusal -
+    is returned unchanged, so a caller can route every call of a job-capable tool through here."""
+    if result.is_error or not result.text.startswith(PENDING_PREFIX):
+        return result
+    match = _JOB_ID_RE.search(result.text)
+    if not match:
+        _fail("%s: a Pending answer must name its jobId:\n%s" % (ctx or "follow_pending", result.text))
+    job_id = match.group(1).strip()
+    deadline = time.time() + CALL_TIMEOUT
+    while True:
+        remaining = deadline - time.time()
+        wait = int(max(0, min(_JOB_POLL_WAIT_SECONDS, remaining)))
+        status = call("get_job_status", {"jobId": job_id, "waitSeconds": wait})
+        assert_ok(status, "%s: poll background job %s" % (ctx or "follow_pending", job_id))
+        state = _JOB_STATUS_RE.search(status.text)
+        state = state.group(1) if state else ""
+        if state == "running":
+            if time.time() >= deadline:
+                _fail("%s: background job %s still running after %gs (MCP_CALL_TIMEOUT):\n%s"
+                      % (ctx or "follow_pending", job_id, CALL_TIMEOUT, status.text))
+            continue
+        if state == "done" and _JOB_RESULT_MARKER in status.text:
+            return _text_result(status.text.split(_JOB_RESULT_MARKER, 1)[1])
+        if state == "failed" and _JOB_ERROR_MARKER in status.text:
+            return _text_result(status.text.split(_JOB_ERROR_MARKER, 1)[1], is_error=True)
+        _fail("%s: background job %s ended without a Result or an Error:\n%s"
+              % (ctx or "follow_pending", job_id, status.text))
+
+
+def rename_call(arguments):
+    """call("rename_metadata_object", arguments), following a Pending preview to its Result.
+
+    A preview that outlives its waitSeconds answers Pending instead of inline; every e2e that reads
+    a preview's table goes through here so a slow runner turns into a longer wait, not a red test.
+    A confirm or a refusal is never Pending, so it comes back exactly as call() returned it."""
+    return follow_pending(call("rename_metadata_object", arguments), "rename_metadata_object")
+
+
 # ── Model-reset shortcut: don't pay for a reset when nothing was changed ──────────────
 #
 # The write-metadata cleanup (reset_fixture + reset_model) dominates the whole suite: 331
