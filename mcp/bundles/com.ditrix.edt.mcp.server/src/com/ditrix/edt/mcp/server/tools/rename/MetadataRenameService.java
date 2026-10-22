@@ -280,7 +280,8 @@ public class MetadataRenameService
                 "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
                 "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
                 "Table (an " + //$NON-NLS-1$
-                "attribute column as '...Attribute.AttrName.Column.ColName'). A form itself " + //$NON-NLS-1$
+                "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
+                "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
                 "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
 
@@ -445,7 +446,8 @@ public class MetadataRenameService
                 ref.formPath, "Form not found for '" + normFqn //$NON-NLS-1$
                     + "'. Address a form element as 'Type.Object.Form.FormName.<Kind>.Name' or " //$NON-NLS-1$
                     + "'CommonForm.FormName.<Kind>.Name' (Kind = Attribute / Command / Field / " //$NON-NLS-1$
-                    + "Button / Group / Decoration / Table / Column on a collection attribute)."); //$NON-NLS-1$
+                    + "Button / Group / Decoration / Table / Column ('...Attribute.A.Column.Name' or " //$NON-NLS-1$
+                    + "'...Attribute.A.Column.TabularSection.Name'))."); //$NON-NLS-1$
 
             // Only the old name and the refactoring leave the read transaction - never the element.
             FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
@@ -454,7 +456,7 @@ public class MetadataRenameService
                     if (member == null)
                     {
                         return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
-                            formModel, ref.kindToken, ref.name, normFqn));
+                            formModel, ref, normFqn));
                     }
                     String designerChild = designerChildRefusal(member, ref);
                     if (designerChild != null)
@@ -668,8 +670,7 @@ public class MetadataRenameService
         }
         else if (kind == FormElementWriter.Kind.COLUMN)
         {
-            EObject owner = FormElementWriter.findFormAttribute(formModel, ref.ownerAttributeName);
-            clash = owner == null ? null : FormElementWriter.findColumn(owner, newName);
+            clash = FormElementWriter.findColumn(formModel, ref, newName);
         }
         else if (kind == FormElementWriter.Kind.COMMAND)
         {
@@ -689,7 +690,7 @@ public class MetadataRenameService
         }
         if (clash == null || clash == member)
         {
-            return null;
+            return FormElementWriter.additionalColumnNameError(formModel, ref, newName);
         }
         return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
             + ". Pick a different name."; //$NON-NLS-1$
