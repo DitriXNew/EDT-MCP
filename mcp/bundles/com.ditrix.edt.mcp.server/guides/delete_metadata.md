@@ -77,3 +77,7 @@ A PREDEFINED item is checked for incoming references exactly like an ordinary ob
 An owned FORM object, a FORM member and an XDTO package member are removed from their own container instead: nothing blocks them (force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a button's command, a Property whose type points at the deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details.
 
 Only the owner's own pointers are cleaned: deleting an owned form clears the default-form settings that named it.
+
+## External data source members
+
+Use `ExternalDataSource.E.Table.T`, `...Table.T.Field.F`, `ExternalDataSource.E.Function.Fn` or `...Cube.C` (Russian tokens also work). The delete runs EDT's delete refactoring on that node, also for a source that still has Tables or Cubes, then exports the file that registers the node: the source's `.mdo` for a Table, Cube or Function, the Table's `.mdo` for a Field. A forced delete then checks that file as described above. See the create_metadata guide, "External data source structure", for defaults, layout and boundaries.

@@ -65,6 +65,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -428,13 +429,16 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Only the special views above may consume a deeper address. The generic resolver reads
         // Type.Name only, so otherwise it would render the owner even for a missing member (#731).
         String normalizedFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        if (nestedChain == null && normalizedFqn.split("\\.", -1).length > 2) //$NON-NLS-1$
+        MetadataNodeResolver.MetadataNode referenced = MetadataNodeResolver.resolveExisting(ctx.scope, normalizedFqn);
+        boolean referencedTop = referenced != null
+            && ReferencedTopObjects.isReferencedTopCollection(referenced.feature);
+        if (nestedChain == null && !referencedTop && normalizedFqn.split("\\.", -1).length > 2) //$NON-NLS-1$
         {
             failures.add(new String[] { fqn, memberAddressReason(ctx.scope, normalizedFqn) });
             return;
         }
         MdObject mdObject = nestedChain != null ? SubsystemUtils.resolveInScope(ctx.scope, nestedChain)
-            : resolveObject(ctx.scope, fqn);
+            : referencedTop ? referenced.object : resolveObject(ctx.scope, fqn);
         if (mdObject == null)
         {
             failures.add(new String[] { fqn, nestedChain != null && !ctx.scope.isExternalObjects()
@@ -1625,11 +1629,35 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             String[] parts = normalizedFqn.split("\\.", 3); //$NON-NLS-1$
             String ownerFqn = parts[0] + "." + parts[1]; //$NON-NLS-1$
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, normalizedFqn);
+            if (node != null && node.owner instanceof MdObject)
+            {
+                String address = MetadataNodeResolver.resolvableAddressOf(renderableOwner((MdObject)node.owner));
+                if (address != null)
+                {
+                    ownerFqn = address;
+                }
+            }
             return "This addresses a member of '" + ownerFqn //$NON-NLS-1$
                 + "'; read its properties with assignable: true. The owner's details render from '" //$NON-NLS-1$
                 + ownerFqn + "'."; //$NON-NLS-1$
         }
         return describeResolutionFailure(normalizedFqn, scope);
+    }
+
+    /**
+     * The nearest ancestor this view renders: a containment-nested owner (a tabular section) is climbed
+     * to its top object, while a referenced top object (an external data source's Table) is itself
+     * renderable and stays. Package-visible for tests.
+     */
+    static MdObject renderableOwner(MdObject owner)
+    {
+        MdObject current = owner;
+        while (current.eContainer() instanceof MdObject && !(current.eContainer() instanceof Configuration))
+        {
+            current = (MdObject)current.eContainer();
+        }
+        return current;
     }
 
     /** Template types the plain view renders itself (text and Data Composition Schema). */

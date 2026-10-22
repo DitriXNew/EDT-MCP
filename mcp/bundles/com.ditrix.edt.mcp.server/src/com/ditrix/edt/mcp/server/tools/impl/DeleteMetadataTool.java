@@ -107,6 +107,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -893,8 +894,29 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Read WHILE THE NODE IS STILL THERE: after the refactoring the node is detached, and the
         // container is what has to be re-exported (see performDeleteRefactoring).
         String containerFqn = containerExportFqn(node.owner);
-        return prepareMdClassDelete(ctx.project, normFqn, node.object, containerFqn, confirm, force,
+        return prepareResolvedDelete(ctx.project, node, normFqn, containerFqn, confirm, force,
             refactoringService, modelResolution);
+    }
+
+    /**
+     * A resolved generic delete. The response, the preview and the error texts keep the caller's
+     * normalized address; only the post-export registration check gets EDT's canonical address, because
+     * the registering file spells it with English kind tokens even for a Russian request.
+     * Package-visible for tests.
+     */
+    String prepareResolvedDelete(IProject project, MetadataNodeResolver.MetadataNode node, String normFqn,
+        String containerFqn, boolean confirm, boolean force, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
+        return prepareMdClassDelete(project, normFqn, deleteTargetFqn(node, normFqn), node.object,
+            containerFqn, confirm, force, refactoringService, modelResolution);
+    }
+
+    /** The verifier must compare EDT's canonical registration text, even for Russian requests. */
+    static String deleteTargetFqn(MetadataNodeResolver.MetadataNode node, String requested)
+    {
+        String canonical = MetadataNodeResolver.resolvableAddressOf(node.object);
+        return canonical == null ? requested : canonical;
     }
 
     /** A resolved nested-subsystem delete, or a refusal with no target. Package-visible for tests. */
@@ -964,7 +986,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
             + "'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount'). " //$NON-NLS-1$
             + "A nested subsystem uses 'Subsystem.<Parent>.Subsystem.<Child>' (repeatable to any depth). " //$NON-NLS-1$
-            + "See get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
+            + "External data source members use 'ExternalDataSource.<X>.Table.<T>(.Field.<F>)' " //$NON-NLS-1$
+            + "or 'ExternalDataSource.<X>.Function.<F>'. See get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
             + "Use get_metadata_objects to find an object's FQN."; //$NON-NLS-1$
     }
 
@@ -1044,6 +1067,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String containerFqn, boolean confirm, boolean force,
         IMdRefactoringService refactoringService, BmModelResolver.Resolution modelResolution)
     {
+        return prepareMdClassDelete(project, normFqn, normFqn, object, containerFqn, confirm, force,
+            refactoringService, modelResolution);
+    }
+
+    /**
+     * As {@link #prepareMdClassDelete(IProject, String, MdObject, String, boolean, boolean,
+     * IMdRefactoringService, BmModelResolver.Resolution)}, with the address the post-export registration
+     * check compares; {@code normFqn} stays the address every response text names.
+     */
+    String prepareMdClassDelete(IProject project, String normFqn, String registrationFqn, MdObject object,
+        String containerFqn, boolean confirm, boolean force,
+        IMdRefactoringService refactoringService, BmModelResolver.Resolution modelResolution)
+    {
         if (!modelResolution.isAvailable())
         {
             return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
@@ -1073,8 +1109,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
-        return confirm ? performDelete(project, normFqn, containerFqn, refactoring, force, descendants)
-            : buildPreview(normFqn, refactoring, descendants);
+        return confirm ? performDelete(project, normFqn, registrationFqn, containerFqn, refactoring, force,
+            descendants) : buildPreview(normFqn, refactoring, descendants);
     }
 
     private String buildPreview(String fqn, IRefactoring refactoring, List<String> descendants)
@@ -1119,7 +1155,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    private String performDelete(IProject project, String fqn, String containerFqn,
+    private String performDelete(IProject project, String fqn, String registrationFqn, String containerFqn,
         IRefactoring refactoring, boolean force, List<String> descendants)
     {
         String projectName = project.getName();
@@ -1164,7 +1200,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1 + descendants.size(), deletionTargets);
         return deleteWithConsent(preview,
-            () -> performDeleteRefactoring(project, fqn, containerFqn, refactoring, force, problems));
+            () -> performDeleteRefactoring(project, fqn, registrationFqn, containerFqn, refactoring, force,
+                problems));
     }
 
     /**
@@ -1177,6 +1214,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *
      * @param project the project whose model is being changed
      * @param fqn the normalized FQN being deleted
+     * @param registrationFqn the address the post-export registration check compares
      * @param containerFqn the FQN of the top object registering the deleted node, captured before
      *     the delete; {@code null} when it could not be named
      * @param refactoring the prepared delete refactoring
@@ -1184,8 +1222,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param problems the references and platform prohibitions the caller already collected
      * @return the tool's JSON result
      */
-    private String performDeleteRefactoring(IProject project, String fqn, String containerFqn,
-        IRefactoring refactoring, boolean force, RefactoringProblems problems)
+    private String performDeleteRefactoring(IProject project, String fqn, String registrationFqn,
+        String containerFqn, IRefactoring refactoring, boolean force, RefactoringProblems problems)
     {
         String projectName = project.getName();
         try
@@ -1243,6 +1281,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     if (registeringFile != null)
                     {
                         result.put(KEY_REGISTERING_FILE, registeringFile);
+                    }
+                    if (registrationFqn != null && !registrationFqn.equals(fqn))
+                    {
+                        result.put(KEY_REGISTRATION_TARGET, registrationFqn);
                     }
                 }
             }
@@ -1355,6 +1397,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         // Internal: always stripped here, so it never reaches the caller.
         JsonElement formCheck = object.remove(KEY_FORM_CHECK);
+        JsonElement registrationTarget = object.remove(KEY_REGISTRATION_TARGET);
         if (VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
             && observeDetachedFiles(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), object,
                 formCheck != null && formCheck.isJsonObject() ? formCheck.getAsJsonObject() : null,
@@ -1366,11 +1409,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             || !object.has("forced") || !object.get("forced").getAsBoolean() //$NON-NLS-1$ //$NON-NLS-2$
             || !object.has(KEY_REGISTERING_CONTAINER))
         {
-            return result;
+            return registrationTarget == null ? result : GsonProvider.toJson(object);
         }
 
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
-        String targetFqn = resultString(object, "fqn"); //$NON-NLS-1$
+        String targetFqn = registrationTarget != null && registrationTarget.isJsonPrimitive()
+            ? registrationTarget.getAsString() : resultString(object, "fqn"); //$NON-NLS-1$
         String registeringFile = resultString(object, KEY_REGISTERING_FILE);
         String registeringContainer = resultString(object, KEY_REGISTERING_CONTAINER);
         RegistrationState state = registeringFile == null ? RegistrationState.UNVERIFIABLE
@@ -1443,7 +1487,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             return path.append('/').append(chain[chain.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
         }
-        return MetadataPathResolver.resolveTopObjectMdoPath(containerFqn);
+        String referencedPath = ReferencedTopObjects.mdoPath(containerFqn);
+        return referencedPath != null ? referencedPath : MetadataPathResolver.resolveTopObjectMdoPath(containerFqn);
     }
 
     /** Reads and structurally checks one registering {@code .mdo}. */
@@ -2554,6 +2599,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Internal result member: the Form.form and attribute (column) the hook re-reads; always stripped there. */
     private static final String KEY_FORM_CHECK = "formCheck"; //$NON-NLS-1$
+
+    /**
+     * Internal result member: the canonical address the forced-delete registration check compares when it
+     * differs from the echoed {@code fqn}; always stripped in {@link #refreshAfterExportAwait}.
+     */
+    private static final String KEY_REGISTRATION_TARGET = "registrationTarget"; //$NON-NLS-1$
     private static final String FORM_CHECK_FILES = "files"; //$NON-NLS-1$
     private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$

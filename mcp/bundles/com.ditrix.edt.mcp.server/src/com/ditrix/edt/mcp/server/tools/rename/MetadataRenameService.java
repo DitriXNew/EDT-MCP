@@ -64,6 +64,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -154,6 +155,12 @@ public class MetadataRenameService
         if (badName != null)
         {
             return ToolResult.error(badName).toJson();
+        }
+
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal(TOOL_NAME, objectFqn);
+        if (memberRefusal != null)
+        {
+            return ToolResult.error(memberRefusal).toJson();
         }
 
         // Resolve the project and its configuration

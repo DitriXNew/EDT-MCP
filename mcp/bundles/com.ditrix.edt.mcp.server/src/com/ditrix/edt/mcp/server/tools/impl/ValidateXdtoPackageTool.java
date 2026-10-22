@@ -19,6 +19,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -93,6 +94,11 @@ public class ValidateXdtoPackageTool implements IMcpTool
 
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal(NAME, fqn);
+        if (memberRefusal != null)
+        {
+            return ToolResult.error(memberRefusal).toJson();
+        }
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, DEFAULT_LIMIT);
         limit = Pagination.clampLimit(limit, 1000);
 

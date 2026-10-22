@@ -109,6 +109,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.StandardCommandGroupResolver;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
@@ -1716,6 +1717,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return "Node not found: " + fqn + ". Use 'Type.Name' for a top object, " //$NON-NLS-1$ //$NON-NLS-2$
             + "'Type.Name.Kind.Name' for a member, or '" + ConfigurationRoot.FQN + "' for the " //$NON-NLS-1$ //$NON-NLS-2$
             + "configuration root. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+            + (normFqn != null && normFqn.startsWith("ExternalDataSource.") //$NON-NLS-1$
+                ? " External data source members use 'ExternalDataSource.<X>.Table.<T>(.Field.<F>)' " //$NON-NLS-1$
+                    + "or 'ExternalDataSource.<X>.Function.<F>'." : "") //$NON-NLS-1$ //$NON-NLS-2$
             + MetadataNodeResolver.yoNotFoundHint(normFqn)
             + scope.addressingHint(normFqn);
     }
@@ -2548,7 +2552,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         // The top object that owns the node's .mdo file.
-        final String topFqn = topFqn(normFqn);
+        final String[] fileOwnerFqn = { null };
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
@@ -2606,6 +2610,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(applyTo);
                 // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
                 // namespace change - null otherwise, so the cascade below never fires).
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
@@ -2676,9 +2681,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(topFqn);
+        exportFqns.add(fileOwnerFqn[0]);
         String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(topFqn))
+        if (contentFqn != null && !contentFqn.equals(fileOwnerFqn[0]))
         {
             exportFqns.add(contentFqn);
         }
@@ -4063,7 +4068,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node, MdObject target, String[] parts)
     {
         BmFetchPlan plan = new BmFetchPlan();
-        if (node.topLevel)
+        if (node.topLevel || ReferencedTopObjects.isReferencedTopCollection(node.feature))
         {
             if (!(target instanceof IBmObject))
             {
@@ -8416,12 +8421,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
-    }
-
-    private static String topFqn(String normFqn)
-    {
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
     }
 
     /**

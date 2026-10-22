@@ -1597,7 +1597,7 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
-    public void testEveryValidFirstStepIsAContainmentAndStaysPossible()
+    public void testEveryValidFirstStepIsACollectionAndStaysPossible()
     {
         // Walks THE grammar the gate resolves against - MetadataNodeResolver's own token -> feature
         // map - not a catalogue that mirrors it. Pinning the mirror was vacuous: a token added to
@@ -1625,11 +1625,13 @@ public class GetProjectErrorsToolTest
                     continue;
                 }
                 String type = classifier.getName();
-                assertTrue("a valid first step must be a CONTAINMENT reference: " //$NON-NLS-1$
+                boolean referencedTop = f == MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__TABLES
+                    || f == MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__CUBES;
+                assertTrue("a valid first step must be containment or a registered EDS top: " //$NON-NLS-1$
                     + type + "." + feature, //$NON-NLS-1$
-                    f instanceof EReference && ((EReference)f).isContainment());
-                assertTrue("the owner question must accept it: " + type + "." + feature, //$NON-NLS-1$ //$NON-NLS-2$
-                    MetadataTypeUtils.typeCanContain(type, feature));
+                    f instanceof EReference && (((EReference)f).isContainment() || referencedTop));
+                assertEquals("the containment-only owner question keeps its contract: " + type + "." + feature, //$NON-NLS-1$ //$NON-NLS-2$
+                    !referencedTop, MetadataTypeUtils.typeCanContain(type, feature));
                 String address = type + ".X." + token + ".Y"; //$NON-NLS-1$ //$NON-NLS-2$
                 assertTrue("a valid first step must stay POSSIBLE: " + address, //$NON-NLS-1$
                     GetProjectErrorsTool.possibleAddressShape(address));
@@ -1655,12 +1657,13 @@ public class GetProjectErrorsToolTest
 
     /**
      * Features whose kinds are legal only DEEPER in an address: {@code methods} hangs off an
-     * HTTPService URLTemplate and {@code parameters} off a WebService Operation, so neither may have
+     * HTTPService URLTemplate, {@code parameters} off a WebService Operation and {@code tableFields}
+     * off an EDS Table, so none may have
      * a first-step owner. Named explicitly so a new kind that resolves to nothing is a failure
      * rather than another silent zero.
      */
     private static final Set<String> DEEPER_ONLY_FEATURES =
-        new HashSet<>(Arrays.asList("methods", "parameters")); //$NON-NLS-1$ //$NON-NLS-2$
+        new HashSet<>(Arrays.asList("methods", "parameters", "tableFields")); //$NON-NLS-1$ //$NON-NLS-2$
 
 
     @Test
