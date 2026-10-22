@@ -147,7 +147,7 @@ public class ImportConfigurationFromXmlPreflightTest
         CountDownLatch attempted = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicBoolean competitorClaimed = new AtomicBoolean();
-        AtomicReference<Long> claimDuringValidation = new AtomicReference<>();
+        AtomicReference<ImportConfigurationFromXmlTool.ImportClaim> claimDuringValidation = new AtomicReference<>();
         ExecutorService competitor = Executors.newSingleThreadExecutor();
         AtomicReference<Future<?>> task = new AtomicReference<>();
         when(manager.getProject(base)).thenAnswer(invocation ->
@@ -287,7 +287,7 @@ public class ImportConfigurationFromXmlPreflightTest
     private void assertRefusedWithCompetingClaim(String... fragments)
     {
         assertNull("the test owns a separate import claim", ImportConfigurationFromXmlTool.tryClaimImport(projectName));
-        Long claim = ImportConfigurationFromXmlTool.importClaimedAt(projectName);
+        ImportConfigurationFromXmlTool.ImportClaim claim = ImportConfigurationFromXmlTool.importClaimedAt(projectName);
         try
         {
             assertRefused(execute(), fragments);
