@@ -190,5 +190,35 @@ A configuration on vendor support can lock objects. A new top-level object needs
 
 `templateType` is accepted at creation only for a common or owned template. Supported types are TextDocument and SpreadsheetDocument (including their Russian spellings). Other types, including DataCompositionSchema and binary templates, are refused. Creation initializes the same external content as the EDT wizard: an empty `Templates/<Name>/Template.txt` with a FileAwareTextDocument proxy, or a canonical spreadsheet resource. Use `modify_metadata` with `template:{text:"..."}` to fill a TextDocument; read its text and `contentHash` with `get_metadata_details`.
 
+## External data source structure
+
+Describe an external data source by hand with these addresses (English or Russian type/kind tokens):
+
+- `ExternalDataSource.E.Table.T` (`ВнешнийИсточникДанных.E.Таблица.T`).
+- `ExternalDataSource.E.Table.T.Field.F` (`...Таблица.T.Поле.F`).
+- `ExternalDataSource.E.Function.Fn` (`...Функция.Fn`).
+- `ExternalDataSource.E.Cube.C` (`...Куб.C`): create and delete only.
+- Existing `Command` and `Template` kinds also work below a Table.
+
+This DESCRIBES the structure. Connecting to the DBMS and importing its schema stays in EDT's External Data Source wizard.
+
+Creation takes only `synonym` (with optional `language`) and `comment` for Table, Field and Function; `templateType` applies only to a Template. Set other properties with a second `modify_metadata` call. A new Table/Field has an empty `nameInDataSource`; supply it with that call. Function has `expressionInDataSource`, not `nameInDataSource`.
+
+For example, create `ExternalDataSource.E.Table.T`, then call `modify_metadata` with that FQN and `properties:[{name:"nameInDataSource",value:"dbo.t"}]`. Create `...Table.T.Field.F`, then modify that field's `nameInDataSource` and `type` as needed. Results use the canonical stored address, including for Russian tokens.
+
+Table defaults come from EDT: `tableDataType=NonobjectData`, `useStandardCommands=true`, `editType=InDialog`. Field defaults include `String(10)` and `allowNull=true`. Function gets a String type and `returnValue=true`. Field/Function retyping sets the type without resetting their other properties, matching EDT.
+
+With `modify_metadata`, Table properties include `nameInDataSource`, `tableType` (`Table` or `Expression`), `expressionInDataSource`, `tableDataType` (`ObjectData` or `NonobjectData`), `useStandardCommands`, `quickChoice`, `editType` and `readOnly`. `tableType=Expression` requires `expressionInDataSource`. `tableDataType=ObjectData` requires `keyFields`; set those in EDT (a validation marker remains until then). `presentationField` takes one of this Table's own fields, such as `ExternalDataSource.E.Table.T.Field.F`. `parentField` takes an own field whose single type is a reference to this same Table; give the field that type in the EDT designer. A field of another Table is refused for both, as in EDT's designer.
+
+Field properties include `nameInDataSource`, `type`, `allowNull`, `readOnly`, `passwordMode`, `mask` and `multiLine`; Function properties include `type`, `returnValue` and `expressionInDataSource`. Table `keyFields`, `inputByString` and `dataLockFields` lists are outside this surface; configure them in EDT.
+
+Tables are separate files: `src/ExternalDataSources/E/Tables/T/T.mdo`, registered by `<tables>ExternalDataSource.E.Table.T</tables>` in `src/ExternalDataSources/E/E.mdo`. The Table records `<parentDataSource>ExternalDataSource.E</parentDataSource>`. Fields, commands and templates export through the Table's file; functions live in the source's file. A Cube is a separate file too: `src/ExternalDataSources/E/Cubes/C/C.mdo` with `<parentDataSource>ExternalDataSource.E</parentDataSource>`, and the source's `.mdo` gains `<cubes>ExternalDataSource.E.Cube.C</cubes>`.
+
+`get_metadata_details` with `full:true` renders a Table with its properties and a `Table Fields` table (each field with its type), and a Cube with its parent data source and dimension tables; use `assignable:true` for Field/Function properties. `delete_metadata` runs EDT's delete refactoring on the addressed node, also for a source that still has Tables or Cubes, then exports the file that registers the node: the source's `.mdo` for a Table, Cube or Function, the Table's `.mdo` for a Field. Deleting a Table removes its `<tables>` line from the source's `.mdo` and its `Tables/T/` folder; deleting a source that still has Tables and Cubes removes the whole `src/ExternalDataSources/E/` directory, child files included. After a forced delete, `persisted=false` means that file still lists the node or could not be read.
+
+Role `rights[].object` can address these tables and fields. Orphan-rights cleanup judges their addresses present or absent and removes a right only when its address is proven absent; a list holding an unresolved reference, a case-only match, a stale reference or a model that is not ready leaves the right in place. Membership content (subsystem content, catalog owners, register records), exchange-plan content and common-attribute content refuse an EDS member address before writing: `<surface> does not support ExternalDataSource members. Use the EDT designer for this operation; ...`.
+
+Boundaries: no Table forms, Cube DimensionTable/dimensions/resources, `rename_metadata_object` or `adopt_metadata_object` on EDS members (use the EDT designer), EDS member listing through `get_metadata_objects` (#447), or `ExternalDataSourceTableRef` value types. Use the addresses above for direct structure editing.
+
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

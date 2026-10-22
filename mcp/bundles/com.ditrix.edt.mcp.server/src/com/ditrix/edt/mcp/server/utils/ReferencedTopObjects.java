@@ -77,7 +77,7 @@ public final class ReferencedTopObjects
         return (bm.bmIsTop() ? bm : bm.bmGetTopObject()).bmGetFqn();
     }
 
-    /** The folder used for each supported referenced top class; Cube needs stand confirmation. */
+    /** The folder of each supported referenced top class: {@code Tables/<T>/} and {@code Cubes/<C>/}. */
     public static String folderFor(EClass type)
     {
         if ("Table".equals(type.getName())) //$NON-NLS-1$

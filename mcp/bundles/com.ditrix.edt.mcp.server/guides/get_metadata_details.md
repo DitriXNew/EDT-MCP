@@ -66,4 +66,4 @@ A TextDocument template FQN (`CommonTemplate.Name` or `<Type>.<Owner>.Template.N
 
 ## External data source members
 
-`ExternalDataSource.E.Table.T` and `...Cube.C` render their full details. For `...Table.T.Field.F` or `ExternalDataSource.E.Function.Fn`, use `assignable:true`. See the create_metadata guide, "External data source structure", for the editing contract and boundaries.
+With `full:true`, `ExternalDataSource.E.Table.T` renders its properties and a `Table Fields` table (each field with its type), and `...Cube.C` renders its parent data source and dimension tables. For `...Table.T.Field.F` or `ExternalDataSource.E.Function.Fn`, use `assignable:true`. See the create_metadata guide, "External data source structure", for the editing contract and boundaries.
