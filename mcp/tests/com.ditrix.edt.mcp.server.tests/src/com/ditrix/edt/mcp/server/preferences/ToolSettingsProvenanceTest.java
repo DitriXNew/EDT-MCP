@@ -264,7 +264,7 @@ public class ToolSettingsProvenanceTest
         fresh.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.DEFAULT_DISABLED_TOOLS);
         ToolSettingsService.ensureMigratedForTest(fresh);
-        assertEquals(Set.of("git", "ask_workmate"), disabled(fresh));
+        assertEquals(Set.of("git", "ask_workmate", "get_form_screenshot"), disabled(fresh));
         assertTrue(fresh.isDefault(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertFalse(fresh.contains(PRESET_ID));
     }
@@ -294,7 +294,7 @@ public class ToolSettingsProvenanceTest
         recorded.setValue(PRESET_ID, "code-review");
         ToolSettingsService.ensureMigratedForTest(recorded);
         // Recorded identity drives v14 only; the unrecognized shape gets no v1-v12 preset additions.
-        Set<String> expected = new HashSet<>(Set.of("user_disabled_tool", "ask_workmate"));
+        Set<String> expected = new HashSet<>(Set.of("user_disabled_tool", "ask_workmate", "get_form_screenshot"));
         expected.addAll(CODE_REVIEW_ADDITIONS.get(14));
         assertEquals(expected, disabled(recorded));
         assertEquals("code-review", recorded.getString(PRESET_ID));
@@ -306,7 +306,7 @@ public class ToolSettingsProvenanceTest
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 3);
         recorded.setValue(PRESET_ID, "development");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        assertEquals(Set.of("user_disabled_tool"), disabled(recorded));
+        assertEquals(Set.of("user_disabled_tool", "get_form_screenshot"), disabled(recorded));
         assertEquals("development", recorded.getString(PRESET_ID));
     }
 

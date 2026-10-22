@@ -124,18 +124,6 @@ public final class EditorScreenshotHelper
         }
     }
 
-    // ==================== Native render mode ====================
-
-    /**
-     * Ensures that the native buffered render mode is enabled so that
-     * {@code getFormImageData()} returns valid image data.
-     * Should be called before opening a form editor.
-     */
-    public static void ensureBufferedNativeRenderMode()
-    {
-        NativeRenderModeProbe.ensureBufferedNativeRenderMode();
-    }
-
     // ==================== Editor opening ====================
 
     /**
@@ -248,8 +236,11 @@ public final class EditorScreenshotHelper
 
         try
         {
-            // Close existing editor so we apply current render mode. The form editor matching
-            // strategy recognizes a FileEditorInput for an already-open granular editor.
+            // Close an editor already open on this form, then reopen it below with the granular input
+            // resolved above, so the identity guards run against an editor built from that input. The
+            // render mode cannot change at runtime, so this is not about the render mode. The form
+            // editor matching strategy recognizes a FileEditorInput for an already-open granular editor.
+            // The close passes save=false: unsaved designer edits in that editor are discarded.
             IEditorPart existingEditor = page.findEditor(new FileEditorInput(formFile));
             if (existingEditor != null)
             {

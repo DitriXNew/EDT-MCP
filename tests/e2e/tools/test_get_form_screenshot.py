@@ -30,8 +30,8 @@ RENDER DEPENDENCY (the headline trap — a blank/empty result is NOT a bug)
   the offscreen handler is absent, extractFormImageData + the Control.print
   fallback both return null, and the tool returns the CLEAN sentinel error
   "Form image data is not available" (or "WYSIWYG viewer is not available" /
-  "...WYSIWYG page is not available"). ensureBufferedNativeRenderMode() is
-  best-effort and cannot retrofit the handler at runtime. Therefore the happy
+  "...WYSIWYG page is not available"). Changing the launch flag requires an
+  EDT restart; the screenshot tool only reads the render mode. Therefore the happy
   path asserts the REAL render-dependent contract: EITHER a genuine PNG blob OR
   one of the documented render-unavailable sentinels — never a crash, never an
   opaque/empty response, never a no-image-no-error. It does NOT assert a specific
@@ -60,6 +60,8 @@ FIXTURE TRUTH (TestConfiguration, English Names)
   Catalog "Catalog" exists but is the WRONG KIND for a 2-part form FQN.
 """
 
+import os
+
 from harness import (
     buffered_form_render_at_startup,
     native_form_layout_render_mode,
@@ -71,7 +73,104 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    _post,
 )
+
+# CI and the stands opt the server in to get_form_screenshot before boot, so the rest of this
+# module can exercise it. Set EDT_MCP_FORM_SCREENSHOT_DEFAULT_E2E=1 only against a server whose
+# Tools preferences are the shipped defaults: then the default-off contract below runs and the
+# opt-in check skips (run it with --filter test_screenshot_is_disabled_by_default).
+SCREENSHOT_DEFAULT_SERVER = os.environ.get("EDT_MCP_FORM_SCREENSHOT_DEFAULT_E2E", "").strip() not in (
+    "", "0", "false", "no")
+
+
+def _advertised_tools():
+    raw = _post("tools/list", {})
+    return set(t["name"] for t in (raw.get("result", {}).get("tools", []) or []))
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_screenshot_is_disabled_by_default_and_refused():
+    """A default server must NOT advertise get_form_screenshot, and must refuse to run it.
+
+    Mutation check: a wrong default, a migration that skipped the stored list, or a
+    "Restore Defaults" that clears the disabled set would put back a tool whose launch flag
+    turns the human's form designer into a grey rectangle for the whole session.
+    """
+    if not SCREENSHOT_DEFAULT_SERVER:
+        raise E2ESkip("this server has get_form_screenshot ENABLED on purpose (CI and the stands "
+                      "opt in); set EDT_MCP_FORM_SCREENSHOT_DEFAULT_E2E=1 against a server with "
+                      "default Tools preferences to assert the default-off contract")
+
+    # Reveal the forms toolset first, so an absence below is the disabled set and not
+    # progressive disclosure hiding the tool.
+    assert_ok(call("enable_toolset", {"toolsets": ["forms"]}), "reveal forms before listing")
+    if "get_form_screenshot" in _advertised_tools():
+        raise AssertionError(
+            "get_form_screenshot must be DISABLED by default: it appeared in tools/list.")
+
+    # The shared disabled-tool path answers with TEXT flagged isError and no structured payload.
+    r = call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"})
+    expected = "Tool 'get_form_screenshot' is disabled by the user"
+    if expected not in (r.text or ""):
+        raise AssertionError(
+            "a disabled tool must answer with the shared disabled-path message %r, got: %r"
+            % (expected, (r.text or "")[:300]))
+    if not r.is_error:
+        raise AssertionError(
+            "a disabled tool must answer with isError:true, got a success: %r" % (r.text or "")[:300])
+    if r.structured or _blob(r):
+        raise AssertionError(
+            "the disabled path carries no structured payload or image - anything here means the "
+            "tool RAN: %r" % (r.structured or "<image blob>"))
+
+    assert_no_diff("a refused call must not touch the project on disk")
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_screenshot_is_explicitly_enabled_and_advertises_the_session_warning():
+    """CI opts in before boot; stands must enable the tool in the Tools preferences.
+
+    This is a failure if setup forgot the opt-in, so screenshot coverage cannot silently
+    become disabled-tool skips. A default server's omission is pinned by
+    test_screenshot_is_disabled_by_default_and_refused (opt-in by environment) and by
+    FormScreenshotVisibilityTest.
+    """
+    if SCREENSHOT_DEFAULT_SERVER:
+        raise E2ESkip("EDT_MCP_FORM_SCREENSHOT_DEFAULT_E2E is set: this server keeps the default "
+                      "Tools preferences, so get_form_screenshot is off by design")
+    assert_ok(call("enable_toolset", {"toolsets": ["forms"]}), "reveal forms for screenshot checks")
+    raw = _post("tools/list", {})
+    tools = (raw.get("result") or {}).get("tools") or []
+    entry = next((tool for tool in tools if tool.get("name") == "get_form_screenshot"), None)
+    assert entry is not None, (
+        "Enable get_form_screenshot in Window > Preferences > MCP Server > Tools before "
+        "running screenshot e2e; CI seeds this explicit opt-in before EDT boots")
+    description = entry.get("description", "")
+    for clause in ("ATTENTION", "disabled by default", "-DnativeFormBufferedLayoutRender=true",
+                   "1cedt.ini", "grey rectangle", "EDT behaviour", "whole session", "restart",
+                   "get_tool_guide('get_form_screenshot')"):
+        assert clause in description, "screenshot description lost %r: %s" % (clause, description)
+    assert_no_diff("listing the explicitly enabled screenshot tool is read-only")
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_screenshot_preserves_startup_modes_and_requested_properties():
+    """An attempted capture may return a render sentinel; it must never change JVM flags."""
+    before = call("get_server_status", {})
+    assert_ok(before, "render flags before capture")
+    before_flags = before.structured["formRenderFlags"]
+    r = call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"})
+    if r.is_error:
+        assert any(sentinel in r.error_text() for sentinel in _RENDER_UNAVAILABLE_SENTINELS), r.error_text()
+    else:
+        _png(r, "capture without any render-mode mutation")
+    after = call("get_server_status", {})
+    assert_ok(after, "render flags after capture")
+    assert after.structured["formRenderFlags"] == before_flags, (
+        "get_form_screenshot changed EDT's startup modes or requested JVM properties")
+    assert all("forcedAtRuntime" not in state for state in before_flags.values()), before_flags
+    assert_no_diff("capturing a form must not touch project files")
 
 
 # The PNG signature, base64-encoded, always begins with "iVBOR" (bytes 89 50 4E 47).
