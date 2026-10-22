@@ -77,6 +77,40 @@ public final class ReferencedTopObjects
         return (bm.bmIsTop() ? bm : bm.bmGetTopObject()).bmGetFqn();
     }
 
+    /**
+     * File owner of a resolved metadata address, preserving its spelling. The shared child grammar
+     * and referenced-top collection rule identify each separate root; contained members keep the
+     * last such root. Other addresses retain their leading Type.Name owner.
+     */
+    public static String fileOwnerFqn(String fqn)
+    {
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        if (parts.length <= 2)
+        {
+            return fqn;
+        }
+        String fileOwner = parts[0] + "." + parts[1]; //$NON-NLS-1$
+        String typeName = MetadataTypeUtils.toEnglishSingular(parts[0]);
+        Object type = typeName == null ? null : MdClassPackage.eINSTANCE.getEClassifier(typeName);
+        EClass ownerType = type instanceof EClass ? (EClass)type : null;
+        String address = fileOwner;
+        for (int i = 2; i + 1 < parts.length; i += 2)
+        {
+            EReference child = MetadataNodeResolver.childFeature(ownerType, parts[i]);
+            if (child == null)
+            {
+                break;
+            }
+            address += '.' + parts[i] + '.' + parts[i + 1];
+            if (isReferencedTopCollection(child))
+            {
+                fileOwner = address;
+            }
+            ownerType = child.getEReferenceType();
+        }
+        return fileOwner;
+    }
+
     /** The folder of each supported referenced top class: {@code Tables/<T>/} and {@code Cubes/<C>/}. */
     public static String folderFor(EClass type)
     {

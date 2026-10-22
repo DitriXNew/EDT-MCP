@@ -60,6 +60,7 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -1502,6 +1503,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * prevent. Scoping by the owning node instead widens the answer to that node's problems, which
      * is visible in every row's Location and never hides one.</p>
      *
+     * <p>Referenced top objects are marker roots too: their contained members use the file owner
+     * declared by the shared metadata grammar, while a Table/Cube address itself stays exact.</p>
+     *
      * @param normFqn the type-normalized address that resolved
      * @return the owning node's address, or {@code null} when {@code normFqn} is already it
      */
@@ -1523,7 +1527,8 @@ public class GetProjectErrorsTool implements IMcpTool
             // Type.Name is the object itself, and a one-segment address names nothing narrower.
             return null;
         }
-        return parts[0] + "." + parts[1]; //$NON-NLS-1$
+        String owner = ReferencedTopObjects.fileOwnerFqn(normFqn);
+        return normFqn.equals(owner) ? null : owner;
     }
 
     /**
