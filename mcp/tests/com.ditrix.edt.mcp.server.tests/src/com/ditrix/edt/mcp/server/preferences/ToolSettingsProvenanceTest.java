@@ -47,7 +47,9 @@ public class ToolSettingsProvenanceTest
         Map.entry(9, Set.of("cancel_job", "delete_infobase", "delete_metadata")),
         Map.entry(10, Set.of("debug_pause")),
         Map.entry(11, Set.of("import_project_from_file")),
-        Map.entry(12, Set.of(EXPORT)));
+        Map.entry(12, Set.of(EXPORT)),
+        Map.entry(14, Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
+            "create_project", "resync_to_disk", "clean_project")));
 
     private final ToolSettingsService service = ToolSettingsService.getInstance();
     private PreferenceStore store;
@@ -185,7 +187,8 @@ public class ToolSettingsProvenanceTest
             ToolSettingsService.ensureMigratedForTest(legacy);
             assertEquals(entry.getValue(), legacy.getString(PRESET_ID));
             assertEquals(entry.getKey().getDisabledTools(), disabled(legacy));
-            assertEquals(13, legacy.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+            assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+                legacy.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             int[] writes = {0};
             legacy.addPropertyChangeListener(event -> writes[0]++);
             ToolSettingsService.ensureMigratedForTest(legacy);
@@ -290,7 +293,9 @@ public class ToolSettingsProvenanceTest
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 1);
         recorded.setValue(PRESET_ID, "code-review");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        Set<String> expected = Set.of("user_disabled_tool", "ask_workmate");
+        // Recorded identity drives v14 only; the unrecognized shape gets no v1-v12 preset additions.
+        Set<String> expected = new HashSet<>(Set.of("user_disabled_tool", "ask_workmate"));
+        expected.addAll(CODE_REVIEW_ADDITIONS.get(14));
         assertEquals(expected, disabled(recorded));
         assertEquals("code-review", recorded.getString(PRESET_ID));
     }

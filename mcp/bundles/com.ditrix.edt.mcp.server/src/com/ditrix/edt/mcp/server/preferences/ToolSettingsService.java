@@ -82,6 +82,14 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> READ_ONLY_V12_ADDITIONS = Set.of(
         "export_configuration_to_file"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V14_ADDITIONS = Set.of(
+        "switch_git_branch", //$NON-NLS-1$
+        "create_git_branch", //$NON-NLS-1$
+        "set_branch_infobase", //$NON-NLS-1$
+        "create_project", //$NON-NLS-1$
+        "resync_to_disk", //$NON-NLS-1$
+        "clean_project"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -94,7 +102,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(9, READ_ONLY_V9_ADDITIONS),
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
-        Map.entry(12, READ_ONLY_V12_ADDITIONS));
+        Map.entry(12, READ_ONLY_V12_ADDITIONS),
+        Map.entry(14, READ_ONLY_V14_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -108,7 +117,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(9, READ_ONLY_V9_ADDITIONS),
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
-        Map.entry(12, READ_ONLY_V12_ADDITIONS));
+        Map.entry(12, READ_ONLY_V12_ADDITIONS),
+        Map.entry(14, READ_ONLY_V14_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -275,6 +285,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * stale names do not date a profile. Default-valued stores keep no ID. Existing IDs are never
      * overwritten; a missing ID on a store already at version 13 is custom without another guess.
      * <p>
+     * Version 14 uses the recorded read-only promise to disable the six workspace/git writers
+     * missed by earlier presets. It runs after the v13 stamp so a legacy store receives both in
+     * one pass. Owner edits and provenance are retained; post-v13 stores without an ID are custom.
+     * The disabled set is written once, after both steps; later reads never reapply v14.
+     * <p>
      * Keep v1-v12 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
      * {@link ToolPreset#isReadOnly()} / {@link ToolPreset#isNoDebug()} promises, independent of owner
      * edits. Universal default-off additions (like v1 and v3) still apply to every explicit list.
@@ -378,10 +393,6 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // export_configuration_to_file is new and drives the Designer against an infobase.
                 changed |= migrateConfigurationFileExportIntoReadOnlyPresets(disabled);
             }
-            if (changed)
-            {
-                store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
-            }
             if (storedVersion < 13 && !store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID))
             {
                 // Resolve once toward the historical preset's promise, after the launch rename.
@@ -389,9 +400,24 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID,
                     recognizeStoredPreset(disabled).getId());
             }
+            if (storedVersion < 14)
+            {
+                changed |= migrateMutatingToolsIntoReadOnlyPresets(store, disabled);
+            }
+            if (changed)
+            {
+                store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
+            }
         }
         store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
             PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+    }
+
+    /** Adds the v14 writers only for a recorded read-only preset, irrespective of owner edits. */
+    private static boolean migrateMutatingToolsIntoReadOnlyPresets(IPreferenceStore store,
+        Set<String> disabled)
+    {
+        return storedPreset(store).isReadOnly() ? disabled.addAll(READ_ONLY_V14_ADDITIONS) : false;
     }
 
     /** One-shot v13 backfill; later preset migrations must use recorded provenance instead. */
