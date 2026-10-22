@@ -9,17 +9,15 @@ import static org.junit.Assert.*;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 
@@ -171,10 +169,12 @@ public class RenamePreviewPlaceTest
         assertTrue(guide.contains("the same project, objectFqn, newName and effective `timeout` attaches"));
         assertTrue(guide.contains("runs its own preview, and so does a different timeout"));
         assertTrue(guide.contains("A preview whose job ended (timeout or cancellation) while EDT was still "
-            + "building it on its UI thread keeps its place until EDT finishes that work, at most an hour "
-            + "after the timeout"));
+            + "building it on its UI thread keeps its place until EDT finishes building that preview "
+            + "(ending the job stops the waiting, not EDT's work)"));
         assertTrue(guide.contains("a new preview of the same project, objectFqn and newName is refused "
-            + "whatever its `timeout` - retry after EDT finishes."));
+            + "whatever its `timeout` - retry after EDT finishes. A wedged UI thread blocks new previews "
+            + "until EDT is restarted."));
+        assertFalse("No time cap releases a held place", guide.contains("at most an hour"));
         assertFalse(guide.contains("A preview that reported a timeout keeps its place"));
         assertFalse(guide.contains("attach to one job"));
         assertFalse(guide.contains("keeps the timeout budget of the first submission"));
@@ -363,27 +363,117 @@ public class RenamePreviewPlaceTest
         }
     }
 
-    /** Only the cap - not a conclusive end or the Job's done notification - logs the warning. */
-    @Test
-    public void testOnlyACapReleaseLogsAWarning()
+    /**
+     * A place whose UI-thread work has not ended is released by the Job's end signal and by
+     * nothing else - in particular not by time. Work that never ends is a wedged UI thread, and a
+     * new preview would only queue behind it, so no timer may hand its place back.
+     */
+    @Test(timeout = 60_000)
+    public void testAHeldPlaceIsReleasedOnlyByTheEndSignalNeverByTime() throws Exception
     {
-        List<String> warnings = new ArrayList<>();
-        AtomicInteger released = new AtomicInteger();
-        AtomicBoolean observed = new AtomicBoolean();
-        Runnable release = RenameMetadataObjectTool.capAwareRelease("Catalog.Products",
-            released::incrementAndGet, observed::get, warnings::add);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger ended = new AtomicInteger();
+        try
+        {
+            String answer = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", false,
+                300L, blocked(release), ended::incrementAndGet);
+            assertTrue("The wait times out while EDT still builds: " + answer,
+                ToolResult.isErrorPayload(answer));
+            assertFalse("No timer may be armed to release the place", liveThreadNamed("preview place cap"));
 
-        release.run();
-        assertEquals(1, released.get());
-        assertEquals(1, warnings.size());
-        assertTrue(warnings.get(0), warnings.get(0).contains("the UI-thread hand-off of the preview of "
-            + "'Catalog.Products' was not reported done within 3600 seconds after its wait ended, so its "
-            + "preview place was released by the cap. EDT may still be building it"));
+            Thread.sleep(1_500L);
+            assertEquals("Long after the wait ended the place is still held", 0, ended.get());
+            assertFalse("No timer may be armed to release the place", liveThreadNamed("preview place cap"));
 
-        observed.set(true);
-        release.run();
-        assertEquals(2, released.get());
-        assertEquals("A release after the done notification is silent", 1, warnings.size());
+            release.countDown();
+            long deadline = System.nanoTime() + 20_000_000_000L;
+            while (ended.get() == 0 && System.nanoTime() < deadline)
+            {
+                Thread.sleep(10L);
+            }
+            assertEquals("The Job's end signal releases the place exactly once", 1, ended.get());
+            Thread.sleep(200L);
+            assertEquals(1, ended.get());
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    /**
+     * close() ends the job while its settle ignores the interrupt, and NO other request arrives
+     * before the settle returns - so nothing ever calls the release that would mark the place
+     * given back. The hand-off must still see that the job is no longer RUNNING and never start
+     * EDT's UI-thread work after the FAILED outcome was published.
+     */
+    @Test(timeout = 60_000)
+    public void testAJobEndedWithNoRequestInBetweenNeverHandsOff() throws Exception
+    {
+        CountDownLatch settle = new CountDownLatch(1);
+        CountDownLatch inSettle = new CountDownLatch(1);
+        CountDownLatch settled = new CountDownLatch(1);
+        AtomicInteger uiWork = new AtomicInteger();
+        BackgroundJobs jobs = new BackgroundJobs(10, 4);
+        Thread closer = new Thread(jobs::close, "rename-preview-place-test-close-quiet");
+        try
+        {
+            RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> {
+                inSettle.countDown();
+                awaitSwallowingInterrupts(settle);
+                settled.countDown();
+                return null;
+            });
+            String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+                uiWork.incrementAndGet();
+                return PREVIEW;
+            }));
+            assertTrue("The job must reach its settle", inSettle.await(20, TimeUnit.SECONDS));
+
+            closer.start();
+            long deadline = System.nanoTime() + 20_000_000_000L;
+            while (isRunning(jobs, id) && System.nanoTime() < deadline)
+            {
+                Thread.sleep(10L);
+            }
+            JobSnapshot ended = jobs.get(id);
+            assertNotNull(ended);
+            assertEquals(BackgroundJobs.Status.FAILED, ended.getStatus());
+            assertTrue(ended.getErrorMessage(), ended.getErrorMessage().contains("EDT-MCP is stopping"));
+
+            // Deliberately no start() or heldPlaces() here: either would run the release.
+            settle.countDown();
+            assertTrue(settled.await(20, TimeUnit.SECONDS));
+            long quiet = System.nanoTime() + 3_000_000_000L;
+            while (uiWork.get() == 0 && System.nanoTime() < quiet)
+            {
+                Thread.sleep(10L);
+            }
+            assertEquals("A job that left RUNNING must not hand off, released flag or not", 0, uiWork.get());
+            closer.join(30_000L);
+            assertFalse("close() must return once the worker unwound", closer.isAlive());
+            assertEquals("No hand-off holds the place", 0, heldPlaces(tool));
+        }
+        finally
+        {
+            settle.countDown();
+            if (!closer.isAlive())
+            {
+                jobs.close();
+            }
+        }
+    }
+
+    private static boolean liveThreadNamed(String fragment)
+    {
+        for (Thread thread : Thread.getAllStackTraces().keySet())
+        {
+            if (thread.isAlive() && thread.getName().contains(fragment))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isRunning(BackgroundJobs jobs, String id)

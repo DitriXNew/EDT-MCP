@@ -11,8 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
-import java.util.function.Consumer;
 
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -127,19 +125,15 @@ public class RenameMetadataObjectTool implements IMcpTool
     private final BackgroundJobs jobs;
 
     /**
-     * Hard cap on how long a preview keeps its place after its UI-thread hand-off stopped being
-     * waited for: the largest accepted {@code timeout}. It only guards against a Job lifecycle that
-     * never reports the hand-off done; a hand-off that ends sooner frees the place when it ends.
-     */
-    private static final long HAND_OFF_RELEASE_CAP_MS = MAX_RENAME_TIMEOUT_SECONDS * 1000L;
-
-    /**
      * One rename preview's place among the {@value #MAX_RUNNING_PREVIEWS}, and its attach entry.
      * <p>
      * The place is held until BOTH the registry job has left RUNNING and every UI-thread hand-off
      * it started has actually ended. A hand-off timeout only stops the WAITING: EDT keeps building
      * the preview on its UI thread, so freeing the place together with the FAILED job would let
-     * retries stack new previews on top of ones EDT is still building. Options are retained so
+     * retries stack new previews on top of ones EDT is still building. There is no time cap on
+     * that hold: a hand-off whose work never ends means EDT's UI thread is wedged, and a new
+     * preview would only queue behind it, so refusing it until EDT is restarted is the honest
+     * answer. Options are retained so
      * attaching cannot silently return another requested plan or slice; the target (the key
      * without the timeout) is retained so such a still-building preview refuses a new preview of
      * the same rename whatever its timeout.
@@ -162,15 +156,32 @@ public class RenameMetadataObjectTool implements IMcpTool
             this.maxResults = maxResults;
         }
 
-        /** @return {@code false} when the place was already given back, so no hand-off may start */
-        synchronized boolean beginHandOff()
+        /**
+         * Starts a hand-off only while the job is still RUNNING in its registry. The released flag
+         * alone is not enough: the registry deadline or {@link BackgroundJobs#close()} can end the
+         * job while nobody calls {@link #releaseIfIdle()}, and a hand-off begun then would build a
+         * preview after its FAILED outcome was already published. The status is read under
+         * {@link #PREVIEW_JOBS_LOCK} and this submission's monitor - the locks the release takes,
+         * in the same order - so the check and the count are one step against the release, and
+         * {@link #jobId} (set under that lock right after admission) is visible.
+         *
+         * @return {@code false} when the job already left RUNNING or the place was given back, so
+         *     no hand-off may start
+         */
+        boolean beginHandOff()
         {
-            if (released)
+            synchronized (PREVIEW_JOBS_LOCK)
             {
-                return false;
+                synchronized (this)
+                {
+                    if (released || !jobRunning())
+                    {
+                        return false;
+                    }
+                    handOffsInFlight++;
+                    return true;
+                }
             }
-            handOffsInFlight++;
-            return true;
         }
 
         /** Called exactly once per begun hand-off, when its work has actually ended. */
@@ -519,10 +530,10 @@ public class RenameMetadataObjectTool implements IMcpTool
                                     if (!placed.beginHandOff())
                                     {
                                         // The job already left RUNNING (its registry deadline, or
-                                        // EDT-MCP stopping) and gave its place back: building the
-                                        // preview now would run uncounted. The registry has already
-                                        // published that terminal outcome, so this failure only
-                                        // stops the work; its text is a fallback.
+                                        // EDT-MCP stopping), whether or not a later request gave
+                                        // its place back: building the preview now would run after
+                                        // its FAILED outcome was published. That outcome stands, so
+                                        // this failure only stops the work; its text is a fallback.
                                         throw new BackgroundJobs.MarkedFailure("The rename preview " //$NON-NLS-1$
                                             + "ended before its hand-off to EDT's UI thread began. " //$NON-NLS-1$
                                             + "Nothing was renamed. Start a new preview.", null); //$NON-NLS-1$
@@ -767,8 +778,9 @@ public class RenameMetadataObjectTool implements IMcpTool
      * this method's return: the deadline stops the waiting, not the work on EDT's UI thread.
      *
      * @param workEnded run exactly once when the work has ended - at once after a conclusive
-     *     outcome, else on the Job's terminal notification (capped by
-     *     {@link #HAND_OFF_RELEASE_CAP_MS}); {@code null} for none
+     *     outcome, else ONLY on the Job's terminal notification. There is no time cap: work that
+     *     never ends is a wedged UI thread, and its place stays held until EDT is restarted;
+     *     {@code null} for none
      */
     static String runRenameBounded(String objectFqn, String newName, boolean confirm, long timeoutMs,
         IRenameAction action, Runnable workEnded)
@@ -776,32 +788,30 @@ public class RenameMetadataObjectTool implements IMcpTool
         RenameProgress progress = new RenameProgress();
         AtomicReference<String> resultRef = new AtomicReference<>();
 
-        AtomicBoolean endObserved = new AtomicBoolean();
-        BoundedJob.DeferredCleanup ended = workEnded == null ? null
-            : new BoundedJob.DeferredCleanup(capAwareRelease(objectFqn, workEnded, endObserved::get,
-                Activator::logWarning), HAND_OFF_RELEASE_CAP_MS, NAME + " preview place cap"); //$NON-NLS-1$
+        Runnable ended = workEnded == null ? null : onceOnly(workEnded);
         BoundedJob.Result result = null;
         try
         {
+            // The Job manager delivers done() for every scheduled job once it ends - ran, raised,
+            // or was cancelled before it started - and BoundedJob runs the callback itself when
+            // scheduling raises. So the done notification is the release for every inconclusive
+            // outcome; no timer stands in for it.
             result = BoundedJob.run(NAME + ": " + objectFqn, timeoutMs, //$NON-NLS-1$
-                monitor -> resultRef.set(action.rename(progress)), ended == null ? null : () -> {
-                    endObserved.set(true);
-                    ended.jobFinished();
-                });
+                monitor -> resultRef.set(action.rename(progress)), ended);
         }
         finally
         {
-            if (ended != null)
+            // Released at once only when the work provably ended or never started: COMPLETED,
+            // TIMED_OUT_BEFORE_START (our cancel kept it from starting), or run() raising - it
+            // raises only before the job is scheduled, or from the scheduler after running the
+            // callback itself. TIMED_OUT, INTERRUPTED and NOT_RUN (a suspended Job manager may
+            // still run the job) wait for the done notification.
+            boolean conclusive = result == null
+                || result.getOutcome() == BoundedJob.Outcome.COMPLETED
+                || result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START;
+            if (ended != null && conclusive)
             {
-                // NOT_RUN is not conclusive either: a suspended Job manager may still run the job.
-                boolean conclusive = result != null
-                    && (result.getOutcome() == BoundedJob.Outcome.COMPLETED
-                        || result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
-                if (conclusive)
-                {
-                    endObserved.set(true);
-                }
-                ended.afterBoundedWait(conclusive);
+                ended.run();
             }
         }
 
@@ -844,30 +854,20 @@ public class RenameMetadataObjectTool implements IMcpTool
     }
 
     /**
-     * The place release handed to the {@link BoundedJob.DeferredCleanup}: when it runs before the
-     * work was seen to end - the {@link #HAND_OFF_RELEASE_CAP_MS} cap fired instead of the Job's
-     * done notification - it logs a warning first, because EDT may still be building the preview
-     * whose place is now free.
+     * Wraps the place release so the done notification and a conclusive outcome, which can both
+     * arrive, release it exactly once.
      *
-     * @param objectFqn the rename target, for the warning
-     * @param workEnded the place release itself
-     * @param endObserved whether a conclusive outcome or the Job's done notification was seen
-     * @param warning the warning sink (production: {@link Activator#logWarning})
-     * @return the release to run exactly once
+     * @param release the place release itself
+     * @return the release to run any number of times, acting on the first call only
      */
-    static Runnable capAwareRelease(String objectFqn, Runnable workEnded, BooleanSupplier endObserved,
-        Consumer<String> warning)
+    static Runnable onceOnly(Runnable release)
     {
+        AtomicBoolean done = new AtomicBoolean();
         return () -> {
-            if (!endObserved.getAsBoolean())
+            if (done.compareAndSet(false, true))
             {
-                warning.accept(NAME + ": the UI-thread hand-off of the preview of '" + objectFqn //$NON-NLS-1$
-                    + "' was not reported done within " + HAND_OFF_RELEASE_CAP_MS / 1000L //$NON-NLS-1$
-                    + " seconds after its wait ended, so its preview place was released by the " //$NON-NLS-1$
-                    + "cap. EDT may still be building it, and a new preview queues behind it on " //$NON-NLS-1$
-                    + "EDT's UI thread."); //$NON-NLS-1$
+                release.run();
             }
-            workEnded.run();
         };
     }
 
