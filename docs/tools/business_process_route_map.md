@@ -13,8 +13,6 @@ Read, replace or remove a BusinessProcess route map. Call action='get' before re
 | language | — | string | Configuration language code for point and connection titles. |
 
 ## Guide
-## Guide
-
 Use `business_process_route_map` to read, replace or remove the separate route-map document of a top-level `BusinessProcess`. Call `action="get"` before replacing it. Creating a BusinessProcess with `create_metadata` does not seed a route map; use `replace` afterwards.
 
 ## Parameter details
@@ -68,7 +66,7 @@ Remove the document:
 
 `get` returns `routeMapExists`, `routeMapFqn`, `file`, the `points` and `connections` arrays, and `defaults.sizes` / `defaults.ports`. An absent document returns `routeMapExists=false` and empty arrays with defaults. Point geometry is returned as `bounds`. Existing editor-authored Switch cases, subprocess references, event handlers and addressing-attribute names are readable.
 
-Writes return item counts in `points` / `connections`, `persisted`, and `writtenProjects` after the shared export barrier. Replace reports the written counts. Remove reports the discarded counts. `file` is the path supplied by EDT's project filesystem service; use this returned path instead of constructing a filename. Only the route-map top object is exported; the owning metadata file has a transient flowchart reference.
+Writes return item counts in `points` / `connections`, `persisted`, and `writtenProjects` after the shared export barrier. Replace reports the written counts. Remove reports the discarded counts. `file` is the path supplied by EDT's project filesystem service; use this returned path instead of constructing a filename. Replacement exports the route-map top object. Removal is persisted when its file is confirmed absent on disk after the shared export barrier. The owning metadata file has a transient flowchart reference and is unchanged.
 
 EDT owns graph validation, including Start/completion reachability and split/join rules. The tool reports markers sliced by both the BusinessProcess FQN and the route-map FQN. Replacement with an empty route-map marker slice returns `markersIncomplete=true` with a reason and never claims `markerCount:0`. Re-check with `get_project_errors` or the EDT route-map editor. Removal checks only the owning BusinessProcess; it does not validate the deleted route-map document.
 

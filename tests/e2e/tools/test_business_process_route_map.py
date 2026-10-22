@@ -77,19 +77,48 @@ def _local(tag):
     return tag.rsplit("}", 1)[-1]
 
 
-def _value(node, key, default=None):
-    # EMF XML features may be attributes or child elements; assert their values.
-    if key in node.attrib:
-        return node.attrib[key]
+def _props(node):
     for child in node:
-        if _local(child.tag) == key:
-            return child.text or ""
+        if _local(child.tag) == "Properties":
+            return child
+    return None
+
+
+def _end(node, side):
+    props = _props(node)
+    if props is not None:
+        for child in props:
+            if _local(child.tag) == "Connect":
+                for end in child:
+                    if _local(end.tag) == side:
+                        return {_local(c.tag): (c.text or "") for c in end}
+    return {}
+
+
+def _value(node, key, default=None):
+    # EDT exports xcf/scheme XML, not EMF feature names.
+    if key == "pointUUID":
+        return node.attrib.get("uuid", default)
+    if key == "id":
+        return node.attrib.get("id", default)
+    ends = {"sourceItemName": ("From", "Item"), "targetItemName": ("To", "Item"),
+            "sourcePortIndex": ("From", "PortIndex"), "targetPortIndex": ("To", "PortIndex")}
+    if key in ends:
+        side, tag = ends[key]
+        return _end(node, side).get(tag, default)
+    props = _props(node)
+    if props is not None:
+        tag = {"name": "Name"}.get(key, key)
+        for child in props:
+            if _local(child.tag) == tag:
+                return child.text or ""
     return default
 
 
 def _disk(data, names):
-    text = poll_disk_contains_all(_file(data), ["pointUUID"] + list(names), ctx="export route-map document")
+    text = poll_disk_contains_all(_file(data), ["uuid="] + list(names), ctx="export route-map document")
     document = ET.fromstring(text)
+    assert document.tag == "{http://v8.1c.ru/8.3/xcf/scheme}GraphicalSchema", document.tag
     items = {}
     for node in document.iter():
         name = _value(node, "name")
@@ -101,9 +130,13 @@ def _disk(data, names):
 
 
 def _bounds(node):
-    matches = [child for child in node if _local(child.tag) == "bounds"]
+    props = _props(node)
+    assert props is not None, ET.tostring(node, encoding="unicode")
+    matches = [child for child in props if _local(child.tag) == "Location"]
     assert len(matches) == 1, ET.tostring(node, encoding="unicode")
-    return {key: int(_value(matches[0], key, "0")) for key in ("x", "y", "width", "height")}
+    box = {key: int(matches[0].attrib[key]) for key in ("top", "left", "bottom", "right")}
+    return {"x": box["left"], "y": box["top"],
+            "width": box["right"] - box["left"], "height": box["bottom"] - box["top"]}
 
 
 def _assert_basic_read(fqn):
@@ -193,7 +226,7 @@ def test_the_route_map_survives_clean_project():
         _disk(result, ["Begin", "Task", "Done", "BeginTask", "TaskDone"])
         clean = call("clean_project", {"projectName": PROJECT})
         assert_ok(clean, "reimport the separately attached route map")
-        wait_for_project_ready(PROJECT)
+        wait_for_project_ready()
         _assert_basic_read(fqn)
         _disk(result, ["Begin", "Task", "Done", "BeginTask", "TaskDone"])
 
@@ -225,7 +258,7 @@ def test_replace_over_an_existing_map_goes_through_consent_and_remove_deletes_th
         assert removed.structured["points"] == len(POINTS)
         assert removed.structured["connections"] == len(CONNECTIONS)
         assert "No markers were observed for the route-map FQN" not in removed.structured.get("message", "")
-        poll_disk_path_gone(_file(second), ctx="detach plus export must delete Flowchart.scheme")
+        poll_disk_path_gone(_file(second), ctx="global commit must delete Flowchart.scheme")
         assert _get(fqn)["routeMapExists"] is False
         error = assert_error(call(TOOL, {"projectName": PROJECT, "fqn": fqn, "action": "remove"}))
         assert_error_quality(error, names=[fqn], suggests=["replace"])

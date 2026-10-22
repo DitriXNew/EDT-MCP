@@ -1600,23 +1600,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     Boolean fileOnDisk(String projectName, String path)
     {
-        if (projectName == null || path == null)
-        {
-            return null;
-        }
-        try
-        {
-            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
-            com.ditrix.edt.mcp.server.utils.ProjectContext context =
-                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
-            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
-            return location == null ? null : Boolean.valueOf(location.toFile().exists());
-        }
-        catch (RuntimeException e)
-        {
-            Activator.logError("delete_metadata: could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            return null;
-        }
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.fileOnDisk(projectName, path);
     }
 
     /**

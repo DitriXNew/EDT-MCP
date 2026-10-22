@@ -122,7 +122,7 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
             .booleanProperty("routeMapExists", "Whether the route-map top object exists.")
             .objectProperty("defaults", "Platform sizes per kind [width,height] and default ports.")
             .stringProperty("language", "Resolved title language code, when configured.")
-            .booleanProperty("persisted", "Whether the export was submitted.")
+            .booleanProperty("persisted", "Whether replacement export was submitted or removal was confirmed on disk.")
             .stringArrayProperty("writtenProjects", "Projects written by this call."))
             .build()).getAsJsonObject();
         for (String key : List.of("points", "connections"))
@@ -310,7 +310,17 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
                     return null;
                 };
                 applyMutation(model, args.action(), mutation);
-                boolean persisted = BmTransactions.forceExportToDisk(ctx.project, snapshot.schemeFqn());
+                boolean persisted = false;
+                if (args.action().equals("remove"))
+                {
+                    // The global commit deletes detached content; there is no scheme left to export.
+                    // The owner's flowchart reference is transient, so its .mdo is unchanged.
+                    WriteScope.recordWrite(ctx.project);
+                }
+                else
+                {
+                    persisted = BmTransactions.forceExportToDisk(ctx.project, snapshot.schemeFqn());
+                }
                 return writeResult(args.action(), preview, args.request()).put("fqn", snapshot.ownerFqn())
                     .put("routeMapFqn", snapshot.schemeFqn()).put("file", snapshot.file())
                     .put("persisted", persisted).toJson();
@@ -441,7 +451,16 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
         {
             return result;
         }
-        List<String> slice = success.has("action") && success.get("action").getAsString().equals("remove")
+        boolean remove = success.has("action") && success.get("action").getAsString().equals("remove");
+        if (remove)
+        {
+            // Observe after the shared barrier: a drained queue alone cannot prove deletion.
+            String file = success.has("file") ? success.get("file").getAsString() : null;
+            Boolean present = com.ditrix.edt.mcp.server.utils.ProjectContext.fileOnDisk(
+                params.get("projectName"), file);
+            success.addProperty("persisted", Boolean.FALSE.equals(present));
+        }
+        List<String> slice = remove
             ? List.of(success.get("fqn").getAsString())
             : List.of(success.get("fqn").getAsString(), success.get("routeMapFqn").getAsString());
         WrittenObjectMarkers.Report report = WrittenObjectMarkers.collect(markerEnvironment(),

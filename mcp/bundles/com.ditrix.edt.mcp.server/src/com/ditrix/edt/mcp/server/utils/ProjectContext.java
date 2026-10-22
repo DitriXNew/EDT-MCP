@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -16,6 +17,7 @@ import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.Path;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -74,6 +76,35 @@ public final class ProjectContext
             ? null
             : ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         return new ProjectContext(projectName, resolved);
+    }
+
+    /**
+     * Observes a project-relative file directly, without waiting for a workspace rule.
+     *
+     * @return whether the file exists on disk, or {@code null} when it cannot be observed
+     */
+    public static Boolean fileOnDisk(String projectName, String path)
+    {
+        if (projectName == null || path == null)
+        {
+            return null;
+        }
+        try
+        {
+            ProjectContext context = of(projectName);
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            if (location == null)
+            {
+                return null;
+            }
+            var file = location.toFile().toPath();
+            return Files.exists(file) ? Boolean.TRUE : Files.notExists(file) ? Boolean.FALSE : null;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return null;
+        }
     }
 
     /**
