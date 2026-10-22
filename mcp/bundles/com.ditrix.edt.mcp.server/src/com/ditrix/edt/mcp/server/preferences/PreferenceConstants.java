@@ -109,9 +109,11 @@ public final class PreferenceConstants
      * no-debug preset gains {@code debug_pause}, a tool that did not exist when it was saved;
      * 11 = stored read-only profiles gain the new {@code import_project_from_file} project importer;
      * 12 = they gain the new {@code export_configuration_to_file} infobase dump;
-     * 13 = record preset provenance after the legacy migrations, without adding disabled tools.
+     * 13 = record preset provenance after the legacy migrations, without adding disabled tools;
+     * 14 = a stored read-only profile, identified by its recorded provenance, gains the six
+     * workspace/git writers the presets had missed.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 13;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 14;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$

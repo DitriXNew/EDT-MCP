@@ -42,7 +42,8 @@ public class ToolPresetProvenanceWriteTest
         store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS, PreferenceConstants.DEFAULT_DISABLED_TOOLS);
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
             ToolSettingsService.serializeDisabledTools(ToolPreset.CODE_REVIEW.getDisabledTools()));
-        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 13);
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
         store.setValue(PRESET_ID, "code-review");
         Activator activator = mock(Activator.class);
         when(activator.getPreferenceStore()).thenReturn(store);
@@ -96,7 +97,7 @@ public class ToolPresetProvenanceWriteTest
         service.setToolEnabled("apply_quick_fix", true);
         assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(service.getDisabledTools().contains("apply_quick_fix"));
-        // Model a future preset-owed step without implementing #641 or registering migration 14.
+        // Model a later preset-owed step using the same recorded promise as migration 14.
         Set<String> migrated = new HashSet<>(service.getDisabledTools());
         if (promise(storedPreset(), "isReadOnly"))
         {
@@ -142,7 +143,8 @@ public class ToolPresetProvenanceWriteTest
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
             ToolSettingsService.serializeDisabledTools(snapshot));
         assertEquals("analysis-only", service.getPresetId());
-        assertEquals(13, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test
