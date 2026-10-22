@@ -199,6 +199,155 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Read, replace or remove a BusinessProcess route map. Call action='get' before replacing; replace discards all existing items, preserving point identity only for same-named points. Replacing a non-empty map and removing an existing map require destructive consent. Full parameters and examples: call get_tool_guide('business_process_route_map').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "Operation; replace needs points and connections, even when empty.",
+          "enum": [
+            "get",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "connections": {
+          "description": "Replacement connections: {from,to,name?,title?,fromPort?,toPort?,branch?}; Condition sources require branch='true' or 'false'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "points": {
+          "description": "Replacement points: {name,type,title?,x?,y?,width?,height?,taskDescription?,group?}; omitted sizes use platform defaults.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "business_process_route_map",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "connections": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "defaults": {
+          "type": "object"
+        },
+        "error": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "points": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "routeMapExists": {
+          "type": "boolean"
+        },
+        "routeMapFqn": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT confirm to see the owning tool, state and progress, then again with confirm=true to cancel. Cancellation is not guaranteed - a committed job whose owner declares no destructive stop stays in flight. Parameters and examples: get_tool_guide('cancel_job').",
     "inputSchema": {
       "properties": {
