@@ -173,6 +173,8 @@ def test_create_additional_column_refusals_leave_the_form_unchanged():
     cases = [
         (_address("Extra", owner="E2ERows"), [], ["E2ERows", "ValueTable"], ["Column.<Name>"]),
         (_address("Extra", table="MissingE2ETable"), [], ["MissingE2ETable"], ["available tables"]),
+        (_address("E2ENestedExtra", table=TABLE + ".E2ENested"), [], ["Object.%s.E2ENested" % TABLE],
+         ["nested tables are not created", "Column.<TabularSection>.<Name>"]),
         (_address(REAL), [], [REAL], ["table property"]),
         (_address("E2EExtra"), [], ["E2EExtra"], ["already exists"]),
         (_address("E2EBadProperty"), [{"name": "dataPath", "value": "Object." + TABLE}], ["dataPath"], ["only", "title"]),

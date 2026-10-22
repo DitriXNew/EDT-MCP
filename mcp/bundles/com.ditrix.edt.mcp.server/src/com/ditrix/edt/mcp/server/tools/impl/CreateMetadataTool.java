@@ -306,7 +306,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("tablePath", "Canonical table path of an additional form attribute column") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("tablePath", "Table path of the additional-column entry the column landed in (canonical for a new entry, the stored spelling for a reused one)") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
                 "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
                     + "export queue to drain before answering, so a success normally means the write has "
@@ -2005,19 +2005,31 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /**
      * Writes one form member into the tx-bound form model. This is the one place the parsed address's
      * table token reaches the writer; it never travels in the binding slot. A created additional column
-     * reports the canonical table path of the entry it landed in through {@code createdTablePath[0]}
-     * (issue #737).
+     * reports the table path of the entry it landed in through {@code createdTablePath[0]} (issue #737).
+     * Creation takes ONE table segment: a nested table path is read, modified, renamed and deleted by its
+     * full address, but not created here.
      */
     static String writeFormMember(EObject formModel, FormElementWriter.FormMemberRef ref, // NOSONAR the out-parameters mirror the writer's
         FormElementWriter.Kind kind, String parent, String bind, List<String> tableColumns, String titleLanguage,
         String writeTitleLanguage, String titleText, boolean russianAutoNames, String[] createdKind,
         String[] createdTablePath)
     {
-        return kind == FormElementWriter.Kind.TABLE
-            ? FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
-                writeTitleLanguage, titleText, russianAutoNames, createdKind)
-            : FormElementWriter.createMember(formModel, kind, ref.name, parent, bind,
-                titleLanguage, titleText, russianAutoNames, createdKind, ref.tablePathToken, createdTablePath);
+        if (kind == FormElementWriter.Kind.TABLE)
+        {
+            return FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
+                writeTitleLanguage, titleText, russianAutoNames, createdKind);
+        }
+        List<String> tableSegments = ref.tablePathSegments;
+        if (tableSegments != null && tableSegments.size() > 1)
+        {
+            return "Nested table path '" + String.join(".", ref.additionalTablePath()) //$NON-NLS-1$ //$NON-NLS-2$
+                + "': nested tables are not created by this tool. Create an additional column under a " //$NON-NLS-1$
+                + "tabular section directly below the attribute ('...Attribute." + ref.ownerAttributeName //$NON-NLS-1$
+                + ".Column.<TabularSection>.<Name>'); a nested column that already exists can be read, " //$NON-NLS-1$
+                + "modified, renamed and deleted by its full address."; //$NON-NLS-1$
+        }
+        return FormElementWriter.createMember(formModel, kind, ref.name, parent, bind, titleLanguage, titleText,
+            russianAutoNames, createdKind, tableSegments == null ? null : tableSegments.get(0), createdTablePath);
     }
 
     /** The common part of a created form member's response; {@code tablePath} only for an additional column. */

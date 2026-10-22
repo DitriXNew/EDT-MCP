@@ -114,7 +114,7 @@ public final class FormElementWriter
     @FunctionalInterface
     interface TableResolver
     {
-        AdditionalColumnTable resolve(EObject formModel, String ownerName, String tableToken);
+        AdditionalColumnTable resolve(EObject formModel, String ownerName, List<String> tableSegments);
     }
 
     static TableResolver additionalColumnTables = FormElementWriter::resolveAdditionalColumnTable;
@@ -320,12 +320,16 @@ public final class FormElementWriter
          * dozen call sites, and a column is not that (issue #295).
          */
         public final String ownerAttributeName;
-        /** The one tabular-section segment of an additional-column address; null otherwise. */
-        public final String tablePathToken;
+        /**
+         * The table segments of an additional-column address - every segment between {@code Column} and
+         * the column name, as the caller spelled them ({@code [Goods]} for {@code ...Column.Goods.Extra},
+         * {@code [Sub, Deep]} for {@code ...Column.Sub.Deep.Extra}); {@code null} for every other shape.
+         */
+        public final List<String> tablePathSegments;
 
         /**
          * How many trailing FQN segments {@link #parse} consumed for this member - 2 for a form-level
-         * member or handler, 4 for an item-level handler or direct column, 5 for an additional column. Carried rather
+         * member or handler, 4 for an item-level handler or direct column, 5 or more for an additional column. Carried rather
          * than re-derived: a caller that needs the OWNING FORM cuts this many segments off the
          * address, and re-deriving it from a boolean got the column shape wrong (it is not
          * item-level, yet its tail is 4), which scoped a marker filter to the ATTRIBUTE instead of
@@ -347,7 +351,7 @@ public final class FormElementWriter
         }
 
         FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
-            String itemName, String ownerAttributeName, String tablePathToken, int tailSegments)
+            String itemName, String ownerAttributeName, List<String> tablePathSegments, int tailSegments)
         {
             this.formPath = formPath;
             this.kindToken = kindToken;
@@ -355,7 +359,8 @@ public final class FormElementWriter
             this.itemKindToken = itemKindToken;
             this.itemName = itemName;
             this.ownerAttributeName = ownerAttributeName;
-            this.tablePathToken = tablePathToken;
+            this.tablePathSegments = tablePathSegments == null ? null
+                : Collections.unmodifiableList(new ArrayList<>(tablePathSegments));
             this.tailSegments = tailSegments;
         }
 
@@ -374,7 +379,24 @@ public final class FormElementWriter
         /** Whether this column belongs to an additionalColumns entry rather than owner.columns. */
         public boolean isAdditionalColumn()
         {
-            return tablePathToken != null;
+            return tablePathSegments != null;
+        }
+
+        /**
+         * The stored {@code tablePath} this additional-column address names: the owning attribute, then
+         * every table segment ({@code Object.Goods}, {@code Rows.Sub.Deep}); {@code null} for every other
+         * shape.
+         */
+        public List<String> additionalTablePath()
+        {
+            if (tablePathSegments == null)
+            {
+                return null;
+            }
+            List<String> path = new ArrayList<>();
+            path.add(ownerAttributeName);
+            path.addAll(tablePathSegments);
+            return path;
         }
     }
 
@@ -394,8 +416,9 @@ public final class FormElementWriter
      *       form ITEM) and its {@code CommonForm.FormName.ItemKind.ItemName.Handler.Event} variant</li>
      *   <li>{@code Type.Object.Form.FormName.Attribute.AttrName.Column.ColumnName} (a COLUMN of a
      *       collection-typed form attribute) and its {@code CommonForm.} variant - issue #295</li>
-     *   <li>{@code ...Form.F.Attribute.Object.Column.Table.Name}: an additional column under one
-     *       tabular section, also supported on CommonForm</li>
+     *   <li>{@code ...Form.F.Attribute.Object.Column.Table.Name}: an additional column, every segment
+     *       between {@code Column} and the name being its table path ({@code ...Column.Sub.Deep.Name}
+     *       for a nested one), also supported on CommonForm</li>
      * </ul>
      * The form-element kind tokens are NOT confused with the mdclass member tokens because a mdclass
      * member FQN never carries a form token at position 2 nor starts with {@code CommonForm} followed
@@ -435,10 +458,13 @@ public final class FormElementWriter
             // Item-level handler: ItemKind.ItemName.Handler.Event.
             return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1], tail);
         }
-        if (tail == 5 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
+        if (tail >= 5 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
         {
-            return new FormMemberRef(formPath, p[rem + 2], p[rem + 4], null, null,
-                p[rem + 1], p[rem + 3], tail);
+            // Additional column: Attribute.AttrName.Column.<Table>...<Table>.ColumnName. Every segment
+            // between Column and the name is the table path, so a nested entry (Rows.Sub.Deep) is
+            // addressable too; the tail length alone tells it from a collection column (tail 4).
+            return new FormMemberRef(formPath, p[rem + 2], p[p.length - 1], null, null,
+                p[rem + 1], Arrays.asList(p).subList(rem + 3, p.length - 1), tail);
         }
         if (tail == 4 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
         {
@@ -2556,7 +2582,8 @@ public final class FormElementWriter
         {
             return "Form attribute '" + ownerName + "' is a dynamic list; its columns come from the query."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        AdditionalColumnTable table = additionalColumnTables.resolve(formModel, stringFeature(owner, FEATURE_NAME), tableToken);
+        AdditionalColumnTable table = additionalColumnTables.resolve(formModel, stringFeature(owner, FEATURE_NAME),
+            List.of(tableToken));
         if (table.error != null)
         {
             return table.error;
@@ -2566,23 +2593,17 @@ public final class FormElementWriter
         {
             return additionalColumnClash(name, table.segments);
         }
-        boolean newEntry = entry == null;
-        if (newEntry)
+        if (entry == null)
         {
             entry = createFromFeatureType(owner, FEATURE_ADDITIONAL_COLUMNS);
             if (entry == null)
             {
                 throw modelLacks("Cannot create additional columns for this form model."); //$NON-NLS-1$
             }
-        }
-        // Reuse a case-variant entry, but write canonical keys: EDT's PathKey equality is exact.
-        // This also makes the response's stored tablePath canonical when an older entry is reused.
-        if (!segmentsOf(singleReference(entry, FEATURE_TABLE_PATH)).equals(table.segments))
-        {
+            // A NEW entry takes EDT's canonical spelling. A reused entry, even a case variant, keeps its
+            // stored path: its bound items' dataPaths are keyed on it, EDT compares PathKey exactly, and a
+            // rewrite here would detach them without rewriting their paths (issue #737 review).
             entry.eSet(entry.eClass().getEStructuralFeature(FEATURE_TABLE_PATH), newDataPath(formModel, table.segments));
-        }
-        if (newEntry)
-        {
             addToList(owner, FEATURE_ADDITIONAL_COLUMNS, entry);
         }
         String error = addAttributeColumn(formModel, entry, name, titleLanguage, title, createdKind);
@@ -2631,7 +2652,8 @@ public final class FormElementWriter
         {
             return "Form attribute not found: " + ref.ownerAttributeName; //$NON-NLS-1$
         }
-        AdditionalColumnTable table = additionalColumnTables.resolve(formModel, stringFeature(owner, FEATURE_NAME), ref.tablePathToken);
+        AdditionalColumnTable table = additionalColumnTables.resolve(formModel, stringFeature(owner, FEATURE_NAME),
+            ref.tablePathSegments);
         return table.error != null ? table.error
             : containsName(table.childNames, newName) ? additionalColumnClash(newName, table.segments) : null;
     }
@@ -2648,9 +2670,9 @@ public final class FormElementWriter
     }
 
     private static AdditionalColumnTable resolveAdditionalColumnTable(EObject formModel, String ownerName,
-        String tableToken)
+        List<String> tableSegments)
     {
-        String path = ownerName + '.' + tableToken;
+        String path = ownerName + '.' + String.join(".", tableSegments); //$NON-NLS-1$
         try
         {
             if (!(formModel instanceof Form))
@@ -2678,59 +2700,77 @@ public final class FormElementWriter
             }
             PropertyInfo owner = sources.findPropertyInfo((Form)formModel,
                 (AbstractDataPath)newDataPath(formModel, List.of(ownerName)));
-            if (owner == null || owner.getPropertyInfos() == null
-                || (owner.getPropertyInfos().isEmpty() && !hasTerminalValueType(ownerAttribute)))
+            // Only a MISSING tree is a readiness delay. A built tree may be empty - an object type with
+            // no attributes and no tabular sections has nothing below it - and no retry changes that.
+            if (owner == null || owner.getPropertyInfos() == null)
             {
                 throw new ModelNotReady();
             }
-            PropertyInfo info = sources.findPropertyInfo((Form)formModel,
-                (AbstractDataPath)newDataPath(formModel, List.of(ownerName, tableToken)));
-            if (info == null)
+            // Each table segment is resolved below the one before it, so a nested entry (Rows.Sub.Deep)
+            // is reached as well as a tabular section right under the attribute.
+            List<String> canonical = new ArrayList<>();
+            canonical.add(ownerName);
+            PropertyInfo parent = owner;
+            PropertyInfo info = null;
+            for (int i = 0; i < tableSegments.size(); i++)
             {
-                // EDT path keys may be case-sensitive, so a case variant is found here. An alias (the
-                // Russian name) is found too, but only so that the refusal below can name the table.
-                for (PropertyInfo child : owner.getPropertyInfos())
+                String token = tableSegments.get(i);
+                List<String> lookup = new ArrayList<>(canonical);
+                lookup.add(token);
+                info = sources.findPropertyInfo((Form)formModel, (AbstractDataPath)newDataPath(formModel, lookup));
+                if (info == null)
                 {
-                    if (containsName(Arrays.asList(child.getName(), child.getNameRu()), tableToken))
-                    {
-                        info = child;
-                        break;
-                    }
+                    // EDT path keys may be case-sensitive, so a case variant is found here. An alias (the
+                    // Russian name) is found too, but only so that the refusal below can name the table.
+                    info = childNamed(parent, token);
                 }
-            }
-            if (info == null)
-            {
-                List<String> tables = new ArrayList<>();
-                for (PropertyInfo child : owner.getPropertyInfos())
+                if (info == null)
                 {
-                    if (PropertyInfoUtil.isTable(child))
+                    List<String> tables = new ArrayList<>();
+                    for (PropertyInfo child : parent.getPropertyInfos())
                     {
-                        tables.add(child.getName());
+                        if (PropertyInfoUtil.isTable(child))
+                        {
+                            tables.add(child.getName());
+                        }
                     }
+                    return refusal("No such table '" + token + (i == 0 //$NON-NLS-1$
+                        ? "' on form attribute '" + ownerName : "' under '" + String.join(".", canonical)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "'; available tables: " //$NON-NLS-1$
+                        + (tables.isEmpty() ? "(none)" : String.join(", ", tables)) + '.'); //$NON-NLS-1$ //$NON-NLS-2$
                 }
-                return refusal("No such table '" + tableToken //$NON-NLS-1$
-                    + "' on form attribute '" + ownerName + "'; available tables: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + (tables.isEmpty() ? "(none)" : String.join(", ", tables)) + '.'); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            if (info.getName() == null)
-            {
-                throw new ModelNotReady();
-            }
-            if (!info.getName().equalsIgnoreCase(tableToken))
-            {
-                // One grammar everywhere: every other tool resolves the table segment by its programmatic
-                // name (ignoring case), so an alias accepted here would create a column no later address
-                // could reach.
-                return refusal("Address the table of form attribute '" + ownerName + "' by its name '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + info.getName() + "', not '" + tableToken + "': '...Attribute." + ownerName + ".Column." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + info.getName() + ".<Name>'."); //$NON-NLS-1$
+                if (info.getName() == null)
+                {
+                    throw new ModelNotReady();
+                }
+                if (!info.getName().equalsIgnoreCase(token))
+                {
+                    // One grammar everywhere: every other tool resolves a table segment by its programmatic
+                    // name (ignoring case), so an alias accepted here would create a column no later address
+                    // could reach.
+                    List<String> corrected = new ArrayList<>(canonical.subList(1, canonical.size()));
+                    corrected.add(info.getName());
+                    corrected.addAll(tableSegments.subList(i + 1, tableSegments.size()));
+                    return refusal("Address the table of form attribute '" + ownerName + "' by its name '" //$NON-NLS-1$ //$NON-NLS-2$
+                        + info.getName() + "', not '" + token + "': '...Attribute." + ownerName + ".Column." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + String.join(".", corrected) + ".<Name>'."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                canonical.add(info.getName());
+                if (i < tableSegments.size() - 1)
+                {
+                    if (info.getPropertyInfos() == null)
+                    {
+                        throw new ModelNotReady();
+                    }
+                    parent = info;
+                }
             }
             FormAttributeManagementService management = attributeManagementSource.get();
             if (management == null)
             {
                 return serviceUnavailable(path, "form-attribute management"); //$NON-NLS-1$
             }
-            if (!management.isSupportingColumn(info) || !additionalColumnSource(info))
+            if (info == null || !management.isSupportingColumn(info) || !additionalColumnSource(info))
             {
                 return refusal("Table path '" + path //$NON-NLS-1$
                     + "' does not support additional columns in EDT. Choose a supported object tabular section."); //$NON-NLS-1$
@@ -2745,7 +2785,7 @@ public final class FormElementWriter
                 names.add(child.getName());
                 names.add(child.getNameRu());
             }
-            return new AdditionalColumnTable(List.of(ownerName, info.getName()), names, null);
+            return new AdditionalColumnTable(canonical, names, null);
         }
         catch (ModelNotReady notReady)
         {
@@ -2765,6 +2805,19 @@ public final class FormElementWriter
     private static AdditionalColumnTable refusal(String error)
     {
         return new AdditionalColumnTable(List.of(), List.of(), error);
+    }
+
+    /** The child of {@code parent} named {@code token} in any case, by its English or Russian name. */
+    private static PropertyInfo childNamed(PropertyInfo parent, String token)
+    {
+        for (PropertyInfo child : parent.getPropertyInfos())
+        {
+            if (containsName(Arrays.asList(child.getName(), child.getNameRu()), token))
+            {
+                return child;
+            }
+        }
+        return null;
     }
 
     private static AdditionalColumnTable serviceUnavailable(String path, String service)
@@ -7906,7 +7959,7 @@ public final class FormElementWriter
     {
         EObject owner = findFormAttribute(formModel, ref.ownerAttributeName);
         EObject container = ref.isAdditionalColumn()
-            ? additionalColumnEntry(owner, List.of(ref.ownerAttributeName, ref.tablePathToken)) : owner;
+            ? additionalColumnEntry(owner, ref.additionalTablePath()) : owner;
         return referenceList(container, FEATURE_COLUMNS);
     }
 
@@ -7930,7 +7983,7 @@ public final class FormElementWriter
             paths.add(Objects.toString(tablePathOfEntry(entry), "")); //$NON-NLS-1$
         }
         return ": attribute '" + stringFeature(owner, FEATURE_NAME) + "' has no additional column '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
-            + "' under '" + stringFeature(owner, FEATURE_NAME) + '.' + ref.tablePathToken //$NON-NLS-1$
+            + "' under '" + stringFeature(owner, FEATURE_NAME) + '.' + String.join(".", ref.tablePathSegments) //$NON-NLS-1$ //$NON-NLS-2$
             + "'; its additional-column paths are: " + (paths.isEmpty() ? "(none)" : String.join(", ", paths)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 

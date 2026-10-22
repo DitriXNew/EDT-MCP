@@ -3220,7 +3220,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 check.put(FORM_CHECK_COLUMN, ref.name);
                 if (ref.isAdditionalColumn())
                 {
-                    check.put(FORM_CHECK_TABLE_PATH, ref.ownerAttributeName + '.' + ref.tablePathToken);
+                    check.put(FORM_CHECK_TABLE_PATH, String.join(".", ref.additionalTablePath())); //$NON-NLS-1$
                 }
             }
             return check;

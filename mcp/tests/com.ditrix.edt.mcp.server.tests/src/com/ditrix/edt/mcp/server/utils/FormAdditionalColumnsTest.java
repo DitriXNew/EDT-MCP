@@ -52,7 +52,13 @@ public class FormAdditionalColumnsTest
         assertEquals("Column", ref.kindToken);
         assertEquals("Extra", ref.name);
         assertEquals("Object", ref.ownerAttributeName);
-        assertEquals("Goods", ref.tablePathToken);
+        assertEquals(List.of("Goods"), ref.tablePathSegments);
+        assertEquals(List.of("Object", "Goods"), ref.additionalTablePath());
+        FormMemberRef nested = ref("Sub.Deep.Extra");
+        assertEquals(List.of("Sub", "Deep"), nested.tablePathSegments);
+        assertEquals(List.of("Object", "Sub", "Deep"), nested.additionalTablePath());
+        assertNull(AdditionalColumnFixture.ref("Catalog.Catalog.Form.ItemForm.Attribute.Rows.Column.Price")
+            .additionalTablePath());
         assertEquals(5, ref.tailSegments);
         assertTrue(ref.isAttributeColumn());
         assertTrue(ref.isAdditionalColumn());
@@ -163,8 +169,9 @@ public class FormAdditionalColumnsTest
         assertNull(f.create("Second", "Goods", new String[1]));
         assertEquals(1, f.owner.getAdditionalColumns().size());
         assertSame(entry, f.owner.getAdditionalColumns().get(0));
-        assertEquals(List.of("Object", "Goods"), entry.getTablePath().getSegments());
-        assertEquals("Object.Goods", FormElementWriter.tablePathOfAdditionalColumn(entry.getColumns().get(1)));
+        // The reused entry keeps its stored spelling: its bound items' dataPaths depend on it.
+        assertEquals(List.of("object", "goods"), entry.getTablePath().getSegments());
+        assertEquals("object.goods", FormElementWriter.tablePathOfAdditionalColumn(entry.getColumns().get(1)));
         assertEquals(2, entry.getColumns().size());
         assertEquals("Second", entry.getColumns().get(1).getName());
     }

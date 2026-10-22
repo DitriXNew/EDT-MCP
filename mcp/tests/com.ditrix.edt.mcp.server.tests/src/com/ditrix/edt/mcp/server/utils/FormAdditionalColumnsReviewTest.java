@@ -106,12 +106,12 @@ public class FormAdditionalColumnsReviewTest
         String[] tablePath = new String[1];
         assertNull(f.create("First", "goods", new String[1], tablePath));
         assertEquals("Object.Goods", tablePath[0]);
-        // A reused case-variant entry reports its now canonical spelling, not the caller's token.
+        // A reused case-variant entry keeps and reports its stored spelling, not the caller's token.
         f.owner.getAdditionalColumns().clear();
         f.entry("object", "GOODS").getColumns().add(AdditionalColumnFixture.column("Old", 7));
         String[] reused = new String[1];
         assertNull(f.create("Second", "gOoDs", new String[1], reused));
-        assertEquals("Object.Goods", reused[0]);
+        assertEquals("object.GOODS", reused[0]);
         // A refusal reports nothing.
         String[] refused = new String[1];
         assertNotNull(f.create("Second", "Goods", new String[1], refused));
