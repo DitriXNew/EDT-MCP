@@ -64,6 +64,7 @@ public enum ToolPreset
             "set_branch_infobase", //$NON-NLS-1$
             "create_project", //$NON-NLS-1$
             "resync_to_disk", //$NON-NLS-1$
+            "project_checks", //$NON-NLS-1$
             "clean_project"); //$NON-NLS-1$
 
         private ReadOnlyPolicy()

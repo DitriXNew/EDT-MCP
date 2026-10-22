@@ -90,6 +90,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "resync_to_disk", //$NON-NLS-1$
         "clean_project"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_PROJECT_CHECKS_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -103,7 +105,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
-        Map.entry(14, READ_ONLY_V14_ADDITIONS));
+        Map.entry(14, READ_ONLY_V14_ADDITIONS),
+        Map.entry(PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION, READ_ONLY_PROJECT_CHECKS_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -118,7 +121,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
-        Map.entry(14, READ_ONLY_V14_ADDITIONS));
+        Map.entry(14, READ_ONLY_V14_ADDITIONS),
+        Map.entry(PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION, READ_ONLY_PROJECT_CHECKS_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -403,6 +407,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 14)
             {
                 changed |= migrateMutatingToolsIntoReadOnlyPresets(store, disabled);
+            }
+            if (storedVersion < PreferenceConstants.PROJECT_CHECKS_MIGRATION_VERSION)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_PROJECT_CHECKS_ADDITIONS);
             }
             if (changed)
             {

@@ -233,7 +233,7 @@ Quickly switch between common tool configurations using presets:
 | Preset | Description |
 |--------|-------------|
 | **All Tools** | All tools enabled (default) |
-| **Analysis Only** | Read-only analysis — Core reads, comparison and git branch listing, Errors, Code Intelligence, Tags; `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, git branch changes and infobase binding are off; `revalidate_objects` and `enable_toolset` stay enabled |
+| **Analysis Only** | Read-only analysis — Core reads, comparison and git branch listing, Errors, Code Intelligence, Tags; `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, git branch changes, infobase binding and `project_checks` are off; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 
@@ -876,7 +876,8 @@ The gated tools are `delete_metadata`, `rename_metadata_object`, `delete_project
 `delete_infobase`, `update_database`, `infobase_sessions`, `evaluate_expression` (arbitrary BSL in the running 1C app —
 its effect cannot be classified from the call, so it always asks), `git` **for its write-capable
 subcommands**, `dcs` **only for a destructive retype**, `modify_metadata` **only when it changes
-an object's or attribute's data type** (a benign property edit is never gated), and `merge_rules`
+an object's or attribute's data type** (a benign property edit is never gated), `project_checks`
+**only for `set`/`switch` that change something** (`list`/`profiles` and no-ops never ask), and `merge_rules`
 **only when a `write` replaces the file `basedOn` names** (a write to a path that holds no file is
 never gated).
 

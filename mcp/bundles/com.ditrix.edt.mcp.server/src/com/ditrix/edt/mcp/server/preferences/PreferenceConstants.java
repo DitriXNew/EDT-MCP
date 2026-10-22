@@ -95,6 +95,9 @@ public final class PreferenceConstants
      */
     public static final String PREF_TOOL_PREFS_MIGRATION = "mcpToolPrefsMigration"; //$NON-NLS-1$
 
+    /** Local v15; renumber to v17 after #810 and #449. */
+    public static final int PROJECT_CHECKS_MIGRATION_VERSION = 15;
+
     /**
      * Migration version this build applies: 1 = the 'git' tool ships disabled; 2 = a stored
      * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
@@ -111,9 +114,11 @@ public final class PreferenceConstants
      * 12 = they gain the new {@code export_configuration_to_file} infobase dump;
      * 13 = record preset provenance after the legacy migrations, without adding disabled tools;
      * 14 = a stored read-only profile, identified by its recorded provenance, gains the six
-     * workspace/git writers the presets had missed.
+     * workspace/git writers the presets had missed;
+     * the project-checks step adds project_checks to stored read-only profiles (v15 locally,
+     * v17 after the pending v15/v16 migrations merge).
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 14;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = PROJECT_CHECKS_MIGRATION_VERSION;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$

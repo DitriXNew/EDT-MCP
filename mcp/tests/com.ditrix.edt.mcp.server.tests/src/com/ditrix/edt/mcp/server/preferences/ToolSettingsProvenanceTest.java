@@ -293,9 +293,10 @@ public class ToolSettingsProvenanceTest
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 1);
         recorded.setValue(PRESET_ID, "code-review");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        // Recorded identity drives v14 only; the unrecognized shape gets no v1-v12 preset additions.
+        // Recorded identity drives later steps; the unrecognized shape gets no v1-v12 additions.
         Set<String> expected = new HashSet<>(Set.of("user_disabled_tool", "ask_workmate"));
         expected.addAll(CODE_REVIEW_ADDITIONS.get(14));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.CODE_REVIEW, expected);
         assertEquals(expected, disabled(recorded));
         assertEquals("code-review", recorded.getString(PRESET_ID));
     }

@@ -74,6 +74,7 @@ public class ToolPresetLegacyRecognitionTest
             "import_project_from_file", "export_configuration_to_file"));
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
             "create_project", "resync_to_disk", "clean_project"));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.CODE_REVIEW, expected);
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(disabled(store).contains("dcs"));
@@ -164,6 +165,7 @@ public class ToolPresetLegacyRecognitionTest
         Set<String> expected = new HashSet<>(before);
         expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
             "create_project", "resync_to_disk", "clean_project"));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.fromId(id), expected);
         int[] disabledWrites = {0};
         store.addPropertyChangeListener(event -> {
             if (PreferenceConstants.PREF_DISABLED_TOOLS.equals(event.getProperty()))

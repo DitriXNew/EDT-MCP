@@ -130,12 +130,13 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code modify_metadata} and {@code dcs} (gated only for a destructive retype),
      * {@code git} (gated per write-capable subcommand), {@code merge_rules} (gated only
      * for the same-path rewrite) and {@code evaluate_expression} (gated always, because
-     * arbitrary BSL cannot be classified). Each tool decides when to call, the gate does not.
+     * arbitrary BSL cannot be classified), plus {@code project_checks} (gated only for
+     * set/switch that change something). Each tool decides when to call, the gate does not.
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
      * {@code delete_launch_config} (which is cheap/recoverable and NOT gated) and
-     * omits the conditional four, whose TYPICAL call is not destructive and whose hint
+     * omits the conditional five, whose TYPICAL call is not destructive and whose hint
      * therefore stays {@code false} — one hint per tool cannot say "this depends on the
      * arguments", and marking a mostly-read tool destructive would steer clients away
      * from it. The exact relationship is asserted by {@code DestructiveConsentGateTest}
@@ -150,6 +151,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "infobase_sessions", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
+        // Settings writes ask; list/profiles and effective no-ops do not. Recoverable via before.
+        "project_checks", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
         // whether one destroys work depends on git's per-subcommand option grammar - see

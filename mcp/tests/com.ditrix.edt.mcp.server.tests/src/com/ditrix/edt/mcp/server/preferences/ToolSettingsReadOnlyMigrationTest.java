@@ -61,6 +61,7 @@ public class ToolSettingsReadOnlyMigrationTest
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
+            ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.fromId(id), expected);
             assertEquals(id, expected, disabled(store));
         }
     }
@@ -109,6 +110,7 @@ public class ToolSettingsReadOnlyMigrationTest
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(before);
             expected.addAll(WRITERS);
+            ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, preset, expected);
             assertEquals(preset.name(), expected, disabled(store));
             assertEquals(preset.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals("stamp, then exactly one owed set write, then version",
