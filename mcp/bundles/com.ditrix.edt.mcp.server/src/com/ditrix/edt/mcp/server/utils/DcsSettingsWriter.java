@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -5397,9 +5399,7 @@ public final class DcsSettingsWriter
                         return ValueResult.failure("Number ValueSpec at '" + path //$NON-NLS-1$
                             + "' needs a JSON number in 'value'."); //$NON-NLS-1$
                     }
-                    NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
-                    number.setValue(raw.getAsBigDecimal());
-                    return ValueResult.success(number);
+                    return ValueResult.success(numberValue(raw));
                 case "boolean": //$NON-NLS-1$
                     if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isBoolean())
                     {
@@ -5443,6 +5443,27 @@ public final class DcsSettingsWriter
             return ValueResult.failure("Date ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                 + "' is invalid. Pass the platform date literal accepted by mcore Date.fromString."); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * All JSON number write paths meet here. Like JsonUtils.parseExactDecimalLong, use exact
+     * decimal arithmetic to remove an integral transport Double's fraction; retain real fractions
+     * verbatim. BigDecimal also keeps values outside the long range exact.
+     */
+    private static NumberValue numberValue(JsonElement raw)
+    {
+        BigDecimal decimal = raw.getAsBigDecimal();
+        try
+        {
+            decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
+        }
+        catch (ArithmeticException e)
+        {
+            // A real fraction keeps its received decimal digits and scale.
+        }
+        NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
+        number.setValue(decimal);
+        return number;
     }
 
     /**

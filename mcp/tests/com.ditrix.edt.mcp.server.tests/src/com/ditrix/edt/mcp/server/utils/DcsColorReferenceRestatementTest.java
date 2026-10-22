@@ -35,6 +35,7 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.PaletteColor;
 import com._1c.g5.v8.dt.mcore.StyleColor;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter.AppearanceCatalogue;
@@ -90,20 +91,16 @@ public class DcsColorReferenceRestatementTest
         style.setName("Accent");
         PaletteColor palette = VALUES.createPaletteColor();
         palette.setName("Brand");
-        StyleValueBuilder.NamedColorResolver project = new StyleValueBuilder.NamedColorResolver()
-        {
-            @Override
-            public StyleColor resolveStyle(String name)
-            {
-                return "Accent".equalsIgnoreCase(name) ? style : null;
-            }
-
-            @Override
-            public PaletteColor resolvePalette(String name)
-            {
-                return "Brand".equalsIgnoreCase(name) ? palette : null;
-            }
-        };
+        var configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        var styleItem = MdClassFactory.eINSTANCE.createStyleItem();
+        styleItem.setName("Accent");
+        styleItem.setAppearanceItem(style);
+        configuration.getStyleItems().add(styleItem);
+        var paletteItem = MdClassFactory.eINSTANCE.createPaletteColor();
+        paletteItem.setName("Brand");
+        paletteItem.setAppearanceItem(palette);
+        configuration.getPaletteColors().add(paletteItem);
+        var project = StyleValueBuilder.forConfiguration(configuration);
         assertNull(guard(appearanceSchema(reference(style)), project));
         assertNull(guard(appearanceSchema(reference(palette)), project));
         StyleColor gone = VALUES.createStyleColor();

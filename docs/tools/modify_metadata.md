@@ -110,7 +110,7 @@ Every refusal names what it refused, and a refused address (malformed, another o
 A StyleItem (created generically with create_metadata) has no value yet; set its `value` property to a STRUCTURED object with EITHER a `color` OR a `font` member (not both). The style item's `type` (Color / Font) is set automatically to match the value.
 - Color (explicit RGB): `{name:'value', value:{color:{red:255, green:0, blue:0}}}` - each component 0-255.
 - Color (automatic): `{name:'value', value:{color:'auto'}}` - the platform automatic color.
-- Color (named): `{name:'value', value:{color:{style:'OtherColor'}}}` or `{name:'value', value:{color:{palette:'Accent'}}}` - the named StyleItem / PaletteColor must exist in the project configuration.
+- Color (named): `{name:'value', value:{color:{style:'OtherColor'}}}` or `{name:'value', value:{color:{palette:'Accent'}}}` - a configuration item first, else the platform color; also `{color:{web:'Red'}}` / `{color:{windows:'WindowText'}}`.
 - Font: `{name:'value', value:{font:{faceName:'Arial', height:12, bold:true, italic:false, underline:false, strikeout:false}}}` - at least one of faceName / height / bold / italic / underline / strikeout is required; height is a positive integer.
 get_metadata_details renders the assigned value under a `Value` section (Style Type + Color `RGB(r, g, b)` / `Auto`, or the Font face / height / flags).
 

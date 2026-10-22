@@ -18,9 +18,7 @@ import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
-import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.MutableFont;
-import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.PaletteColor;
 import com._1c.g5.v8.dt.mcore.StyleAppearanceItem;
 import com._1c.g5.v8.dt.mcore.StyleColor;
@@ -66,33 +64,17 @@ public final class StyleValueBuilder
     /** Error-message fragment between the expected range/value and the actual one. */
     private static final String GOT_SEPARATOR = ", got "; //$NON-NLS-1$
 
-    /** Resolves the mcore appearance object owned by a named project style/palette item. */
+    private static final String COLOR_FORMS = "Use {color:{red:0-255, green:0-255, blue:0-255}}, " //$NON-NLS-1$
+        + "{color:'auto'}, or a named color {color:{<source>:'<Name>'}} with source style " //$NON-NLS-1$
+        + "(a configuration style item or a platform style color), palette, web or windows - " //$NON-NLS-1$
+        + "e.g. {color:{web:'Red'}} or {color:{style:'FormBackColor'}}."; //$NON-NLS-1$
+
+    /** Resolves a named color by the shared source, precedence and refusal rule. */
+    @FunctionalInterface
     public interface NamedColorResolver
     {
-        /** @return the style item's {@link StyleColor}, or {@code null} when it is absent/not a color. */
-        StyleColor resolveStyle(String name);
-
-        /** @return the palette item's {@link PaletteColor}, or {@code null} when it is absent/not a color. */
-        PaletteColor resolvePalette(String name);
-
-        /**
-         * A platform color by its registered name ({@code Web.Red}, {@code Windows.WindowText},
-         * {@code Style.FieldBackColor}): the platform catalogue's proxy, the same object EDT's own
-         * Template.dcs reader references for {@code web:Red}.
-         *
-         * @return the proxy, or {@code null} when this resolver has no platform catalogue or the name
-         *     is not in it
-         */
-        default Color resolvePlatform(String qualifiedName)
-        {
-            return null;
-        }
-
-        /** The shared source, precedence and refusal rule used by form appearance and DCS. */
-        default AppearanceValueBuilder.Result resolveColor(String source, String name)
-        {
-            return AppearanceValueBuilder.namedColor(source, name, this);
-        }
+        /** @return the shared lookup result, including an actionable refusal when unresolved */
+        AppearanceValueBuilder.Result resolveColor(String source, String name);
     }
 
     /** A successfully built style value (the mcore {@link Value} + the matching element {@link StyleElementType}),
@@ -260,7 +242,7 @@ public final class StyleValueBuilder
     {
         String prefix = AppearanceValueBuilder.COLOR_SOURCES.get(source);
         AppearanceValueBuilder.Result resolved = namedColors == null
-            ? AppearanceValueBuilder.namedColor(prefix, name, (NamedColorResolver)null)
+            ? AppearanceValueBuilder.namedColor(prefix, name, null, null, COLOR_FORMS)
             : namedColors.resolveColor(prefix, name);
         if (resolved.error != null) return Result.error(resolved.error);
         if (resolved.configurationItem != null)
@@ -525,12 +507,10 @@ public final class StyleValueBuilder
         }
         if (color instanceof ColorRef)
         {
-            Color referenced = ((ColorRef)color).getColor();
-            if (referenced instanceof NamedElement)
+            String name = AppearanceValueBuilder.colorReferenceName((ColorRef)color);
+            if (name != null)
             {
-                String prefix = referenced instanceof StyleColor ? "Style." //$NON-NLS-1$
-                    : referenced instanceof PaletteColor ? "Palette." : ""; //$NON-NLS-1$ //$NON-NLS-2$
-                return prefix + ((NamedElement)referenced).getName();
+                return name;
             }
         }
         return color.eClass().getName();
@@ -558,36 +538,8 @@ public final class StyleValueBuilder
     public static NamedColorResolver forConfiguration(Configuration configuration,
         IEObjectProvider colorCatalogue)
     {
-        return new NamedColorResolver()
-        {
-            @Override
-            public AppearanceValueBuilder.Result resolveColor(String source, String name)
-            {
-                return AppearanceValueBuilder.namedColor(source, name, configuration, colorCatalogue);
-            }
-
-            @Override
-            public Color resolvePlatform(String qualifiedName)
-            {
-                PlatformCatalogue.Lookup found = PlatformCatalogue.find(colorCatalogue, qualifiedName,
-                    McorePackage.Literals.COLOR);
-                return found.status == PlatformCatalogue.Status.FOUND ? (Color)found.proxy : null;
-            }
-
-            @Override
-            public StyleColor resolveStyle(String name)
-            {
-                StyleAppearanceItem item = appearanceOf(findStyleItem(configuration, name));
-                return item instanceof StyleColor ? (StyleColor)item : null;
-            }
-
-            @Override
-            public PaletteColor resolvePalette(String name)
-            {
-                StyleAppearanceItem item = appearanceOf(findPaletteColor(configuration, name));
-                return item instanceof PaletteColor ? (PaletteColor)item : null;
-            }
-        };
+        return (source, name) -> AppearanceValueBuilder.namedColor(source, name, configuration,
+            colorCatalogue, COLOR_FORMS);
     }
 
     /**

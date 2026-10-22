@@ -136,8 +136,8 @@ public class DcsReplaceStoredValueRoundTripTest
     }
 
     /**
-     * Untyped values keep exactly what EDT read: a number's scale (1.50, 10.000), a large precision,
-     * the empty date, and an empty string. EDT's reader itself rejects a date with fractions or a
+     * Untyped values retain real fractions' scales (1.50), high precision, the empty date and an
+     * empty string. Integral numbers use scale 0. EDT's reader rejects a date with fractions or a
      * zone, so such a date is never stored.
      */
     @Test

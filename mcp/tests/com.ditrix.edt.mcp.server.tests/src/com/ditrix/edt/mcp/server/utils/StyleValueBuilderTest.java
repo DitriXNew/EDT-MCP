@@ -306,8 +306,9 @@ public class StyleValueBuilderTest
         config.getStyleItems().add(header);
         assertEquals(header, StyleValueBuilder.findStyleItem(config, "headerfont")); //$NON-NLS-1$
         assertEquals(header.getAppearanceItem(), StyleValueBuilder.appearanceOf(header));
-        assertNull("a font item is no named color", //$NON-NLS-1$
-            StyleValueBuilder.forConfiguration(config).resolveStyle("HeaderFont")); //$NON-NLS-1$
+        assertTrue("a font item is no named color", //$NON-NLS-1$
+            StyleValueBuilder.forConfiguration(config).resolveColor("Style", "HeaderFont").error //$NON-NLS-1$ //$NON-NLS-2$
+                .contains("holds no color")); //$NON-NLS-1$
         assertNull(StyleValueBuilder.findPaletteColor(config, "HeaderFont")); //$NON-NLS-1$
         assertNull(StyleValueBuilder.findStyleItem(null, "HeaderFont")); //$NON-NLS-1$
     }
