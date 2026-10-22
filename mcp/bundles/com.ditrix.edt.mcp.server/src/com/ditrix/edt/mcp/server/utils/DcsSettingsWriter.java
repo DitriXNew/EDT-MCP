@@ -4130,6 +4130,21 @@ public final class DcsSettingsWriter
         return value(raw, path);
     }
 
+    /** A parameter-specific storage constraint, applied before any value is attached to the model. */
+    private static ValueResult outputParameterValue(JsonElement raw, DcsAvailableParameter declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        ValueResult built = typedParameterValue(raw, declared.defValue(), languages, path);
+        if (built.error == null && "ChartType.ScaleColor".equals(declared.key(0)) //$NON-NLS-1$
+            && built.value instanceof ColorValue && ((ColorValue)built.value).getValue() == null)
+        {
+            return ValueResult.failure("Output parameter 'ChartType.ScaleColor' at '" + path //$NON-NLS-1$
+                + "' cannot store {color:'auto'}: EDT cannot reload that value. Pass an explicit " //$NON-NLS-1$
+                + "RGB color such as {color:{red:0,green:0,blue:0}}, or omit this parameter."); //$NON-NLS-1$
+        }
+        return built;
+    }
+
     /** The two accepted enum wire forms: a bare string, or the ordinary string ValueSpec. */
     private static String enumParameterLiteral(JsonElement raw)
     {
@@ -4813,7 +4828,7 @@ public final class DcsSettingsWriter
         {
             return members;
         }
-        if (body.has("value") && body.has(KEY_VALUES)) //$NON-NLS-1$
+        if (available == null && body.has("value") && body.has(KEY_VALUES)) //$NON-NLS-1$
         {
             return "Parameter item at '" + path + "' takes 'value' or 'values', not both. Pass one " //$NON-NLS-1$ //$NON-NLS-2$
                 + "value in 'value', or every value of the item in 'values'."; //$NON-NLS-1$
@@ -4862,11 +4877,17 @@ public final class DcsSettingsWriter
             }
             item.getParameter().setValue(parameterName(declared, languages));
         }
+        if (declared != null && body.has(KEY_VALUES))
+        {
+            return "Output parameter '" + declared.key(0) + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + ".values' accepts one typed 'value', not a 'values' array. Pass it in 'value'; " //$NON-NLS-1$
+                + "only data parameters accept 'values'."; //$NON-NLS-1$
+        }
         if (body.has("value")) //$NON-NLS-1$
         {
             ValueResult mapped = available == null
                 ? value(body.get("value"), path + ".value") //$NON-NLS-1$ //$NON-NLS-2$
-                : typedParameterValue(body.get("value"), declared.defValue(), languages, //$NON-NLS-1$
+                : outputParameterValue(body.get("value"), declared, languages, //$NON-NLS-1$
                     path + ".value"); //$NON-NLS-1$
             if (mapped.error != null)
             {
@@ -4877,7 +4898,7 @@ public final class DcsSettingsWriter
         }
         else if (body.has(KEY_VALUES))
         {
-            ValuesResult mapped = parameterValues(body, declared, languages, path);
+            ValuesResult mapped = parameterValues(body, path);
             if (mapped.error != null)
             {
                 return mapped.error;
@@ -4904,32 +4925,19 @@ public final class DcsSettingsWriter
         return scaffold;
     }
 
-    /**
-     * The 'values' array of a parameter item: every value of the item, each built by the item's own
-     * value writer - value() for a data parameter, typedParameterValue against the declared type for
-     * an output parameter. An output parameter takes more than one value only when the platform
-     * declares a value list allowed for it.
-     */
-    private static ValuesResult parameterValues(JsonObject body, DcsAvailableParameter declared,
-        DcsPresentationParser.LanguageContext languages, String path)
+    /** Every data-parameter value is built by its own untyped ValueSpec writer. */
+    private static ValuesResult parameterValues(JsonObject body, String path)
     {
         JsonArray raw = array(body, KEY_VALUES, path);
         if (raw == null)
         {
             return new ValuesResult(null, arrayError);
         }
-        if (declared != null && raw.size() > 1 && !declared.isValueListAllowed())
-        {
-            return new ValuesResult(null, "Output parameter '" + declared.key(0) + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
-                + ".values' takes one value, not " + raw.size() //$NON-NLS-1$
-                + ": the platform declares no value list for it. Pass one value in 'value'."); //$NON-NLS-1$
-        }
         List<Value> values = new ArrayList<>();
         for (int i = 0; i < raw.size(); i++)
         {
             String at = path + ".values[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-            ValueResult mapped = declared == null ? value(raw.get(i), at)
-                : typedParameterValue(raw.get(i), declared.defValue(), languages, at);
+            ValueResult mapped = value(raw.get(i), at);
             if (mapped.error != null)
             {
                 return new ValuesResult(null, mapped.error);

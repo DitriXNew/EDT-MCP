@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import org.junit.Test;
-import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
@@ -18,15 +17,13 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
-import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter.AppearanceCatalogue;
 
 /**
- * #682 round 5: a typed parameter is restated with several values exactly when its writer takes
- * them - an output parameter the platform declares a value list for - and each value must pass on
- * its own; an appearance key always writes one value.
+ * Real output and appearance catalogue entries each take one typed value; data-parameter arrays
+ * are exercised separately by DcsStandardValueKindsRoundTripTest.
  */
 public class DcsParameterValuesGuardTest
 {
@@ -34,53 +31,37 @@ public class DcsParameterValuesGuardTest
         com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
 
     @Test
-    public void testSeveralOutputParameterValuesPassOnlyWithADeclaredValueList()
+    public void testARealOutputParameterWritesOneTypedValue() throws Exception
     {
         DataCompositionSchema schema = schema();
         DataCompositionOutputParameterValues holder = SETTINGS.createDataCompositionOutputParameterValues();
-        SettingsParameterValue item = item("Known", text("A"), text("B"));
+        SettingsParameterValue item = item("Title", text("A"), text("B"));
         holder.getItems().add(item);
         schema.getDefaultSettings().setOutputParameters(holder);
-
-        String single = guard(schema, catalogue(false));
-        assertNotNull(single);
-        assertTrue(single, single.contains("(2 values; 'Known' takes one value, the platform declares no value "
-            + "list for it)"));
-        assertNull("a declared value list restates every value", guard(schema, catalogue(true)));
-
-        item.getValues().add(com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createStringValue());
-        String typed = guard(schema, catalogue(true));
-        assertNotNull(typed);
-        assertTrue(typed, typed.contains("(value #2: declared LocalString, stored StringValue"));
+        var catalogue = DcsReplaceTestCatalogues.load(DcsSettingsWriter.OutputParameterCatalogue.SETTINGS,
+            Version.V8_3_27, "en");
+        String refusal = guard(schema, catalogue);
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("(2 values; 'Title' takes one typed value; only data parameters accept 'values')"));
+        item.getValues().remove(1);
+        assertNull(guard(schema, catalogue));
     }
 
     @Test
-    public void testAnAppearanceKeyWritesOneValue()
+    public void testAnAppearanceKeyWritesOneValue() throws Exception
     {
         DataCompositionSchema schema = schema();
         DataCompositionConditionalAppearance appearance = SETTINGS.createDataCompositionConditionalAppearance();
         DataCompositionConditionalAppearanceItem rule = SETTINGS.createDataCompositionConditionalAppearanceItem();
         DataCompositionAppearance holder =
             com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionAppearance();
-        holder.getItems().add(item("Known", text("A"), text("B")));
+        holder.getItems().add(item("Text", text("A"), text("B")));
         rule.setAppearance(holder);
         appearance.getItems().add(rule);
         schema.getDefaultSettings().setConditionalAppearance(appearance);
-        String refusal = guard(schema, catalogue(true));
+        String refusal = guard(schema, DcsReplaceTestCatalogues.load(AppearanceCatalogue.SCHEMA, Version.V8_3_27, "en"));
         assertNotNull(refusal);
         assertTrue(refusal, refusal.contains("(2 values; an appearance key writes one typed value)"));
-    }
-
-    private static DcsAvailableParameterCollection catalogue(boolean valueListAllowed)
-    {
-        DcsAvailableParameter parameter = Mockito.mock(DcsAvailableParameter.class);
-        LocalString declared = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString();
-        Mockito.doReturn(declared).when(parameter).defValue();
-        Mockito.doReturn(Boolean.valueOf(valueListAllowed)).when(parameter).isValueListAllowed();
-        Mockito.doReturn("Known").when(parameter).key(0); //$NON-NLS-1$
-        DcsAvailableParameterCollection result = Mockito.mock(DcsAvailableParameterCollection.class);
-        Mockito.doReturn(parameter).when(result).findItem("Known"); //$NON-NLS-1$
-        return result;
     }
 
     private static String guard(DataCompositionSchema schema, DcsAvailableParameterCollection parameters)

@@ -64,9 +64,9 @@ public class DcsColorReferenceRestatementTest
     {
         StyleValueBuilder.NamedColorResolver platform = StyleValueBuilder.forConfiguration(null,
             catalogue("Web.Red", "Windows.WindowText", "Style.FieldBackColor"));
-        String[][] cases = {{"web:Red", "Web.Red", "Platform web color 'Red' cannot be resolved"},
-            {"win:WindowText", "Windows.WindowText", "Platform windows color 'WindowText' cannot be resolved"},
-            {"style:FieldBackColor", "Style.FieldBackColor", "Named style color 'FieldBackColor' cannot be resolved"}};
+        String[][] cases = {{"web:Red", "Web.Red", "Unknown Web color 'Red'"},
+            {"win:WindowText", "Windows.WindowText", "Unknown Windows color 'WindowText'"},
+            {"style:FieldBackColor", "Style.FieldBackColor", "Unknown Style color 'FieldBackColor'"}};
         for (String[] item : cases)
         {
             DataCompositionSchema read = readColor(item[0]);
@@ -79,7 +79,7 @@ public class DcsColorReferenceRestatementTest
                 + "invalid: " + item[2]));
         }
         assertTrue(guard(readColor("web:Blue"), platform),
-            guard(readColor("web:Blue"), platform).contains("Platform web color 'Blue' cannot be resolved"));
+            guard(readColor("web:Blue"), platform).contains("Unknown Web color 'Blue'"));
     }
 
     /** A configuration style color and palette color are restated through the project's resolver. */
@@ -110,7 +110,7 @@ public class DcsColorReferenceRestatementTest
         gone.setName("Removed");
         String refusal = guard(appearanceSchema(reference(gone)), project);
         assertNotNull(refusal);
-        assertTrue(refusal, refusal.contains("Named style color 'Removed' cannot be resolved"));
+        assertTrue(refusal, refusal.contains("Unknown Style color 'Removed'"));
     }
 
     @Test
@@ -152,8 +152,7 @@ public class DcsColorReferenceRestatementTest
         StyleValueBuilder.Result noCatalogue = StyleValueBuilder.build(
             JsonParser.parseString("{\"color\":{\"web\":\"Red\"}}"), StyleValueBuilder.forConfiguration(null));
         assertNotNull(noCatalogue.error);
-        assertTrue(noCatalogue.error, noCatalogue.error.contains("Platform web color 'Red' cannot be resolved "
-            + "for this project's platform version"));
+        assertTrue(noCatalogue.error, noCatalogue.error.contains("platform catalogue is unavailable for this project's platform version"));
         StyleValueBuilder.Result mixed = StyleValueBuilder.build(
             JsonParser.parseString("{\"color\":{\"web\":\"Red\",\"red\":1}}"), platform);
         assertNotNull(mixed.error);
@@ -161,7 +160,7 @@ public class DcsColorReferenceRestatementTest
             + "{web:'<name>'} or {windows:'<name>'}"));
         StyleValueBuilder.Result palette = StyleValueBuilder.build(
             JsonParser.parseString("{\"color\":{\"palette\":\"Red\"}}"), platform);
-        assertNotNull("a palette name is never looked up among platform colors", palette.error);
+        assertNotNull("a palette name absent from both sources is refused", palette.error);
     }
 
     private static IEObjectProvider catalogue(String... names)

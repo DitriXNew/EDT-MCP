@@ -11,13 +11,9 @@ import static org.junit.Assert.*;
 import java.util.List;
 
 import org.junit.Test;
-import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.dcs.model.settings.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
-import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
-import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
-import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StandardBeginningDateValue;
@@ -28,7 +24,6 @@ import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypedValueList;
 import com._1c.g5.v8.dt.mcore.TypedValueListItem;
 import com._1c.g5.v8.dt.mcore.Value;
-import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -183,55 +178,6 @@ public class DcsStandardValueKindsTest
         settings.setDataParameters(holder);
         return DcsSettingsWriter.planSettings(settings, List.of("dataParameters", "items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "dataParameter", json(body), null); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testATypedOutputParameterTakesSeveralValuesOnlyWithAPlatformValueList() throws Exception
-    {
-        StringValue declared = McoreFactory.eINSTANCE.createStringValue();
-        declared.setValue("");
-        String body = "{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Known\"},\"values\":["
-            + "{\"kind\":\"string\",\"value\":\"a\"},{\"kind\":\"string\",\"value\":\"b\"}]}";
-        SettingsParameterValue single = DcsFactory.eINSTANCE.createSettingsParameterValue();
-        String refused = DcsSettingsWriter.applyOutputParameterItemForTest(single, json(body), null,
-            catalogue(declared, false));
-        assertNotNull(refused);
-        assertTrue(refused, refused.contains("takes one value, not 2: the platform declares no value list for it"));
-
-        SettingsParameterValue one = DcsFactory.eINSTANCE.createSettingsParameterValue();
-        assertNull(DcsSettingsWriter.applyOutputParameterItemForTest(one, json(
-            "{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Known\"},\"values\":[{\"kind\":\"string\","
-                + "\"value\":\"a\"}]}"), null, catalogue(declared, false)));
-        assertEquals(1, one.getValues().size());
-
-        SettingsParameterValue list = DcsFactory.eINSTANCE.createSettingsParameterValue();
-        assertNull(DcsSettingsWriter.applyOutputParameterItemForTest(list, json(body), null,
-            catalogue(declared, true)));
-        assertEquals("a declared value list takes every value", 2, list.getValues().size());
-    }
-
-    /**
-     * One declared parameter 'Known'. A real catalogue entry with a value list allowed needs the
-     * platform type index, so that case is a stand-in with the same answers.
-     */
-    static DcsAvailableParameterCollection catalogue(Value declared, boolean valueListAllowed)
-        throws DcsPathException
-    {
-        if (!valueListAllowed)
-        {
-            DcsAvailableParameterCollection result = new DcsAvailableParameterCollection();
-            result.addItem().init(new String[] {"Known", "Alias"}, null, null, "Known", declared, //$NON-NLS-1$ //$NON-NLS-2$
-                false, null, true, false, null, Version.V8_3_27, null);
-            return result;
-        }
-        DcsAvailableParameter parameter = Mockito.mock(DcsAvailableParameter.class);
-        Mockito.doReturn(declared).when(parameter).defValue();
-        Mockito.doReturn(Boolean.TRUE).when(parameter).isValueListAllowed();
-        Mockito.doReturn("Known").when(parameter).key(0); //$NON-NLS-1$
-        Mockito.doReturn("Alias").when(parameter).key(1); //$NON-NLS-1$
-        DcsAvailableParameterCollection result = Mockito.mock(DcsAvailableParameterCollection.class);
-        Mockito.doReturn(parameter).when(result).findItem("Known"); //$NON-NLS-1$
-        return result;
     }
 
     private static Value built(String body)

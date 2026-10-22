@@ -95,11 +95,10 @@ public class DcsReplaceStoredValueRoundTripTest
             probes += probeCatalogue(Slot.appearance(kind), DcsReplaceTestCatalogues.load(kind, VERSION, "en"),
                 failures);
         }
-        // A value EDT's own reader rejects in EDT's own serialization can never be stored, so the
-        // guard never sees it; it is listed, not failed. Only one probe is known to do that.
+        // Every body the writer accepts must be readable; no unstorable value is tolerated.
         List<String> unstorable = new ArrayList<>();
         failures.removeIf(failure -> failure.contains(UNSTORABLE) && unstorable.add(failure));
-        assertTrue("unstorable probes: " + unstorable, unstorable.size() <= 1);
+        assertEquals("unstorable probes: " + unstorable, List.of(), unstorable);
         assertTrue("the catalogues were probed: " + probes, probes > 300);
         assertTrue(failures.size() + " of " + probes + " probes:\n" + String.join("\n", failures), failures.isEmpty());
     }
@@ -317,8 +316,28 @@ public class DcsReplaceStoredValueRoundTripTest
             for (String body : bodies(declared))
             {
                 probes++;
-                DcsSettingsWriter.ValueResult built = DcsSettingsWriter.buildTypedParameterValue(
-                    JsonParser.parseString(body), declared, languages(), "value");
+                DcsSettingsWriter.ValueResult built;
+                if (where.output != null)
+                {
+                    var written = SETTINGS.createSettingsParameterValue();
+                    JsonObject spec = new JsonObject();
+                    spec.add("parameter", json("{\"kind\":\"parameter\",\"value\":\"" + item.key(0) + "\"}"));
+                    spec.add("value", JsonParser.parseString(body));
+                    String error = DcsSettingsWriter.applyOutputParameterItemForTest(written, spec, languages(), catalogue);
+                    if ("ChartType.ScaleColor".equals(item.key(0)) && "{\"color\":\"auto\"}".equals(body))
+                    {
+                        assertNotNull("the writer must refuse the unstorable ScaleColor", error);
+                        assertTrue(error, error.contains("EDT cannot reload that value"));
+                        continue;
+                    }
+                    built = error == null ? DcsSettingsWriter.ValueResult.success(written.getValues().get(0))
+                        : DcsSettingsWriter.ValueResult.failure(error);
+                }
+                else
+                {
+                    built = DcsSettingsWriter.buildTypedParameterValue(
+                        JsonParser.parseString(body), declared, languages(), "value");
+                }
                 if (built.error != null)
                 {
                     failures.add(where + " " + item.key(0) + " " + body + ": the writer refused it: " + built.error);

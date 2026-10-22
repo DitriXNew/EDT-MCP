@@ -91,7 +91,7 @@ public final class AppearanceValueBuilder
     private static final String PALETTE = "Palette"; //$NON-NLS-1$
 
     /** Colour sources: the object-form member and the catalogue prefix it stands for. */
-    private static final Map<String, String> COLOR_SOURCES = Map.of("style", STYLE, "palette", PALETTE, //$NON-NLS-1$ //$NON-NLS-2$
+    static final Map<String, String> COLOR_SOURCES = Map.of("style", STYLE, "palette", PALETTE, //$NON-NLS-1$ //$NON-NLS-2$
         "web", "Web", "windows", "Windows"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /** Font sources: the object-form member and the catalogue prefix it stands for. */
@@ -375,6 +375,13 @@ public final class AppearanceValueBuilder
     private static Result named(Kind kind, String source, String name, EObject ref, // NOSONAR one named lookup's inputs
         Configuration configuration, IEObjectProvider catalogue)
     {
+        return named(kind, source, name, ref, configuration, catalogue, null);
+    }
+
+    /** The same lookup with an adapter for callers supplying a detached named-color resolver. */
+    private static Result named(Kind kind, String source, String name, EObject ref,
+        Configuration configuration, IEObjectProvider catalogue, StyleValueBuilder.NamedColorResolver colors)
+    {
         if (name.isEmpty())
         {
             return Result.error("A named " + kind.label + " needs a name after '" + source + ".'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -393,6 +400,17 @@ public final class AppearanceValueBuilder
             // The target is bound inside the write transaction - see bind().
             return Result.ok(ref, item);
         }
+        if (colors != null)
+        {
+            Color target = STYLE.equals(source) ? colors.resolveStyle(name)
+                : PALETTE.equals(source) ? colors.resolvePalette(name) : null;
+            if (target == null) target = colors.resolvePlatform(source + "." + name); //$NON-NLS-1$
+            if (target != null)
+            {
+                setTarget(ref, target);
+                return Result.ok(ref, null);
+            }
+        }
         PlatformCatalogue.Lookup found = PlatformCatalogue.find(catalogue, source + "." + name, kind.type); //$NON-NLS-1$
         if (found.status == PlatformCatalogue.Status.FOUND)
         {
@@ -401,6 +419,18 @@ public final class AppearanceValueBuilder
         }
         return Result.error("Unknown " + source + " " + kind.label + " '" + name + "'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + candidatesTail(kind, source, name, searched, catalogue, found.status));
+    }
+
+    /** The shared named-color lookup; only attachment of its result is caller-specific. */
+    static Result namedColor(String source, String name, Configuration configuration, IEObjectProvider catalogue)
+    {
+        return named(Kind.COLOR_KIND, source, name, McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue);
+    }
+
+    /** Adapter for a caller that supplies detached targets rather than a configuration and catalogue. */
+    static Result namedColor(String source, String name, StyleValueBuilder.NamedColorResolver colors)
+    {
+        return named(Kind.COLOR_KIND, source, name, McoreFactory.eINSTANCE.createColorRef(), null, null, colors);
     }
 
     /** Whether a source has configuration items: Style (colours and fonts), Palette (colours). */

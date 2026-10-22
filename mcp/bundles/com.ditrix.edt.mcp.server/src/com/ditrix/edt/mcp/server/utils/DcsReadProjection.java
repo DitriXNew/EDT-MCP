@@ -474,11 +474,8 @@ public final class DcsReadProjection
             {
                 return values.size() + " values; an appearance key writes one typed value"; //$NON-NLS-1$
             }
-            if (!declared.isValueListAllowed())
-            {
-                return values.size() + " values; '" + name //$NON-NLS-1$
-                    + "' takes one value, the platform declares no value list for it"; //$NON-NLS-1$
-            }
+            return values.size() + " values; '" + name //$NON-NLS-1$
+                + "' takes one typed value; only data parameters accept 'values'"; //$NON-NLS-1$
         }
         if (values.isEmpty())
         {
@@ -492,8 +489,9 @@ public final class DcsReadProjection
     }
 
     /**
-     * One stored value is judged as the body's 'value', several as its 'values' array: each must be
-     * restated by the item's value writer, and a refusal of one of several names its position.
+     * A data parameter's values are judged individually against its ValueSpec writer. Typed output
+     * and appearance callers have already refused several values; a data-parameter refusal names
+     * the position of the value it cannot restate.
      */
     private static String eachValueRefusal(List<Value> values,
         java.util.function.Function<Value, String> writerRefusal)

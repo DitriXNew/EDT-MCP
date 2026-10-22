@@ -6522,7 +6522,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case MCORE_VALUE_LIST:
                 return prepareMcoreValueList(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
-                return prepareStyleValue(ctx.config, name, prop, target, info, out);
+                return prepareStyleValue(ctx, name, prop, target, info, out);
             case PICTURE:
                 return preparePicture(ctx, name, prop, info, out);
             case QNAME:
@@ -7234,11 +7234,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
      * on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareStyleValue(Configuration configuration, String name, JsonObject prop,
+    private String prepareStyleValue(PrepareContext ctx, String name, JsonObject prop,
         EObject target, PropertyInfo info, List<PreparedChange> out)
     {
         StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE),
-            StyleValueBuilder.forConfiguration(configuration));
+            StyleValueBuilder.forConfiguration(ctx.config, AppearanceValueBuilder.colorCatalogue(ctx.version)));
         if (sv.error != null)
         {
             return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$

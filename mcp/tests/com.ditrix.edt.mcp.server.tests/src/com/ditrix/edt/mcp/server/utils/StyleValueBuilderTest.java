@@ -148,8 +148,8 @@ public class StyleValueBuilderTest
 
         assertNotNull(r.error);
         assertTrue(r.error, r.error.contains("MissingStyle")); //$NON-NLS-1$
-        assertTrue(r.error, r.error.contains("Configuration > Style items")); //$NON-NLS-1$
-        assertTrue(r.error, r.error.contains("Common/StyleItems")); //$NON-NLS-1$
+        assertTrue(r.error, r.error.contains("Unknown Style color")); //$NON-NLS-1$
+        assertTrue(r.error, r.error.contains("platform catalogue is unavailable")); //$NON-NLS-1$
     }
 
     // ==================== building a Font ====================

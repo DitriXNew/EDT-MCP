@@ -313,6 +313,8 @@ def test_platform_color_references_round_trip_through_replace():
     text = before.decode("utf-8-sig")
     for stored in (">web:Red<", ">style:FieldBackColor<", ">win:WindowText<"):
         assert stored in text, "Template.dcs must store %s: %s" % (stored, text[:4000])
+    # Run the guard on values EDT read with the project, including catalogue and BM proxies.
+    _import(fqn, *_parse(_xml(fqn)))
     whole = _get(fqn + "#/defaultSettings", "userSettings")
     assert_ok(whole)
     assert_ok(_write(fqn + "#/defaultSettings", "replace", "userSettings", rule, expectedHash=_hash(whole)),
@@ -339,6 +341,8 @@ def test_configuration_style_color_round_trips_through_replace():
     assert_ok(_write(fqn, "upsert", "schema", {"defaultSettings": rule}), "write the configuration style color")
     _, before = _flushed_bytes(name, fqn)
     assert (">style:%s<" % style_name) in before.decode("utf-8-sig")
+    # Run the guard on values EDT read with the project, including catalogue and BM proxies.
+    _import(fqn, *_parse(_xml(fqn)))
     whole = _get(fqn + "#/defaultSettings", "userSettings")
     assert_ok(whole)
     assert_ok(_write(fqn + "#/defaultSettings", "replace", "userSettings", rule, expectedHash=_hash(whole)),

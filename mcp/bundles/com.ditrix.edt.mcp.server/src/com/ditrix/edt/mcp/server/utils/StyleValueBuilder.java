@@ -46,7 +46,7 @@ import com.google.gson.JsonPrimitive;
  * <li><b>Color</b> {@code {color:{red:0-255, green:0-255, blue:0-255}}} - an explicit RGB color;
  * {@code {color:"auto"}} - the platform automatic color; or
  * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color, a
- * style name falling back to the platform's style color of that name; or
+ * style or palette name falling back to the platform color of that source and name; or
  * {@code {color:{web:"Name"}}} / {@code {color:{windows:"Name"}}} - a platform web or Windows color.
  * Platform colors resolve only through a resolver that carries the platform color catalogue.</li>
  * <li><b>Font</b> {@code {font:{faceName?, height?, bold?, italic?, underline?, strikeout?}}} -
@@ -86,6 +86,12 @@ public final class StyleValueBuilder
         default Color resolvePlatform(String qualifiedName)
         {
             return null;
+        }
+
+        /** The shared source, precedence and refusal rule used by form appearance and DCS. */
+        default AppearanceValueBuilder.Result resolveColor(String source, String name)
+        {
+            return AppearanceValueBuilder.namedColor(source, name, this);
         }
     }
 
@@ -189,7 +195,7 @@ public final class StyleValueBuilder
         JsonObject color = colorEl.getAsJsonObject();
         String source = null;
         int sources = 0;
-        for (String member : NAMED_COLOR_SOURCES.keySet())
+        for (String member : AppearanceValueBuilder.COLOR_SOURCES.keySet())
         {
             if (color.has(member))
             {
@@ -236,67 +242,33 @@ public final class StyleValueBuilder
             "Color RGB(" + red + ", " + green + ", " + blue + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
-    /** The named-color body members and the platform catalogue prefix each stands for. */
-    private static final java.util.Map<String, String> NAMED_COLOR_SOURCES = new java.util.LinkedHashMap<>();
-
-    static
-    {
-        NAMED_COLOR_SOURCES.put("style", "Style"); //$NON-NLS-1$ //$NON-NLS-2$
-        NAMED_COLOR_SOURCES.put("palette", "Palette"); //$NON-NLS-1$ //$NON-NLS-2$
-        NAMED_COLOR_SOURCES.put("web", "Web"); //$NON-NLS-1$ //$NON-NLS-2$
-        NAMED_COLOR_SOURCES.put("windows", "Windows"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
     /**
      * The body member that names a color of a catalogue prefix ({@code Web} to {@code web}), the
      * inverse of the named-color forms; {@code null} for a prefix no body names.
      */
     static String namedColorMember(String prefix)
     {
-        for (java.util.Map.Entry<String, String> entry : NAMED_COLOR_SOURCES.entrySet())
+        for (java.util.Map.Entry<String, String> entry : AppearanceValueBuilder.COLOR_SOURCES.entrySet())
         {
             if (entry.getValue().equals(prefix)) return entry.getKey();
         }
         return null;
     }
 
-    /**
-     * Resolves a named color: a style or palette name against the project's configuration first,
-     * a style name then against the platform's style colors, and a web or Windows name against the
-     * platform catalogue only - the catalogue EDT's Template.dcs reader looks names up in.
-     */
+    /** Constructs the DCS/StyleItem wrapper around the shared named-color lookup result. */
     private static Result namedColor(String source, String name, NamedColorResolver namedColors)
     {
-        String prefix = NAMED_COLOR_SOURCES.get(source);
-        Color resolved = null;
-        if (namedColors != null)
+        String prefix = AppearanceValueBuilder.COLOR_SOURCES.get(source);
+        AppearanceValueBuilder.Result resolved = namedColors == null
+            ? AppearanceValueBuilder.namedColor(prefix, name, (NamedColorResolver)null)
+            : namedColors.resolveColor(prefix, name);
+        if (resolved.error != null) return Result.error(resolved.error);
+        if (resolved.configurationItem != null)
         {
-            resolved = "style".equals(source) ? namedColors.resolveStyle(name) //$NON-NLS-1$
-                : "palette".equals(source) ? namedColors.resolvePalette(name) : null; //$NON-NLS-1$
-            if (resolved == null && !"palette".equals(source)) //$NON-NLS-1$
-            {
-                resolved = namedColors.resolvePlatform(prefix + "." + name); //$NON-NLS-1$
-            }
+            AppearanceValueBuilder.bind(resolved.value, resolved.configurationItem);
         }
-        if (resolved == null)
-        {
-            if ("style".equals(source) || "palette".equals(source)) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                boolean style = "style".equals(source); //$NON-NLS-1$
-                String location = style
-                    ? "Configuration > Style items (Common/StyleItems) or among the platform's style colors" //$NON-NLS-1$
-                    : "Configuration > Palette colors (Common/PaletteColors)"; //$NON-NLS-1$
-                return Result.error("Named " + (style ? "style color" : "palette color") + " '" + name //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                    + "' cannot be resolved. Such items are defined in the project's " + location + "."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return Result.error("Platform " + source + " color '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                + "' cannot be resolved for this project's platform version. Name a color the " //$NON-NLS-1$
-                + "platform registers as " + prefix + ".<Name>, e.g. {color:{web:'Red'}}."); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        ColorRef colorRef = McoreFactory.eINSTANCE.createColorRef();
-        colorRef.setColor(resolved);
         ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
-        colorValue.setValue(colorRef);
+        colorValue.setValue((Color)resolved.value);
         return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -588,6 +560,12 @@ public final class StyleValueBuilder
     {
         return new NamedColorResolver()
         {
+            @Override
+            public AppearanceValueBuilder.Result resolveColor(String source, String name)
+            {
+                return AppearanceValueBuilder.namedColor(source, name, configuration, colorCatalogue);
+            }
+
             @Override
             public Color resolvePlatform(String qualifiedName)
             {
