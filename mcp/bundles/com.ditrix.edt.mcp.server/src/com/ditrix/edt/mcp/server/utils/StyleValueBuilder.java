@@ -18,6 +18,7 @@ import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.MutableFont;
 import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.PaletteColor;
@@ -29,6 +30,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -43,7 +45,10 @@ import com.google.gson.JsonPrimitive;
  * <ul>
  * <li><b>Color</b> {@code {color:{red:0-255, green:0-255, blue:0-255}}} - an explicit RGB color;
  * {@code {color:"auto"}} - the platform automatic color; or
- * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color.</li>
+ * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color, a
+ * style name falling back to the platform's style color of that name; or
+ * {@code {color:{web:"Name"}}} / {@code {color:{windows:"Name"}}} - a platform web or Windows color.
+ * Platform colors resolve only through a resolver that carries the platform color catalogue.</li>
  * <li><b>Font</b> {@code {font:{faceName?, height?, bold?, italic?, underline?, strikeout?}}} -
  * at least one of the listed members must be present.</li>
  * </ul>
@@ -69,6 +74,19 @@ public final class StyleValueBuilder
 
         /** @return the palette item's {@link PaletteColor}, or {@code null} when it is absent/not a color. */
         PaletteColor resolvePalette(String name);
+
+        /**
+         * A platform color by its registered name ({@code Web.Red}, {@code Windows.WindowText},
+         * {@code Style.FieldBackColor}): the platform catalogue's proxy, the same object EDT's own
+         * Template.dcs reader references for {@code web:Red}.
+         *
+         * @return the proxy, or {@code null} when this resolver has no platform catalogue or the name
+         *     is not in it
+         */
+        default Color resolvePlatform(String qualifiedName)
+        {
+            return null;
+        }
     }
 
     /** A successfully built style value (the mcore {@link Value} + the matching element {@link StyleElementType}),
@@ -169,40 +187,31 @@ public final class StyleValueBuilder
                 + "the string 'auto'."); //$NON-NLS-1$
         }
         JsonObject color = colorEl.getAsJsonObject();
-        boolean hasStyle = color.has("style"); //$NON-NLS-1$
-        boolean hasPalette = color.has("palette"); //$NON-NLS-1$
-        if (hasStyle || hasPalette)
+        String source = null;
+        int sources = 0;
+        for (String member : NAMED_COLOR_SOURCES.keySet())
         {
-            if (hasStyle && hasPalette || color.size() != 1)
+            if (color.has(member))
             {
-                return Result.error("A named 'color' must be exactly {style:'<name>'} or " //$NON-NLS-1$
-                    + "{palette:'<name>'}, with no RGB or other members."); //$NON-NLS-1$
+                source = member;
+                sources++;
             }
-            String member = hasStyle ? "style" : "palette"; //$NON-NLS-1$ //$NON-NLS-2$
-            String name = strictStringMember(color, member);
+        }
+        if (source != null)
+        {
+            if (sources > 1 || color.size() != 1)
+            {
+                return Result.error("A named 'color' must be exactly one of {style:'<name>'}, " //$NON-NLS-1$
+                    + "{palette:'<name>'}, {web:'<name>'} or {windows:'<name>'}, with no RGB or other " //$NON-NLS-1$
+                    + "members."); //$NON-NLS-1$
+            }
+            String name = strictStringMember(color, source);
             if (name == null || name.trim().isEmpty())
             {
                 return Result.error("A named 'color' needs a non-empty string name: " //$NON-NLS-1$
-                    + "{color:{" + member + ":'<name>'}}."); //$NON-NLS-1$ //$NON-NLS-2$
+                    + "{color:{" + source + ":'<name>'}}."); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            name = name.trim();
-            Color resolved = hasStyle && namedColors != null ? namedColors.resolveStyle(name)
-                : !hasStyle && namedColors != null ? namedColors.resolvePalette(name) : null;
-            if (resolved == null)
-            {
-                String kind = hasStyle ? "style color" : "palette color"; //$NON-NLS-1$ //$NON-NLS-2$
-                String location = hasStyle
-                    ? "Configuration > Style items (Common/StyleItems)" //$NON-NLS-1$
-                    : "Configuration > Palette colors (Common/PaletteColors)"; //$NON-NLS-1$
-                return Result.error("Named " + kind + " '" + name + "' cannot be resolved. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "Such items are defined in the project's " + location + "."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            ColorRef colorRef = McoreFactory.eINSTANCE.createColorRef();
-            colorRef.setColor(resolved);
-            ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
-            colorValue.setValue(colorRef);
-            return Result.ok(colorValue, StyleElementType.COLOR,
-                "Color=" + (hasStyle ? "Style." : "Palette.") + name); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return namedColor(source, name.trim(), namedColors);
         }
         Integer red = intMember(color, "red"); //$NON-NLS-1$
         Integer green = intMember(color, "green"); //$NON-NLS-1$
@@ -225,6 +234,70 @@ public final class StyleValueBuilder
         colorValue.setValue(colorDef);
         return Result.ok(colorValue, StyleElementType.COLOR,
             "Color RGB(" + red + ", " + green + ", " + blue + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /** The named-color body members and the platform catalogue prefix each stands for. */
+    private static final java.util.Map<String, String> NAMED_COLOR_SOURCES = new java.util.LinkedHashMap<>();
+
+    static
+    {
+        NAMED_COLOR_SOURCES.put("style", "Style"); //$NON-NLS-1$ //$NON-NLS-2$
+        NAMED_COLOR_SOURCES.put("palette", "Palette"); //$NON-NLS-1$ //$NON-NLS-2$
+        NAMED_COLOR_SOURCES.put("web", "Web"); //$NON-NLS-1$ //$NON-NLS-2$
+        NAMED_COLOR_SOURCES.put("windows", "Windows"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The body member that names a color of a catalogue prefix ({@code Web} to {@code web}), the
+     * inverse of the named-color forms; {@code null} for a prefix no body names.
+     */
+    static String namedColorMember(String prefix)
+    {
+        for (java.util.Map.Entry<String, String> entry : NAMED_COLOR_SOURCES.entrySet())
+        {
+            if (entry.getValue().equals(prefix)) return entry.getKey();
+        }
+        return null;
+    }
+
+    /**
+     * Resolves a named color: a style or palette name against the project's configuration first,
+     * a style name then against the platform's style colors, and a web or Windows name against the
+     * platform catalogue only - the catalogue EDT's Template.dcs reader looks names up in.
+     */
+    private static Result namedColor(String source, String name, NamedColorResolver namedColors)
+    {
+        String prefix = NAMED_COLOR_SOURCES.get(source);
+        Color resolved = null;
+        if (namedColors != null)
+        {
+            resolved = "style".equals(source) ? namedColors.resolveStyle(name) //$NON-NLS-1$
+                : "palette".equals(source) ? namedColors.resolvePalette(name) : null; //$NON-NLS-1$
+            if (resolved == null && !"palette".equals(source)) //$NON-NLS-1$
+            {
+                resolved = namedColors.resolvePlatform(prefix + "." + name); //$NON-NLS-1$
+            }
+        }
+        if (resolved == null)
+        {
+            if ("style".equals(source) || "palette".equals(source)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                boolean style = "style".equals(source); //$NON-NLS-1$
+                String location = style
+                    ? "Configuration > Style items (Common/StyleItems) or among the platform's style colors" //$NON-NLS-1$
+                    : "Configuration > Palette colors (Common/PaletteColors)"; //$NON-NLS-1$
+                return Result.error("Named " + (style ? "style color" : "palette color") + " '" + name //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    + "' cannot be resolved. Such items are defined in the project's " + location + "."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return Result.error("Platform " + source + " color '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "' cannot be resolved for this project's platform version. Name a color the " //$NON-NLS-1$
+                + "platform registers as " + prefix + ".<Name>, e.g. {color:{web:'Red'}}."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        ColorRef colorRef = McoreFactory.eINSTANCE.createColorRef();
+        colorRef.setColor(resolved);
+        ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
+        colorValue.setValue(colorRef);
+        return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** The inverse of buildFont: only explicit fonts with an integer height and default scale. */
@@ -499,8 +572,30 @@ public final class StyleValueBuilder
      */
     public static NamedColorResolver forConfiguration(Configuration configuration)
     {
+        return forConfiguration(configuration, null);
+    }
+
+    /**
+     * {@link #forConfiguration(Configuration)} that also resolves platform colors from the given
+     * platform color catalogue ({@link AppearanceValueBuilder#colorCatalogue}).
+     *
+     * @param configuration the project configuration, may be {@code null}
+     * @param colorCatalogue the platform color catalogue of the project's version, may be {@code null}
+     * @return the resolver
+     */
+    public static NamedColorResolver forConfiguration(Configuration configuration,
+        IEObjectProvider colorCatalogue)
+    {
         return new NamedColorResolver()
         {
+            @Override
+            public Color resolvePlatform(String qualifiedName)
+            {
+                PlatformCatalogue.Lookup found = PlatformCatalogue.find(colorCatalogue, qualifiedName,
+                    McorePackage.Literals.COLOR);
+                return found.status == PlatformCatalogue.Status.FOUND ? (Color)found.proxy : null;
+            }
+
             @Override
             public StyleColor resolveStyle(String name)
             {

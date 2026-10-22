@@ -545,6 +545,21 @@ public final class AppearanceValueBuilder
     }
 
     /**
+     * The {@code <Source>.<Name>} a color reference names - {@code Web.Red}, {@code Style.X},
+     * {@code Palette.X} - read without resolving it, by the same rule as {@link #renderColor}.
+     *
+     * @param reference the color reference
+     * @return the name, or {@code null} when the reference names no target in that form
+     */
+    public static String colorReferenceName(ColorRef reference)
+    {
+        String name = reference == null ? null
+            : referenceName(reference, McorePackage.Literals.COLOR_REF__COLOR);
+        int dot = name == null ? -1 : name.indexOf('.');
+        return dot > 0 && dot < name.length() - 1 && name.indexOf(' ') < 0 ? name : null;
+    }
+
+    /**
      * Renders a contained font: an absolute font as its members ({@code face='Arial', height=12,
      * bold}), a font reference as {@code <Source>.<Name>} followed by its SET overrides in
      * parentheses, an automatic font as {@code Auto} with its overrides.
@@ -683,6 +698,13 @@ public final class AppearanceValueBuilder
                 return PALETTE + fqn.substring("PaletteColor".length()); //$NON-NLS-1$
             }
             return null;
+        }
+        if ("unresolved".equals(uri.scheme()) && uri.segmentCount() > 0) //$NON-NLS-1$
+        {
+            // What EDT's DCS reader makes of web:Red without a platform catalogue:
+            // unresolved:/Web.Red, named by its first segment as EDT's own writer reads it back.
+            String name = uri.segment(0);
+            return name != null && name.indexOf('.') > 0 ? name : null;
         }
         String fragment = uri.fragment();
         if (fragment == null)

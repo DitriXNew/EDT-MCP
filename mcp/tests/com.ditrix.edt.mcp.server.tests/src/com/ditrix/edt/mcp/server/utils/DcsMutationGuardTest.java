@@ -91,7 +91,10 @@ public class DcsMutationGuardTest
         DataCompositionChartGroup point = factory.createDataCompositionChartGroup();
         DataCompositionGroupFields fields = factory.createDataCompositionGroupFields();
         DataCompositionGroupField field = factory.createDataCompositionGroupField();
-        field.setPeriodAdditionBegin(McoreFactory.eINSTANCE.createDateValue());
+        // A stored date bound has a date: a payload-less DateValue never comes back from Template.dcs.
+        com._1c.g5.v8.dt.mcore.DateValue begin = McoreFactory.eINSTANCE.createDateValue();
+        begin.setValue(com._1c.g5.v8.dt.mcore.util.Date.fromString("0001-01-01T00:00:00")); //$NON-NLS-1$
+        field.setPeriodAdditionBegin(begin);
         fields.getItems().add(field);
         point.setGroupFields(fields);
         chart.getPoints().add(point);
@@ -128,8 +131,7 @@ public class DcsMutationGuardTest
         DataCompositionChartGroup series = factory.createDataCompositionChartGroup();
         DataCompositionFilter filter = factory.createDataCompositionFilter();
         DataCompositionFilterItem item = factory.createDataCompositionFilterItem();
-        item.setLeft(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
-            .createDataCompositionField());
+        item.setLeft(namedField("Amount")); //$NON-NLS-1$
         filter.getItems().add(item);
         series.setFilter(filter);
         chart.getSeries().add(series);
@@ -149,9 +151,10 @@ public class DcsMutationGuardTest
             + "/series/0/filter/items/0/left")); //$NON-NLS-1$
 
         // The right operands go through the same untyped ValueSpec.
-        item.setLeft(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
-            .createDataCompositionField());
-        item.getRight().add(McoreFactory.eINSTANCE.createStringValue());
+        item.setLeft(namedField("Amount")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.StringValue text = McoreFactory.eINSTANCE.createStringValue();
+        text.setValue("Open"); //$NON-NLS-1$
+        item.getRight().add(text);
         assertNull("a string operand is authorable", //$NON-NLS-1$
             DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         EnumValue right = McoreFactory.eINSTANCE.createEnumValue();
@@ -291,5 +294,14 @@ public class DcsMutationGuardTest
         DcsAddress.ParseResult parsed = DcsAddress.parse(raw);
         assertTrue(raw, parsed.isSuccess());
         return parsed.address();
+    }
+
+    /** A stored field operand names its field: value(), the writer of the slot, refuses an empty one. */
+    private static com._1c.g5.v8.dt.dcs.model.core.DataCompositionField namedField(String name)
+    {
+        com._1c.g5.v8.dt.dcs.model.core.DataCompositionField field =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionField();
+        field.setValue(name);
+        return field;
     }
 }

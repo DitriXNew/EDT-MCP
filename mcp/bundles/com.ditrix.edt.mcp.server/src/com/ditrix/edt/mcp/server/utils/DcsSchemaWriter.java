@@ -130,7 +130,7 @@ public final class DcsSchemaWriter
     {
         return apply(schema, request, resolver, version, namedColors,
             DcsSettingsWriter.catalogues(version, request == null ? null : request.languages,
-                DcsSettingsWriter.AppearanceCatalogue.SCHEMA));
+                DcsSettingsWriter.AppearanceCatalogue.SCHEMA, namedColors));
     }
 
     /** Reuses the tool's per-mutation catalogue snapshot when both layers are replaced. */

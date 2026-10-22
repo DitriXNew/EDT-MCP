@@ -32,6 +32,7 @@ public final class DcsWriterCatalogues
     private final AppearanceCatalogue appearance;
     private final String language;
     private final DcsPresentationParser.LanguageContext languages;
+    private final StyleValueBuilder.NamedColorResolver namedColors;
     private final Source source;
     private final Map<Enum<?>, Lookup> cache = new HashMap<>();
 
@@ -49,16 +50,35 @@ public final class DcsWriterCatalogues
     public DcsWriterCatalogues(Version version, AppearanceCatalogue appearance, String language,
         DcsPresentationParser.LanguageContext languages, Source source)
     {
+        this(version, appearance, language, languages, null, source);
+    }
+
+    /**
+     * @param namedColors the named-color resolver this mutation's writers build colors with, so the
+     *        guard's dry run names a stored color reference the way the writer would; may be
+     *        {@code null}, and then a named color reference has no restatement
+     */
+    public DcsWriterCatalogues(Version version, AppearanceCatalogue appearance, String language,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors,
+        Source source)
+    {
         this.version = version == null ? Version.LATEST : version;
         this.appearance = Objects.requireNonNull(appearance);
         this.language = language == null ? "en" : language; //$NON-NLS-1$
         this.languages = languages;
+        this.namedColors = namedColors;
         this.source = Objects.requireNonNull(source);
     }
 
     public Version version()
     {
         return version;
+    }
+
+    /** The writers' named-color resolver, or {@code null} when they run without one. */
+    public StyleValueBuilder.NamedColorResolver namedColors()
+    {
+        return namedColors;
     }
 
     /** The writers' language context, or {@code null} when they run without one. */

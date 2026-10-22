@@ -61,6 +61,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
+import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -621,7 +622,8 @@ public class DcsTool implements IMcpTool
             DcsWriter.TypeResolver typeResolver =
                 DcsWriter.typeResolver(context.configuration(), version);
             StyleValueBuilder.NamedColorResolver namedColors =
-                StyleValueBuilder.forConfiguration(context.configuration());
+                StyleValueBuilder.forConfiguration(context.configuration(),
+                    AppearanceValueBuilder.colorCatalogue(version));
             if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
             {
                 if (body != null && body.has(FORMAT_XML))
@@ -768,7 +770,7 @@ public class DcsTool implements IMcpTool
                     DcsChartReferences.Census chartsBefore =
                         DcsChartReferences.census(content.schema(), address.rootFqn());
                     DcsWriterCatalogues catalogues = replaceCatalogues(target.kind(), services.version(),
-                        languages, null);
+                        languages, null, namedColors);
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
@@ -957,7 +959,7 @@ public class DcsTool implements IMcpTool
                 {
                     String refusal = replaceRefusal(extInfo,
                         extInfo == null ? null : extInfo.getListSettings(), type, address,
-                        replaceCatalogues(target.kind(), version, languages, null));
+                        replaceCatalogues(target.kind(), version, languages, null, namedColors));
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1130,7 +1132,8 @@ public class DcsTool implements IMcpTool
                 if (ACTION_REPLACE.equals(action))
                 {
                     String refusal = DcsMutationGuard.replaceError(
-                        current, address, replaceCatalogues(target.kind(), version, languages, null));
+                        current, address, replaceCatalogues(target.kind(), version, languages, null,
+                            namedColors));
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1291,13 +1294,21 @@ public class DcsTool implements IMcpTool
     static DcsWriterCatalogues replaceCatalogues(TargetKind kind, Version version,
         DcsPresentationParser.LanguageContext languages, DcsWriterCatalogues.Source source)
     {
+        return replaceCatalogues(kind, version, languages, source, null);
+    }
+
+    /** {@link #replaceCatalogues(TargetKind, Version, DcsPresentationParser.LanguageContext, DcsWriterCatalogues.Source)} with the writers' named colors. */
+    static DcsWriterCatalogues replaceCatalogues(TargetKind kind, Version version,
+        DcsPresentationParser.LanguageContext languages, DcsWriterCatalogues.Source source,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
         DcsSettingsWriter.AppearanceCatalogue appearance = kind == TargetKind.FORM
             ? DcsSettingsWriter.AppearanceCatalogue.FORM : kind == TargetKind.DYNAMIC_LIST
                 ? DcsSettingsWriter.AppearanceCatalogue.DYNAMIC_LIST
                 : DcsSettingsWriter.AppearanceCatalogue.SCHEMA;
-        return source == null ? DcsSettingsWriter.catalogues(version, languages, appearance)
+        return source == null ? DcsSettingsWriter.catalogues(version, languages, appearance, namedColors)
             : new DcsWriterCatalogues(version, appearance,
-                languages == null ? "en" : languages.resolvedCode(), languages, source); //$NON-NLS-1$
+                languages == null ? "en" : languages.resolvedCode(), languages, namedColors, source); //$NON-NLS-1$
     }
 
     /**

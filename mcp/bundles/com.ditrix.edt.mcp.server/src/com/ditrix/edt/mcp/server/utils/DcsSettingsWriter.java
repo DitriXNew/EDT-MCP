@@ -112,6 +112,14 @@ import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.mcore.StructureProperty;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDate;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDateValue;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDateVariant;
+import com._1c.g5.v8.dt.mcore.StandardPeriod;
+import com._1c.g5.v8.dt.mcore.StandardPeriodValue;
+import com._1c.g5.v8.dt.mcore.StandardPeriodVariant;
+import com._1c.g5.v8.dt.mcore.TypedValueList;
+import com._1c.g5.v8.dt.mcore.TypedValueListItem;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -160,6 +168,16 @@ public final class DcsSettingsWriter
 
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
     private static final String KEY_KIND = "kind"; //$NON-NLS-1$
+    private static final String KIND_STANDARD_PERIOD = "standardPeriod"; //$NON-NLS-1$
+    private static final String KIND_STANDARD_BEGINNING_DATE = "standardBeginningDate"; //$NON-NLS-1$
+    private static final String KIND_VALUE_LIST = "valueList"; //$NON-NLS-1$
+    private static final String KEY_VARIANT = "variant"; //$NON-NLS-1$
+    private static final String KEY_START_DATE = "startDate"; //$NON-NLS-1$
+    private static final String KEY_END_DATE = "endDate"; //$NON-NLS-1$
+    private static final String KEY_DATE = "date"; //$NON-NLS-1$
+    private static final String KEY_LAST_ID = "lastId"; //$NON-NLS-1$
+    private static final String KEY_CHECK_STATE = "checkState"; //$NON-NLS-1$
+    private static final String KEY_VALUES = "values"; //$NON-NLS-1$
     private static final String KEY_NAME = "name"; //$NON-NLS-1$
     private static final String KEY_USE = "use"; //$NON-NLS-1$
     private static final String KEY_FIELD = "field"; //$NON-NLS-1$
@@ -3739,11 +3757,22 @@ public final class DcsSettingsWriter
      * being dropped.
      *
      * <p>Two value forms keep their own rules: a font is judged by
-     * {@link StyleValueBuilder#fontRefusal}, and a ColorRef with a referent passes unchecked because
-     * the guard has no project in which to name the referent - the boundary declared for #682.</p>
+     * {@link StyleValueBuilder#fontRefusal}, and a color reference by the name it writes - see
+     * {@link #colorReferenceRefusal}.</p>
      */
     static String typedValueRefusal(Value declared, Value stored,
         DcsPresentationParser.LanguageContext languages)
+    {
+        return typedValueRefusal(declared, stored, languages, null);
+    }
+
+    /**
+     * {@link #typedValueRefusal(Value, Value, DcsPresentationParser.LanguageContext)} run with the
+     * mutation's named-color resolver, so a stored color reference is restated the way the writer
+     * would build it.
+     */
+    static String typedValueRefusal(Value declared, Value stored,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
     {
         if (stored == null) return "the stored value is null"; //$NON-NLS-1$
         if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
@@ -3753,15 +3782,20 @@ public final class DcsSettingsWriter
         }
         if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof ColorRef)
         {
-            return ((ColorRef)((ColorValue)stored).getValue()).getColor() != null ? null
-                : "the color writer needs auto, a ColorDef or a ColorRef with a referent"; //$NON-NLS-1$
+            return colorReferenceRefusal(declared, (ColorRef)((ColorValue)stored).getValue(), languages,
+                namedColors);
+        }
+        if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof AutoColor)
+        {
+            return "an AutoColor is saved as #000000; restate it as {color:{red:0,green:0,blue:0}} " //$NON-NLS-1$
+                + "or use action=update"; //$NON-NLS-1$
         }
         List<JsonElement> bodies = typedBodies(stored);
         if (bodies.isEmpty())
         {
             return stored instanceof ColorValue
                 ? "the color writer needs auto, a ColorDef or a ColorRef with a referent" //$NON-NLS-1$
-                : stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
+                : untypedProjection(stored).refusal();
         }
         DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
         return rebuildRefusal(stored, bodies,
@@ -3775,13 +3809,54 @@ public final class DcsSettingsWriter
     static String untypedValueRefusal(Value stored)
     {
         if (stored == null) return "the stored value is null"; //$NON-NLS-1$
-        JsonElement body = untypedBody(stored);
-        if (body == null) return stored.eClass().getName() + " is not an untyped ValueSpec kind"; //$NON-NLS-1$
-        return rebuildRefusal(stored, List.of(body), raw -> value(raw, STORED_VALUE_PATH));
+        UntypedProjection projected = untypedProjection(stored);
+        if (projected.body() == null) return projected.refusal();
+        return rebuildRefusal(stored, List.of(projected.body()), raw -> value(raw, STORED_VALUE_PATH));
     }
 
     /** Where a dry-run error says the projected body came from. */
     private static final String STORED_VALUE_PATH = "value"; //$NON-NLS-1$
+
+    /**
+     * A stored color reference is restated by its name: the reference to {@code Web.Red} is written
+     * by {@code {color:{web:'Red'}}}, to a configuration or platform style color by
+     * {@code {color:{style:'<Name>'}}}, to a palette color by {@code {color:{palette:'<Name>'}}}. The
+     * body runs through the writer with the mutation's named-color resolver, and the rebuilt
+     * reference must name the same target. Names are compared, not objects: EDT's Template.dcs
+     * writer stores a color reference as its name, and the same platform color reaches the model as
+     * a catalogue proxy, a proxy with a bare-name URI or a resolved object depending on how it was
+     * loaded - one stored value under three object identities.
+     */
+    private static String colorReferenceRefusal(Value declared, ColorRef stored,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        String name = AppearanceValueBuilder.colorReferenceName(stored);
+        if (name == null)
+        {
+            return "the color reference names no target; the color writer restates a reference only " //$NON-NLS-1$
+                + "by its <Source>.<Name>"; //$NON-NLS-1$
+        }
+        int dot = name.indexOf('.');
+        String member = StyleValueBuilder.namedColorMember(name.substring(0, dot));
+        if (member == null)
+        {
+            return "the color reference names '" + name + "', and no color body names a " //$NON-NLS-1$ //$NON-NLS-2$
+                + name.substring(0, dot) + " color"; //$NON-NLS-1$
+        }
+        JsonObject named = new JsonObject();
+        named.addProperty(member, name.substring(dot + 1));
+        JsonObject body = new JsonObject();
+        body.add("color", named); //$NON-NLS-1$
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        ValueResult rebuilt = withNamedColors(namedColors,
+            () -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+        if (rebuilt.error != null) return "the writer refuses its body: " + rebuilt.error; //$NON-NLS-1$
+        Color color = rebuilt.value instanceof ColorValue ? ((ColorValue)rebuilt.value).getValue() : null;
+        String restated = color instanceof ColorRef
+            ? AppearanceValueBuilder.colorReferenceName((ColorRef)color) : null;
+        return name.equals(restated) ? null : "the writer would rebuild it as " //$NON-NLS-1$
+            + (restated == null ? "another color" : restated) + ", not " + name; //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
     /** Passes when one projected body rebuilds an equal value; otherwise names the first failure. */
     private static String rebuildRefusal(Value stored, List<JsonElement> bodies,
@@ -3855,17 +3930,75 @@ public final class DcsSettingsWriter
             }
             return bodies;
         }
-        JsonElement untyped = untypedBody(stored);
+        JsonElement untyped = untypedProjection(stored).body();
         if (untyped != null) bodies.add(untyped);
         return bodies;
     }
 
-    /** The {kind, value} form value() reads, projected from a stored value; null when it has none. */
-    private static JsonElement untypedBody(Value stored)
+    /**
+     * A stored value projected to the {kind, value} body value() reads, or the reason it has none: a
+     * kind value() does not build, or a member its body does not carry.
+     */
+    private record UntypedProjection(JsonElement body, String refusal)
+    {
+        static UntypedProjection of(JsonElement body)
+        {
+            return new UntypedProjection(body, null);
+        }
+
+        static UntypedProjection refused(String refusal)
+        {
+            return new UntypedProjection(null, refusal);
+        }
+    }
+
+    /**
+     * The {kind, value} form value() reads, projected from a stored value. A standard period or
+     * beginning date carries its variant and the dates it has, a value list its last id and every
+     * item's id, value, presentation and check state - so the round trip is exact - and each nested
+     * item value projects the same way.
+     */
+    private static UntypedProjection untypedProjection(Value stored)
     {
         String kind;
         JsonElement payload;
-        if (stored instanceof DataCompositionField)
+        if (stored instanceof StandardPeriodValue)
+        {
+            StandardPeriod period = ((StandardPeriodValue)stored).getValue();
+            if (period == null)
+            {
+                return UntypedProjection.refused("the StandardPeriodValue holds no period; a " //$NON-NLS-1$
+                    + "standardPeriod body always writes one"); //$NON-NLS-1$
+            }
+            JsonObject object = new JsonObject();
+            object.addProperty(KEY_VARIANT, period.getVariant().getLiteral());
+            if (period.getStartDate() != null) object.addProperty(KEY_START_DATE, period.getStartDate().toString());
+            if (period.getEndDate() != null) object.addProperty(KEY_END_DATE, period.getEndDate().toString());
+            kind = KIND_STANDARD_PERIOD;
+            payload = object;
+        }
+        else if (stored instanceof StandardBeginningDateValue)
+        {
+            StandardBeginningDate beginning = ((StandardBeginningDateValue)stored).getValue();
+            if (beginning == null)
+            {
+                return UntypedProjection.refused("the StandardBeginningDateValue holds no date; a " //$NON-NLS-1$
+                    + "standardBeginningDate body always writes one"); //$NON-NLS-1$
+            }
+            JsonObject object = new JsonObject();
+            object.addProperty(KEY_VARIANT, beginning.getVariant().getLiteral());
+            if (beginning.getDate() != null) object.addProperty(KEY_DATE, beginning.getDate().toString());
+            kind = KIND_STANDARD_BEGINNING_DATE;
+            payload = object;
+        }
+        else if (stored instanceof TypedValueList)
+        {
+            UntypedProjection list = valueListProjection((TypedValueList)stored);
+            if (list.body() == null) return list;
+            kind = KIND_VALUE_LIST;
+            payload = list.body();
+        }
+        else if (stored instanceof DataCompositionField)
         {
             kind = "field"; //$NON-NLS-1$
             payload = nullableText(((DataCompositionField)stored).getValue());
@@ -3911,12 +4044,66 @@ public final class DcsSettingsWriter
         }
         else
         {
-            return null;
+            return UntypedProjection.refused(stored.eClass().getName()
+                + " is not an untyped ValueSpec kind"); //$NON-NLS-1$
         }
         JsonObject body = new JsonObject();
         body.addProperty(KEY_KIND, kind);
         if (payload != null) body.add("value", payload); //$NON-NLS-1$
-        return body;
+        return UntypedProjection.of(body);
+    }
+
+    /**
+     * The 'value' object of a valueList body for a stored list, or the member it cannot carry: a
+     * non-empty value type, available values, an item picture or format presentation, or an item
+     * value with no body of its own.
+     */
+    private static UntypedProjection valueListProjection(TypedValueList list)
+    {
+        if (list.getValueType() == null
+            || !EcoreUtil.equals(list.getValueType(), McoreFactory.eINSTANCE.createTypeDescription()))
+        {
+            return UntypedProjection.refused("the value list has a value type; a valueList body writes " //$NON-NLS-1$
+                + "the empty value type the DCS designer stores"); //$NON-NLS-1$
+        }
+        if (list.getAvailableValues() != null)
+        {
+            return UntypedProjection.refused("the value list has available values; a valueList body " //$NON-NLS-1$
+                + "does not carry them"); //$NON-NLS-1$
+        }
+        JsonArray items = new JsonArray();
+        for (int i = 0; i < list.getItems().size(); i++)
+        {
+            TypedValueListItem item = list.getItems().get(i);
+            if (item.getPicture() != null)
+            {
+                return UntypedProjection.refused("value-list item #" + i //$NON-NLS-1$
+                    + " has a picture; a valueList body does not carry item pictures"); //$NON-NLS-1$
+            }
+            if (item.isFormatPresentationSpecified() || item.getFormatPresentation() != null)
+            {
+                return UntypedProjection.refused("value-list item #" + i //$NON-NLS-1$
+                    + " has a format presentation; a valueList body does not carry it"); //$NON-NLS-1$
+            }
+            JsonObject entry = new JsonObject();
+            entry.addProperty(KEY_ID, item.getId());
+            if (item.getValue() != null)
+            {
+                UntypedProjection nested = untypedProjection(item.getValue());
+                if (nested.body() == null)
+                {
+                    return UntypedProjection.refused("value-list item #" + i + ": " + nested.refusal()); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                entry.add("value", nested.body()); //$NON-NLS-1$
+            }
+            if (item.getPresentation() != null) entry.addProperty(KEY_PRESENTATION, item.getPresentation());
+            if (item.getCheckState() != 0) entry.addProperty(KEY_CHECK_STATE, item.getCheckState());
+            items.add(entry);
+        }
+        JsonObject object = new JsonObject();
+        object.addProperty(KEY_LAST_ID, list.getLastId());
+        if (!items.isEmpty()) object.add(KEY_ITEMS, items);
+        return UntypedProjection.of(object);
     }
 
     private static JsonElement nullableText(String text)
@@ -4114,8 +4301,16 @@ public final class DcsSettingsWriter
     public static DcsWriterCatalogues catalogues(Version version,
         DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance)
     {
+        return catalogues(version, languages, appearance, null);
+    }
+
+    /** {@link #catalogues(Version, DcsPresentationParser.LanguageContext, AppearanceCatalogue)} with the writers' named colors. */
+    public static DcsWriterCatalogues catalogues(Version version,
+        DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
         return new DcsWriterCatalogues(platformVersion(version), appearance,
-            languages == null ? "en" : languages.resolvedCode(), languages, //$NON-NLS-1$
+            languages == null ? "en" : languages.resolvedCode(), languages, namedColors, //$NON-NLS-1$
             (kind, platform, language) -> kind instanceof OutputParameterCatalogue
                 ? outputParameters((OutputParameterCatalogue)kind, platform, language)
                 : appearanceParameters((AppearanceCatalogue)kind, platform, language));
@@ -4183,7 +4378,8 @@ public final class DcsSettingsWriter
                     + item.eClass().getName() + ", not SettingsParameterValue. Choose an address from get."; //$NON-NLS-1$
             }
             String at = where + "/items/" + path.get(1); //$NON-NLS-1$
-            boolean needsTypedDefinition = body.has("parameter") || body.has("value"); //$NON-NLS-1$ //$NON-NLS-2$
+            boolean needsTypedDefinition = body.has("parameter") || body.has("value") //$NON-NLS-1$ //$NON-NLS-2$
+                || body.has(KEY_VALUES);
             AvailableParametersResult typed = needsTypedDefinition
                 ? availableOutputParameters(catalogue, version, languages, at)
                 : AvailableParametersResult.success(null);
@@ -4611,12 +4807,18 @@ public final class DcsSettingsWriter
         DcsPresentationParser.LanguageContext languages,
         DcsAvailableParameterCollection available, Version version, String path)
     {
-        String members = checkMembers(body, path, "parameter", "value", KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
+        String members = checkMembers(body, path, "parameter", "value", KEY_VALUES, KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION);
         if (members != null)
         {
             return members;
         }
+        if (body.has("value") && body.has(KEY_VALUES)) //$NON-NLS-1$
+        {
+            return "Parameter item at '" + path + "' takes 'value' or 'values', not both. Pass one " //$NON-NLS-1$ //$NON-NLS-2$
+                + "value in 'value', or every value of the item in 'values'."; //$NON-NLS-1$
+        }
+        boolean writesValues = body.has("value") || body.has(KEY_VALUES); //$NON-NLS-1$
         DcsAvailableParameter declared = null;
         if (body.has("parameter")) //$NON-NLS-1$
         {
@@ -4644,7 +4846,7 @@ public final class DcsSettingsWriter
             }
             item.setParameter((DataCompositionParameter)parameter.value);
         }
-        else if (available != null && body.has("value")) //$NON-NLS-1$
+        else if (available != null && writesValues)
         {
             String name = item.getParameter() == null ? null : item.getParameter().getValue();
             if (name == null || name.isEmpty())
@@ -4673,6 +4875,16 @@ public final class DcsSettingsWriter
             item.getValues().clear();
             item.getValues().add(mapped.value);
         }
+        else if (body.has(KEY_VALUES))
+        {
+            ValuesResult mapped = parameterValues(body, declared, languages, path);
+            if (mapped.error != null)
+            {
+                return mapped.error;
+            }
+            item.getValues().clear();
+            item.getValues().addAll(mapped.values);
+        }
         else if (declared != null && !item.getValues().isEmpty()
             && !hasExpectedType(declared.defValue(), item.getValues().get(0)))
         {
@@ -4690,6 +4902,45 @@ public final class DcsSettingsWriter
         }
         String scaffold = applyParameterScaffold(item, body, languages, path);
         return scaffold;
+    }
+
+    /**
+     * The 'values' array of a parameter item: every value of the item, each built by the item's own
+     * value writer - value() for a data parameter, typedParameterValue against the declared type for
+     * an output parameter. An output parameter takes more than one value only when the platform
+     * declares a value list allowed for it.
+     */
+    private static ValuesResult parameterValues(JsonObject body, DcsAvailableParameter declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        JsonArray raw = array(body, KEY_VALUES, path);
+        if (raw == null)
+        {
+            return new ValuesResult(null, arrayError);
+        }
+        if (declared != null && raw.size() > 1 && !declared.isValueListAllowed())
+        {
+            return new ValuesResult(null, "Output parameter '" + declared.key(0) + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + ".values' takes one value, not " + raw.size() //$NON-NLS-1$
+                + ": the platform declares no value list for it. Pass one value in 'value'."); //$NON-NLS-1$
+        }
+        List<Value> values = new ArrayList<>();
+        for (int i = 0; i < raw.size(); i++)
+        {
+            String at = path + ".values[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            ValueResult mapped = declared == null ? value(raw.get(i), at)
+                : typedParameterValue(raw.get(i), declared.defValue(), languages, at);
+            if (mapped.error != null)
+            {
+                return new ValuesResult(null, mapped.error);
+            }
+            values.add(mapped.value);
+        }
+        return new ValuesResult(values, null);
+    }
+
+    private record ValuesResult(List<Value> values, String error)
+    {
     }
 
     /** Headless unit seam: production obtains this same collection from the holder catalogue. */
@@ -5075,15 +5326,6 @@ public final class DcsSettingsWriter
         return FieldResult.success((DataCompositionField)result.value);
     }
 
-    /** The value classes emitted by value(), also shared by schema input-parameter writes. */
-    static boolean isAuthorableUntypedValue(Value value)
-    {
-        return value instanceof DataCompositionField || value instanceof DataCompositionParameter
-            || value instanceof com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue
-            || value instanceof StringValue || value instanceof NumberValue
-            || value instanceof BooleanValue || value instanceof DateValue || value instanceof NullValue;
-    }
-
     private static ValueResult value(JsonElement element, String path)
     {
         if (element == null || !element.isJsonObject())
@@ -5176,10 +5418,16 @@ public final class DcsSettingsWriter
                     }
                     NullValue nullValue = McoreFactory.eINSTANCE.createNullValue();
                     return ValueResult.success(nullValue);
+                case KIND_STANDARD_PERIOD:
+                    return standardPeriodValue(raw, path);
+                case KIND_STANDARD_BEGINNING_DATE:
+                    return standardBeginningDateValue(raw, path);
+                case KIND_VALUE_LIST:
+                    return valueListValue(raw, path);
                 default:
                     return ValueResult.failure("ValueSpec kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                         + "' is invalid. Use one of: field, parameter, expression, string, number, " //$NON-NLS-1$
-                        + "boolean, date, null."); //$NON-NLS-1$
+                        + "boolean, date, null, standardPeriod, standardBeginningDate, valueList."); //$NON-NLS-1$
             }
         }
         catch (IllegalArgumentException e)
@@ -5187,6 +5435,201 @@ public final class DcsSettingsWriter
             return ValueResult.failure("Date ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                 + "' is invalid. Pass the platform date literal accepted by mcore Date.fromString."); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * {@code {kind:'standardPeriod', value:{variant?, startDate?, endDate?}}}: the platform's
+     * StandardPeriod as EDT stores it - a variant (Custom when omitted, the model default) and the
+     * optional custom start and end dates, each a platform date literal.
+     */
+    private static ValueResult standardPeriodValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Standard-period ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {variant?, startDate?, endDate?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_VARIANT, KEY_START_DATE, KEY_END_DATE);
+        if (members != null) return ValueResult.failure(members);
+        EnumResult<StandardPeriodVariant> variant = variant(body, at, StandardPeriodVariant.values(),
+            StandardPeriodVariant.CUSTOM);
+        if (variant.error != null) return ValueResult.failure(variant.error);
+        DateResult start = optionalDate(body, KEY_START_DATE, at);
+        if (start.error != null) return ValueResult.failure(start.error);
+        DateResult end = optionalDate(body, KEY_END_DATE, at);
+        if (end.error != null) return ValueResult.failure(end.error);
+        StandardPeriod period = McoreFactory.eINSTANCE.createStandardPeriod();
+        period.setVariant(variant.value);
+        if (start.value != null) period.setStartDate(start.value);
+        if (end.value != null) period.setEndDate(end.value);
+        StandardPeriodValue value = McoreFactory.eINSTANCE.createStandardPeriodValue();
+        value.setValue(period);
+        return ValueResult.success(value);
+    }
+
+    /**
+     * {@code {kind:'standardBeginningDate', value:{variant?, date?}}}: the platform's
+     * StandardBeginningDate - a variant (Custom when omitted) and the optional custom date.
+     */
+    private static ValueResult standardBeginningDateValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Standard-beginning-date ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {variant?, date?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_VARIANT, KEY_DATE);
+        if (members != null) return ValueResult.failure(members);
+        EnumResult<StandardBeginningDateVariant> variant = variant(body, at,
+            StandardBeginningDateVariant.values(), StandardBeginningDateVariant.CUSTOM);
+        if (variant.error != null) return ValueResult.failure(variant.error);
+        DateResult date = optionalDate(body, KEY_DATE, at);
+        if (date.error != null) return ValueResult.failure(date.error);
+        StandardBeginningDate beginning = McoreFactory.eINSTANCE.createStandardBeginningDate();
+        beginning.setVariant(variant.value);
+        if (date.value != null) beginning.setDate(date.value);
+        StandardBeginningDateValue value = McoreFactory.eINSTANCE.createStandardBeginningDateValue();
+        value.setValue(beginning);
+        return ValueResult.success(value);
+    }
+
+    /**
+     * {@code {kind:'valueList', value:{items?:[{value?, presentation?, checkState?, id?}], lastId?}}}:
+     * the platform ValueList EDT stores in a filter's right side or a parameter value, with an empty
+     * value type, as the DCS designer writes it. Each item's value is itself a ValueSpec. An item
+     * without 'id' takes one more than the highest id before it (the first takes 1); 'lastId'
+     * defaults to the highest item id, or -1 for an empty list, which is what the designer stores.
+     * Item pictures, format presentations, a non-empty value type and available values are not
+     * carried.
+     */
+    private static ValueResult valueListValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Value-list ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {items?:[{value?, presentation?, checkState?, id?}], " //$NON-NLS-1$
+                + "lastId?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_ITEMS, KEY_LAST_ID);
+        if (members != null) return ValueResult.failure(members);
+        TypedValueList list = McoreFactory.eINSTANCE.createTypedValueList();
+        list.setValueType(McoreFactory.eINSTANCE.createTypeDescription());
+        Integer highest = null;
+        if (body.has(KEY_ITEMS) && !body.get(KEY_ITEMS).isJsonNull())
+        {
+            JsonArray items = array(body, KEY_ITEMS, at);
+            if (items == null) return ValueResult.failure(arrayError);
+            for (int i = 0; i < items.size(); i++)
+            {
+                String itemPath = at + ".items[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+                JsonObject itemBody = arrayObject(items, i, at + ".items"); //$NON-NLS-1$
+                if (itemBody == null) return ValueResult.failure(arrayObjectError);
+                String itemMembers = checkMembers(itemBody, itemPath, "value", KEY_PRESENTATION, //$NON-NLS-1$
+                    KEY_CHECK_STATE, KEY_ID);
+                if (itemMembers != null) return ValueResult.failure(itemMembers);
+                TypedValueListItem item = McoreFactory.eINSTANCE.createTypedValueListItem();
+                JsonElement itemValue = itemBody.get("value"); //$NON-NLS-1$
+                if (itemValue != null && !itemValue.isJsonNull())
+                {
+                    ValueResult built = value(itemValue, itemPath + ".value"); //$NON-NLS-1$
+                    if (built.error != null) return built;
+                    item.setValue(built.value);
+                }
+                JsonElement presentation = itemBody.get(KEY_PRESENTATION);
+                if (presentation != null && !presentation.isJsonNull())
+                {
+                    if (!presentation.isJsonPrimitive() || !presentation.getAsJsonPrimitive().isString())
+                    {
+                        return ValueResult.failure("Member '" + itemPath //$NON-NLS-1$
+                            + ".presentation' must be a string: a value-list item's presentation is plain " //$NON-NLS-1$
+                            + "text, not a localized map."); //$NON-NLS-1$
+                    }
+                    item.setPresentation(presentation.getAsString());
+                }
+                IntResult checkState = optionalInt(itemBody, KEY_CHECK_STATE, itemPath);
+                if (checkState.error != null) return ValueResult.failure(checkState.error);
+                if (checkState.value != null) item.setCheckState(checkState.value.intValue());
+                IntResult id = optionalInt(itemBody, KEY_ID, itemPath);
+                if (id.error != null) return ValueResult.failure(id.error);
+                int itemId = id.value != null ? id.value.intValue()
+                    : highest == null ? 1 : highest.intValue() + 1;
+                item.setId(itemId);
+                highest = highest == null ? itemId : Math.max(highest.intValue(), itemId);
+                list.getItems().add(item);
+            }
+        }
+        IntResult lastId = optionalInt(body, KEY_LAST_ID, at);
+        if (lastId.error != null) return ValueResult.failure(lastId.error);
+        list.setLastId(lastId.value != null ? lastId.value.intValue()
+            : highest == null ? -1 : highest.intValue());
+        return ValueResult.success(list);
+    }
+
+    /** A platform-enum member of a standard period or beginning date; omitted or null means the model default. */
+    private static <T extends Enum<T> & Enumerator> EnumResult<T> variant(JsonObject body, String path,
+        T[] values, T fallback)
+    {
+        if (!body.has(KEY_VARIANT) || body.get(KEY_VARIANT).isJsonNull())
+        {
+            return EnumResult.success(fallback);
+        }
+        return enumValue(body, KEY_VARIANT, path, values);
+    }
+
+    /** An optional platform date literal member; omitted or null leaves the date unset. */
+    private static DateResult optionalDate(JsonObject body, String member, String path)
+    {
+        JsonElement raw = body.get(member);
+        if (raw == null || raw.isJsonNull()) return new DateResult(null, null);
+        if (!raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isString())
+        {
+            return new DateResult(null, "Member '" + path + "." + member //$NON-NLS-1$ //$NON-NLS-2$
+                + "' must be a platform date literal string such as '2026-01-31T23:59:59'."); //$NON-NLS-1$
+        }
+        try
+        {
+            return new DateResult(com._1c.g5.v8.dt.mcore.util.Date.fromString(raw.getAsString()), null);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return new DateResult(null, "Member '" + path + "." + member + "' value '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + raw.getAsString() + "' is not a platform date. Pass whole seconds without a zone, " //$NON-NLS-1$
+                + "e.g. '2026-01-31T23:59:59'."); //$NON-NLS-1$
+        }
+    }
+
+    /** An optional whole-number member that fits an int; omitted or null is absent. */
+    private static IntResult optionalInt(JsonObject body, String member, String path)
+    {
+        JsonElement raw = body.get(member);
+        if (raw == null || raw.isJsonNull()) return new IntResult(null, null);
+        if (raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isNumber())
+        {
+            try
+            {
+                return new IntResult(Integer.valueOf(raw.getAsBigDecimal().intValueExact()), null);
+            }
+            catch (ArithmeticException e)
+            {
+                // Falls through to the refusal: a fraction or a value outside int.
+            }
+        }
+        return new IntResult(null, "Member '" + path + "." + member //$NON-NLS-1$ //$NON-NLS-2$
+            + "' must be a whole number."); //$NON-NLS-1$
+    }
+
+    private record DateResult(com._1c.g5.v8.dt.mcore.util.Date value, String error)
+    {
+    }
+
+    private record IntResult(Integer value, String error)
+    {
     }
 
     private static <T extends Enum<T> & Enumerator> EnumResult<T> enumValue(JsonObject body,

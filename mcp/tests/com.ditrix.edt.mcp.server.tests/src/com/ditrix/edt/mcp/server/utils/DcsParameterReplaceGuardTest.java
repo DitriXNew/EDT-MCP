@@ -37,16 +37,20 @@ public class DcsParameterReplaceGuardTest
     private static final DcsFactory SETTINGS = DcsFactory.eINSTANCE;
     private static final McoreFactory VALUES = McoreFactory.eINSTANCE;
 
+    /** #682 round 5: several data-parameter values are restated by 'values', each judged by value(). */
     @Test
-    public void testMultiValuedDataParameterBlocksReplace()
+    public void testMultiValuedDataParameterIsJudgedValueByValue()
     {
         DataCompositionSchema schema = schema();
         SettingsParameterValue item = dataItem(schema, text("A"));
         assertNull(refusal(schema));
         item.getValues().add(text("B"));
+        assertNull("two restatable values pass: the body carries them in 'values'", refusal(schema));
+        item.getValues().add(VALUES.createReferenceValue());
         String error = refusal(schema);
         contains(error, "SettingsParameterValue at Report.Sales#/defaultSettings/dataParameters/items/0",
-            "(2 values; a data parameter body carries one 'value')", "action='update'", "lossless XML channel");
+            "(value #2: ReferenceValue is not an untyped ValueSpec kind)", "action='update'",
+            "lossless XML channel");
         assertNull(DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"),
             DcsReplaceTestCatalogues.schema()));
     }
@@ -54,8 +58,8 @@ public class DcsParameterReplaceGuardTest
     @Test
     public void testDataParameterKindsOutsideUntypedValueSpecsBlockReplace()
     {
-        for (Value value : List.of(VALUES.createStandardPeriodValue(), VALUES.createStandardBeginningDateValue(),
-            VALUES.createValueList(), com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString(),
+        for (Value value : List.of(VALUES.createValueList(),
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString(),
             VALUES.createEnumValue(), VALUES.createReferenceValue(), VALUES.createTypeValue()))
         {
             DataCompositionSchema schema = schema();
@@ -261,9 +265,14 @@ public class DcsParameterReplaceGuardTest
         assertTrue(result.getValues().get(1) instanceof NumberValue);
     }
 
-    /** #680 pins #673: intentionally green on base, killed by removing the filter-right guard. */
+    /**
+     * #680 after #682 round 5: the value list and the standard beginning date EDT stores in a
+     * filter's right side are restated by value(), so they no longer block a replace; a value no
+     * body can carry - mcore's untyped ValueList, a beginning date with no date object - still does.
+     * Removing the filter-right slot from the guard turns the refusals here into silent passes.
+     */
     @Test
-    public void testValueListAndStandardBeginningDateInFilterRightBlockReplace()
+    public void testFilterRightIsJudgedByTheUntypedWriter()
     {
         DataCompositionSchema schema = schema();
         var group = SETTINGS.createDataCompositionGroup();
@@ -272,14 +281,32 @@ public class DcsParameterReplaceGuardTest
         var item = SETTINGS.createDataCompositionFilterItem();
         group.setFilter(filter);
         filter.getItems().add(item);
-        item.getRight().add(VALUES.createNumberValue());
+        item.getRight().add(number(1));
         assertNull(refusal(schema));
-        for (Value value : List.of(VALUES.createValueList(), VALUES.createStandardBeginningDateValue()))
+        TypedValueList list = VALUES.createTypedValueList();
+        list.setValueType(VALUES.createTypeDescription());
+        list.setLastId(-1);
+        StandardBeginningDateValue beginning = VALUES.createStandardBeginningDateValue();
+        beginning.setValue(VALUES.createStandardBeginningDate());
+        beginning.getValue().setVariant(StandardBeginningDateVariant.BEGINNING_OF_THIS_DAY);
+        for (Value value : List.of(list, beginning))
         {
             item.getRight().set(0, value);
-            contains(refusal(schema), value.eClass().getName()
-                + " at Report.Sales#/defaultSettings/items/0/filter/items/0/right");
+            assertNull(value.eClass().getName(), refusal(schema));
         }
+        item.getRight().set(0, VALUES.createValueList());
+        contains(refusal(schema), "ValueList at Report.Sales#/defaultSettings/items/0/filter/items/0/right",
+            "(ValueList is not an untyped ValueSpec kind)");
+        item.getRight().set(0, VALUES.createStandardBeginningDateValue());
+        contains(refusal(schema),
+            "StandardBeginningDateValue at Report.Sales#/defaultSettings/items/0/filter/items/0/right",
+            "holds no date");
+        // A stored empty field is no longer passed on its class alone: value() refuses an empty name.
+        var empty = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionField();
+        empty.setValue("");
+        item.getRight().set(0, empty);
+        contains(refusal(schema), "DataCompositionField at Report.Sales#/defaultSettings/items/0/filter/items/0/right",
+            "the writer refuses its body");
     }
 
     private static StringValue text(String value)

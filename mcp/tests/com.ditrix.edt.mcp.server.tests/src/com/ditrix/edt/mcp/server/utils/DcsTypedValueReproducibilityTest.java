@@ -116,8 +116,10 @@ public class DcsTypedValueReproducibilityTest
         ColorRef reference = f.createColorRef();
         stored.setValue(reference);
         assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
+        // #682 round 5: a referent is no longer enough - the reference must name a target the
+        // writer rebuilds; an unnamed detached color names none.
         reference.setColor(f.createColorDef());
-        assertNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
+        assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));
         stored.setValue(f.createAutoColor());
         // An AutoColor is a ColorDef that EDT saves as black; 'auto' rebuilds the colorless value.
         assertNotNull(DcsSettingsWriter.typedValueRefusal(declared, stored));

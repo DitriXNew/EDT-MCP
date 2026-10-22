@@ -364,12 +364,13 @@ public final class DcsReadProjection
             || "periodAdditionEnd".equals(collection) //$NON-NLS-1$
             || object.eContainer() instanceof DataCompositionFilterItem
                 && ("left".equals(collection) || "right".equals(collection)); //$NON-NLS-1$ //$NON-NLS-2$
-        if (untypedValueSlot && object instanceof Value
-            && !DcsSettingsWriter.isAuthorableUntypedValue((Value)object))
-        {
-            unsupported = true;
-        }
         String reason = unsupported ? "this node is outside the writer's model" : null; //$NON-NLS-1$
+        if (reason == null && untypedValueSlot && object instanceof Value)
+        {
+            // The same verdict as a data parameter's value: value() - the writer of these slots -
+            // must rebuild the stored value exactly.
+            reason = DcsSettingsWriter.untypedValueRefusal((Value)object);
+        }
         if (object instanceof DataCompositionParameterValue)
         {
             reason = parameterValueRefusal((DataCompositionParameterValue)object, catalogues);
@@ -446,11 +447,8 @@ public final class DcsReadProjection
         if (holder instanceof DataCompositionDataParameterValues)
         {
             if (identity != null) return "its parameter: " + identity; //$NON-NLS-1$
-            if (values.size() > 1)
-            {
-                return values.size() + " values; a data parameter body carries one 'value'"; //$NON-NLS-1$
-            }
-            return values.isEmpty() ? null : DcsSettingsWriter.untypedValueRefusal(values.get(0));
+            // One value is restated by 'value', several by 'values'; each through value().
+            return eachValueRefusal(values, DcsSettingsWriter::untypedValueRefusal);
         }
         DcsWriterCatalogues.Lookup catalogue = holder instanceof DataCompositionAppearance
             ? catalogues.appearanceCatalogue() : holder instanceof ParameterValues
@@ -472,7 +470,15 @@ public final class DcsReadProjection
         }
         if (values.size() > 1)
         {
-            return values.size() + " values; a typed parameter body carries one 'value'"; //$NON-NLS-1$
+            if (holder instanceof DataCompositionAppearance)
+            {
+                return values.size() + " values; an appearance key writes one typed value"; //$NON-NLS-1$
+            }
+            if (!declared.isValueListAllowed())
+            {
+                return values.size() + " values; '" + name //$NON-NLS-1$
+                    + "' takes one value, the platform declares no value list for it"; //$NON-NLS-1$
+            }
         }
         if (values.isEmpty())
         {
@@ -481,8 +487,24 @@ public final class DcsReadProjection
                 ? "no value; an appearance body has no valueless form - each key writes exactly one typed value" //$NON-NLS-1$
                 : null;
         }
-        return DcsSettingsWriter.typedValueRefusal(declared.defValue(), values.get(0),
-            catalogues.languages());
+        return eachValueRefusal(values, value -> DcsSettingsWriter.typedValueRefusal(declared.defValue(),
+            value, catalogues.languages(), catalogues.namedColors()));
+    }
+
+    /**
+     * One stored value is judged as the body's 'value', several as its 'values' array: each must be
+     * restated by the item's value writer, and a refusal of one of several names its position.
+     */
+    private static String eachValueRefusal(List<Value> values,
+        java.util.function.Function<Value, String> writerRefusal)
+    {
+        if (values.size() == 1) return writerRefusal.apply(values.get(0));
+        for (int i = 0; i < values.size(); i++)
+        {
+            String refusal = writerRefusal.apply(values.get(i));
+            if (refusal != null) return "value #" + i + ": " + refusal; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
     }
 
     private static void collectReferences(EObject object, String address, String kind,

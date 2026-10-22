@@ -37,8 +37,13 @@ public class DcsFilterRightSerializationTest
 {
     private static final String REFRESH_FIXTURES = "edtmcp.refreshDcsFixtures"; //$NON-NLS-1$
 
+    /**
+     * #680 after #682 round 5: both filter-right shapes EDT serializes are restated by value(): the
+     * guard passes them after EDT's own XML, and the writer's valueList and standardBeginningDate
+     * bodies rebuild values EDT saves to the same XML.
+     */
     @Test
-    public void testEdtSerializedFilterRightValuesRoundTripAndBlockReplace() throws Exception
+    public void testEdtSerializedFilterRightValuesRoundTripThroughTheWriter() throws Exception
     {
         DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
             .createDataCompositionSchema();
@@ -77,9 +82,23 @@ public class DcsFilterRightSerializationTest
         assertNull("The native fixture must pass the XML channel's loss check: " + missing, missing);
         String error = DcsMutationGuard.replaceError(restored, DcsAddress.parse("Report.Sales").address(),
             DcsReplaceTestCatalogues.schema());
-        assertNotNull(error);
-        assertTrue(error, error.contains("TypedValueList at Report.Sales#/defaultSettings/items/0/filter/items/0/right"));
-        assertTrue(error, error.contains("StandardBeginningDateValue at Report.Sales#/defaultSettings/items/0/filter/items/1/right"));
+        assertNull("both EDT-serialized filter-right values are restatable", error);
+        String[] bodies = {
+            "{\"kind\":\"valueList\",\"value\":{\"lastId\":1,\"items\":[{\"id\":1,"
+                + "\"value\":{\"kind\":\"number\",\"value\":1}}]}}",
+            "{\"kind\":\"standardBeginningDate\",\"value\":{\"variant\":\"Custom\","
+                + "\"date\":\"2026-01-01T00:00:00\"}}"};
+        var filterItems = restored.getDefaultSettings().getItems().get(0);
+        for (int i = 0; i < bodies.length; i++)
+        {
+            DcsSettingsWriter.ValueResult built = DcsSettingsWriter.buildValue(
+                com.google.gson.JsonParser.parseString(bodies[i]), "right");
+            assertNull(bodies[i], built.error);
+            var stored = ((com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup)filterItems).getFilter()
+                .getItems().get(i);
+            assertTrue(bodies[i], org.eclipse.emf.ecore.util.EcoreUtil.equals(built.value,
+                ((com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem)stored).getRight().get(0)));
+        }
         // Source of the e2e fixture on request; no XML element names are invented by tests.
         refreshFixture("dcs-682-filter-right.xml", xml);
     }
@@ -130,8 +149,10 @@ public class DcsFilterRightSerializationTest
         String refusal = DcsMutationGuard.replaceError(schema, DcsAddress.parse("Report.Sales").address(),
             DcsReplaceTestCatalogues.schema());
         assertNotNull(refusal);
-        assertTrue(refusal, refusal.contains("2 values"));
-        assertTrue(refusal, refusal.contains("StandardPeriodValue is not an untyped ValueSpec kind"));
+        // Two values are restated by 'values', but these two hold no string; the custom period with
+        // its dates is restated by a standardPeriod body.
+        assertTrue(refusal, refusal.contains("value #0: the writer refuses its body"));
+        assertFalse(refusal, refusal.contains("StandardPeriodValue"));
         assertTrue(refusal, refusal.contains("font height 10.5"));
         refreshFixture("dcs-682-census.xml", serialize(schema));
     }
