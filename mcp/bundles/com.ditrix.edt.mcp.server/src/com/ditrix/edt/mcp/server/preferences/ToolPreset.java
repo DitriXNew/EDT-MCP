@@ -38,6 +38,40 @@ public enum ToolPreset
     CUSTOM("custom", //$NON-NLS-1$
         "Custom", "Manually configured", null); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * Explicit exceptions to the write hint: comparison takes EDT's single comparison slot but
+     * reads the project; toolset enablement changes session visibility only; revalidation refreshes
+     * derived markers without discarding workspace content. The policy ratchet checks each one.
+     */
+    static final Set<String> READ_ONLY_KEEPS_DESPITE_WRITE_HINT = Set.of(
+        "compare_configurations", //$NON-NLS-1$
+        "enable_toolset", //$NON-NLS-1$
+        "revalidate_objects"); //$NON-NLS-1$
+
+    /** A holder initializes the shared policy before the enum constructors call either builder. */
+    static final class ReadOnlyPolicy
+    {
+        /** Writers in groups that the read-only presets disable only in part. */
+        static final Set<String> READ_ONLY_EXCLUDED_BY_NAME = Set.of(
+            "export_configuration_to_xml", //$NON-NLS-1$
+            "import_configuration_from_xml", //$NON-NLS-1$
+            "import_project_from_file", //$NON-NLS-1$
+            "apply_quick_fix", //$NON-NLS-1$
+            "merge_rules", //$NON-NLS-1$
+            "delete_project", //$NON-NLS-1$
+            "switch_git_branch", //$NON-NLS-1$
+            "create_git_branch", //$NON-NLS-1$
+            "set_branch_infobase", //$NON-NLS-1$
+            "create_project", //$NON-NLS-1$
+            "resync_to_disk", //$NON-NLS-1$
+            "clean_project"); //$NON-NLS-1$
+
+        private ReadOnlyPolicy()
+        {
+            // Constants only.
+        }
+    }
+
     private final String id;
     private final String displayName;
     private final String description;
@@ -168,17 +202,13 @@ public enum ToolPreset
     }
 
     /**
-     * Builds the Code Review preset: disable apps (including external-object builds and credential
-     * writes), debug, refactoring (including adoption into an extension), translation,
-     * write_module_source, apply_quick_fix, and the state-mutating workspace export/import tools.
-     * {@code export_common_picture} remains enabled: despite its name, it is a pure model read that
-     * returns the selected PNG as base64 and never writes a file.
+     * Builds Code Review: disable applications, debugging, refactoring, translation and BSL
+     * writing, plus the shared workspace, git and comparison writers. CORE and GIT remain partly
+     * available for reads, so their writers must be excluded by name.
      * <p>
-     * It also disables {@code delete_project} and {@code merge_rules}. {@code merge_rules} is here
-     * because its {@code write} half creates and replaces files; {@code compare_configurations}
-     * and {@code get_comparison_node} stay ENABLED - a comparison is analysis and touches no
-     * project. {@code delete_project} sits in {@link ToolGroup#CORE}, which no preset disables, so
-     * it has to be named here or it stays on in a read-only profile.
+     * Comparison reads, the in-memory toolset switch and non-discarding revalidation stay enabled
+     * under the documented keep-list. {@code export_common_picture} is a pure model read returning
+     * PNG bytes, so it also stays enabled.
      */
     private static Set<String> buildCodeReviewDisabled()
     {
@@ -188,28 +218,17 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.REFACTORING.getToolNames());
         disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
         disabled.add("write_module_source"); //$NON-NLS-1$
-        disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
-        disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
-        disabled.add("import_project_from_file"); //$NON-NLS-1$
-        disabled.add("apply_quick_fix"); //$NON-NLS-1$
-        disabled.add("merge_rules"); //$NON-NLS-1$
-        disabled.add("delete_project"); //$NON-NLS-1$
+        disabled.addAll(ReadOnlyPolicy.READ_ONLY_EXCLUDED_BY_NAME);
         return Collections.unmodifiableSet(disabled);
     }
 
     /**
-     * Builds the Analysis Only preset: disable apps (including external-object builds and credential
-     * writes), debug, the entire BSL Code group (both read and write tools — analysis is metadata-
-     * and error-level only), refactoring (including adoption into an extension), apply_quick_fix,
-     * the state-mutating workspace export/import tools, and the LanguageTool translation tools.
-     * {@code export_common_picture} remains enabled because it only reads model content and returns
-     * base64; it does not export to the filesystem.
+     * Builds Analysis Only: the same read-only exclusions as Code Review, with the entire BSL
+     * Code group disabled as well. Analysis is limited to metadata and problems. CORE and GIT
+     * remain partly available for reads; their workspace and git writers are excluded by name.
      * <p>
-     * It also disables {@code delete_project} and {@code merge_rules}. {@code merge_rules} is here
-     * because its {@code write} half creates and replaces files; {@code compare_configurations}
-     * and {@code get_comparison_node} stay ENABLED - a comparison is analysis and touches no
-     * project. {@code delete_project} sits in {@link ToolGroup#CORE}, which no preset disables, so
-     * it has to be named here or it stays on in a read-only profile.
+     * {@code compare_configurations}, {@code get_comparison_node}, {@code revalidate_objects},
+     * {@code enable_toolset} and the model-only {@code export_common_picture} stay enabled.
      */
     private static Set<String> buildAnalysisOnlyDisabled()
     {
@@ -219,12 +238,7 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.BSL_CODE.getToolNames());
         disabled.addAll(ToolGroup.REFACTORING.getToolNames());
         disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
-        disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
-        disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
-        disabled.add("import_project_from_file"); //$NON-NLS-1$
-        disabled.add("apply_quick_fix"); //$NON-NLS-1$
-        disabled.add("merge_rules"); //$NON-NLS-1$
-        disabled.add("delete_project"); //$NON-NLS-1$
+        disabled.addAll(ReadOnlyPolicy.READ_ONLY_EXCLUDED_BY_NAME);
         return Collections.unmodifiableSet(disabled);
     }
 }

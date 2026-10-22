@@ -233,7 +233,7 @@ Quickly switch between common tool configurations using presets:
 | Preset | Description |
 |--------|-------------|
 | **All Tools** | All tools enabled (default) |
-| **Analysis Only** | Read-only analysis — Core except `delete_project`, plus Errors, Code Intelligence, Tags |
+| **Analysis Only** | Read-only analysis — Core reads, comparison and git branch listing, Errors, Code Intelligence, Tags; `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, git branch changes and infobase binding are off; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 

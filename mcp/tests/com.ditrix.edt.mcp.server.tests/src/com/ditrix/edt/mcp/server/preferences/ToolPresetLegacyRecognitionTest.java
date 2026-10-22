@@ -72,11 +72,14 @@ public class ToolPresetLegacyRecognitionTest
         expected.addAll(Set.of("launch", "set_error_breakpoint", "merge_rules", "delete_project",
             "infobase_sessions", "cancel_job", "delete_infobase", "delete_metadata", "debug_pause",
             "import_project_from_file", "export_configuration_to_file"));
+        expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
+            "create_project", "resync_to_disk", "clean_project"));
         assertEquals(expected, disabled(store));
         assertEquals("code-review", store.getString(PRESET_ID));
         assertFalse(disabled(store).contains("dcs"));
         assertFalse(disabled(store).contains("get_job_status"));
-        assertEquals(13, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test
@@ -88,6 +91,7 @@ public class ToolPresetLegacyRecognitionTest
         assertEquals("analysis-only", store.getString(PRESET_ID));
         assertFalse(disabled(store).contains("validate_form_model"));
         assertTrue(disabled(store).contains("export_configuration_to_file"));
+        assertTrue(disabled(store).contains("switch_git_branch"));
     }
 
     @Test
@@ -101,7 +105,7 @@ public class ToolPresetLegacyRecognitionTest
     @Test
     public void testBareNestedShapeRecordsAnalysisOnlyBeforeCodeReview()
     {
-        assertStampWithoutSetWrite(ToolSettingsService.ANALYSIS_ONLY_RECOGNITION_SHAPE, "analysis-only");
+        assertStampThenOneOwedWrite(ToolSettingsService.ANALYSIS_ONLY_RECOGNITION_SHAPE, "analysis-only");
     }
 
     @Test
@@ -109,7 +113,7 @@ public class ToolPresetLegacyRecognitionTest
     {
         Set<String> before = new HashSet<>(ToolSettingsService.CODE_REVIEW_RECOGNITION_SHAPE);
         before.add("obsolete_disabled_tool");
-        assertStampWithoutSetWrite(before, "code-review");
+        assertStampThenOneOwedWrite(before, "code-review");
     }
 
     @Test
@@ -154,6 +158,33 @@ public class ToolPresetLegacyRecognitionTest
         assertEquals("custom", store.getString(PRESET_ID));
     }
 
+    private static void assertStampThenOneOwedWrite(Set<String> before, String id)
+    {
+        PreferenceStore store = stored(before, 12);
+        Set<String> expected = new HashSet<>(before);
+        expected.addAll(Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
+            "create_project", "resync_to_disk", "clean_project"));
+        int[] disabledWrites = {0};
+        store.addPropertyChangeListener(event -> {
+            if (PreferenceConstants.PREF_DISABLED_TOOLS.equals(event.getProperty()))
+            {
+                assertEquals("provenance must be stamped before writing the owed tools",
+                    id, store.getString(PRESET_ID));
+                disabledWrites[0]++;
+            }
+        });
+        ToolSettingsService.ensureMigratedForTest(store);
+        assertEquals(id, store.getString(PRESET_ID));
+        assertEquals(expected, disabled(store));
+        assertEquals(1, disabledWrites[0]);
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        int[] writes = {0};
+        store.addPropertyChangeListener(event -> writes[0]++);
+        ToolSettingsService.ensureMigratedForTest(store);
+        assertEquals("the stamp and owed additions are one-shot", 0, writes[0]);
+    }
+
     private static void assertStampWithoutSetWrite(Set<String> before, String id)
     {
         PreferenceStore store = stored(before, 12);
@@ -170,7 +201,8 @@ public class ToolPresetLegacyRecognitionTest
         assertEquals(serialized, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertEquals(before, disabled(store));
         assertEquals(0, disabledWrites[0]);
-        assertEquals(13, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         int[] writes = {0};
         store.addPropertyChangeListener(event -> writes[0]++);
         ToolSettingsService.ensureMigratedForTest(store);
