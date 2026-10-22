@@ -106,6 +106,10 @@ public class ImportProjectFromFileTool implements IMcpTool
     private static final String MARKER_COMMITTED = "mutationCommitted"; //$NON-NLS-1$
     private static final String MARKER_UNKNOWN = "mutationOutcomeUnknown"; //$NON-NLS-1$
 
+    /** The preflight advice after an existing-project refusal, exact name or case variant. */
+    private static final String NEW_PROJECT_ADVICE = "The import creates a NEW project: pass a new project " //$NON-NLS-1$
+        + "name, or remove the old one with delete_project first."; //$NON-NLS-1$
+
     private final BackgroundJobs jobs;
     private final IThickClientProvider thickClients;
     private final IProjectImporter importer;
@@ -355,11 +359,12 @@ public class ImportProjectFromFileTool implements IMcpTool
             return "projectName '" + projectName + "' is not a legal project name: " + problem //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Pass another name."; //$NON-NLS-1$
         }
-        if (ProjectContext.of(projectName).exists())
+        IProject existing = WorkspacePaths.existingProjectVariant(projectName);
+        if (existing != null)
         {
-            return "Project already exists in workspace: " + projectName //$NON-NLS-1$
-                + ". The import creates a NEW project: pass a new project name, or remove the old " //$NON-NLS-1$
-                + "one with delete_project first."; //$NON-NLS-1$
+            return ImportConfigurationFromXmlTool.existingProjectMessage(projectName, existing,
+                "Project already exists in workspace: " + projectName + ". " + NEW_PROJECT_ADVICE, //$NON-NLS-1$ //$NON-NLS-2$
+                NEW_PROJECT_ADVICE);
         }
         Path folder = WorkspacePaths.defaultProjectFolder(projectName);
         if (folder != null && Files.exists(folder))
@@ -367,10 +372,11 @@ public class ImportProjectFromFileTool implements IMcpTool
             return "The workspace folder " + folder + " already exists, so project '" + projectName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' cannot be created there. Pass a new project name, or remove that folder."; //$NON-NLS-1$
         }
-        Long claimedAt = ImportConfigurationFromXmlTool.importClaimedAt(projectName);
-        if (claimedAt != null)
+        ImportConfigurationFromXmlTool.ImportClaim runningImport =
+            ImportConfigurationFromXmlTool.importClaimedAt(projectName);
+        if (runningImport != null)
         {
-            return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, claimedAt.longValue());
+            return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, runningImport);
         }
         return null;
     }
@@ -418,11 +424,12 @@ public class ImportProjectFromFileTool implements IMcpTool
         AtomicReference<Mutation> mutation) throws Exception
     {
         String name = request.projectName;
-        Long otherStartedAt = ImportConfigurationFromXmlTool.tryClaimImport(name);
-        if (otherStartedAt != null)
+        ImportConfigurationFromXmlTool.ImportClaim runningImport =
+            ImportConfigurationFromXmlTool.tryClaimImport(name);
+        if (runningImport != null)
         {
             throw new ImportFailure(
-                ImportConfigurationFromXmlTool.importInProgressMessage(name, otherStartedAt.longValue()));
+                ImportConfigurationFromXmlTool.importInProgressMessage(name, runningImport));
         }
         Path workDir = null;
         try
@@ -452,12 +459,17 @@ public class ImportProjectFromFileTool implements IMcpTool
                     + "was created."); //$NON-NLS-1$
             }
             // Asked again: the conversion took time, and the name was free only when the call came.
+            IProject existing = WorkspacePaths.existingProjectVariant(name);
             Path folder = WorkspacePaths.defaultProjectFolder(name);
-            if (ProjectContext.of(name).exists() || folder != null && Files.exists(folder))
+            if (existing != null || folder != null && Files.exists(folder))
             {
-                throw new ImportFailure("A project or workspace folder named '" + name + "' appeared " //$NON-NLS-1$ //$NON-NLS-2$
+                String appeared = "A project or workspace folder named '" + name + "' appeared " //$NON-NLS-1$ //$NON-NLS-2$
                     + "while the file was being converted, so nothing was imported. Pass a new project " //$NON-NLS-1$
-                    + "name."); //$NON-NLS-1$
+                    + "name."; //$NON-NLS-1$
+                throw new ImportFailure(existing == null ? appeared
+                    : ImportConfigurationFromXmlTool.existingProjectMessage(name, existing, appeared,
+                        "It appeared while the file was being converted, so nothing was imported. Pass a " //$NON-NLS-1$
+                            + "new project name.")); //$NON-NLS-1$
             }
             mutation.set(Mutation.UNKNOWN);
             progress.add("Importing the XML files into new project " + name + "."); //$NON-NLS-1$ //$NON-NLS-2$
