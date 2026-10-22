@@ -240,14 +240,15 @@ Quickly switch between common tool configurations using presets:
 Select a preset from the dropdown in the Tools tab. The dropdown shows the preset you last chose and keeps it when you tick or untick individual tools, so later preset-owed updates (for example a new mutating tool disabled in the read-only presets) still reach your edited profile. Choose "Custom", "Disable all" or "Restore Defaults" to opt out. Profiles saved by older versions are recognised once, on upgrade.
 
 For scripted launches, set **`EDT_MCP_TOOL_PRESET=<preset id>`** on the EDT process before
-startup: `all-tools`, `analysis-only`, `code-review`, `development`, or `custom`. IDs are
+startup: `all-tools`, `analysis-only`, `code-review`, or `development`. These predefined IDs are
 case-insensitive; surrounding whitespace is ignored. The value is resolved once, on first use,
 including in-process bridge calls and manual server starts when early
 startup is disabled. A predefined preset replaces the effective tool selection **for this
 session only**; stored Tools preferences are untouched by launch-preset resolution and registry
-reads, including their migration state. `custom`, an unset variable or a blank value uses the
-stored selection. An unknown ID is ignored and logged once at WARNING, with the valid IDs,
-when first resolved.
+reads, including their migration state. An unset variable, a blank value or `custom` uses the
+stored selection; explicit `custom` logs one INFO line explaining that there is no launch override.
+An unknown ID is ignored and logged once at WARNING, listing only the predefined override IDs
+and explaining that unset or `custom` uses the stored selection.
 
 The Tools tab always displays and edits the saved selection, and shows a read-only note when
 a launch preset is active. Opening the tab still runs normal stored-preference migrations;

@@ -99,11 +99,12 @@ Set `EDT_MCP_TOOL_PRESET=analysis-only` or `EDT_MCP_TOOL_PRESET=code-review` on 
 process before startup**, alongside the other `EDT_MCP_*` launch overrides. Set
 `EDT_MCP_PROGRESSIVE_DISCLOSURE=false` there to expose the complete preset. The preset is
 session-only: stored Tools preferences are untouched by launch-preset resolution and registry
-reads, including migration state. Valid IDs are `all-tools`, `analysis-only`, `code-review`,
-`development`, and `custom` (use the stored selection). IDs are case-insensitive and trimmed.
+reads, including migration state. Predefined override IDs are `all-tools`, `analysis-only`,
+`code-review`, and `development`. IDs are case-insensitive and trimmed.
 Resolution happens once on first use, including bridge calls and manual starts without early
-startup. An unknown ID is ignored with one WARNING listing the valid IDs at resolution;
-unset/blank values use the stored selection.
+startup. An unset variable, a blank value or `custom` uses the stored selection; explicit
+`custom` logs one INFO line explaining that there is no launch override. An unknown ID is
+ignored with one WARNING listing only the predefined override IDs and the stored-selection hint.
 
 The Tools tab loads saved settings, runs their normal migrations, and shows the active launch
 preset in a read-only note. Unchanged OK/Apply preserves the saved selection and preset ID;

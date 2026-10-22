@@ -259,8 +259,10 @@ variable to the test process and launch EDT with `EDT_MCP_PROGRESSIVE_DISCLOSURE
 The launch preset is session-only; stored Tools preferences are untouched by its resolution
 and registry reads, including migration state. IDs are case-insensitive and trimmed. The value
 is resolved once on first use, including bridge calls and manual starts without early startup.
-Unknown IDs produce one WARNING listing the valid IDs at resolution and are ignored.
-Missing/blank values and `custom` use the stored selection, and the wire tests report a clear
+Predefined override IDs are `all-tools`, `analysis-only`, `code-review`, and `development`.
+Unknown IDs produce one WARNING listing only those IDs and the stored-selection hint, then
+are ignored. Missing/blank values and `custom` use the stored selection; explicit `custom`
+logs one INFO line explaining that there is no launch override. The wire tests report a clear
 skip without a selected read-only preset. The Tools tab edits saved settings and shows a
 read-only launch-preset note; its normal migrations still run. Unchanged OK/Apply preserves
 the saved selection and preset ID; deliberate edits apply on a launch without the override.

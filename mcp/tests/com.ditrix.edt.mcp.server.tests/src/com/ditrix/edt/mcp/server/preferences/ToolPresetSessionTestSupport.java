@@ -232,6 +232,12 @@ public abstract class ToolPresetSessionTestSupport
 
     protected List<IStatus> presetWarnings()
     {
+        return presetMessages().stream().filter(status -> status.getSeverity() == IStatus.WARNING)
+            .collect(Collectors.toList());
+    }
+
+    protected List<IStatus> presetMessages()
+    {
         synchronized (recorded)
         {
             return recorded.stream().filter(status -> status.getMessage().contains(ENV_PRESET))

@@ -23,7 +23,10 @@ pass the same variable to `python -m tools.test_preset_launch` from `tests/e2e`.
 `EDT_MCP_PROGRESSIVE_DISCLOSURE=false` on EDT. IDs are case-insensitive and trimmed.
 The override is resolved once on first use, including bridge calls and manual starts without
 early startup; stored Tools preferences are untouched by resolution and registry reads,
-including migration state. Unknown IDs warn once with the valid IDs, then use stored settings.
+including migration state. Predefined override IDs are `all-tools`, `analysis-only`,
+`code-review`, and `development`. Unknown IDs produce one WARNING listing only those IDs and
+the stored-selection hint, then use stored settings. Unset/blank values and `custom` use the
+stored selection; explicit `custom` logs one INFO line explaining that there is no launch override.
 The Tools tab loads saved settings with their normal migrations and shows a read-only launch
 note. Unchanged OK/Apply preserves the saved selection and preset ID; deliberate edits apply
 on a launch without the override. Use a fresh workspace for each CI preset launch; wire checks

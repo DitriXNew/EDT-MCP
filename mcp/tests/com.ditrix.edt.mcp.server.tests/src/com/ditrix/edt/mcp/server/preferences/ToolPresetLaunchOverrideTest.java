@@ -60,9 +60,11 @@ public class ToolPresetLaunchOverrideTest extends ToolPresetSessionTestSupport
         List<IStatus> warnings = presetWarnings();
         assertEquals("one launch warning", 1, warnings.size());
         assertEquals(IStatus.WARNING, warnings.get(0).getSeverity());
-        String ids = Arrays.stream(ToolPreset.values()).map(ToolPreset::getId).collect(Collectors.joining(", "));
+        String ids = Arrays.stream(ToolPreset.values()).filter(preset -> preset != ToolPreset.CUSTOM)
+            .map(ToolPreset::getId).collect(Collectors.joining(", "));
         assertEquals("Invalid EDT_MCP_TOOL_PRESET value: analysis_only_typo. Valid preset ids: "
-            + ids + ". Ignoring launch override.", warnings.get(0).getMessage());
+            + ids + ". Unset or custom uses the stored tool selection. Ignoring launch override.",
+            warnings.get(0).getMessage());
     }
 
     @Test

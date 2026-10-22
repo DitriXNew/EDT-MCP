@@ -1,5 +1,11 @@
 """Read-only preset tools/list checks, selected by EDT_MCP_TOOL_PRESET at EDT launch.
 
+Predefined override IDs are all-tools, analysis-only, code-review and development;
+matching is case-insensitive and trimmed. Unset/blank values and custom use the
+stored selection. Explicit custom logs one INFO line explaining there is no launch
+override; unknown IDs are ignored with one WARNING listing only the predefined
+override IDs and the stored-selection hint. Resolution happens once on first use.
+
 Run from tests/e2e with `python -m tools.test_preset_launch` after launching EDT
 with the same preset variable. The normal runner's model cleanup requires
 clean_project, which these presets deliberately disable. This read-only entry

@@ -229,7 +229,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Returns the active predefined launch preset, or null when the stored selection applies.
+     * Returns the active predefined launch preset from {@code EDT_MCP_TOOL_PRESET}, or null
+     * when the stored selection applies. IDs are case-insensitive and trimmed.
+     * An unset or blank value, or {@code custom}, uses the stored selection. Explicit {@code custom}
+     * logs once at INFO; unknown IDs log once at WARNING with only the predefined override IDs.
      * Resolves once on first use, including bridge calls and manual starts without earlyStartup.
      * The immutable holder publishes the complete decision atomically, including blank/invalid values.
      */
@@ -263,13 +266,21 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             if (preset.getId().equalsIgnoreCase(id))
             {
-                return preset == ToolPreset.CUSTOM ? null : preset;
+                if (preset == ToolPreset.CUSTOM)
+                {
+                    Activator.logInfo("EDT_MCP_TOOL_PRESET=custom uses the stored tool selection; " //$NON-NLS-1$
+                        + "no launch override."); //$NON-NLS-1$
+                    return null;
+                }
+                return preset;
             }
         }
         String validIds = Arrays.stream(ToolPreset.values())
+            .filter(preset -> preset != ToolPreset.CUSTOM)
             .map(ToolPreset::getId).collect(Collectors.joining(", ")); //$NON-NLS-1$
         Activator.logWarning("Invalid EDT_MCP_TOOL_PRESET value: " + value //$NON-NLS-1$
-            + ". Valid preset ids: " + validIds + ". Ignoring launch override."); //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Valid preset ids: " + validIds //$NON-NLS-1$
+            + ". Unset or custom uses the stored tool selection. Ignoring launch override."); //$NON-NLS-1$
         return null;
     }
 

@@ -155,7 +155,7 @@ public class ToolsTab
         ToolPreset preset = ToolSettingsService.getInstance().getSessionPreset();
         return preset == null ? null
             : NLS.bind("Launch preset {0} is active via EDT_MCP_TOOL_PRESET; " //$NON-NLS-1$
-                + "saved changes apply on a launch without it.", preset.getDisplayName()); //$NON-NLS-1$
+                + "saved changes apply when it is unset, blank or custom.", preset.getDisplayName()); //$NON-NLS-1$
     }
 
     private void createSessionPresetNote()

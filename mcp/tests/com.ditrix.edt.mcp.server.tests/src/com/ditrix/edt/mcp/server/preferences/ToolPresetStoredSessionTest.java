@@ -72,7 +72,7 @@ public class ToolPresetStoredSessionTest extends ToolPresetSessionTestSupport
         launch("analysis-only");
         withTab(tab -> {
             String text = "Launch preset Analysis Only is active via EDT_MCP_TOOL_PRESET; "
-                + "saved changes apply on a launch without it.";
+                + "saved changes apply when it is unset, blank or custom.";
             String actual = null;
             try
             {
