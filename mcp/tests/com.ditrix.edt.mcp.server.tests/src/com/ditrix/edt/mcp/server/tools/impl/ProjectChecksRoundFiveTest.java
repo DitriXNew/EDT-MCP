@@ -68,7 +68,7 @@ public class ProjectChecksRoundFiveTest
         available.add("P");
         when(repo.getAvailableSettingsProfiles(project)).thenAnswer(call -> List.copyOf(available));
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active);
-        doAnswer(call -> { available.add(call.getArgument(1)); return null; })
+        doAnswer(call -> { available.add(call.getArgument(1)); ProjectChecksTestFiles.save(folder, call.getArgument(1)); return null; })
             .when(repo).duplicateSettingsProfile(anyString(), anyString(), same(project));
         doAnswer(call -> { available.remove(call.getArgument(0)); return null; })
             .when(repo).deleteSettingsProfile(anyString(), same(project));

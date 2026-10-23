@@ -82,7 +82,7 @@ public class ProjectChecksRoundSixTest
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
         when(project.getFolder(".settings")).thenReturn(folder);
-        settings = ProjectChecksTestFiles.locate(folder, temporary);
+        settings = ProjectChecksTestFiles.locate(folder, temporary, "Default", "Review", "Other");
         when(repo.validateProfileName(anyString())).thenReturn(true);
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active.get());
         when(repo.getAvailableSettingsProfiles(project)).thenAnswer(call -> List.copyOf(available));
@@ -113,9 +113,9 @@ public class ProjectChecksRoundSixTest
             active.set(target);
             return null;
         }).when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
-        doAnswer(call -> { available.add(call.getArgument(1)); return null; })
+        doAnswer(call -> { available.add(call.getArgument(1)); ProjectChecksTestFiles.save(folder, call.getArgument(1)); return null; })
             .when(repo).duplicateSettingsProfile(anyString(), anyString(), same(project));
-        doAnswer(call -> { available.remove(call.getArgument(0)); return null; })
+        doAnswer(call -> { available.remove(call.getArgument(0)); ProjectChecksTestFiles.remove(folder, call.getArgument(0)); return null; })
             .when(repo).deleteSettingsProfile(anyString(), same(project));
         tool = new TestTool(project);
     }
@@ -158,6 +158,8 @@ public class ProjectChecksRoundSixTest
     public void normalizedActiveSpellingDuringConsentKeepsTheSameSetPlan()
     {
         active.set(NFC);
+        ProjectChecksTestFiles.save(folder, NFC);
+        ProjectChecksTestFiles.save(folder, NFD.toUpperCase(Locale.ROOT));
         tool.onConsent = () -> active.set(NFD.toUpperCase(Locale.ROOT));
         assertTrue(ok(invoke("set", "ignored", null)).get("persisted").getAsBoolean());
         assertFalse(enabled.get());
@@ -247,14 +249,7 @@ public class ProjectChecksRoundSixTest
             release.countDown();
             assertTrue(ok(switching.get(10, TimeUnit.SECONDS)).get("persisted").getAsBoolean());
             String completed = competing.get(10, TimeUnit.SECONDS);
-            if ("copyProfile".equals(action) || "createProfile".equals(action))
-            {
-                ok(completed);
-            }
-            else
-            {
-                assertActiveChanged(completed);
-            }
+            assertActiveChanged(completed);
             assertEquals("Review", active.get());
             assertTrue("The switched profile was never deleted/recreated", available.contains("Review"));
         }
@@ -372,6 +367,7 @@ public class ProjectChecksRoundSixTest
     public void switchAliasUsesOriginalListedSpelling()
     {
         available.add(NFC);
+        ProjectChecksTestFiles.save(folder, NFC);
         assertTrue(ok(invoke("switch", NFD, null)).get("persisted").getAsBoolean());
         verify(repo).setActiveSettingsProfile(NFC, List.of(), project);
     }

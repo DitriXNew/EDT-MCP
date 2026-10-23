@@ -220,20 +220,21 @@ public class ProjectChecksTool implements IMcpTool
                 break;
             case "switch":
                 String profile = JsonUtils.extractStringArgument(params, "profile");
-                if (!ProjectCheckSettingsSupport.validateSwitch(repo, project, active, profile))
+                var switchPlan = ProjectCheckSettingsSupport.prepareSwitch(repo, project, active, profile);
+                if (!switchPlan.changed())
                 {
                     data = Map.of("changed", false);
                     break;
                 }
                 ConsentPreview switchPreview = new ConsentPreview("Switch check profile of " + project.getName(),
-                    "'" + active + "' \u2192 '" + profile + "'; every check follows the target profile's settings; "
-                        + "the response names the previous profile", 1, List.of(profile));
+                    "'" + active + "' \u2192 '" + switchPlan.target() + "'; every check follows the target profile's settings; "
+                        + "the response names the previous profile", 1, List.of(switchPlan.target()));
                 String switchDenied = consentErrorOrNull(switchPreview);
                 if (switchDenied != null)
                 {
                     return switchDenied;
                 }
-                data = ProjectCheckSettingsSupport.switchProfile(repo, project, active, profile);
+                data = ProjectCheckSettingsSupport.switchProfile(repo, project, switchPlan);
                 refreshWarning = refreshSettings(project);
                 break;
             case "createProfile":
@@ -254,7 +255,7 @@ public class ProjectChecksTool implements IMcpTool
                     return copyDenied;
                 }
                 data = ProjectCheckSettingsSupport.copyProfile(repo, project, newProfile, source,
-                    "createProfile".equals(action) && from == null, sourceFingerprint);
+                    "createProfile".equals(action) && from == null, sourceFingerprint, active);
                 refreshWarning = refreshSettings(project);
                 break;
             case "deleteProfile":

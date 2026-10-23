@@ -10,6 +10,7 @@ import static org.mockito.Mockito.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
@@ -24,11 +25,11 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.runtime.IPath;
 
 /** Physical locations for repository stubs that exercise the final file-safety check. */
-final class ProjectChecksTestFiles implements AutoCloseable
+public final class ProjectChecksTestFiles implements AutoCloseable
 {
     private final Path root;
 
-    ProjectChecksTestFiles() throws IOException
+    public ProjectChecksTestFiles() throws IOException
     {
         root = Files.createTempDirectory("project-checks-");
     }
@@ -56,7 +57,7 @@ final class ProjectChecksTestFiles implements AutoCloseable
         }
     }
 
-    static Path locate(IFolder folder, ProjectChecksTestFiles temporary) throws IOException
+    public static Path locate(IFolder folder, ProjectChecksTestFiles temporary, String... savedProfiles) throws IOException
     {
         Path settings = Files.createDirectory(temporary.root.resolve(".settings"));
         when(folder.getLocation()).thenReturn(org.eclipse.core.runtime.Path.fromOSString(settings.toString()));
@@ -68,7 +69,36 @@ final class ProjectChecksTestFiles implements AutoCloseable
                 settings.resolve(name).toString()));
             return file;
         });
+        for (String name : savedProfiles)
+        {
+            save(folder, name);
+        }
         return settings;
+    }
+
+    /** Disk side of a repository stub's saved state, independent of its in-memory values. */
+    public static void save(IFolder folder, String profile)
+    {
+        try
+        {
+            Files.writeString(folder.getLocation().toFile().toPath().resolve(profile + ".cset"), "saved profile");
+        }
+        catch (IOException e)
+        {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    static void remove(IFolder folder, String profile)
+    {
+        try
+        {
+            Files.deleteIfExists(folder.getLocation().toFile().toPath().resolve(profile + ".cset"));
+        }
+        catch (IOException e)
+        {
+            throw new UncheckedIOException(e);
+        }
     }
 
     static Runnable mockTargetPath(IFolder folder, Path settings, String profile, boolean symbolic, Path realPath) throws IOException

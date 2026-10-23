@@ -28,6 +28,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -45,6 +46,7 @@ import com.google.gson.JsonParser;
 /** Action orchestration and consent tested through the real execute entry point. */
 public class ProjectChecksToolTest
 {
+    private ProjectChecksTestFiles temporary;
     private ICheckRepository repo;
     private IProject project;
     private IFolder folder;
@@ -55,8 +57,9 @@ public class ProjectChecksToolTest
     private final AtomicReference<String> profile = new AtomicReference<>("Default");
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         IWorkspace workspace = mock(IWorkspace.class);
@@ -66,9 +69,7 @@ public class ProjectChecksToolTest
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         when(project.getFolder(".settings")).thenReturn(folder);
-        IFile profileFile = mock(IFile.class);
-        when(folder.getFile(anyString())).thenReturn(profileFile);
-        when(profileFile.getParent()).thenReturn(folder);
+        ProjectChecksTestFiles.locate(folder, temporary, "Default", "Review");
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> profile.get());
         when(repo.getAvailableSettingsProfiles(project)).thenReturn(List.of("Default", "Review"));
         ICheckDescription description = mock(ICheckDescription.class);
@@ -99,6 +100,12 @@ public class ProjectChecksToolTest
         doAnswer(call -> { profile.set(call.getArgument(0)); return null; })
             .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
         tool = new TestTool();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        temporary.close();
     }
 
     @Test

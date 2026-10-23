@@ -36,21 +36,26 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   in one repository write. The response includes `profile`, `before`, `after`, `changed`,
   `persisted`, and `markersRefresh`. `changed` and the consent preview count only checks
   with an effective change; unchanged entries are omitted from the preview names.
+  The active profile file is checked before and after writing; success requires a regular saved `.cset`.
 - `switch`: require `profile` to name a listed profile or the implicit built-in `Default`. Return
   `before.activeProfile`, `after.activeProfile`, and `persisted`; top-level `profile`
   is the active profile read back after the switch. Switching to the
   already active profile returns `changed:false`. Every other unlisted profile is refused;
   this action does not create user profiles.
   A read-back that misses the planned profile returns an error naming the planned and actual profiles.
+  Switching rechecks the target settings after consent and verifies their fingerprint, safe physical target,
+  and availability after writing; an unsaved `Default` may remain without a file or list entry.
 - `createProfile`: require a new `profile` name. Optional `from` chooses an existing source;
   omitting it copies the stored `Default` profile, including its customizations. When `Default`
   has no saved file, EDT creates an empty profile using default check settings. An explicit
   `from` must name a listed profile. EDT's public
   repository provides duplication for both creation and copying. The active profile stays unchanged.
-  Creation requires an absent target file, an unchanged source fingerprint after consent, and matching copied settings.
+  Creation requires an absent target file, an unchanged source fingerprint after consent, matching copied settings,
+  a regular saved target file after writing, and an unchanged active profile.
 - `copyProfile`: require both a new `profile` and an existing `from`. Copy the source's stored
   settings, including check parameters, without switching profiles.
-  Copying checks target absence before consent and immediately before writing, rechecks the source fingerprint, and verifies the target fingerprint.
+  Copying checks target absence before consent and immediately before writing, rechecks the source fingerprint,
+  and verifies the target fingerprint, regular saved target file, and unchanged active profile.
 - `deleteProfile`: require an existing, inactive `profile`. This is destructive and uses the
   destructive consent gate. Missing and active profiles, including case aliases of the active name,
   are refused before consent; switch away first to delete a user profile. EDT also requires
@@ -59,7 +64,8 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   remain. EDT's own storage refusals are returned as errors. The response includes `deletedProfile` and `deletedCustomizedChecks`,
   the number of customized checks removed. Save the original settings separately to recreate
   them; the count alone is not a restore recipe.
-  Deletion verifies physical absence without following links and returns an error if the file was recreated during the write.
+  Deletion verifies physical absence without following links and returns an error if the file was recreated,
+  the deleted profile became active, or any other active-profile change occurred during the write.
 
 Each create/copy/delete response includes the resulting `activeProfile` and `profiles` list in
 the same shape as `profiles`, plus the affected `profile`, `changed`, and a `persisted` verdict
@@ -88,8 +94,9 @@ Source and target availability are checked again after consent, before the write
 ### Concurrency and file safety
 
 After consent, the tool takes the per-project lock, re-reads everything shown by the preview,
-and refuses any difference; create, copy, and delete also check that the target is not a link
-and its real parent is still the real `.settings` directory. EDT's UI and other processes are
+and refuses any difference; every write checks that `.settings` itself is a real directory,
+the target is not a link, and its real parent is still the real `.settings` directory.
+These physical checks run again after writing, including the required file presence or absence. EDT's UI and other processes are
 not serialized with these calls, so a change in the short interval before EDT's own write is
 reported by read-back rather than prevented.
 
@@ -137,7 +144,8 @@ before any mutation or consent prompt.
 the exact contributor's previous effective settings in the same profile. Keep the
 original response until restoration is verified. `after` is read again from EDT's
 repository; `persisted:true` means the planned profile is still active and every changed
-check matches the planned values. A partial entry writes only its supplied fields; a change
+check matches the planned values, with a regular saved profile file under the same real `.settings`.
+A partial entry writes only its supplied fields; a change
 to any previewed enabled/severity value during consent requires a new preview. `before` is
 the pre-consent snapshot. If the profile or values differ after the write, the response is
 an error naming the actually active profile and carrying the plan's restore values; inspect

@@ -11,10 +11,16 @@ import static org.mockito.Mockito.*;
 
 import java.util.Map;
 
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.Status;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.tools.impl.ProjectChecksTestFiles;
 import com.ditrix.edt.mcp.server.utils.ProjectCheckSettingsSupport.Plan;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckDescription;
@@ -26,16 +32,30 @@ import com.e1c.g5.v8.dt.check.settings.IssueSeverity;
 public class ProjectCheckPartialChangesTest
 {
     private final CheckUid uid = new CheckUid("begin-transaction", "example.checks");
+    private ProjectChecksTestFiles temporary;
     private ICheckRepository repo;
     private IProject project;
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
+        temporary = new ProjectChecksTestFiles();
+        IFolder folder = mock(IFolder.class);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(project.getFolder(".settings")).thenReturn(folder);
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
+        ProjectChecksTestFiles.locate(folder, temporary, "Default");
         when(repo.getActiveSettingsProfile(project)).thenReturn("Default");
         doReturn(Map.of(uid, mock(ICheckDescription.class))).when(repo).getChecksWithDescriptions();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        temporary.close();
     }
 
     @Test

@@ -72,7 +72,7 @@ public class ProjectChecksRoundSevenTest
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
         when(project.getFolder(".settings")).thenReturn(folder);
-        settings = ProjectChecksTestFiles.locate(folder, temporary);
+        settings = ProjectChecksTestFiles.locate(folder, temporary, "Default");
         when(repo.validateProfileName(anyString())).thenReturn(true);
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active.get());
         when(repo.getAvailableSettingsProfiles(project)).thenAnswer(call -> List.copyOf(available));
@@ -316,6 +316,7 @@ public class ProjectChecksRoundSevenTest
             repo.getCustomizedSettingsFromProfile(source, project));
         when(repo.getCustomizedSettingsFromProfile(target, project)).thenReturn(copied);
         available.add(target);
+        ProjectChecksTestFiles.save(folder, target);
     }
 
     private void duplicateReplacesTarget(Runnable replacement)

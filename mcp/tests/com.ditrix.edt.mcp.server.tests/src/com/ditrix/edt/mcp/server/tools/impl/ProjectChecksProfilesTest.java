@@ -76,6 +76,7 @@ public class ProjectChecksProfilesTest
         when(repo.validateProfileName(anyString())).thenReturn(true);
         doAnswer(call -> {
             profiles.put(call.getArgument(1), new LinkedHashMap<>(profiles.getOrDefault(call.getArgument(0), Map.of())));
+            ProjectChecksTestFiles.save(folder, call.getArgument(1));
             return null;
         }).when(repo).duplicateSettingsProfile(anyString(), anyString(), same(project));
         doAnswer(call -> { profiles.remove(call.getArgument(0)); return null; })
@@ -321,12 +322,12 @@ public class ProjectChecksProfilesTest
     }
 
     @Test
-    public void profileListReadsTheCurrentActiveProfileAfterConsent()
+    public void profileCopyRefusesAnActiveProfileChangedDuringConsent()
     {
         tool.onConsent = () -> active = "Review";
-        JsonObject result = ok(invoke("createProfile", "New", null));
-        assertProfiles(result, "Default", "New", "Review");
-        assertEquals("Review", result.get("activeProfile").getAsString());
+        String message = error(invoke("createProfile", "New", null));
+        assertTrue(message, message.contains("active profile changed from 'Default' to 'Review'"));
+        verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
 
     @Test

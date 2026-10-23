@@ -21,10 +21,12 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.Status;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.ditrix.edt.mcp.server.tools.impl.ProjectChecksTestFiles;
 import com.ditrix.edt.mcp.server.utils.ProjectCheckSettingsSupport.Plan;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckDescription;
@@ -38,6 +40,7 @@ import com.e1c.g5.v8.dt.check.settings.IssueType;
 /** Repository protocol tests: no running EDT, disk, or UI needed. */
 public class ProjectCheckSettingsSupportTest
 {
+    private ProjectChecksTestFiles temporary;
     private ICheckRepository repo;
     private IProject project;
     private final CheckUid uid = new CheckUid("begin-transaction", "example.checks");
@@ -45,8 +48,9 @@ public class ProjectCheckSettingsSupportTest
     private Map<CheckUid, ICheckDescription> descriptions;
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         IWorkspace workspace = mock(IWorkspace.class);
@@ -55,9 +59,7 @@ public class ProjectCheckSettingsSupportTest
         when(project.getName()).thenReturn("TestConfiguration");
         IFolder folder = mock(IFolder.class);
         when(project.getFolder(".settings")).thenReturn(folder);
-        IFile profileFile = mock(IFile.class);
-        when(folder.getFile(anyString())).thenReturn(profileFile);
-        when(profileFile.getParent()).thenReturn(folder);
+        ProjectChecksTestFiles.locate(folder, temporary, "Default", "Review");
         descriptions = new LinkedHashMap<>();
         when(repo.getChecksWithDescriptions()).thenAnswer(call -> descriptions);
         describe(uid, "Begin", true);
@@ -66,6 +68,12 @@ public class ProjectCheckSettingsSupportTest
         when(repo.getSettings(eq(other), same(project))).thenAnswer(call -> settings(other, true, IssueSeverity.MAJOR));
         when(repo.getAvailableSettingsProfiles(project)).thenReturn(List.of("Default", "Review"));
         when(repo.getActiveSettingsProfile(project)).thenReturn("Default");
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        temporary.close();
     }
 
     private ICheckDescription describe(CheckUid id, String title, boolean critical)

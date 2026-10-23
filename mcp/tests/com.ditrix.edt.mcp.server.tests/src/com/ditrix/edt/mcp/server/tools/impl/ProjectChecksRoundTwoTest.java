@@ -28,6 +28,7 @@ import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.osgi.framework.FrameworkUtil;
@@ -48,6 +49,7 @@ import com.google.gson.JsonParser;
 /** Regressions for the round-two gate, exercised through the real execute entry point. */
 public class ProjectChecksRoundTwoTest
 {
+    private ProjectChecksTestFiles temporary;
     private ICheckRepository repo;
     private IProject project;
     private TestTool tool;
@@ -57,6 +59,7 @@ public class ProjectChecksRoundTwoTest
     @Before
     public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         IWorkspace workspace = mock(IWorkspace.class);
@@ -66,9 +69,7 @@ public class ProjectChecksRoundTwoTest
         when(project.isOpen()).thenReturn(true);
         IFolder folder = mock(IFolder.class);
         when(project.getFolder(".settings")).thenReturn(folder);
-        IFile profileFile = mock(IFile.class);
-        when(folder.getFile(anyString())).thenReturn(profileFile);
-        when(profileFile.getParent()).thenReturn(folder);
+        ProjectChecksTestFiles.locate(folder, temporary, "Default", "Review");
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active.get());
         when(repo.getAvailableSettingsProfiles(project)).thenReturn(List.of("Default", "Review"));
         doReturn(Map.of(uid, description(uid))).when(repo).getChecksWithDescriptions();
@@ -77,6 +78,12 @@ public class ProjectChecksRoundTwoTest
         doAnswer(call -> { active.set(call.getArgument(0)); return null; })
             .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
         tool = new TestTool();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        temporary.close();
     }
 
     @Test
