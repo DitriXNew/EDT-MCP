@@ -9,7 +9,6 @@ import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
@@ -40,47 +39,46 @@ public class ProjectCheckPartialChangesTest
     }
 
     @Test
-    public void enabledOnlyPreservesSeverityChangedDuringConsent()
+    public void enabledOnlyRefusesSeverityChangedDuringConsent()
     {
         Plan plan = plan("enabled", "false", true, IssueSeverity.MAJOR);
         ICheckSettings fresh = settings(true, IssueSeverity.CRITICAL);
-        doReturn(fresh, settings(false, IssueSeverity.CRITICAL)).when(repo).getSettings(uid, project);
-        Map<String, Object> result = ProjectCheckSettingsSupport.applyAll(repo, project, plan);
-        verify(fresh).setEnabled(false);
+        doReturn(fresh).when(repo).getSettings(uid, project);
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> ProjectCheckSettingsSupport.applyAll(repo, project, plan));
+        assertTrue(error.getMessage().contains("changed since the preview"));
+        verify(repo, never()).applyChanges(anyCollection(), same(project));
         verify(fresh, never()).setSeverity(any(IssueSeverity.class));
-        assertEquals(true, result.get("persisted"));
-        assertEquals("CRITICAL", rows(result, "after").get(0).get("severity"));
-        assertEquals("MAJOR", rows(result, "before").get(0).get("severity"));
     }
 
     @Test
-    public void severityOnlyPreservesEnabledChangedDuringConsent()
+    public void severityOnlyRefusesEnabledChangedDuringConsent()
     {
         Plan plan = plan("severity", "\"MINOR\"", true, IssueSeverity.MAJOR);
-        ICheckSettings fresh = settings(false, IssueSeverity.MAJOR);
-        doReturn(fresh, settings(false, IssueSeverity.MINOR)).when(repo).getSettings(uid, project);
-        Map<String, Object> result = ProjectCheckSettingsSupport.applyAll(repo, project, plan);
-        verify(fresh).setSeverity(IssueSeverity.MINOR);
-        verify(fresh, never()).setEnabled(anyBoolean());
-        assertEquals(true, result.get("persisted"));
-        assertEquals(false, rows(result, "after").get(0).get("enabled"));
+        doReturn(settings(false, IssueSeverity.MAJOR)).when(repo).getSettings(uid, project);
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> ProjectCheckSettingsSupport.applyAll(repo, project, plan));
+        assertTrue(error.getMessage().contains("changed since the preview"));
+        verify(repo, never()).applyChanges(anyCollection(), same(project));
     }
 
     @Test
-    public void persistedIgnoresOmittedFieldsButChecksEveryRequestedField()
+    public void persistedRequiresEveryPlannedValueToMatchTheReadBack()
     {
         Plan enabledOnly = plan("enabled", "false", true, IssueSeverity.MAJOR);
-        doReturn(settings(true, IssueSeverity.CRITICAL), settings(false, IssueSeverity.CRITICAL))
+        doReturn(settings(true, IssueSeverity.MAJOR), settings(false, IssueSeverity.MAJOR))
             .when(repo).getSettings(uid, project);
         assertEquals(true, ProjectCheckSettingsSupport.applyAll(repo, project, enabledOnly).get("persisted"));
-        doReturn(settings(true, IssueSeverity.CRITICAL)).when(repo).getSettings(uid, project);
-        assertEquals(false, ProjectCheckSettingsSupport.applyAll(repo, project, enabledOnly).get("persisted"));
+        doReturn(settings(true, IssueSeverity.MAJOR)).when(repo).getSettings(uid, project);
+        assertThrows(IllegalArgumentException.class,
+            () -> ProjectCheckSettingsSupport.applyAll(repo, project, enabledOnly));
         Plan severityOnly = plan("severity", "\"MINOR\"", true, IssueSeverity.MAJOR);
-        doReturn(settings(false, IssueSeverity.MAJOR), settings(false, IssueSeverity.MINOR))
+        doReturn(settings(true, IssueSeverity.MAJOR), settings(true, IssueSeverity.MINOR))
             .when(repo).getSettings(uid, project);
         assertEquals(true, ProjectCheckSettingsSupport.applyAll(repo, project, severityOnly).get("persisted"));
-        doReturn(settings(false, IssueSeverity.MAJOR)).when(repo).getSettings(uid, project);
-        assertEquals(false, ProjectCheckSettingsSupport.applyAll(repo, project, severityOnly).get("persisted"));
+        doReturn(settings(true, IssueSeverity.MAJOR)).when(repo).getSettings(uid, project);
+        assertThrows(IllegalArgumentException.class,
+            () -> ProjectCheckSettingsSupport.applyAll(repo, project, severityOnly));
     }
 
     private Plan plan(String field, String value, boolean enabled, IssueSeverity severity)
@@ -98,9 +96,4 @@ public class ProjectCheckPartialChangesTest
         return settings;
     }
 
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> rows(Map<String, Object> result, String name)
-    {
-        return (List<Map<String, Object>>)result.get(name);
-    }
 }

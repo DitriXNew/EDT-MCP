@@ -27,6 +27,7 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckDescription;
 import com.e1c.g5.v8.dt.check.settings.ICheckParameterSettings;
@@ -306,11 +307,18 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
-            requirePlannedActiveProfile(repo, project, plan.profile());
             List<ICheckSettings> settings = new ArrayList<>();
-            for (Change change : plan.changes())
+            for (int i = 0; i < plan.changes().size(); i++)
             {
+                Change change = plan.changes().get(i);
                 ICheckSettings copy = repo.getSettings(change.uid(), project);
+                State current = new State(change.uid(), copy.isEnabled(), copy.getSeverity(),
+                    repo.getChecksWithDescriptions().get(change.uid()).isCriticalDataIntegrityCheck());
+                if (!plan.before().get(i).equals(current))
+                {
+                    throw new IllegalArgumentException("Check settings in profile '" + plan.profile()
+                        + "' changed since the preview; re-run the preview with project_checks before applying changes.");
+                }
                 if (change.enabled() != null)
                 {
                     copy.setEnabled(change.enabled());
@@ -321,21 +329,26 @@ public final class ProjectCheckSettingsSupport
                 }
                 settings.add(copy);
             }
+            requirePlannedActiveProfile(repo, project, plan.profile());
             repo.applyChanges(settings, project);
             List<State> after = plan.changes().stream().map(change -> snapshot(repo, project, change.uid())).toList();
+            String active = repo.getActiveSettingsProfile(project);
+            if (!sameProfile(plan.profile(), active) || !plan.requested().equals(after))
+            {
+                throw new IllegalArgumentException("EDT's write could not be verified: planned profile '"
+                    + plan.profile() + "', actually active profile '" + active + "'; the change may have landed in '"
+                    + active + "'. " + (!sameProfile(plan.profile(), active)
+                        ? "The active profile changed during the write. "
+                        : "The read-back check values differ from the planned values. ")
+                    + "Restore values from the preview in profile '" + plan.profile() + "': "
+                    + GsonProvider.toJson(plan.beforeRows()) + ". Inspect project_checks list/profiles "
+                    + "before restoring or retrying.");
+            }
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("before", plan.beforeRows());
             result.put("after", after.stream().map(State::row).toList());
             result.put("changed", plan.changed());
-            boolean persisted = true;
-            for (int i = 0; i < plan.changes().size(); i++)
-            {
-                Change change = plan.changes().get(i);
-                State actual = after.get(i);
-                persisted &= (change.enabled() == null || change.enabled() == actual.enabled())
-                    && (change.severity() == null || change.severity() == actual.severity());
-            }
-            result.put("persisted", persisted);
+            result.put("persisted", true);
             result.put("markersRefresh", MARKERS_REFRESH);
             List<String> criticalDisabled = after.stream()
                 .filter(state -> state.criticalDataIntegrity() && !state.enabled())
@@ -504,7 +517,7 @@ public final class ProjectCheckSettingsSupport
     }
 
     /** Resolve physical paths immediately before calling EDT, including dangling links. */
-    private static void validateProfileTarget(IProject project, String profile)
+    private static Path validateProfileTarget(IProject project, String profile)
     {
         IFolder settings = project.getFolder(".settings");
         var folderLocation = settings.getLocation();
@@ -513,10 +526,10 @@ public final class ProjectCheckSettingsSupport
         {
             throw unsafeProfileTarget(profile);
         }
-        validateProfileTarget(folderLocation.toFile().toPath(), targetLocation.toFile().toPath(), profile);
+        return validateProfileTarget(folderLocation.toFile().toPath(), targetLocation.toFile().toPath(), profile);
     }
 
-    static void validateProfileTarget(Path settings, Path target, String profile)
+    static Path validateProfileTarget(Path settings, Path target, String profile)
     {
         try
         {
@@ -533,11 +546,30 @@ public final class ProjectCheckSettingsSupport
             {
                 throw unsafeProfileTarget(profile);
             }
+            return realSettings;
         }
         catch (IOException | SecurityException e)
         {
             throw unsafeProfileTarget(profile);
         }
+    }
+
+    private static void verifyProfileTargetAfterWrite(IProject project, String profile, Path plannedParent)
+    {
+        try
+        {
+            if (plannedParent.equals(validateProfileTarget(project, profile)))
+            {
+                return;
+            }
+        }
+        catch (IllegalArgumentException e)
+        {
+            // Reuse the same physical-path checks, but report that EDT has already been called.
+        }
+        throw new IllegalArgumentException("Profile '" + profile + "' target was replaced during the write; "
+            + "EDT may have written through the replacement. Inspect .settings and restore the local profile "
+            + "target before retrying.");
     }
 
     private static IllegalArgumentException unsafeProfileTarget(String profile)
@@ -591,8 +623,9 @@ public final class ProjectCheckSettingsSupport
             // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
             String listedSource = validateProfileCopy(repo, project, profile,
                 implicitDefault ? null : source, !implicitDefault);
-            validateProfileTarget(project, profile);
+            Path plannedParent = validateProfileTarget(project, profile);
             repo.duplicateSettingsProfile(listedSource, profile, project);
+            verifyProfileTargetAfterWrite(project, profile, plannedParent);
             Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
                 repo.getActiveSettingsProfile(project)));
             result.put("profile", profile);
@@ -603,18 +636,47 @@ public final class ProjectCheckSettingsSupport
         }
     }
 
+    /** Immutable, order-independent snapshot of every customized value that deletion would discard. */
+    public record ProfileSetting(String checkId, String contributorId, boolean enabled, IssueSeverity severity,
+        List<ProfileParameter> parameters)
+    {
+    }
+
+    public record ProfileParameter(String name, String value)
+    {
+    }
+
+    public static List<ProfileSetting> profileFingerprint(ICheckRepository repo, IProject project, String profile)
+    {
+        return repo.getCustomizedSettingsFromProfile(profile, project).entrySet().stream()
+            .map(entry -> new ProfileSetting(entry.getKey().getCheckId(), entry.getKey().getContributorId(),
+                entry.getValue().isEnabled(), entry.getValue().getSeverity(),
+                entry.getValue().getParameters().entrySet().stream().sorted(Map.Entry.comparingByKey())
+                    .map(parameter -> new ProfileParameter(parameter.getKey(), parameter.getValue().getValue()))
+                    .toList()))
+            .sorted(Comparator.comparing(ProfileSetting::checkId).thenComparing(ProfileSetting::contributorId))
+            .toList();
+    }
+
     public static Map<String, Object> deleteProfile(ICheckRepository repo, IProject project, String profile,
-        String plannedActive)
+        String plannedActive, List<ProfileSetting> preview)
     {
         synchronized (profileMutationLock(project))
         {
             requirePlannedActiveProfile(repo, project, plannedActive);
             String listed = validateProfileDelete(repo, project, profile);
-            int customized = repo.getCustomizedSettingsFromProfile(listed, project).size();
+            List<ProfileSetting> current = profileFingerprint(repo, project, listed);
+            if (!preview.equals(current))
+            {
+                throw new IllegalArgumentException("Profile '" + listed
+                    + "' changed since the preview; re-run the preview with project_checks before deleting it.");
+            }
+            int customized = current.size();
             try
             {
-                validateProfileTarget(project, listed);
+                Path plannedParent = validateProfileTarget(project, listed);
                 repo.deleteSettingsProfile(listed, project);
+                verifyProfileTargetAfterWrite(project, listed, plannedParent);
             }
             catch (IllegalStateException e)
             {
@@ -667,13 +729,13 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
-            requirePlannedActiveProfile(repo, project, active);
             // Revalidate at the write boundary as well as before consent.
             String target = switchTarget(repo, project, profile);
             if (sameProfile(target, active))
             {
                 return Map.of("changed", false);
             }
+            requirePlannedActiveProfile(repo, project, active);
             repo.setActiveSettingsProfile(target, Collections.emptyList(), project);
             String after = repo.getActiveSettingsProfile(project);
             return Map.of("before", Map.of("activeProfile", active), "after", Map.of("activeProfile", after),

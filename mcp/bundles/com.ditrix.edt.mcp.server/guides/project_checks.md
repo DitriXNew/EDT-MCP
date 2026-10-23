@@ -65,10 +65,11 @@ Source and target availability are checked again after consent, before the write
 
 ### Concurrency and file safety
 
-If the active profile changed while consent was pending, the operation is refused; re-run
-the preview. Concurrent MCP profile changes for the same project are serialized after consent.
-Create, copy, and delete refuse links and junctions in `.settings` and require each `.cset`
-target to have the real `.settings` directory as its parent.
+After consent, the tool takes the per-project lock, re-reads everything shown by the preview,
+and refuses any difference; create, copy, and delete also check that the target is not a link
+and its real parent is still the real `.settings` directory. EDT's UI and other processes are
+not serialized with these calls, so a change in the short interval before EDT's own write is
+reported by read-back rather than prevented.
 
 ### Check identifiers and filters
 
@@ -113,10 +114,12 @@ before any mutation or consent prompt.
 `checkId` set to that row's `uid`, and copy its `enabled` and `severity`. This restores
 the exact contributor's previous effective settings in the same profile. Keep the
 original response until restoration is verified. `after` is read again from EDT's
-repository; `persisted:true` means that read-back matches the fields explicitly requested.
-A partial entry writes only its supplied fields, preserving fresh values of omitted
-fields if they changed while consent was pending. `before` is the pre-consent snapshot.
-If it is false, inspect `after` and list again before deciding how to retry.
+repository; `persisted:true` means the planned profile is still active and every changed
+check matches the planned values. A partial entry writes only its supplied fields; a change
+to any previewed enabled/severity value during consent requires a new preview. `before` is
+the pre-consent snapshot. If the profile or values differ after the write, the response is
+an error naming the actually active profile and carrying the plan's restore values; inspect
+the current settings before restoring or retrying.
 
 Critical data integrity checks can be disabled with the same consent as other checks.
 Such rows carry `criticalDataIntegrity:true`. When a critical check is disabled, the

@@ -187,6 +187,8 @@ public class ProjectCheckSettingsSupportTest
         ICheckSettings copy = settings(uid, true, IssueSeverity.MAJOR);
         ICheckSettings after = settings(uid, false, IssueSeverity.MINOR);
         doReturn(old, copy, after).when(repo).getSettings(uid, project);
+        doReturn(settings(other, true, IssueSeverity.MAJOR), settings(other, true, IssueSeverity.MAJOR),
+            settings(other, false, IssueSeverity.MAJOR)).when(repo).getSettings(other, project);
         Plan plan = ProjectCheckSettingsSupport.prepare(repo, project, "Default",
             "[{\"checkId\":\"begin-transaction\",\"enabled\":false,\"severity\":\"MINOR\"},"
                 + "{\"checkId\":\"z-check\",\"enabled\":false}]");
@@ -212,10 +214,10 @@ public class ProjectCheckSettingsSupportTest
         when(copy.isEnabled()).thenAnswer(call -> copyEnabled.get());
         doAnswer(call -> { copyEnabled.set(call.getArgument(0)); return null; }).when(copy).setEnabled(anyBoolean());
         doReturn(copy, settings(uid, true, IssueSeverity.MAJOR)).when(repo).getSettings(uid, project);
-        Map<String, Object> result = ProjectCheckSettingsSupport.applyAll(repo, project, plan);
-        assertEquals(false, result.get("persisted"));
-        assertEquals(true, ((List<Map<String, Object>>)result.get("after")).get(0).get("enabled"));
-        assertFalse(result.containsKey("criticalDataIntegrityWarning"));
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> ProjectCheckSettingsSupport.applyAll(repo, project, plan));
+        assertTrue(error.getMessage(), error.getMessage().contains("read-back check values differ"));
+        assertTrue(error.getMessage(), error.getMessage().contains("Restore values from the preview"));
     }
 
     @Test

@@ -11,9 +11,6 @@ import static org.mockito.Mockito.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.FileSystem;
-import java.nio.file.spi.FileSystemProvider;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.text.Normalizer;
@@ -38,7 +35,6 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Status;
 import org.junit.Assume;
 import org.junit.Before;
@@ -507,31 +503,7 @@ public class ProjectChecksRoundSixTest
 
     private Runnable mockTargetPath(String profile, boolean symbolic, Path realPath) throws IOException
     {
-        Path target = mock(Path.class);
-        FileSystem fileSystem = mock(FileSystem.class);
-        FileSystemProvider provider = mock(FileSystemProvider.class, CALLS_REAL_METHODS);
-        BasicFileAttributes attributes = mock(BasicFileAttributes.class);
-        when(target.getFileSystem()).thenReturn(fileSystem);
-        when(fileSystem.provider()).thenReturn(provider);
-        when(provider.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS))
-            .thenReturn(attributes);
-        when(attributes.isSymbolicLink()).thenReturn(symbolic);
-        when(attributes.isRegularFile()).thenReturn(true);
-        // Windows temp paths can contain a short user-directory spelling. Return a real parent,
-        // so the symbolic-link test cannot pass just because another guard rejects that alias.
-        Path resolved = realPath.getParent().toRealPath().resolve(realPath.getFileName());
-        when(target.toRealPath()).thenReturn(resolved);
-        // If the link check is removed, this still has a safe parent; that mutation must fail.
-        when(target.getParent()).thenReturn(settings);
-        IPath location = mock(IPath.class);
-        java.io.File file = mock(java.io.File.class);
-        when(location.toFile()).thenReturn(file);
-        when(file.toPath()).thenReturn(target);
-        IFile resource = folder.getFile(profile + ".cset");
-        return () -> {
-            when(resource.getLocation()).thenReturn(location);
-            when(folder.getFile(profile + ".cset")).thenReturn(resource);
-        };
+        return ProjectChecksTestFiles.mockTargetPath(folder, settings, profile, symbolic, realPath);
     }
 
     private Path stageSymlink(Path target) throws IOException
