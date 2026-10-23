@@ -79,6 +79,10 @@ For an object that a configuration on vendor support locks, the output carries o
 
 A TextDocument template FQN (`CommonTemplate.Name` or `<Type>.<Owner>.Template.Name`) returns a `## Text template` section with the exact text in a fenced block and a `contentHash` from the same helper as `write_module_source`. Pass that hash as `modify_metadata.template.expectedHash`. Long text is bounded using the standard `[OUTPUT TRUNCATED]` notice; the hash always covers the full text, including the part omitted from the response. Request a single template FQN to keep its section within the overall response budget. This read does not write the model or the file.
 
+## External data source members
+
+With `full:true`, `ExternalDataSource.E.Table.T` renders its properties and a `Table Fields` table (each field with its type), and `...Cube.C` renders its parent data source and dimension tables. For `...Table.T.Field.F` or `ExternalDataSource.E.Function.Fn`, use `assignable:true`. See the create_metadata guide, "External data source structure", for the editing contract and boundaries.
+
 ## Additional columns
 `assignable:true` accepts an additional column's address, `...Form.F.Attribute.Object.Column.<TabularSection>.<Name>`. The form structure lists additional columns in their own `## Additional columns` table (Attribute, Table path, Name, Synonym, Type) with its own row cap; the table is omitted when the form has none. Details: get_tool_guide('create_metadata', section='Additional columns').
 

@@ -71,6 +71,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
@@ -482,13 +483,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return wrongKind;
             }
-            return ToolResult.error("Cannot resolve a create target for FQN '" + fqn + "'. " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Use 'Type.Name' for a top object or 'Type.Name.Kind.Name' for a member " //$NON-NLS-1$
-                + "(Kind = Attribute/TabularSection/Dimension/Resource/EnumValue/Command or a " //$NON-NLS-1$
-                + "type-specific child such as AccountingFlag/AddressingAttribute/Column; see " //$NON-NLS-1$
-                + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
-                + "exist; use get_metadata_objects to check." + ctx.scope.addressingHint(normFqn))
-                .toJson();
+            return createTargetNotFound(fqn, ctx.scope.addressingHint(normFqn));
         }
         EClass createClass = target.topLevel
             ? resolveCollectionElementType(config, target.configFeatureName) : target.elementType;
@@ -543,6 +538,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // question: it may be a single-language build, or a language not supported yet.
         boolean localeUnused = ctx.scope.isDeclaredButUnused(synonymLanguage);
 
+        if (isReferencedTopTarget(target))
+        {
+            return createReferencedTopObject(project, projectName, target, props, synonymLanguage,
+                localesMissing, localeUnused, normReport);
+        }
         if (target.topLevel)
         {
             return createTopLevel(new TopLevelRequest(project, config, projectName, target, normFqn,
@@ -607,11 +607,29 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         List<String> kinds = MetadataNodeResolver.childKindsFor(owner.object);
         String kindToken = parts[parts.length - 2];
+        if (kinds.stream().anyMatch(kind -> MetadataNodeResolver.featureNameForKind(kind)
+            .equals(MetadataNodeResolver.featureNameForKind(kindToken))))
+        {
+            return null;
+        }
         return ToolResult.error("'" + owner.object.eClass().getName() + " '" + owner.object.getName() //$NON-NLS-1$ //$NON-NLS-2$
             + "' has no '" + kindToken + "' members. It accepts: " //$NON-NLS-1$ //$NON-NLS-2$
             + (kinds.isEmpty() ? "no member kinds at all" : String.join(", ", kinds)) //$NON-NLS-1$ //$NON-NLS-2$
             + ". A form is addressed separately as '" + ownerFqn + ".Form.<Name>'; see " //$NON-NLS-1$ //$NON-NLS-2$
             + "get_metadata_details for what this object already has.").toJson(); //$NON-NLS-1$
+    }
+
+    /** The actionable fallback for a missing create owner or an unknown target shape. */
+    static String createTargetNotFound(String fqn, String addressingHint)
+    {
+        return ToolResult.error("Cannot resolve a create target for FQN '" + fqn + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Use 'Type.Name' for a top object or 'Type.Name.Kind.Name' for a member " //$NON-NLS-1$
+                + "(Kind = Attribute/TabularSection/Dimension/Resource/EnumValue/Command or a " //$NON-NLS-1$
+                + "type-specific child such as AccountingFlag/AddressingAttribute/Column or " //$NON-NLS-1$
+                + "Table/Field/Function (ExternalDataSource); see " //$NON-NLS-1$
+                + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
+                + "exist; use get_metadata_objects to check." + addressingHint)
+                .toJson();
     }
 
     private static String invalidNameError(String name)
@@ -1651,6 +1669,68 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return dirty;
     }
 
+    /** Dispatch seam: a non-containment collection must attach a new BM top before linking it. */
+    static boolean isReferencedTopTarget(CreateTarget target)
+    {
+        return !target.topLevel && ReferencedTopObjects.isReferencedTopCollection(target.feature);
+    }
+
+    /** Create and attach a separate file, then register it with its owner in both directions. */
+    private String createReferencedTopObject(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract
+        Props props, String synonymLanguage, List<String> localesMissing, boolean localeUnused,
+        MdNameNormalizer.Report normReport)
+    {
+        if (!(target.owner instanceof IBmObject))
+        {
+            return ToolResult.error("Owner is not a BM object").toJson(); //$NON-NLS-1$
+        }
+        BmContext bm = resolveBmContext(project, projectName);
+        if (bm.hasError())
+        {
+            return bm.error;
+        }
+        final long ownerBmId = ((IBmObject)target.owner).bmGetId();
+        final String[] childFqn = { null };
+        final String[] parentFqn = { null };
+        try
+        {
+            BmTransactions.<Void>write(bm.bmModel, "CreateReferencedTopObject", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject owner = (EObject)tx.getObjectById(ownerBmId);
+                if (!(owner instanceof IBmObject))
+                {
+                    throw new IllegalStateException("Owner object not found in transaction"); //$NON-NLS-1$
+                }
+                if (childByName(owner, target.feature, target.childName) != null)
+                {
+                    throw new IllegalStateException("Member already exists: " + target.childName); //$NON-NLS-1$
+                }
+                String ownerFqn = ((IBmObject)owner).bmGetFqn();
+                MdObject child = newTopObject(bm.factory, target.elementType, bm.v8Project,
+                    target.childName, typeProviderFor(target.elementType, bm.version));
+                if (child == null)
+                {
+                    throw new IllegalStateException("The EDT factory cannot create a '" //$NON-NLS-1$
+                        + target.elementType.getName() + "' object"); //$NON-NLS-1$
+                }
+                applyScalarProps(child, props, synonymLanguage);
+                String attached = ReferencedTopObjects.attachFqn(ownerFqn, child.eClass(), target.childName);
+                ReferencedTopObjects.attachAndLink(tx, owner, target.feature, child, attached, bm.factory);
+                childFqn[0] = attached;
+                parentFqn[0] = ownerFqn;
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating referenced top object", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(project, List.of(childFqn[0], parentFqn[0]));
+        return success(new SuccessInfo(childFqn[0], target.elementType, target.childName, persisted, props,
+            synonymLanguage, localesMissing, localeUnused, null, normReport));
+    }
+
     // ---- member creation (mirrors the former add_metadata_attribute, generalized) ---------------
 
     private String createMember(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
@@ -1676,8 +1756,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
         final String name = target.childName;
-        // The top object that owns the member's .mdo file (members live inside the top object's file).
-        final String topFqn = topFqn(normFqn);
+        // The walk starts at the root, but a referenced Table owns its members' file.
+        final String[] fileOwnerFqn = { null };
+        final String[] createdFqn = { normFqn };
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
 
@@ -1692,6 +1773,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     new MemberChildSpec(factory, elementType, owner, version, name, props,
                         synonymLanguage, feature);
                 MdObject child = createMemberChild(spec);
+                fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(owner);
+                if ("ExternalDataSource".equals(parts[0])) //$NON-NLS-1$
+                {
+                    String canonical = MetadataNodeResolver.resolvableAddressOf(child);
+                    if (canonical != null)
+                    {
+                        createdFqn[0] = canonical;
+                    }
+                }
                 if (child instanceof BasicTemplate)
                 {
                     templateContentFqn[0] = templates.initialize((BasicTemplate)child,
@@ -1708,8 +1798,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         boolean persisted = BmTransactions.forceExportToDisk(project, templateContentFqn[0] == null
-            ? List.of(topFqn) : List.of(topFqn, templateContentFqn[0]));
-        return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
+            ? List.of(fileOwnerFqn[0]) : List.of(fileOwnerFqn[0], templateContentFqn[0]));
+        return success(new SuccessInfo(createdFqn[0], createdKind, name, persisted, props, synonymLanguage,
             localesMissing, localeUnused, null, normReport));
     }
 
@@ -3385,13 +3475,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             throw new IllegalStateException("Configuration feature '" + refName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         ((EList<MdObject>)collection).add(newObject);
-    }
-
-    /** Extracts the {@code Type.Name} top-object FQN from a (normalized) full-name FQN. */
-    private static String topFqn(String normFqn)
-    {
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
     }
 
     /**
