@@ -138,7 +138,7 @@ public class ProjectChecksProfileSafetyTest
         }
         available.add("Escaped");
         assertFileStemRefusal(invoke("copyProfile", "New", "Escaped"));
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(1);
     }
 
     @Test
@@ -197,10 +197,10 @@ public class ProjectChecksProfileSafetyTest
             }
         }
         assertTrue("Every unsafe name must be refused as a file stem: " + unexpected, unexpected.isEmpty());
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent("switch".equals(action) ? UNSAFE_NAMES.size() : 0);
     }
 
-    private void assertNoWritesOrConsent()
+    private void assertNoWritesOrConsent(int expectedRefreshes)
     {
         assertEquals(0, tool.consents);
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
@@ -209,7 +209,7 @@ public class ProjectChecksProfileSafetyTest
         verify(repo, never()).applyChanges(anyCollection(), same(project));
         try
         {
-            verify(settings, never()).refreshLocal(anyInt(), any(IProgressMonitor.class));
+            verify(settings, times(expectedRefreshes)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
         }
         catch (Exception e)
         {

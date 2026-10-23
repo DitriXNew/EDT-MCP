@@ -238,7 +238,7 @@ public class ProjectChecksToolTest
         assertEquals("Review", result.getAsJsonObject("after").get("activeProfile").getAsString());
         assertTrue(result.get("persisted").getAsBoolean());
         verify(repo).setActiveSettingsProfile("Review", List.of(), project);
-        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(2)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test
@@ -259,7 +259,7 @@ public class ProjectChecksToolTest
             .contains("profile is required"));
         assertTrue(tool.previews.isEmpty());
         verify(repo, never()).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
-        verify(folder, never()).refreshLocal(anyInt(), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test
