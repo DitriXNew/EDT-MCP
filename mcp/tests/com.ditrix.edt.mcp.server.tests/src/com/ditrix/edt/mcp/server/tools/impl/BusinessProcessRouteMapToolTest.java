@@ -74,7 +74,7 @@ public class BusinessProcessRouteMapToolTest
             assertEquals("Replace route map of BusinessProcess.Process", preview.getTitle());
             assertEquals("2 points and 1 connections are discarded; infobase tasks keep their point identity "
                 + "only for same-named points", preview.getSubtitle());
-            assertEquals(2, preview.getTotalCount());
+            assertEquals(3, preview.getTotalCount());
             assertEquals(List.of("Begin", "Done"), preview.getTopNames());
             return ConsentDecision.REJECT;
         });

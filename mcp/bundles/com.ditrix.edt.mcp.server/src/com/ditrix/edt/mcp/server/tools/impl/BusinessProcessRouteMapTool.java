@@ -2,6 +2,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -16,6 +17,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.bp.scheme.model.GraphicalScheme;
 import com._1c.g5.v8.dt.bp.scheme.model.GraphicalSchemeConnection;
 import com._1c.g5.v8.dt.bp.scheme.model.GraphicalSchemeFigure;
+import com._1c.g5.v8.dt.bp.scheme.model.GraphicalSchemeItemType;
 import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.md.MdPlugin;
@@ -350,8 +352,14 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
         return new Content(schemeFqn, RouteMapWriter.existing(tx, schemeFqn));
     }
 
-    record MapPreview(boolean exists, int items, int points, int connections, List<String> names)
+    record MapPreview(boolean exists, int items, int points, int connections, List<String> names,
+        String discardedItems)
     {
+        MapPreview(boolean exists, int items, int points, int connections, List<String> names)
+        {
+            this(exists, items, points, connections, names, points + " points and " + connections + " connections");
+        }
+
         MapPreview
         {
             names = List.copyOf(names);
@@ -367,12 +375,19 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
         }
         int points = 0;
         int connections = 0;
+        int decorations = 0;
+        Map<String, Integer> otherKinds = new LinkedHashMap<>();
         List<String> names = new ArrayList<>();
         for (var item : previous.getItems())
         {
             if (item instanceof GraphicalSchemeFigure figure)
             {
                 points++;
+                if (figure.getItemType() == GraphicalSchemeItemType.DECORATION)
+                {
+                    decorations++;
+                    otherKinds.merge("decoration", 1, Integer::sum);
+                }
                 if (figure.getName() != null)
                 {
                     names.add(figure.getName());
@@ -382,8 +397,19 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
             {
                 connections++;
             }
+            else
+            {
+                String kind = item.getItemType() == null ? item.eClass().getName() : item.getItemType().getLiteral();
+                otherKinds.merge(kind + " item", 1, Integer::sum);
+            }
         }
-        return new MapPreview(true, previous.getItems().size(), points, connections, names);
+        // Keep figure counts for get/remove's projection; consent lists decorations separately.
+        List<String> discarded = new ArrayList<>();
+        discarded.add((points - decorations) + " points");
+        discarded.add(connections + " connections");
+        otherKinds.forEach((kind, count) -> discarded.add(count + " " + kind + (count == 1 ? "" : "s")));
+        return new MapPreview(true, previous.getItems().size(), points, connections, names,
+            String.join(" and ", discarded));
     }
 
     /** The count fields describe written items for replace and discarded items for remove. */
@@ -407,8 +433,8 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
         {
             ConsentPreview preview = new ConsentPreview(
                 (action.equals("remove") ? "Remove" : "Replace") + " route map of " + fqn,
-                previous.points() + " points and " + previous.connections() + " connections are discarded; "
-                    + "infobase tasks keep their point identity only for same-named points", previous.points(),
+                previous.discardedItems() + " are discarded; "
+                    + "infobase tasks keep their point identity only for same-named points", previous.items(),
                 previous.names());
             ConsentDecision decision = consent.request(NAME, preview);
             if (decision != ConsentDecision.ALLOW)

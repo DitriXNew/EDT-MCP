@@ -29,6 +29,26 @@ class RouteMapMutationContractTest(unittest.TestCase):
                 "projectName": self.harness.PROJECT, "fqn": "BusinessProcess.Approval", "action": action,
             })
 
+    def test_successful_get_keeps_the_pristine_shortcut_and_is_not_a_write(self):
+        for tool, action in ((TOOL, "get"), ("dcs", "get"), ("dcs", "options")):
+            for echo_action in (True, False):
+                with self.subTest(tool=tool, action=action, echo_action=echo_action):
+                    self.harness.begin_test_calls()
+                    payload = {"success": True}
+                    if echo_action:
+                        payload["action"] = action
+                    raw = {"result": {"structuredContent": payload}}
+                    args = {"projectName": self.harness.PROJECT, "action": action}
+                    with mock.patch.object(self.harness, "_post", return_value=raw):
+                        self.harness.call(tool, args)
+                    self.assertFalse(self.harness.mutations_unresolved())
+                    self.assertNotIn(tool, self.harness.confirmed_mutation_tools())
+                    self.assertEqual((), self.harness.mutation_kind_violation_tools(
+                        "read", self.harness.confirmed_mutation_tools()))
+                    self.assertFalse(self.harness._MUTATION_CONFIRMED)
+                    self.assertFalse(self.harness.evidenced_mutation_fixture_projects())
+                    self.assertTrue(self.harness.model_is_pristine())
+
     def test_successful_replace_and_remove_forfeit_the_pristine_shortcut(self):
         for action in ("replace", "remove"):
             with self.subTest(action=action):

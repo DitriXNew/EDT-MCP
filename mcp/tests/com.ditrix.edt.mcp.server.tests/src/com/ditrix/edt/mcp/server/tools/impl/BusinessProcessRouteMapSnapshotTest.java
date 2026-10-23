@@ -81,7 +81,7 @@ public class BusinessProcessRouteMapSnapshotTest
         List<String> events = new ArrayList<>();
         var tool = new BusinessProcessRouteMapTool((name, preview) -> {
             events.add("consent");
-            assertEquals(2, preview.getTotalCount());
+            assertEquals(3, preview.getTotalCount());
             assertEquals(List.of("Point0", "Point1"), preview.getTopNames());
             return ConsentDecision.ALLOW;
         });

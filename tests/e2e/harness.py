@@ -749,6 +749,17 @@ NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
 })
 
 
+# Action-based writers share one exemption table. All other actions stay conservative.
+READ_ONLY_MODEL_ACTIONS = {
+    "dcs": frozenset({"get", "options"}),
+    "business_process_route_map": frozenset({"get"}),
+}
+
+
+def _is_read_only_model_action(tool, args):
+    return (args or {}).get("action") in READ_ONLY_MODEL_ACTIONS.get(tool, ())
+
+
 def _call_moves_the_fixture_model(tool, args, structured):
     """Did THIS call move the fixture's model? Asked per call, not per tool.
 
@@ -765,7 +776,7 @@ def _call_moves_the_fixture_model(tool, args, structured):
     is "preview" is a dry run by construction (rename/delete build the refactoring and report it
     without applying), so it cannot have moved anything.
     """
-    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS or _is_read_only_model_action(tool, args):
         return False
     if isinstance(structured, dict) and structured.get("action") == "preview":
         return False
@@ -939,12 +950,13 @@ def _record_outcome(tool, args, is_error, structured):
     call_moves_fixture = (mutation_evidenced
                           and _call_moves_the_fixture_model(tool, args, structured))
     if mutation_evidenced:
-        _MUTATION_CONFIRMED = True
+        if mutation_committed or mutation_unknown or not _is_read_only_model_action(tool, args):
+            _MUTATION_CONFIRMED = True
         if _cascades_across_fixtures(tool, args):
             _CASCADE_CONFIRMED_CALLED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
-        # stays conservative (any success forfeits it), while accusing a test of a mis-declared
-        # kind has to be right about THIS call actually having moved the fixture's model.
+        # stays conservative outside the shared read-only actions, while accusing a test of a
+        # mis-declared kind must be right about THIS call moving the fixture's model.
         if call_moves_fixture:
             _CONFIRMED_MUTATION_TOOLS.add(tool)
     # Keep the named targets correlated with THIS outcome. A success counts only when this call
