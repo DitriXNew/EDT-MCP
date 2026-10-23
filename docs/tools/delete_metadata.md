@@ -92,6 +92,10 @@ An owned FORM object, a FORM member and an XDTO package member are removed from 
 
 Only the owner's own pointers are cleaned: deleting an owned form clears the default-form settings that named it.
 
+## External data source members
+
+Use `ExternalDataSource.E.Table.T`, `...Table.T.Field.F`, `ExternalDataSource.E.Function.Fn` or `...Cube.C` (Russian tokens also work). The delete runs EDT's delete refactoring on that node, also for a source that still has Tables or Cubes, then exports the file that registers the node: the source's `.mdo` for a Table, Cube or Function, the Table's `.mdo` for a Field. Deleting a Table removes its `<tables>` line from the source's `.mdo` and its `Tables/T/` folder; deleting a source that still has Tables and Cubes removes the whole `src/ExternalDataSources/E/` directory, child files included. A forced delete then checks that file as described above. See the create_metadata guide, "External data source structure", for defaults, layout and boundaries.
+
 ## Additional columns
 An additional column of an object attribute's tabular section is deleted by `...Form.F.Attribute.Object.Column.<TabularSection>.<Name>` with the same preview/confirm. EDT's designer delete takes its bound items along, and the `<additionalColumns>` entry goes with its last column. Details: get_tool_guide('create_metadata', section='Additional columns').
 

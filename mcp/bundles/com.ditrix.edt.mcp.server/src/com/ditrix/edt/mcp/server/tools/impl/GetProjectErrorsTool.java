@@ -23,12 +23,15 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EReference;
 
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -57,6 +60,7 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -1499,6 +1503,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * prevent. Scoping by the owning node instead widens the answer to that node's problems, which
      * is visible in every row's Location and never hides one.</p>
      *
+     * <p>Referenced top objects are marker roots too: their contained members use the file owner
+     * declared by the shared metadata grammar, while a Table/Cube address itself stays exact.</p>
+     *
      * @param normFqn the type-normalized address that resolved
      * @return the owning node's address, or {@code null} when {@code normFqn} is already it
      */
@@ -1520,7 +1527,8 @@ public class GetProjectErrorsTool implements IMcpTool
             // Type.Name is the object itself, and a one-segment address names nothing narrower.
             return null;
         }
-        return parts[0] + "." + parts[1]; //$NON-NLS-1$
+        String owner = ReferencedTopObjects.fileOwnerFqn(normFqn);
+        return normFqn.equals(owner) ? null : owner;
     }
 
     /**
@@ -1786,28 +1794,19 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return false;
         }
+        EClass ownerType = (EClass)MdClassPackage.eINSTANCE.getEClassifier(
+            MetadataTypeUtils.toEnglishSingular(parts[0]));
         for (int i = 2; i < parts.length; i += 2)
         {
-            // The NAVIGABLE-child catalogue, not the segment-alias one. The alias catalogue also
-            // holds kinds that exist only INSIDE a form (Field, Group, Button, ...), so asking it
-            // let 'Catalog.Products.Field.Code' - a form kind hung directly off a mdclass object -
-            // pass as a shape some configuration might hold. Nothing can: the mdclass metamodel has
-            // no such containment. Form / Handler are absent here on purpose; they lead out of the
-            // mdclass model and the two form grammars above own them.
-            String feature = MetadataNodeResolver.featureNameForKind(parts[i]);
-            if (feature == null)
+            // Tokens alone do not establish a path: Field and Table also name form items.
+            // Check the actual owner EClass at EVERY step, then follow the reference's element
+            // type. This accepts EDS.Table.Field while rejecting Catalog.TabularSection.Field.
+            EReference child = MetadataNodeResolver.childFeature(ownerType, parts[i]);
+            if (child == null || !child.isMany())
             {
                 return false;
             }
-            // ...and, at the FIRST level, whether THIS owner can hold that child at all: 'Column' is
-            // a real kind but a containment of DocumentJournal, so 'Catalog.Products.Column.Number'
-            // names nothing in any configuration. Only the first level is checked because deeper
-            // owners are not named by a type token (the owner of an Attribute under a TabularSection
-            // is the tabular section, which no segment types), and a gap here is the safe direction.
-            if (i == 2 && !ownerTypeCanContain(parts[0], feature))
-            {
-                return false;
-            }
+            ownerType = child.getEReferenceType();
         }
         return true;
     }

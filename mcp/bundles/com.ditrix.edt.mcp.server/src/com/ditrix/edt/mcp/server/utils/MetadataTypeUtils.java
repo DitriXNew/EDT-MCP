@@ -428,6 +428,16 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Handler", "Handlers", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a),
             cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a, 0x0438));
+        // The EXTERNAL DATA SOURCE children (#448), named by the MdClass.xcore code / code_ru of the
+        // Cube and Function classes. Table and Field are shared with the form kinds above.
+        // Cube (ru: kub / kuby)
+        putNestedKind(m, "Cube", "Cubes", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041a, 0x0443, 0x0431),
+            cp(0x041a, 0x0443, 0x0431, 0x044b));
+        // Function (ru: funkciya / funkcii)
+        putNestedKind(m, "Function", "Functions", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0424, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x044f),
+            cp(0x0424, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x0438));
         // TabularSection (ru: tablichnaya chast / tablichnye chasti)
         putNestedKind(m, "TabularSection", "TabularSections", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x0430, 0x044f,
