@@ -16,10 +16,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.ILogListener;
@@ -57,6 +59,9 @@ public class ProjectChecksRoundTwoTest
     {
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         IFolder folder = mock(IFolder.class);

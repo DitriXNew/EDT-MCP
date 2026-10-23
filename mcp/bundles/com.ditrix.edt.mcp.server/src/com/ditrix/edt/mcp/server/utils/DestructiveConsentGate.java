@@ -138,9 +138,11 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
      * {@code delete_launch_config} (which is cheap/recoverable and NOT gated) and
      * omits five gated tools ({@code modify_metadata}, {@code dcs}, {@code git},
-     * {@code evaluate_expression} and {@code project_checks}), which declare their own
-     * annotations. {@code dcs} and {@code project_checks} declare {@code destructiveHint:true}
-     * because one action can discard data. The exact relationship is asserted by
+     * {@code evaluate_expression} and {@code project_checks}). {@code modify_metadata} and
+     * {@code evaluate_expression} fall to the classifier's non-destructive-write default because
+     * their typical call destroys nothing. {@code dcs}, {@code git} and {@code project_checks}
+     * override {@code getAnnotations} with {@code destructiveHint:true} because one action can
+     * discard data. The exact relationship is asserted by
      * {@code DestructiveConsentGateTest} so the two lists never silently drift.
      */
     public static final Set<String> GATED_TOOLS = Set.of(

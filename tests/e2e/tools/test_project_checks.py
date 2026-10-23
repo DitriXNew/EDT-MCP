@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import harness
 from harness import (
     PROJECT, PROJECT_DIR, E2ESkip, call, assert_ok, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, split_markdown_row,
@@ -57,6 +58,11 @@ def _stored(profile):
     assert document["version"] == 1, document
     assert isinstance(document["settings"], dict), document
     return document["settings"]
+
+
+def _stored_check(settings, row):
+    """EDT writes bare ids, or contributor|check for colliding ids; MCP uid is different."""
+    return settings.get(row["contributorId"] + "|" + row["checkId"], settings.get(row["checkId"], {}))
 
 
 def _active_on_disk():
@@ -155,19 +161,20 @@ def _error_rows(check_id=None, severity=None):
 
 
 def _cheap_noncritical_check(checks, require_default=False, codes=None):
-    # These documented syntax checks need no cross-project data. Prefer begin-transaction
-    # when enabled; all three have NORMAL complexity in the shipped check guides.
-    preferred = ("begin-transaction", "empty-except-statement", "export-procedure-missing-comment")
+    # These syntax/module-structure checks need no cross-project data. Prefer begin-transaction
+    # when enabled. A live-marker check need not have a guide under its runtime id.
+    preferred = ("begin-transaction", "empty-except-statement", "export-procedure-missing-comment",
+                 "module-structure-method-in-regions")
     for check_id in preferred:
         candidates = sorted((row for row in checks
                              if row["checkId"] == check_id and row["enabled"]
-                             and not row["criticalDataIntegrity"] and row["hasDocumentation"]
+                             and not row["criticalDataIntegrity"] and (codes is not None or row["hasDocumentation"])
                              and (not require_default or (row["defaultEnabled"] and not row["customized"]))
                              and (codes is None or row["checkId"] in codes or row["shortUid"] in codes)),
                             key=lambda row: row["uid"])
         if candidates:
             return candidates[0]
-    raise E2ESkip("fixture has no eligible enabled non-critical documented syntax check: "
+    raise E2ESkip("fixture has no eligible enabled non-critical syntax/module-structure check: "
                   + ", ".join(preferred))
 
 
@@ -230,15 +237,15 @@ def test_profiles_lists_default_as_active_on_the_pristine_fixture():
 def test_set_disable_then_restore_round_trips_through_before_and_writes_the_cset():
     row = _cheap_noncritical_check(_all(), require_default=True)
     active = _success("profiles")["activeProfile"]
-    assert row["uid"] not in _stored(active)
+    assert not _stored_check(_stored(active), row)
     with _temporary_set(row, enabled=False) as response:
         assert response["changed"] == 1, response
-        _poll(lambda: _stored(active), lambda settings: settings.get(row["uid"], {}).get("enabled") is False,
+        _poll(lambda: _stored(active), lambda settings: _stored_check(settings, row).get("enabled") is False,
               "disabled check persisted in .cset")
         customized = _success("list", checkIds=[row["uid"]], onlyCustomized=True)
         assert customized["total"] == 1 and customized["checks"][0]["uid"] == row["uid"], customized
         assert not row["criticalDataIntegrity"], row
-    assert row["uid"] not in _stored(active), "restored default must have no stored delta"
+    assert not _stored_check(_stored(active), row), "restored default must have no stored delta"
     assert _success("list", checkIds=[row["uid"]], onlyCustomized=True)["total"] == 0
 
 
@@ -252,7 +259,7 @@ def test_set_severity_changes_live_markers():
     active = _success("profiles")["activeProfile"]
     with _temporary_set(row, severity=new):
         _poll(lambda: _stored(active),
-              lambda settings: settings.get(row["uid"], {}).get("severity", row["defaultSeverity"]) == new,
+              lambda settings: _stored_check(settings, row).get("severity", row["defaultSeverity"]) == new,
               "severity persisted in .cset")
         _poll(lambda: (_error_rows(code, new), _error_rows(code, old)),
               lambda rows: bool(rows[0]) and not rows[1], "markers retagged live")
@@ -265,7 +272,7 @@ def test_set_disable_removes_the_checks_markers_without_clean_project():
     row = _check_with_markers()
     active = _success("profiles")["activeProfile"]
     with _temporary_set(row, enabled=False):
-        assert _stored(active).get(row["uid"], {}).get("enabled", row["defaultEnabled"]) is False
+        assert _stored_check(_stored(active), row).get("enabled", row["defaultEnabled"]) is False
         _poll(lambda: _error_rows(row["checkId"]), lambda rows: not rows, "disabled check markers removed")
     _poll(lambda: _error_rows(row["checkId"]), bool, "restored check markers re-created")
 
@@ -304,7 +311,7 @@ def test_set_accepts_the_short_uid_from_get_project_errors():
     active = _success("profiles")["activeProfile"]
     with _temporary_set(row, check_id=row["shortUid"], enabled=False) as response:
         assert response["before"][0]["uid"] == row["uid"], response
-        assert _stored(active).get(row["uid"], {}).get("enabled", row["defaultEnabled"]) is False
+        assert _stored_check(_stored(active), row).get("enabled", row["defaultEnabled"]) is False
 
 
 @e2e_test(tool="project_checks", kind="action")
@@ -346,9 +353,12 @@ def test_switch_round_trip_between_default_and_a_profile_created_on_disk():
         assert _stored(previous) == original_settings, "a pure switch must not overlay target settings"
         _poll(_active_on_disk, lambda active: active == previous, "original activeProfile preference restored")
         assert "activeProfile=" not in (PREFS.read_text(encoding="utf-8-sig") if PREFS.exists() else "")
-        if path.exists():
-            path.unlink()
+        if not (harness.calls_aborted() or harness.fixtures_frozen()):
+            path.unlink(missing_ok=True)
         assert not path.exists()
+        _poll(lambda: _success("profiles"),
+              lambda result: all(row["name"] != name for row in result["profiles"]),
+              "repository forgets removed E2eProfile.cset", timeout=30)
         assert_no_diff()
 
 
@@ -425,10 +435,11 @@ def test_profile_create_copy_delete_round_trip_restores_the_repository_and_cset_
                 _poll(paths[name].exists, lambda exists: not exists, "temporary profile removed in cleanup")
             except Exception as error:
                 cleanup_errors.append(error)
-                try:
-                    paths[name].unlink(missing_ok=True)
-                except Exception as unlink_error:
-                    cleanup_errors.append(unlink_error)
+                if not (harness.calls_aborted() or harness.fixtures_frozen()):
+                    try:
+                        paths[name].unlink(missing_ok=True)
+                    except Exception as unlink_error:
+                        cleanup_errors.append(unlink_error)
         for verify_cleanup in (
             lambda: _poll(lambda: _success("profiles"), lambda result: result == original,
                           "original profiles restored after cleanup"),
@@ -440,9 +451,21 @@ def test_profile_create_copy_delete_round_trip_restores_the_repository_and_cset_
             except Exception as error:
                 cleanup_errors.append(error)
     if original_error is not None:
-        if cleanup_errors:
-            raise BaseExceptionGroup("Profile round-trip failed; cleanup errors follow the original failure",
-                                     [original_error, *cleanup_errors])
+        for cleanup_error in cleanup_errors:
+            original_error.add_note("Profile cleanup failed: " + type(cleanup_error).__name__ + ": "
+                                    + str(cleanup_error))
         raise original_error
     if cleanup_errors:
         raise ExceptionGroup("Profile cleanup failed", cleanup_errors)
+
+
+@e2e_test(tool="project_checks", kind="action")
+def test_create_profile_refuses_traversal_without_creating_any_cset():
+    name = "E2e757_escape_" + uuid4().hex
+    before = _snapshot(with_times=True)
+    error = assert_error(call("project_checks", dict(projectName=PROJECT, action="createProfile",
+                                                    profile="../" + name)))
+    assert_error_quality(error, names=[name], suggests=["profile name", "not a path"])
+    assert not list(Path(PROJECT_DIR).glob("E2e757_escape_*.cset")), "profile escaped .settings"
+    assert _snapshot(with_times=True) == before, "refused profile created or changed settings"
+    assert_no_diff()

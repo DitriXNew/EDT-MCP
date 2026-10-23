@@ -19,6 +19,7 @@ import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckDescription;
@@ -44,7 +45,10 @@ public final class ProjectCheckSettingsSupport
     {
     }
 
-    /** The .cset key, deliberately different from CheckUid.toString(). */
+    /**
+     * The MCP checkId|contributorId identifier, deliberately different from CheckUid.toString().
+     * EDT stores bare checkId keys in .cset files, or contributorId|checkId on a collision.
+     */
     public static String key(CheckUid uid)
     {
         return uid.getCheckId() + "|" + uid.getContributorId();
@@ -417,7 +421,7 @@ public final class ProjectCheckSettingsSupport
                 + " is invalid. The profile name should not contain spaces, $ or %");
         }
         validateProfileFile(project, profile);
-        if (repo.getAvailableSettingsProfiles(project).stream()
+        if ("Default".equalsIgnoreCase(profile) || repo.getAvailableSettingsProfiles(project).stream()
             .anyMatch(profile::equalsIgnoreCase))
         {
             throw new IllegalArgumentException("EDT: The profile with the name " + profile
@@ -448,9 +452,14 @@ public final class ProjectCheckSettingsSupport
             throw new IllegalArgumentException("Invalid profile name '" + profile
                 + "': a profile name is a file stem in .settings, not a path; '/', '\\' and ':' are not allowed.");
         }
+        if (!project.getWorkspace().validateName(profile + ".cset", IResource.FILE).isOK())
+        {
+            throw new IllegalArgumentException("Invalid profile name '" + profile
+                + "': EDT workspace requires a valid .cset file name in .settings.");
+        }
     }
 
-    /** Refuse unavailable and active profiles before asking for destructive consent. */
+    /** Refuse unavailable, active and last inactive profiles before destructive consent. */
     public static void validateProfileDelete(ICheckRepository repo, IProject project, String profile)
     {
         if (profile == null || profile.isBlank())
@@ -458,7 +467,8 @@ public final class ProjectCheckSettingsSupport
             throw new IllegalArgumentException("profile is required for deleteProfile; use project_checks profiles.");
         }
         validateProfileFile(project, profile);
-        if (!repo.getAvailableSettingsProfiles(project).contains(profile))
+        Collection<String> available = repo.getAvailableSettingsProfiles(project);
+        if (!available.contains(profile))
         {
             throw new IllegalArgumentException("Unknown profile '" + profile
                 + "'; use project_checks profiles and choose an existing name.");
@@ -468,6 +478,18 @@ public final class ProjectCheckSettingsSupport
             throw new IllegalArgumentException("Cannot delete active profile '" + profile
                 + "'; switch to another profile with project_checks switch first.");
         }
+        if (available.size() <= 1)
+        {
+            throw lastInactiveProfileRefusal(profile);
+        }
+    }
+
+    private static IllegalStateException lastInactiveProfileRefusal(String profile)
+    {
+        return Refusals.state("Cannot delete profile '" + profile
+            + "': EDT requires more than one listed profile to delete an inactive profile. "
+            + "To remove the last saved profile, switch to it and delete it in EDT's validation preferences; "
+            + "EDT restores Default when no profiles remain.");
     }
 
     public static Map<String, Object> copyProfile(ICheckRepository repo, IProject project, String profile,
@@ -489,7 +511,19 @@ public final class ProjectCheckSettingsSupport
     {
         validateProfileDelete(repo, project, profile);
         int customized = repo.getCustomizedSettingsFromProfile(profile, project).size();
-        repo.deleteSettingsProfile(profile, project);
+        try
+        {
+            repo.deleteSettingsProfile(profile, project);
+        }
+        catch (IllegalStateException e)
+        {
+            // EDT rechecks under its lock; a concurrent profile removal can invalidate our snapshot.
+            if ("The last profile cannot be inactive".equals(e.getMessage()))
+            {
+                throw lastInactiveProfileRefusal(profile);
+            }
+            throw e;
+        }
         Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
             repo.getActiveSettingsProfile(project)));
         result.put("profile", profile);

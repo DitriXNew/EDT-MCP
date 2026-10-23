@@ -50,9 +50,10 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   settings, including check parameters, without switching profiles.
 - `deleteProfile`: require an existing, inactive `profile`. This is destructive and uses the
   destructive consent gate. Missing and active profiles, including case aliases of the active name,
-  are refused before consent; switch away
-  first to delete a user profile. EDT's own storage refusals, including for a default profile,
-  are returned as errors. The response includes `deletedProfile` and `deletedCustomizedChecks`,
+  are refused before consent; switch away first to delete a user profile. EDT also requires
+  more than one listed profile to delete an inactive profile. To remove the last saved profile,
+  switch to it and delete it in EDT's validation preferences; EDT restores Default when no profiles
+  remain. EDT's own storage refusals are returned as errors. The response includes `deletedProfile` and `deletedCustomizedChecks`,
   the number of customized checks removed. Save the original settings separately to recreate
   them; the count alone is not a restore recipe.
 
@@ -61,8 +62,10 @@ the same shape as `profiles`, plus the affected `profile`, `changed`, and a `per
 for the profile's presence or absence. Create/copy also reports `from`. New names are checked
 by EDT's own `validateProfileName`; invalid and duplicate names include EDT's English refusal.
 Every profile name, including `from`, must be a file stem directly in `.settings`; `/`, `\` and `:` are refused.
-Existing names are compared without regard to case to prevent a Windows file alias from
-overwriting another profile during creation or copying.
+EDT's workspace file-name validator also rejects platform-invalid names, including Windows device
+stems and invalid characters. Existing names and the reserved built-in `Default` are compared
+without regard to case, even when `Default` is unlisted, to prevent a Windows file alias from
+overwriting a profile during creation or copying.
 Source and target availability are checked again after consent, before the write.
 
 ```json
@@ -82,7 +85,7 @@ Source and target availability are checked again after consent, before the write
 `set` entries and the optional `list.checkIds` array accept these three forms:
 
 - A symbolic id such as `begin-transaction`.
-- The exact `checkId|contributorId` key from a list row's `uid` or a `.cset` file.
+- The exact `checkId|contributorId` identifier from a list row's `uid`.
   Use this form when several contributors register the same symbolic id; an ambiguous
   symbolic id is refused with the available pipe keys.
 - A project-local short UID such as `SU23` from `get_project_errors` or a list row's
@@ -145,8 +148,11 @@ Switches apply the target profile as stored, with no extra settings overlaid.
 ### Persistence and live markers
 
 EDT stores only deviations from defaults in `.settings/<profile>.cset`: JSON with
-`version:1` and a `settings` map keyed by `checkId|contributorId`, containing `enabled`,
-`severity`, and optional `properties`. The active profile is stored in
+`version:1` and a `settings` map keyed by the bare `checkId`, for example
+`{"empty-except-statement":{"enabled":false}}`. When check ids collide, EDT uses
+`contributorId|checkId` for the collision entry. Values contain `enabled`, `severity`, and
+optional `properties`. These file keys differ from the tool's `checkId|contributorId` identifiers.
+The active profile is stored in
 `.settings/com.e1c.g5.v8.dt.check.prefs` under `activeProfile`; choosing `Default`
 clears that preference. Preference flushing may finish asynchronously. Restoring a
 default removes its delta; an empty `.cset` file can remain.

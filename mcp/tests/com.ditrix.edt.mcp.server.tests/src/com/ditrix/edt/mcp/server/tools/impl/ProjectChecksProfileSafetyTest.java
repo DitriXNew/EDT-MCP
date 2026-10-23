@@ -17,7 +17,10 @@ import java.util.Map;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Status;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -44,6 +47,9 @@ public class ProjectChecksProfileSafetyTest
     {
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
         settings = mock(IFolder.class);
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);

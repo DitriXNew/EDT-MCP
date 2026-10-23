@@ -21,7 +21,7 @@ class ProjectChecksSelectionTest(unittest.TestCase):
     def namespace(self, rows, **overrides):
         # Loading only these AST nodes avoids importing the live stand harness.
         tree = ast.parse(SOURCE.read_text(encoding="utf-8-sig"))
-        names = {"_cheap_noncritical_check", "_check_with_markers",
+        names = {"_cheap_noncritical_check", "_check_with_markers", "_stored_check",
                  "test_set_disable_then_restore_round_trips_through_before_and_writes_the_cset"}
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         for node in functions:
@@ -51,7 +51,7 @@ class ProjectChecksSelectionTest(unittest.TestCase):
 
     @staticmethod
     def row(check_id="begin-transaction", contributor="a", **overrides):
-        row = dict(checkId=check_id, uid=check_id + "|" + contributor, shortUid="SU1",
+        row = dict(checkId=check_id, contributorId=contributor, uid=check_id + "|" + contributor, shortUid="SU1",
                    enabled=True, defaultEnabled=True, customized=False,
                    criticalDataIntegrity=False, hasDocumentation=True)
         row.update(overrides)

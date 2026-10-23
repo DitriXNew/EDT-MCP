@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectCheckSettingsSupport.Plan;
 import com.ditrix.edt.mcp.server.utils.ProjectCheckSettingsSupport;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 /** Read and change the active project's EDT validation settings through the public repository. */
@@ -170,11 +171,12 @@ public class ProjectChecksTool implements IMcpTool
         {
             if (!(e instanceof IllegalArgumentException))
             {
-                Activator.logError("project_checks failed for project '" + projectName + "'", e);
+                Refusals.log("project_checks failed for project '" + projectName + "'", e);
             }
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             return ToolResult.error("project_checks failed for project '" + projectName + "': "
-                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
-                + " Use project_checks list/profiles before retrying.").toJson();
+                + detail + (detail.endsWith(".") ? " " : ". ")
+                + "Use project_checks list/profiles before retrying.").toJson();
         }
     }
 
