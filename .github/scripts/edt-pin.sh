@@ -52,7 +52,7 @@ fi
 # ── PIN MAP (single source of truth) ──────────────────────────────────────────────────
 # channel -> the com._1c.g5.v8.dt.core build qualifier the CI base is validated against.
 case "$CHANNEL" in
-  2026.2) EDT_EXPECTED="28.0.0.v202609171902" ;; # 1C:EDT 2026.2.1 — Eclipse 4.38 / Java 25
+  2026.2) EDT_EXPECTED="28.0.0.v202610211527" ;; # 1C:EDT 2026.2.2 — Eclipse 4.38 / Java 25
   2026.1) EDT_EXPECTED="27.0.2.v202607090722" ;; # 1C:EDT 2026.1.2 — Eclipse 4.30 / Java 17
   *)
     log "::error::edt-pin.sh: no pinned EDT build for channel '$CHANNEL'. Add it to the PIN MAP in .github/scripts/edt-pin.sh."
