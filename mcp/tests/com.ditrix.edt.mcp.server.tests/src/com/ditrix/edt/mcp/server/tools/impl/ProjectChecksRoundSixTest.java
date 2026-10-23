@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.text.Normalizer;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -449,7 +450,7 @@ public class ProjectChecksRoundSixTest
     {
         Path outside = temporary.newFile("outside.cset").toPath();
         Path staged = stageSymlink(outside);
-        tool.onConsent = () -> moveLink(staged, settings.resolve("Review.cset"));
+        tool.onConsent = () -> replaceWithLink(staged, settings.resolve("Review.cset"));
         assertUnsafe(invoke("deleteProfile", "Review", null));
         assertTrue(Files.exists(outside));
         verify(repo, never()).deleteSettingsProfile(anyString(), same(project));
@@ -525,6 +526,18 @@ public class ProjectChecksRoundSixTest
         try
         {
             Files.move(from, to);
+        }
+        catch (IOException e)
+        {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static void replaceWithLink(Path from, Path to)
+    {
+        try
+        {
+            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
         }
         catch (IOException e)
         {
