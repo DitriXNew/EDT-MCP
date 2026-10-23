@@ -484,8 +484,11 @@ public final class DcsReadProjection
                 ? "no value; an appearance body has no valueless form - each key writes exactly one typed value" //$NON-NLS-1$
                 : null;
         }
-        return eachValueRefusal(values, value -> DcsSettingsWriter.typedValueRefusal(declared.defValue(),
-            value, catalogues.languages(), catalogues.namedColors()));
+        return eachValueRefusal(values, value -> holder instanceof DataCompositionAppearance
+            ? DcsSettingsWriter.typedValueRefusal(declared.defValue(),
+                value, catalogues.languages(), catalogues.namedColors())
+            : DcsSettingsWriter.outputValueRefusal(declared,
+                value, catalogues.languages(), catalogues.namedColors()));
     }
 
     /**

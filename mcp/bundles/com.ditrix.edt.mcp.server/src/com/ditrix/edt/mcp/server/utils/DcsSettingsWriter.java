@@ -3776,6 +3776,25 @@ public final class DcsSettingsWriter
     static String typedValueRefusal(Value declared, Value stored,
         DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
     {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return parameterValueRefusal(declared, stored, namedColors,
+            body -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+    }
+
+    /** The same projection and equality check, through the output parameter's actual writer. */
+    static String outputValueRefusal(DcsAvailableParameter declared, Value stored,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return parameterValueRefusal(declared.defValue(), stored, namedColors,
+            body -> outputParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+    }
+
+    /** Holder-specific writers share the stored-value projection and losslessness checks. */
+    private static String parameterValueRefusal(Value declared, Value stored,
+        StyleValueBuilder.NamedColorResolver namedColors,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
         if (stored == null) return "the stored value is null"; //$NON-NLS-1$
         if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
         if (declared instanceof FontValue)
@@ -3784,8 +3803,8 @@ public final class DcsSettingsWriter
         }
         if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof ColorRef)
         {
-            return colorReferenceRefusal(declared, (ColorRef)((ColorValue)stored).getValue(), languages,
-                namedColors);
+            return colorReferenceRefusal((ColorRef)((ColorValue)stored).getValue(), namedColors,
+                writer);
         }
         if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof AutoColor)
         {
@@ -3799,9 +3818,7 @@ public final class DcsSettingsWriter
                 ? "the color writer needs auto, a ColorDef or a ColorRef with a referent" //$NON-NLS-1$
                 : untypedProjection(stored).refusal();
         }
-        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
-        return rebuildRefusal(stored, bodies,
-            body -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+        return withNamedColors(namedColors, () -> rebuildRefusal(stored, bodies, writer));
     }
 
     /**
@@ -3829,8 +3846,9 @@ public final class DcsSettingsWriter
      * a catalogue proxy, a proxy with a bare-name URI or a resolved object depending on how it was
      * loaded - one stored value under three object identities.
      */
-    private static String colorReferenceRefusal(Value declared, ColorRef stored,
-        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
+    private static String colorReferenceRefusal(ColorRef stored,
+        StyleValueBuilder.NamedColorResolver namedColors,
+        java.util.function.Function<JsonElement, ValueResult> writer)
     {
         String name = AppearanceValueBuilder.colorReferenceName(stored);
         if (name == null)
@@ -3849,9 +3867,7 @@ public final class DcsSettingsWriter
         named.addProperty(member, name.substring(dot + 1));
         JsonObject body = new JsonObject();
         body.add("color", named); //$NON-NLS-1$
-        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
-        ValueResult rebuilt = withNamedColors(namedColors,
-            () -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+        ValueResult rebuilt = withNamedColors(namedColors, () -> writer.apply(body));
         if (rebuilt.error != null) return "the writer refuses its body: " + rebuilt.error; //$NON-NLS-1$
         Color color = rebuilt.value instanceof ColorValue ? ((ColorValue)rebuilt.value).getValue() : null;
         String restated = color instanceof ColorRef
@@ -5399,7 +5415,7 @@ public final class DcsSettingsWriter
                         return ValueResult.failure("Number ValueSpec at '" + path //$NON-NLS-1$
                             + "' needs a JSON number in 'value'."); //$NON-NLS-1$
                     }
-                    return ValueResult.success(numberValue(raw));
+                    return numberValue(raw, path);
                 case "boolean": //$NON-NLS-1$
                     if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isBoolean())
                     {
@@ -5448,22 +5464,43 @@ public final class DcsSettingsWriter
     /**
      * All JSON number write paths meet here. Like JsonUtils.parseExactDecimalLong, use exact
      * decimal arithmetic to remove an integral transport Double's fraction; retain real fractions
-     * verbatim. BigDecimal also keeps values outside the long range exact.
+     * verbatim. Bound integer digits before setScale can expand a compact exponent; use the
+     * platform's widest Number precision, shared with TypeDescription validation.
      */
-    private static NumberValue numberValue(JsonElement raw)
+    private static ValueResult numberValue(JsonElement raw, String path)
     {
-        BigDecimal decimal = raw.getAsBigDecimal();
+        BigDecimal decimal;
         try
+        {
+            decimal = raw.getAsBigDecimal();
+        }
+        catch (NumberFormatException e)
+        {
+            // Newer Gson versions also reject extreme scales during parsing. Keep that rejection
+            // on the numeric error path, rather than the generic Date ValueSpec catch.
+            return numberValueFailure(raw, path);
+        }
+        long integerDigits = (long)decimal.precision() - decimal.scale();
+        if (decimal.signum() != 0 && integerDigits > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
+        {
+            return numberValueFailure(raw, path);
+        }
+        // Inspect integrality without growing a power of ten for a tiny fractional exponent.
+        if (decimal.scale() <= 0 || decimal.stripTrailingZeros().scale() <= 0)
         {
             decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
         }
-        catch (ArithmeticException e)
-        {
-            // A real fraction keeps its received decimal digits and scale.
-        }
         NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
         number.setValue(decimal);
-        return number;
+        return ValueResult.success(number);
+    }
+
+    private static ValueResult numberValueFailure(JsonElement raw, String path)
+    {
+        return ValueResult.failure("Number ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "' cannot be stored as a 1C Number. Pass a finite JSON number with at most " //$NON-NLS-1$
+            + MetadataTypeBuilder.MAX_NUMBER_PRECISION
+            + " integer digits and a supported decimal scale."); //$NON-NLS-1$
     }
 
     /**

@@ -232,7 +232,7 @@ public final class MetadataTypeBuilder
      * the narrower per-context rule to EDT`s own validator, which surfaces it as a project error.
      */
     private static final int MAX_STRING_LENGTH = 1024;
-    private static final int MAX_NUMBER_PRECISION = 38;
+    static final int MAX_NUMBER_PRECISION = 38;
 
     /**
      * The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. A failure
