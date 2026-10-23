@@ -257,8 +257,8 @@ public class ProjectChecksTool implements IMcpTool
                 refreshWarning = refreshSettings(project);
                 break;
             case "deleteProfile":
-                String deletedProfile = JsonUtils.extractStringArgument(params, "profile");
-                ProjectCheckSettingsSupport.validateProfileDelete(repo, project, deletedProfile);
+                String deletedProfile = ProjectCheckSettingsSupport.validateProfileDelete(repo, project,
+                    JsonUtils.extractStringArgument(params, "profile"));
                 int customized = repo.getCustomizedSettingsFromProfile(deletedProfile, project).size();
                 ConsentPreview deletePreview = new ConsentPreview("Delete check profile of " + project.getName(),
                     "Delete '" + deletedProfile + "' with " + customized
@@ -269,7 +269,7 @@ public class ProjectChecksTool implements IMcpTool
                 {
                     return deleteDenied;
                 }
-                data = ProjectCheckSettingsSupport.deleteProfile(repo, project, deletedProfile);
+                data = ProjectCheckSettingsSupport.deleteProfile(repo, project, deletedProfile, active);
                 refreshWarning = refreshSettings(project);
                 break;
             default:

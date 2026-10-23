@@ -23,6 +23,7 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.After;
 
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
@@ -33,6 +34,8 @@ import com.google.gson.JsonParser;
 /** Names are file stems even when EDT accepts them or lists an unsafe on-disk name. */
 public class ProjectChecksProfileSafetyTest
 {
+    private ProjectChecksTestFiles temporary;
+
     private static final List<String> UNSAFE_NAMES = List.of("../x", "a/b", "a\\b", "a\\\\b", "x:y", "a/../b");
 
     private ICheckRepository repo;
@@ -43,8 +46,9 @@ public class ProjectChecksProfileSafetyTest
     private final List<String> available = new ArrayList<>();
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         IWorkspace workspace = mock(IWorkspace.class);
@@ -54,9 +58,7 @@ public class ProjectChecksProfileSafetyTest
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         when(project.getFolder(".settings")).thenReturn(settings);
-        IFile directChild = mock(IFile.class);
-        when(directChild.getParent()).thenReturn(settings);
-        when(settings.getFile(anyString())).thenReturn(directChild);
+        ProjectChecksTestFiles.locate(settings, temporary);
         // The explicit separator guard is required even when canonicalization returns a child.
         when(repo.validateProfileName(anyString())).thenReturn(true);
         active = "P";
@@ -71,6 +73,15 @@ public class ProjectChecksProfileSafetyTest
         doAnswer(call -> { active = call.getArgument(0); return null; })
             .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
         tool = new TestTool();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        if (temporary != null)
+        {
+            temporary.close();
+        }
     }
 
     @Test

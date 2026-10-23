@@ -64,8 +64,9 @@ by EDT's own `validateProfileName`; invalid and duplicate names include EDT's En
 Every profile name, including `from`, must be a file stem directly in `.settings`; `/`, `\` and `:` are refused.
 EDT's workspace file-name validator also rejects platform-invalid names, including Windows device
 stems and invalid characters. Existing names and the reserved built-in `Default` are compared
-without regard to case, even when `Default` is unlisted, to prevent a Windows file alias from
-overwriting a profile during creation or copying.
+after Unicode NFC normalization and without regard to case, even when `Default` is unlisted,
+to prevent aliases from overwriting a profile during creation or copying. Listed names retain
+their original spelling in repository calls; implicit `Default` aliases use `Default`.
 Source and target availability are checked again after consent, before the write.
 
 ```json
@@ -79,6 +80,13 @@ Source and target availability are checked again after consent, before the write
 ```json
 {"projectName":"TestConfiguration","action":"deleteProfile","profile":"CopiedChecks"}
 ```
+
+### Concurrency and file safety
+
+If the active profile changed while consent was pending, the operation is refused; re-run
+the preview. Concurrent MCP profile changes for the same project are serialized after consent.
+Create, copy, and delete refuse links and junctions in `.settings` and require each `.cset`
+target to have the real `.settings` directory as its parent.
 
 ### Check identifiers and filters
 

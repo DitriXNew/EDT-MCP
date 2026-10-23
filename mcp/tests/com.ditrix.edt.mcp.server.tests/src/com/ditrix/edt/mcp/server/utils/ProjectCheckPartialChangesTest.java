@@ -35,6 +35,7 @@ public class ProjectCheckPartialChangesTest
     {
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
+        when(repo.getActiveSettingsProfile(project)).thenReturn("Default");
         doReturn(Map.of(uid, mock(ICheckDescription.class))).when(repo).getChecksWithDescriptions();
     }
 

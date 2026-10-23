@@ -14,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -26,6 +25,7 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.After;
 import org.osgi.framework.FrameworkUtil;
 
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -39,6 +39,8 @@ import com.google.gson.JsonParser;
 /** Round-five platform-name, implicit-Default and last-inactive-profile regressions. */
 public class ProjectChecksRoundFiveTest
 {
+    private ProjectChecksTestFiles temporary;
+
     private ICheckRepository repo;
     private IProject project;
     private IWorkspace workspace;
@@ -47,20 +49,19 @@ public class ProjectChecksRoundFiveTest
     private final List<String> available = new ArrayList<>();
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         workspace = mock(IWorkspace.class);
         IFolder folder = mock(IFolder.class);
-        IFile file = mock(IFile.class);
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.validateName(anyString(), eq(IResource.FILE))).thenReturn(Status.OK_STATUS);
         when(project.getFolder(".settings")).thenReturn(folder);
-        when(folder.getFile(anyString())).thenReturn(file);
-        when(file.getParent()).thenReturn(folder);
+        ProjectChecksTestFiles.locate(folder, temporary);
         when(repo.validateProfileName(anyString())).thenReturn(true);
         active = "P";
         available.clear();
@@ -74,6 +75,15 @@ public class ProjectChecksRoundFiveTest
         doAnswer(call -> { active = call.getArgument(0); return null; })
             .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
         tool = new TestTool();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        if (temporary != null)
+        {
+            temporary.close();
+        }
     }
 
     @Test
@@ -125,15 +135,15 @@ public class ProjectChecksRoundFiveTest
     }
 
     @Test
-    public void switchRefusesLowercaseImplicitDefaultBeforeConsent()
+    public void switchAcceptsLowercaseImplicitDefault()
     {
-        refuseSwitchAlias("default");
+        acceptSwitchAlias("default");
     }
 
     @Test
-    public void switchRefusesUppercaseImplicitDefaultBeforeConsent()
+    public void switchAcceptsUppercaseImplicitDefault()
     {
-        refuseSwitchAlias("DEFAULT");
+        acceptSwitchAlias("DEFAULT");
     }
 
     @Test
@@ -226,12 +236,15 @@ public class ProjectChecksRoundFiveTest
         assertNoWritesOrConsent();
     }
 
-    private void refuseSwitchAlias(String name)
+    private void acceptSwitchAlias(String name)
     {
         assertEquals(List.of("P"), available);
-        String text = error(invoke("switch", name));
-        assertTrue(text, text.contains("Unknown profile '" + name + "'"));
-        assertNoWritesOrConsent();
+        String text = invoke("switch", name);
+        JsonObject result = JsonParser.parseString(text).getAsJsonObject();
+        assertTrue(text, result.get("success").getAsBoolean());
+        assertEquals("Default", result.get("profile").getAsString());
+        assertEquals(1, tool.consents);
+        verify(repo).setActiveSettingsProfile("Default", List.of(), project);
     }
 
     private static void assertLastProfileRefusal(String text)

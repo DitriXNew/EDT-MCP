@@ -333,7 +333,7 @@ public class ProjectCheckSettingsSupportTest
     {
         Map<String, Object> result = ProjectCheckSettingsSupport.switchProfile(repo, project, "Default", "Review");
         verify(repo).setActiveSettingsProfile("Review", List.of(), project);
-        verify(repo).getActiveSettingsProfile(project);
+        verify(repo, times(2)).getActiveSettingsProfile(project);
         assertEquals(Map.of("activeProfile", "Default"), result.get("before"));
         assertEquals(Map.of("activeProfile", "Default"), result.get("after"));
         assertEquals(false, result.get("persisted"));

@@ -5,6 +5,11 @@
  */
 package com.ditrix.edt.mcp.server.utils;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -15,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IFolder;
@@ -40,6 +46,35 @@ public final class ProjectCheckSettingsSupport
 
     public static final String MARKERS_REFRESH = "EDT removed/retagged markers of the changed checks and "
         + "re-runs enabled ones in the background; poll get_project_errors";
+
+    // Equal project handles share a monitor for the server lifetime, including queued callers.
+    private static final Map<IProject, Object> PROFILE_MUTATION_LOCKS = new ConcurrentHashMap<>();
+
+    private static Object profileMutationLock(IProject project)
+    {
+        return PROFILE_MUTATION_LOCKS.computeIfAbsent(project, key -> new Object());
+    }
+
+    private static boolean sameProfile(String left, String right)
+    {
+        return left != null && right != null && Normalizer.normalize(left, Normalizer.Form.NFC)
+            .equalsIgnoreCase(Normalizer.normalize(right, Normalizer.Form.NFC));
+    }
+
+    private static String listedProfile(Collection<String> available, String requested)
+    {
+        return available.stream().filter(name -> sameProfile(name, requested)).findFirst().orElse(null);
+    }
+
+    private static void requirePlannedActiveProfile(ICheckRepository repo, IProject project, String planned)
+    {
+        String active = repo.getActiveSettingsProfile(project);
+        if (!sameProfile(planned, active))
+        {
+            throw new IllegalArgumentException("The active profile changed from '" + planned + "' to '"
+                + active + "'; re-run the preview with project_checks before applying changes.");
+        }
+    }
 
     private ProjectCheckSettingsSupport()
     {
@@ -269,46 +304,50 @@ public final class ProjectCheckSettingsSupport
     /** Fresh settings copies, one persistence/listener call, then an independent read-back. */
     public static Map<String, Object> applyAll(ICheckRepository repo, IProject project, Plan plan)
     {
-        List<ICheckSettings> settings = new ArrayList<>();
-        for (Change change : plan.changes())
+        synchronized (profileMutationLock(project))
         {
-            ICheckSettings copy = repo.getSettings(change.uid(), project);
-            if (change.enabled() != null)
+            requirePlannedActiveProfile(repo, project, plan.profile());
+            List<ICheckSettings> settings = new ArrayList<>();
+            for (Change change : plan.changes())
             {
-                copy.setEnabled(change.enabled());
+                ICheckSettings copy = repo.getSettings(change.uid(), project);
+                if (change.enabled() != null)
+                {
+                    copy.setEnabled(change.enabled());
+                }
+                if (change.severity() != null)
+                {
+                    copy.setSeverity(change.severity());
+                }
+                settings.add(copy);
             }
-            if (change.severity() != null)
+            repo.applyChanges(settings, project);
+            List<State> after = plan.changes().stream().map(change -> snapshot(repo, project, change.uid())).toList();
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("before", plan.beforeRows());
+            result.put("after", after.stream().map(State::row).toList());
+            result.put("changed", plan.changed());
+            boolean persisted = true;
+            for (int i = 0; i < plan.changes().size(); i++)
             {
-                copy.setSeverity(change.severity());
+                Change change = plan.changes().get(i);
+                State actual = after.get(i);
+                persisted &= (change.enabled() == null || change.enabled() == actual.enabled())
+                    && (change.severity() == null || change.severity() == actual.severity());
             }
-            settings.add(copy);
+            result.put("persisted", persisted);
+            result.put("markersRefresh", MARKERS_REFRESH);
+            List<String> criticalDisabled = after.stream()
+                .filter(state -> state.criticalDataIntegrity() && !state.enabled())
+                .map(state -> key(state.uid())).toList();
+            if (!criticalDisabled.isEmpty())
+            {
+                result.put("criticalDataIntegrityWarning", "EDT will now load the configuration without these "
+                    + "critical data integrity checks: " + String.join(", ", criticalDisabled)
+                    + ". Restore their before values when finished.");
+            }
+            return result;
         }
-        repo.applyChanges(settings, project);
-        List<State> after = plan.changes().stream().map(change -> snapshot(repo, project, change.uid())).toList();
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("before", plan.beforeRows());
-        result.put("after", after.stream().map(State::row).toList());
-        result.put("changed", plan.changed());
-        boolean persisted = true;
-        for (int i = 0; i < plan.changes().size(); i++)
-        {
-            Change change = plan.changes().get(i);
-            State actual = after.get(i);
-            persisted &= (change.enabled() == null || change.enabled() == actual.enabled())
-                && (change.severity() == null || change.severity() == actual.severity());
-        }
-        result.put("persisted", persisted);
-        result.put("markersRefresh", MARKERS_REFRESH);
-        List<String> criticalDisabled = after.stream()
-            .filter(state -> state.criticalDataIntegrity() && !state.enabled())
-            .map(state -> key(state.uid())).toList();
-        if (!criticalDisabled.isEmpty())
-        {
-            result.put("criticalDataIntegrityWarning", "EDT will now load the configuration without these "
-                + "critical data integrity checks: " + String.join(", ", criticalDisabled)
-                + ". Restore their before values when finished.");
-        }
-        return result;
     }
 
     public static Map<String, Object> list(ICheckRepository repo, IProject project, String profile,
@@ -399,7 +438,7 @@ public final class ProjectCheckSettingsSupport
     public static Map<String, Object> profiles(ICheckRepository repo, IProject project, String active)
     {
         List<Map<String, Object>> profiles = repo.getAvailableSettingsProfiles(project).stream().sorted()
-            .map(name -> Map.<String, Object>of("name", name, "active", name.equals(active),
+            .map(name -> Map.<String, Object>of("name", name, "active", sameProfile(name, active),
                 "customizedChecks", repo.getCustomizedSettingsFromProfile(name, project).size())).toList();
         return Map.of("activeProfile", active, "profiles", profiles);
     }
@@ -421,8 +460,8 @@ public final class ProjectCheckSettingsSupport
                 + " is invalid. The profile name should not contain spaces, $ or %");
         }
         validateProfileFile(project, profile);
-        if ("Default".equalsIgnoreCase(profile) || repo.getAvailableSettingsProfiles(project).stream()
-            .anyMatch(profile::equalsIgnoreCase))
+        if (sameProfile("Default", profile)
+            || listedProfile(repo.getAvailableSettingsProfiles(project), profile) != null)
         {
             throw new IllegalArgumentException("EDT: The profile with the name " + profile
                 + " already exists. Please enter another name");
@@ -434,10 +473,15 @@ public final class ProjectCheckSettingsSupport
                 + "use project_checks profiles and choose an existing source.");
         }
         validateProfileFile(project, source);
-        if ((requireFrom || from != null) && !repo.getAvailableSettingsProfiles(project).contains(source))
+        if (requireFrom || from != null)
         {
-            throw new IllegalArgumentException("Unknown from profile '" + source
-                + "'; use project_checks profiles and choose an existing source.");
+            String listed = listedProfile(repo.getAvailableSettingsProfiles(project), source);
+            if (listed == null)
+            {
+                throw new IllegalArgumentException("Unknown from profile '" + source
+                    + "'; use project_checks profiles and choose an existing source.");
+            }
+            return listed;
         }
         return source;
     }
@@ -459,8 +503,53 @@ public final class ProjectCheckSettingsSupport
         }
     }
 
+    /** Resolve physical paths immediately before calling EDT, including dangling links. */
+    private static void validateProfileTarget(IProject project, String profile)
+    {
+        IFolder settings = project.getFolder(".settings");
+        var folderLocation = settings.getLocation();
+        var targetLocation = settings.getFile(profile + ".cset").getLocation();
+        if (folderLocation == null || targetLocation == null)
+        {
+            throw unsafeProfileTarget(profile);
+        }
+        validateProfileTarget(folderLocation.toFile().toPath(), targetLocation.toFile().toPath(), profile);
+    }
+
+    static void validateProfileTarget(Path settings, Path target, String profile)
+    {
+        try
+        {
+            Path realSettings = settings.toRealPath();
+            // isSymbolicLink always examines the link itself (NOFOLLOW_LINKS), even if dangling.
+            if (Files.isSymbolicLink(target))
+            {
+                throw unsafeProfileTarget(profile);
+            }
+            boolean exists = Files.exists(target, LinkOption.NOFOLLOW_LINKS);
+            Path realParent = exists ? target.toRealPath().getParent() : target.getParent().toRealPath();
+            if (!realSettings.equals(realParent)
+                || (exists && !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)))
+            {
+                throw unsafeProfileTarget(profile);
+            }
+        }
+        catch (IOException | SecurityException e)
+        {
+            throw unsafeProfileTarget(profile);
+        }
+    }
+
+    private static IllegalArgumentException unsafeProfileTarget(String profile)
+    {
+        return new IllegalArgumentException("Cannot safely access profile '" + profile
+            + "': links and junctions in .settings are refused; the .cset must have the real .settings "
+            + "directory as its parent. Remove the link or restore the local .settings directory, "
+            + "then re-run the preview.");
+    }
+
     /** Refuse unavailable, active and last inactive profiles before destructive consent. */
-    public static void validateProfileDelete(ICheckRepository repo, IProject project, String profile)
+    public static String validateProfileDelete(ICheckRepository repo, IProject project, String profile)
     {
         if (profile == null || profile.isBlank())
         {
@@ -468,12 +557,13 @@ public final class ProjectCheckSettingsSupport
         }
         validateProfileFile(project, profile);
         Collection<String> available = repo.getAvailableSettingsProfiles(project);
-        if (!available.contains(profile))
+        String listed = listedProfile(available, profile);
+        if (listed == null)
         {
             throw new IllegalArgumentException("Unknown profile '" + profile
                 + "'; use project_checks profiles and choose an existing name.");
         }
-        if (profile.equalsIgnoreCase(repo.getActiveSettingsProfile(project)))
+        if (sameProfile(profile, repo.getActiveSettingsProfile(project)))
         {
             throw new IllegalArgumentException("Cannot delete active profile '" + profile
                 + "'; switch to another profile with project_checks switch first.");
@@ -482,6 +572,7 @@ public final class ProjectCheckSettingsSupport
         {
             throw lastInactiveProfileRefusal(profile);
         }
+        return listed;
     }
 
     private static IllegalStateException lastInactiveProfileRefusal(String profile)
@@ -495,72 +586,98 @@ public final class ProjectCheckSettingsSupport
     public static Map<String, Object> copyProfile(ICheckRepository repo, IProject project, String profile,
         String source, boolean implicitDefault)
     {
-        // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
-        validateProfileCopy(repo, project, profile, implicitDefault ? null : source, !implicitDefault);
-        repo.duplicateSettingsProfile(source, profile, project);
-        Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
-            repo.getActiveSettingsProfile(project)));
-        result.put("profile", profile);
-        result.put("from", source);
-        result.put("changed", true);
-        result.put("persisted", repo.getAvailableSettingsProfiles(project).contains(profile));
-        return result;
+        synchronized (profileMutationLock(project))
+        {
+            // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
+            String listedSource = validateProfileCopy(repo, project, profile,
+                implicitDefault ? null : source, !implicitDefault);
+            validateProfileTarget(project, profile);
+            repo.duplicateSettingsProfile(listedSource, profile, project);
+            Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
+                repo.getActiveSettingsProfile(project)));
+            result.put("profile", profile);
+            result.put("from", listedSource);
+            result.put("changed", true);
+            result.put("persisted", listedProfile(repo.getAvailableSettingsProfiles(project), profile) != null);
+            return result;
+        }
     }
 
-    public static Map<String, Object> deleteProfile(ICheckRepository repo, IProject project, String profile)
+    public static Map<String, Object> deleteProfile(ICheckRepository repo, IProject project, String profile,
+        String plannedActive)
     {
-        validateProfileDelete(repo, project, profile);
-        int customized = repo.getCustomizedSettingsFromProfile(profile, project).size();
-        try
+        synchronized (profileMutationLock(project))
         {
-            repo.deleteSettingsProfile(profile, project);
-        }
-        catch (IllegalStateException e)
-        {
-            // EDT rechecks under its lock; a concurrent profile removal can invalidate our snapshot.
-            if ("The last profile cannot be inactive".equals(e.getMessage()))
+            requirePlannedActiveProfile(repo, project, plannedActive);
+            String listed = validateProfileDelete(repo, project, profile);
+            int customized = repo.getCustomizedSettingsFromProfile(listed, project).size();
+            try
             {
-                throw lastInactiveProfileRefusal(profile);
+                validateProfileTarget(project, listed);
+                repo.deleteSettingsProfile(listed, project);
             }
-            throw e;
+            catch (IllegalStateException e)
+            {
+                // EDT rechecks under its lock; UI edits can still invalidate our snapshot.
+                if ("The last profile cannot be inactive".equals(e.getMessage()))
+                {
+                    throw lastInactiveProfileRefusal(listed);
+                }
+                throw e;
+            }
+            Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
+                repo.getActiveSettingsProfile(project)));
+            result.put("profile", listed);
+            result.put("deletedProfile", listed);
+            result.put("deletedCustomizedChecks", customized);
+            result.put("changed", true);
+            result.put("persisted", listedProfile(repo.getAvailableSettingsProfiles(project), listed) == null);
+            return result;
         }
-        Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
-            repo.getActiveSettingsProfile(project)));
-        result.put("profile", profile);
-        result.put("deletedProfile", profile);
-        result.put("deletedCustomizedChecks", customized);
-        result.put("changed", true);
-        result.put("persisted", !repo.getAvailableSettingsProfiles(project).contains(profile));
-        return result;
     }
 
     /** Default is implicit; every other switch target must already be available. */
-    public static boolean validateSwitch(ICheckRepository repo, IProject project, String active, String profile)
+    private static String switchTarget(ICheckRepository repo, IProject project, String profile)
     {
         if (profile == null || profile.isBlank())
         {
             throw new IllegalArgumentException("profile is required for switch; use project_checks profiles.");
         }
         validateProfileFile(project, profile);
-        if (!"Default".equals(profile) && !repo.getAvailableSettingsProfiles(project).contains(profile))
+        String listed = listedProfile(repo.getAvailableSettingsProfiles(project), profile);
+        if (listed != null)
         {
-            throw new IllegalArgumentException("Unknown profile '" + profile
-                + "'; use project_checks profiles and choose an existing name.");
+            return listed;
         }
-        return !profile.equals(active);
+        if (sameProfile("Default", profile))
+        {
+            return "Default";
+        }
+        throw new IllegalArgumentException("Unknown profile '" + profile
+            + "'; use project_checks profiles and choose an existing name.");
+    }
+
+    public static boolean validateSwitch(ICheckRepository repo, IProject project, String active, String profile)
+    {
+        return !sameProfile(switchTarget(repo, project, profile), active);
     }
 
     public static Map<String, Object> switchProfile(ICheckRepository repo, IProject project,
         String active, String profile)
     {
-        // Revalidate at the write boundary as well as before consent.
-        if (!validateSwitch(repo, project, active, profile))
+        synchronized (profileMutationLock(project))
         {
-            return Map.of("changed", false);
+            requirePlannedActiveProfile(repo, project, active);
+            // Revalidate at the write boundary as well as before consent.
+            String target = switchTarget(repo, project, profile);
+            if (sameProfile(target, active))
+            {
+                return Map.of("changed", false);
+            }
+            repo.setActiveSettingsProfile(target, Collections.emptyList(), project);
+            String after = repo.getActiveSettingsProfile(project);
+            return Map.of("before", Map.of("activeProfile", active), "after", Map.of("activeProfile", after),
+                "changed", true, "persisted", sameProfile(target, after), "markersRefresh", MARKERS_REFRESH);
         }
-        repo.setActiveSettingsProfile(profile, Collections.emptyList(), project);
-        String after = repo.getActiveSettingsProfile(project);
-        return Map.of("before", Map.of("activeProfile", active), "after", Map.of("activeProfile", after),
-            "changed", true, "persisted", profile.equals(after), "markersRefresh", MARKERS_REFRESH);
     }
 }

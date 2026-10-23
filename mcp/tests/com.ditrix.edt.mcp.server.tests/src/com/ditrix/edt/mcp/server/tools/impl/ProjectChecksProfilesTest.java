@@ -14,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -23,6 +22,7 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.After;
 
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -38,6 +38,8 @@ import com.google.gson.JsonParser;
 /** Profile actions exercise the real execute boundary and the existing consent seam. */
 public class ProjectChecksProfilesTest
 {
+    private ProjectChecksTestFiles temporary;
+
     private ICheckRepository repo;
     private IProject project;
     private IFolder folder;
@@ -46,8 +48,9 @@ public class ProjectChecksProfilesTest
     private final Map<String, Map<CheckUid, ICheckSettings>> profiles = new LinkedHashMap<>();
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
+        temporary = new ProjectChecksTestFiles();
         repo = mock(ICheckRepository.class);
         project = mock(IProject.class);
         IWorkspace workspace = mock(IWorkspace.class);
@@ -65,9 +68,7 @@ public class ProjectChecksProfilesTest
         when(project.getName()).thenReturn("TestConfiguration");
         when(project.isOpen()).thenReturn(true);
         when(project.getFolder(".settings")).thenReturn(folder);
-        IFile profileFile = mock(IFile.class);
-        when(folder.getFile(anyString())).thenReturn(profileFile);
-        when(profileFile.getParent()).thenReturn(folder);
+        ProjectChecksTestFiles.locate(folder, temporary);
         when(repo.getActiveSettingsProfile(project)).thenAnswer(call -> active);
         when(repo.getAvailableSettingsProfiles(project)).thenAnswer(call -> List.copyOf(profiles.keySet()));
         when(repo.getCustomizedSettingsFromProfile(anyString(), same(project)))
@@ -80,6 +81,15 @@ public class ProjectChecksProfilesTest
         doAnswer(call -> { profiles.remove(call.getArgument(0)); return null; })
             .when(repo).deleteSettingsProfile(anyString(), same(project));
         tool = new TestTool();
+    }
+
+    @After
+    public void tearDown() throws Exception
+    {
+        if (temporary != null)
+        {
+            temporary.close();
+        }
     }
 
     @Test
@@ -294,7 +304,8 @@ public class ProjectChecksProfilesTest
     {
         tool.onConsent = () -> active = "Review";
         String message = error(invoke("deleteProfile", "Review", null));
-        assertTrue(message, message.contains("Cannot delete active profile 'Review'"));
+        assertTrue(message, message.contains("active profile changed"));
+        assertTrue(message, message.contains("re-run the preview"));
         assertEquals(1, tool.previews.size());
         verifyNoWrites();
     }
