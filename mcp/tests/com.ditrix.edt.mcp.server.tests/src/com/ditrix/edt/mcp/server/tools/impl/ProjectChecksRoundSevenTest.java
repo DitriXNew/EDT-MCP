@@ -87,7 +87,7 @@ public class ProjectChecksRoundSevenTest
             persist(call.getArgument(0));
             return null;
         }).when(repo).applyChanges(anyCollection(), same(project));
-        doAnswer(call -> { available.add(call.getArgument(1)); return null; })
+        doAnswer(call -> { recordCopy(call.getArgument(0), call.getArgument(1)); return null; })
             .when(repo).duplicateSettingsProfile(anyString(), anyString(), same(project));
         doAnswer(call -> { available.remove(call.getArgument(0)); customized.clear(); return null; })
             .when(repo).deleteSettingsProfile(anyString(), same(project));
@@ -271,7 +271,8 @@ public class ProjectChecksRoundSevenTest
     public void deleteReportsSymlinkReplacementDuringWrite() throws Exception
     {
         deleteReplacesTarget(mockTarget("Review", true, settings.resolve("local.cset")));
-        assertReplaced(invoke("deleteProfile", "Review"));
+        String message = error(invoke("deleteProfile", "Review"));
+        assertTrue(message, message.contains("was recreated during the write"));
         verify(repo).deleteSettingsProfile("Review", project);
     }
 
@@ -286,7 +287,8 @@ public class ProjectChecksRoundSevenTest
     public void deleteReportsRealParentReplacementDuringWrite() throws Exception
     {
         deleteReplacesTarget(mockTarget("Review", false, temporary.newFile("outside.cset").toPath()));
-        assertReplaced(invoke("deleteProfile", "Review"));
+        String message = error(invoke("deleteProfile", "Review"));
+        assertTrue(message, message.contains("was recreated during the write"));
     }
 
     @Test
@@ -308,10 +310,18 @@ public class ProjectChecksRoundSevenTest
         assertTrue(ok(invoke("copyProfile", "New")).get("persisted").getAsBoolean());
     }
 
+    private void recordCopy(String source, String target)
+    {
+        Map<CheckUid, ICheckSettings> copied = new LinkedHashMap<>(
+            repo.getCustomizedSettingsFromProfile(source, project));
+        when(repo.getCustomizedSettingsFromProfile(target, project)).thenReturn(copied);
+        available.add(target);
+    }
+
     private void duplicateReplacesTarget(Runnable replacement)
     {
         doAnswer(call -> {
-            available.add(call.getArgument(1));
+            recordCopy(call.getArgument(0), call.getArgument(1));
             replacement.run();
             return null;
         }).when(repo).duplicateSettingsProfile(anyString(), anyString(), same(project));

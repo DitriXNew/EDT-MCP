@@ -112,7 +112,7 @@ public class ProjectChecksRoundTwoTest
     }
 
     @Test
-    public void switchReportsTheReadBackProfileEvenWhenItDiffersFromTheTarget()
+    public void switchReportsTheTargetAndRefusesADifferentReadBackProfile()
     {
         JsonObject result = ok(tool.execute(Map.of("projectName", "TestConfiguration", "action", "switch",
             "profile", "Review")));
@@ -121,10 +121,10 @@ public class ProjectChecksRoundTwoTest
         active.set("Default");
         doAnswer(call -> { active.set("ReadBack"); return null; })
             .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
-        result = ok(tool.execute(Map.of("projectName", "TestConfiguration", "action", "switch",
+        String message = error(tool.execute(Map.of("projectName", "TestConfiguration", "action", "switch",
             "profile", "Review")));
-        assertEquals("ReadBack", result.get("profile").getAsString());
-        assertFalse(result.get("persisted").getAsBoolean());
+        assertTrue(message, message.contains("planned profile 'Review'"));
+        assertTrue(message, message.contains("actually active profile 'ReadBack'"));
     }
 
     @Test

@@ -333,12 +333,13 @@ public class ProjectCheckSettingsSupportTest
     @Test
     public void testSwitchUsesAnEmptyOverlayAndReadsBackTheActiveProfile()
     {
+        when(repo.getActiveSettingsProfile(project)).thenReturn("Default", "Review");
         Map<String, Object> result = ProjectCheckSettingsSupport.switchProfile(repo, project, "Default", "Review");
         verify(repo).setActiveSettingsProfile("Review", List.of(), project);
         verify(repo, times(2)).getActiveSettingsProfile(project);
         assertEquals(Map.of("activeProfile", "Default"), result.get("before"));
-        assertEquals(Map.of("activeProfile", "Default"), result.get("after"));
-        assertEquals(false, result.get("persisted"));
+        assertEquals(Map.of("activeProfile", "Review"), result.get("after"));
+        assertEquals(true, result.get("persisted"));
     }
 
     private Plan disablePlan()

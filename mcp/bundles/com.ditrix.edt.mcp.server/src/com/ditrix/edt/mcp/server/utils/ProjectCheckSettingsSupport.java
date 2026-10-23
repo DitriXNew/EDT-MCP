@@ -473,6 +473,7 @@ public final class ProjectCheckSettingsSupport
                 + " is invalid. The profile name should not contain spaces, $ or %");
         }
         validateProfileFile(project, profile);
+        requireAbsentProfileTarget(project, profile);
         if (sameProfile("Default", profile)
             || listedProfile(repo.getAvailableSettingsProfiles(project), profile) != null)
         {
@@ -521,12 +522,36 @@ public final class ProjectCheckSettingsSupport
     {
         IFolder settings = project.getFolder(".settings");
         var folderLocation = settings.getLocation();
-        var targetLocation = settings.getFile(profile + ".cset").getLocation();
-        if (folderLocation == null || targetLocation == null)
+        if (folderLocation == null)
         {
             throw unsafeProfileTarget(profile);
         }
-        return validateProfileTarget(folderLocation.toFile().toPath(), targetLocation.toFile().toPath(), profile);
+        return validateProfileTarget(folderLocation.toFile().toPath(), profileTargetPath(project, profile), profile);
+    }
+
+    private static Path profileTargetPath(IProject project, String profile)
+    {
+        var location = project.getFolder(".settings").getFile(profile + ".cset").getLocation();
+        if (location == null)
+        {
+            throw unsafeProfileTarget(profile);
+        }
+        return location.toFile().toPath();
+    }
+
+    private static boolean profileTargetExists(IProject project, String profile)
+    {
+        return Files.exists(profileTargetPath(project, profile), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    private static void requireAbsentProfileTarget(IProject project, String profile)
+    {
+        if (profileTargetExists(project, profile))
+        {
+            throw new IllegalArgumentException("Cannot create profile '" + profile + "': a file named "
+                + profile + ".cset already exists in .settings; choose another name or remove the file, "
+                + "then re-run the preview.");
+        }
     }
 
     static Path validateProfileTarget(Path settings, Path target, String profile)
@@ -616,27 +641,41 @@ public final class ProjectCheckSettingsSupport
     }
 
     public static Map<String, Object> copyProfile(ICheckRepository repo, IProject project, String profile,
-        String source, boolean implicitDefault)
+        String source, boolean implicitDefault, List<ProfileSetting> preview)
     {
         synchronized (profileMutationLock(project))
         {
             // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
             String listedSource = validateProfileCopy(repo, project, profile,
                 implicitDefault ? null : source, !implicitDefault);
+            if (!preview.equals(profileFingerprint(repo, project, listedSource)))
+            {
+                throw new IllegalArgumentException("The source profile changed since the preview; re-run the "
+                    + "preview with project_checks before copying '" + listedSource + "'.");
+            }
             Path plannedParent = validateProfileTarget(project, profile);
+            requireAbsentProfileTarget(project, profile);
             repo.duplicateSettingsProfile(listedSource, profile, project);
             verifyProfileTargetAfterWrite(project, profile, plannedParent);
+            List<ProfileSetting> copied = profileFingerprint(repo, project, profile);
+            if (!preview.equals(copied)
+                || listedProfile(repo.getAvailableSettingsProfiles(project), profile) == null)
+            {
+                throw new IllegalArgumentException("EDT's copy could not be verified: target profile '" + profile
+                    + "' is missing or its read-back settings differ from source profile '" + listedSource
+                    + "' in the preview. Inspect project_checks list/profiles before retrying.");
+            }
             Map<String, Object> result = new LinkedHashMap<>(profiles(repo, project,
                 repo.getActiveSettingsProfile(project)));
             result.put("profile", profile);
             result.put("from", listedSource);
             result.put("changed", true);
-            result.put("persisted", listedProfile(repo.getAvailableSettingsProfiles(project), profile) != null);
+            result.put("persisted", true);
             return result;
         }
     }
 
-    /** Immutable, order-independent snapshot of every customized value that deletion would discard. */
+    /** Immutable, order-independent snapshot of every customized value that copying or deletion affects. */
     public record ProfileSetting(String checkId, String contributorId, boolean enabled, IssueSeverity severity,
         List<ProfileParameter> parameters)
     {
@@ -676,6 +715,11 @@ public final class ProjectCheckSettingsSupport
             {
                 Path plannedParent = validateProfileTarget(project, listed);
                 repo.deleteSettingsProfile(listed, project);
+                if (profileTargetExists(project, listed))
+                {
+                    throw new IllegalArgumentException("Profile '" + listed + "' was recreated during the write; "
+                        + "its .cset still exists in .settings. Inspect the file before retrying deletion.");
+                }
                 verifyProfileTargetAfterWrite(project, listed, plannedParent);
             }
             catch (IllegalStateException e)
@@ -693,7 +737,12 @@ public final class ProjectCheckSettingsSupport
             result.put("deletedProfile", listed);
             result.put("deletedCustomizedChecks", customized);
             result.put("changed", true);
-            result.put("persisted", listedProfile(repo.getAvailableSettingsProfiles(project), listed) == null);
+            if (listedProfile(repo.getAvailableSettingsProfiles(project), listed) != null)
+            {
+                throw new IllegalArgumentException("EDT's deletion could not be verified: profile '" + listed
+                    + "' is still listed after the write. Inspect project_checks profiles before retrying.");
+            }
+            result.put("persisted", true);
             return result;
         }
     }
@@ -738,8 +787,14 @@ public final class ProjectCheckSettingsSupport
             requirePlannedActiveProfile(repo, project, active);
             repo.setActiveSettingsProfile(target, Collections.emptyList(), project);
             String after = repo.getActiveSettingsProfile(project);
+            if (!sameProfile(target, after))
+            {
+                throw new IllegalArgumentException("EDT's write could not be verified: planned profile '" + target
+                    + "', actually active profile '" + after + "'. Inspect project_checks list/profiles "
+                    + "before restoring or retrying.");
+            }
             return Map.of("before", Map.of("activeProfile", active), "after", Map.of("activeProfile", after),
-                "changed", true, "persisted", sameProfile(target, after), "markersRefresh", MARKERS_REFRESH);
+                "changed", true, "persisted", true, "markersRefresh", MARKERS_REFRESH);
         }
     }
 }

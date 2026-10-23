@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.spi.FileSystemProvider;
 import java.nio.file.Path;
@@ -72,6 +73,12 @@ final class ProjectChecksTestFiles implements AutoCloseable
 
     static Runnable mockTargetPath(IFolder folder, Path settings, String profile, boolean symbolic, Path realPath) throws IOException
     {
+        return mockTargetPath(folder, settings, profile, symbolic, realPath, false);
+    }
+
+    static Runnable mockTargetPath(IFolder folder, Path settings, String profile, boolean symbolic, Path realPath,
+        boolean dangling) throws IOException
+    {
         Path target = mock(Path.class);
         FileSystem fileSystem = mock(FileSystem.class);
         FileSystemProvider provider = mock(FileSystemProvider.class, CALLS_REAL_METHODS);
@@ -82,6 +89,11 @@ final class ProjectChecksTestFiles implements AutoCloseable
             .thenReturn(attributes);
         when(attributes.isSymbolicLink()).thenReturn(symbolic);
         when(attributes.isRegularFile()).thenReturn(true);
+        if (dangling)
+        {
+            // A following existence check misses a dangling link; NOFOLLOW_LINKS must see it.
+            doThrow(new NoSuchFileException(realPath.toString())).when(provider).checkAccess(target);
+        }
         // Windows temp paths can contain a short user-directory spelling. Return a real parent,
         // so the symbolic-link test cannot pass just because another guard rejects that alias.
         Path resolved = realPath.getParent().toRealPath().resolve(realPath.getFileName());

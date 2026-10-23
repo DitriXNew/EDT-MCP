@@ -41,13 +41,16 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   is the active profile read back after the switch. Switching to the
   already active profile returns `changed:false`. Every other unlisted profile is refused;
   this action does not create user profiles.
+  A read-back that misses the planned profile returns an error naming the planned and actual profiles.
 - `createProfile`: require a new `profile` name. Optional `from` chooses an existing source;
   omitting it copies the stored `Default` profile, including its customizations. When `Default`
   has no saved file, EDT creates an empty profile using default check settings. An explicit
   `from` must name a listed profile. EDT's public
   repository provides duplication for both creation and copying. The active profile stays unchanged.
+  Creation requires an absent target file, an unchanged source fingerprint after consent, and matching copied settings.
 - `copyProfile`: require both a new `profile` and an existing `from`. Copy the source's stored
   settings, including check parameters, without switching profiles.
+  Copying checks target absence before consent and immediately before writing, rechecks the source fingerprint, and verifies the target fingerprint.
 - `deleteProfile`: require an existing, inactive `profile`. This is destructive and uses the
   destructive consent gate. Missing and active profiles, including case aliases of the active name,
   are refused before consent; switch away first to delete a user profile. EDT also requires
@@ -56,10 +59,11 @@ Its MCP annotation is `destructiveHint:true` because profile deletion can discar
   remain. EDT's own storage refusals are returned as errors. The response includes `deletedProfile` and `deletedCustomizedChecks`,
   the number of customized checks removed. Save the original settings separately to recreate
   them; the count alone is not a restore recipe.
+  Deletion verifies physical absence without following links and returns an error if the file was recreated during the write.
 
 Each create/copy/delete response includes the resulting `activeProfile` and `profiles` list in
 the same shape as `profiles`, plus the affected `profile`, `changed`, and a `persisted` verdict
-for the profile's presence or absence. Create/copy also reports `from`. New names are checked
+for the profile's verified contents or absence. Create/copy also reports `from`. New names are checked
 by EDT's own `validateProfileName`; invalid and duplicate names include EDT's English refusal.
 Every profile name, including `from`, must be a file stem directly in `.settings`; `/`, `\` and `:` are refused.
 EDT's workspace file-name validator also rejects platform-invalid names, including Windows device

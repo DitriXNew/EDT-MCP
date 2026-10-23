@@ -242,6 +242,7 @@ public class ProjectChecksTool implements IMcpTool
                 String from = JsonUtils.extractStringArgument(params, "from");
                 String source = ProjectCheckSettingsSupport.validateProfileCopy(repo, project, newProfile,
                     from, "copyProfile".equals(action));
+                var sourceFingerprint = ProjectCheckSettingsSupport.profileFingerprint(repo, project, source);
                 ConsentPreview copyPreview = new ConsentPreview(
                     ("createProfile".equals(action) ? "Create" : "Copy")
                         + " check profile of " + project.getName(),
@@ -253,7 +254,7 @@ public class ProjectChecksTool implements IMcpTool
                     return copyDenied;
                 }
                 data = ProjectCheckSettingsSupport.copyProfile(repo, project, newProfile, source,
-                    "createProfile".equals(action) && from == null);
+                    "createProfile".equals(action) && from == null, sourceFingerprint);
                 refreshWarning = refreshSettings(project);
                 break;
             case "deleteProfile":

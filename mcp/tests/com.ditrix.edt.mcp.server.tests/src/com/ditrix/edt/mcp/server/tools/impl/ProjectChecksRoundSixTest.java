@@ -300,7 +300,10 @@ public class ProjectChecksRoundSixTest
         when(other.getFolder(".settings")).thenReturn(folder);
         IWorkspace workspace = project.getWorkspace();
         when(other.getWorkspace()).thenReturn(workspace);
-        when(repo.getActiveSettingsProfile(other)).thenReturn("Default");
+        AtomicReference<String> otherActive = new AtomicReference<>("Default");
+        when(repo.getActiveSettingsProfile(other)).thenAnswer(call -> otherActive.get());
+        doAnswer(call -> { otherActive.set(call.getArgument(0)); return null; })
+            .when(repo).setActiveSettingsProfile(anyString(), anyCollection(), same(other));
         when(repo.getAvailableSettingsProfiles(other)).thenReturn(List.of("Default", "Other"));
         CountDownLatch writing = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -419,7 +422,7 @@ public class ProjectChecksRoundSixTest
         Path outside = temporary.getRoot().toPath().resolve("must-not-be-created.cset");
         Path staged = stageSymlink(outside);
         tool.onConsent = () -> moveLink(staged, settings.resolve("New.cset"));
-        assertUnsafe(invoke("createProfile", "New", null));
+        assertExisting(invoke("createProfile", "New", null));
         assertFalse(Files.exists(outside, LinkOption.NOFOLLOW_LINKS));
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
@@ -430,7 +433,7 @@ public class ProjectChecksRoundSixTest
         Path outside = temporary.newFile("outside.cset").toPath();
         Files.writeString(outside, "untouched");
         moveLink(stageSymlink(outside), settings.resolve("New.cset"));
-        assertUnsafe(invoke("copyProfile", "New", "Review"));
+        assertExisting(invoke("copyProfile", "New", "Review"));
         assertEquals("untouched", Files.readString(outside));
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
@@ -440,7 +443,7 @@ public class ProjectChecksRoundSixTest
     {
         Path local = Files.writeString(settings.resolve("local.cset"), "untouched");
         moveLink(stageSymlink(local), settings.resolve("New.cset"));
-        assertUnsafe(invoke("copyProfile", "New", "Review"));
+        assertExisting(invoke("copyProfile", "New", "Review"));
         assertEquals("untouched", Files.readString(local));
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
@@ -460,17 +463,17 @@ public class ProjectChecksRoundSixTest
     public void mockedSymbolicTargetIsRefusedWithoutSymlinkPrivileges() throws Exception
     {
         tool.onConsent = mockTargetPath("New", true, settings.resolve("local.cset"));
-        assertUnsafe(invoke("createProfile", "New", null));
+        assertExisting(invoke("createProfile", "New", null));
         assertEquals(1, tool.consents.get());
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
 
     @Test
-    public void mockedRegularTargetWithRealSettingsParentIsAccepted() throws Exception
+    public void mockedRegularTargetWithRealSettingsParentIsRefused() throws Exception
     {
         tool.onConsent = mockTargetPath("New", false, settings.resolve("local.cset"));
-        assertTrue(ok(invoke("createProfile", "New", null)).get("persisted").getAsBoolean());
-        verify(repo).duplicateSettingsProfile("Default", "New", project);
+        assertExisting(invoke("createProfile", "New", null));
+        verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
 
     @Test
@@ -489,7 +492,7 @@ public class ProjectChecksRoundSixTest
         Path outside = temporary.newFile("outside.cset").toPath();
         when(target.getLocation()).thenReturn(org.eclipse.core.runtime.Path.fromOSString(outside.toString()));
         when(folder.getFile("New.cset")).thenReturn(target);
-        assertUnsafe(invoke("copyProfile", "New", "Review"));
+        assertExisting(invoke("copyProfile", "New", "Review"));
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
 
@@ -497,7 +500,7 @@ public class ProjectChecksRoundSixTest
     public void mockedJunctionResolvingOutsideSettingsIsRefused() throws Exception
     {
         tool.onConsent = mockTargetPath("New", false, temporary.newFile("junction-target.cset").toPath());
-        assertUnsafe(invoke("createProfile", "New", null));
+        assertExisting(invoke("createProfile", "New", null));
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
     }
 
@@ -563,6 +566,13 @@ public class ProjectChecksRoundSixTest
     {
         String error = error(text);
         assertTrue(error, error.contains("active profile changed"));
+        assertTrue(error, error.contains("re-run the preview"));
+    }
+
+    private static void assertExisting(String text)
+    {
+        String error = error(text);
+        assertTrue(error, error.contains("a file named New.cset already exists in .settings"));
         assertTrue(error, error.contains("re-run the preview"));
     }
 
