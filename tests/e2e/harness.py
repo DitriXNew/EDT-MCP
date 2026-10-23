@@ -729,6 +729,8 @@ MODEL_MUTATION_TOOLS = frozenset({
     # failure carries mutationOutcomeUnknown:true. Both forfeit the shortcut without making an
     # ordinary negative test do so.
     "dcs",
+    # Like dcs, get only reads; replace/remove write after validation and consent.
+    "business_process_route_map",
     # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection.
     # Their entry points now mark an exception after invoke() as outcome-unknown, but source
     # scanning still cannot discover their membership; the ratchet pins their names explicitly.

@@ -338,7 +338,9 @@
           "type": "array"
         }
       },
-      "required": [],
+      "required": [
+        "success"
+      ],
       "type": "object"
     }
   },

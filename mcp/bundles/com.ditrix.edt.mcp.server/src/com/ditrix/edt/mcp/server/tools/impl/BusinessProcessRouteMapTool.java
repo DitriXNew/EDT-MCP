@@ -112,7 +112,7 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
     public String getOutputSchema()
     {
         JsonObject schema = JsonParser.parseString(WrittenObjectMarkers.declareOutput(JsonSchemaBuilder.object()
-            .booleanProperty("success", "Whether the operation succeeded.")
+            .booleanProperty("success", "Whether the operation succeeded.", true)
             .stringProperty("error", "Actionable refusal on failure.")
             .stringProperty("message", "Operation and validation status.")
             .enumProperty("action", "Requested operation.", "get", "replace", "remove")
