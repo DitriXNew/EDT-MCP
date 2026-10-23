@@ -1051,7 +1051,8 @@ public class MetadataTypeUtilsTest
     private static final Set<String> MDCLASS_RESOLVED_KINDS = new LinkedHashSet<>(Arrays.asList(
         "Attribute", "TabularSection", "Dimension", "Resource", "EnumValue", "Command",
         "AccountingFlag", "ExtDimensionAccountingFlag", "AddressingAttribute", "Column",
-        "Template", "Recalculation", "URLTemplate", "Method", "Operation", "Parameter"));
+        "Template", "Recalculation", "URLTemplate", "Method", "Operation", "Parameter",
+        "Table", "Field", "Function", "Cube"));
 
     /** Registers one more applicable consumer for a canonical kind. */
     private static void addOwner(Map<String, List<Predicate<String>>> owners, String canonical,

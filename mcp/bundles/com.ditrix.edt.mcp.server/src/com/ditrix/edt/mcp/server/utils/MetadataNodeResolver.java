@@ -26,7 +26,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
  * Resolves a 1C "full name" FQN to a metadata node anywhere in the mdclass tree,
  * for the unified metadata-CRUD tools (create / modify / delete / get_properties).
  *
- * <p>A full name addresses a node by its containment path, where each level adds a
+ * <p>A full name addresses a node by its metadata path (containments and the registered EDS
+ * Table/Cube reference collections), where each level adds a
  * {@code .KindToken.Name} pair: {@code Catalog.Products} (a top object),
  * {@code Catalog.Products.Attribute.Weight} (an attribute),
  * {@code Catalog.Products.TabularSection.Goods.Attribute.Price} (a tabular-section
@@ -53,6 +54,8 @@ public final class MetadataNodeResolver
      * every owner type that declares the collection.
      */
     private static final Map<String, String> CHILD_FEATURE_BY_TOKEN;
+    /** The one collection whose EMF name differs from its metamodel code (the FQN token). */
+    private static final Map<String, String> KIND_TOKEN_BY_FEATURE = Map.of("tableFields", "Field"); //$NON-NLS-1$ //$NON-NLS-2$
     static
     {
         Map<String, String> m = new LinkedHashMap<>();
@@ -134,6 +137,14 @@ public final class MetadataNodeResolver
         putTokens(m, "parameters", "parameter", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440),
             cp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b));
+        putTokens(m, "tables", "table", "tables", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430), cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b));
+        putTokens(m, "cubes", "cube", "cubes", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043a, 0x0443, 0x0431), cp(0x043a, 0x0443, 0x0431, 0x044b));
+        putTokens(m, "functions", "function", "functions", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x0444, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x044f), cp(0x0444, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x0438));
+        putTokens(m, "tableFields", "field", "fields", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x043f, 0x043e, 0x043b, 0x0435), cp(0x043f, 0x043e, 0x043b, 0x044f));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 
@@ -172,7 +183,7 @@ public final class MetadataNodeResolver
         public final MdObject object;
         /** The container: the {@link Configuration} for a top object, the owner {@link MdObject} for a child. */
         public final EObject owner;
-        /** The containment feature in {@link #owner} that holds {@link #object}. */
+        /** The collection in {@link #owner} containing or registering {@link #object}. */
         public final EReference feature;
         /** {@code true} when the node is a top-level configuration object. */
         public final boolean topLevel;
@@ -204,10 +215,11 @@ public final class MetadataNodeResolver
         public final String configFeatureName;
         /** Resolved direct parent of the leaf; {@code null} for a top-level create. */
         public final EObject owner;
-        /** The TOP object that owns the leaf's {@code .mdo} file and is re-fetchable in a BM
-         * transaction (only TOP objects are re-fetchable by bmId); {@code null} for a top-level create. */
+        /** The re-fetchable TOP object where the in-transaction walk starts. The leaf's FILE owner
+         * is read inside that transaction; it may be a referenced Table rather than this root.
+         * {@code null} for a top-level create. */
         public final MdObject topObject;
-        /** Containment feature on {@link #owner}; {@code null} for a top-level create. */
+        /** Child collection on {@link #owner}; {@code null} for a configuration-level create. */
         public final EReference feature;
         /** Concrete element type to instantiate; {@code null} for a top-level create. */
         public final EClass elementType;
@@ -298,7 +310,7 @@ public final class MetadataNodeResolver
         for (String featureName : new LinkedHashSet<>(CHILD_FEATURE_BY_TOKEN.values()))
         {
             EStructuralFeature f = owner.eClass().getEStructuralFeature(featureName);
-            if (f instanceof EReference)
+            if (f instanceof EReference && childFeature(owner, kindTokenForFeature(featureName)) != null)
             {
                 kinds.add(kindTokenForFeature(featureName));
             }
@@ -307,16 +319,21 @@ public final class MetadataNodeResolver
     }
 
     /**
-     * The canonical FQN kind token for an EMF containment feature name: its singular, capitalized
-     * ({@code "tabularSections"} &rarr; {@code "TabularSection"}). Derived from the feature rather
-     * than tabulated a second time - {@link #featureNameForKind} accepts the result case-insensitively,
-     * so what this prints is addressable.
+     * The canonical FQN kind token for a child collection. Usually its singular, capitalized name
+     * ({@code "tabularSections"} &rarr; {@code "TabularSection"}); {@code tableFields} is the one
+     * collection whose EMF name is not its token, so it uses the metamodel's {@code code}, Field.
+     * {@link #featureNameForKind} accepts the result case-insensitively.
      *
      * @param featureName the containment feature name
      * @return the kind token
      */
     public static String kindTokenForFeature(String featureName)
     {
+        String override = KIND_TOKEN_BY_FEATURE.get(featureName);
+        if (override != null)
+        {
+            return override;
+        }
         String singular = featureName.endsWith("s") //$NON-NLS-1$
             ? featureName.substring(0, featureName.length() - 1) : featureName;
         return singular.isEmpty() ? singular
@@ -374,7 +391,8 @@ public final class MetadataNodeResolver
         EStructuralFeature feature = object.eContainingFeature();
         if (container instanceof MdObject && !(container instanceof Configuration) && feature != null)
         {
-            if (strict && !isAddressableStep(feature))
+            if (strict && (!isAddressableStep(feature)
+                || childFeature((MdObject)container, kindTokenForFeature(feature.getName())) == null))
             {
                 return null;
             }
@@ -384,6 +402,24 @@ public final class MetadataNodeResolver
                 return null;
             }
             return owner + '.' + kindTokenForFeature(feature.getName()) + '.' + object.getName();
+        }
+        if (container == null)
+        {
+            for (Map.Entry<String, String> entry : ReferencedTopObjects.BACK_REFERENCE_BY_COLLECTION.entrySet())
+            {
+                EStructuralFeature back = object.eClass().getEStructuralFeature(entry.getValue());
+                if (back != null && object.eGet(back) instanceof MdObject)
+                {
+                    MdObject parent = (MdObject)object.eGet(back);
+                    EReference collection = childFeature(parent, kindTokenForFeature(entry.getKey()));
+                    if (collection != null && collection.getEReferenceType().isSuperTypeOf(object.eClass()))
+                    {
+                        String owner = address(parent, strict);
+                        return owner == null ? null : ReferencedTopObjects.attachFqn(owner, object.eClass(),
+                            object.getName());
+                    }
+                }
+            }
         }
         if (strict && container != null && !(container instanceof Configuration))
         {
@@ -411,6 +447,23 @@ public final class MetadataNodeResolver
     private static boolean isBlank(String value)
     {
         return value == null || value.isEmpty();
+    }
+
+    private static boolean malformedEdsAddress(String fqn)
+    {
+        String[] parts = fqn.split("\\.", -1); //$NON-NLS-1$
+        if (!"ExternalDataSource".equals(MetadataTypeUtils.toEnglishSingular(parts[0]))) //$NON-NLS-1$
+        {
+            return false;
+        }
+        for (String part : parts)
+        {
+            if (part.isEmpty() || !part.equals(part.trim()))
+            {
+                return true;
+            }
+        }
+        return !isValidArity(parts.length);
     }
 
     /**
@@ -465,7 +518,7 @@ public final class MetadataNodeResolver
      */
     public static MetadataNode resolveExisting(MetadataScope scope, String fqn)
     {
-        if (scope == null || fqn == null || fqn.isEmpty())
+        if (scope == null || fqn == null || fqn.isEmpty() || malformedEdsAddress(fqn))
         {
             return null;
         }
@@ -710,7 +763,7 @@ public final class MetadataNodeResolver
      */
     public static CreateTarget resolveForCreate(MetadataScope scope, String fqn)
     {
-        if (scope == null || fqn == null || fqn.isEmpty())
+        if (scope == null || fqn == null || fqn.isEmpty() || malformedEdsAddress(fqn))
         {
             return null;
         }
@@ -822,12 +875,19 @@ public final class MetadataNodeResolver
      */
     private static EReference childFeature(MdObject owner, String kindToken)
     {
+        return childFeature(owner.eClass(), kindToken);
+    }
+
+    /** The shared per-owner grammar check, also used by marker and orphan address walks. */
+    public static EReference childFeature(EClass ownerType, String kindToken)
+    {
         String featureName = featureNameForKind(kindToken);
-        if (featureName == null)
+        if (ownerType == null || featureName == null || ("Cube".equals(ownerType.getName()) //$NON-NLS-1$
+            && ("dimensions".equals(featureName) || "resources".equals(featureName)))) //$NON-NLS-1$ //$NON-NLS-2$
         {
             return null;
         }
-        EStructuralFeature f = owner.eClass().getEStructuralFeature(featureName);
+        EStructuralFeature f = ownerType.getEStructuralFeature(featureName);
         return (f instanceof EReference) ? (EReference)f : null;
     }
 

@@ -458,6 +458,11 @@ public final class CommonAttributeContentWriter
                 .toJson());
         }
 
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal("Common attribute content", fqn); //$NON-NLS-1$
+        if (memberRefusal != null)
+        {
+            return EntryPlan.failed(ToolResult.error(memberRefusal).toJson());
+        }
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
         if (node == null || node.object == null)

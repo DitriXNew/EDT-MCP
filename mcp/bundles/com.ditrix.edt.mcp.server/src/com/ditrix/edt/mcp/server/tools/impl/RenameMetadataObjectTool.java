@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonParser;
 
@@ -368,6 +369,12 @@ public class RenameMetadataObjectTool implements IMcpTool
         if (err != null)
         {
             return err;
+        }
+
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal(NAME, objectFqn);
+        if (memberRefusal != null)
+        {
+            return ToolResult.error(memberRefusal).toJson();
         }
 
         // Whether the new name is even an identifier is decided HERE, among the other argument

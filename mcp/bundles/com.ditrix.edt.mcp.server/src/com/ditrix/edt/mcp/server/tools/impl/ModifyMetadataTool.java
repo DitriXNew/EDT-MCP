@@ -109,7 +109,9 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.StandardCommandGroupResolver;
+import com.ditrix.edt.mcp.server.utils.TableFieldReferences;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -1716,6 +1718,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return "Node not found: " + fqn + ". Use 'Type.Name' for a top object, " //$NON-NLS-1$ //$NON-NLS-2$
             + "'Type.Name.Kind.Name' for a member, or '" + ConfigurationRoot.FQN + "' for the " //$NON-NLS-1$ //$NON-NLS-2$
             + "configuration root. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+            + (normFqn != null && normFqn.startsWith("ExternalDataSource.") //$NON-NLS-1$
+                ? " External data source members use 'ExternalDataSource.<X>.Table.<T>(.Field.<F>)' " //$NON-NLS-1$
+                    + "or 'ExternalDataSource.<X>.Function.<F>'." : "") //$NON-NLS-1$ //$NON-NLS-2$
             + MetadataNodeResolver.yoNotFoundHint(normFqn)
             + scope.addressingHint(normFqn);
     }
@@ -2548,7 +2553,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         // The top object that owns the node's .mdo file.
-        final String topFqn = topFqn(normFqn);
+        final String[] fileOwnerFqn = { null };
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
@@ -2606,6 +2611,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(applyTo);
                 // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
                 // namespace change - null otherwise, so the cascade below never fires).
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
@@ -2676,9 +2682,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(topFqn);
+        exportFqns.add(fileOwnerFqn[0]);
         String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(topFqn))
+        if (contentFqn != null && !contentFqn.equals(fileOwnerFqn[0]))
         {
             exportFqns.add(contentFqn);
         }
@@ -4063,7 +4069,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node, MdObject target, String[] parts)
     {
         BmFetchPlan plan = new BmFetchPlan();
-        if (node.topLevel)
+        if (node.topLevel || ReferencedTopObjects.isReferencedTopCollection(node.feature))
         {
             if (!(target instanceof IBmObject))
             {
@@ -7087,7 +7093,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return null;
         }
         MdObject targetMd = resolveReferenceTarget(scope, owner, value);
-        String vErr = validateReferenceTarget(name, info.feature, targetMd, value, groupCatalogue);
+        String vErr = validateReferenceTarget(name, info.feature, targetMd, value, groupCatalogue, owner);
         if (vErr != null)
         {
             return vErr;
@@ -7538,7 +7544,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Validates a reference target: it must resolve, be re-fetchable (a top object, a FORM member, or a
-     * {@link BasicTemplate} member). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
+     * {@link BasicTemplate} member; with an owner, also the owner's own Field - see the overload that
+     * takes one). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
      * ({@code mainDataCompositionSchema}) legitimately cross-reference members owned by another object;
      * both are BM objects with stable {@code bmGetId()} values and are re-fetched with
      * {@link IBmTransaction#getObjectById(long)} inside the write transaction. The target must also be
@@ -7569,6 +7576,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static String validateReferenceTarget(String prop, EStructuralFeature feature,
         MdObject target, String fqn, IEObjectProvider groupCatalogue)
     {
+        return validateReferenceTarget(prop, feature, target, fqn, groupCatalogue, null);
+    }
+
+    /**
+     * The full single-reference check, with the object the property is being set on. Besides a top
+     * object, a form and a template, it admits the owner's OWN Field for a {@code refers Field}
+     * property (an external data source Table's {@code presentationField} / {@code parentField},
+     * issue #448) with the owner check in {@link TableFieldReferences}. A list reference
+     * passes no owner, so a Field never passes there.
+     *
+     * @param prop the property name
+     * @param feature the reference feature
+     * @param target the resolved target, or {@code null} when nothing resolved
+     * @param fqn the reference value as supplied by the caller
+     * @param groupCatalogue the platform command-group catalogue, may be {@code null}
+     * @param owner the element the property is being set on, or {@code null}
+     * @return a JSON error, or {@code null} when the target is usable
+     */
+    static String validateReferenceTarget(String prop, EStructuralFeature feature, // NOSONAR the owner joins the existing reference inputs
+        MdObject target, String fqn, IEObjectProvider groupCatalogue, EObject owner)
+    {
         if (target == null)
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' was not found. " //$NON-NLS-1$
@@ -7581,11 +7609,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
         boolean isTemplate = target instanceof BasicTemplate;
-        if (!isForm && !isTemplate && !((IBmObject)target).bmIsTop())
+        boolean isField = TableFieldReferences.isFieldReference(feature, target);
+        if (!isForm && !isTemplate && !isField && !((IBmObject)target).bmIsTop())
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported (forms and templates " //$NON-NLS-1$
                 + "are the supported member references because BM can re-fetch both by id).").toJson(); //$NON-NLS-1$
+        }
+        String fieldRefusal = isField ? TableFieldReferences.refusal(prop, owner, target, fqn) : null;
+        if (fieldRefusal != null)
+        {
+            return ToolResult.error(fieldRefusal).toJson();
         }
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
@@ -8415,12 +8449,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
-    }
-
-    private static String topFqn(String normFqn)
-    {
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
     }
 
     /**
