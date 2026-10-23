@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.google.gson.JsonObject;
 
@@ -137,6 +138,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        return ReferencedTopObjects.memberOperationRefusal(NAME,
+            JsonUtils.extractStringArgument(params, "fqn")); //$NON-NLS-1$
+    }
+
+    @Override
     protected String executeOnUiThread(Map<String, String> params) throws Exception
     {
         String argErr = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
@@ -147,6 +155,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         String extensionProjectName = JsonUtils.extractStringArgument(params, "extensionProjectName"); //$NON-NLS-1$
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal(NAME, fqn);
+        if (memberRefusal != null)
+        {
+            return ToolResult.error(memberRefusal).toJson();
+        }
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
