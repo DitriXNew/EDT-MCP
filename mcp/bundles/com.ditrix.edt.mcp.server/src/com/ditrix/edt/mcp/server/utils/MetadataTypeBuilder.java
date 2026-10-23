@@ -1248,6 +1248,11 @@ public final class MetadataTypeBuilder
                 String requested = isDefinedTypeKind(kind) ? kind + "." + ref : ref; //$NON-NLS-1$
                 return addDefinedTypeSet(td, target, requested);
             }
+            String memberRefusal = ReferencedTopObjects.memberOperationRefusal("Metadata type assignment", ref); //$NON-NLS-1$
+            if (memberRefusal != null)
+            {
+                return error(memberRefusal);
+            }
             Type refType;
             boolean routed = true;
             try
