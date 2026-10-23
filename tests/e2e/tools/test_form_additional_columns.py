@@ -9,7 +9,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from harness import (
-    PROJECT, call, assert_ok, assert_error, assert_error_quality, assert_contains,
+    PROJECT, call, rename_call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_not_contains, read_disk, tree_snapshot, assert_tree_unchanged,
     poll_disk_contains, poll_disk_lacks, settle_or_fail, e2e_test,
 )
@@ -263,13 +263,13 @@ def test_rename_additional_column_round_trip_updates_bound_item_data_path():
     settle_or_fail("the additional-column rename cascade")
     before = tree_snapshot()
     args = {"projectName": PROJECT, "objectFqn": _address("E2EExtra"), "newName": "E2ERenamedExtra"}
-    preview = call("rename_metadata_object", args)
+    preview = rename_call(args)
     assert_ok(preview, "additional-column rename preview")
     assert_contains(preview.text, "preview")
     assert_tree_unchanged(before, "rename preview")
     assert _text(_column(), "name") == "E2EExtra"
     assert_contains(_details(_address("E2EExtra"), True), "E2EExtra")
-    assert_ok(call("rename_metadata_object", dict(args, confirm=True)), "rename additional column")
+    assert_ok(rename_call(dict(args, confirm=True)), "rename additional column")
     poll_disk_contains(FILE, "<name>E2ERenamedExtra</name>", ctx="renamed column reaches disk")
     poll_disk_contains(FILE, "Object.%s.E2ERenamedExtra" % TABLE, ctx="rename rewrites the bound item's dataPath")
     root = ET.fromstring(read_disk(FILE))
@@ -288,7 +288,7 @@ def test_rename_additional_column_refuses_sibling_and_real_property_names():
     settle_or_fail("the additional-column rename clash checks")
     for name in ("E2ESecondExtra", REAL):
         before = tree_snapshot()
-        error = assert_error(call("rename_metadata_object", {"projectName": PROJECT,
+        error = assert_error(rename_call({"projectName": PROJECT,
             "objectFqn": _address("E2EFirstExtra"), "newName": name, "confirm": True}), "rename clash")
         assert_error_quality(error, names=[name], suggests=["different name"])
         assert_tree_unchanged(before, "refused rename")
