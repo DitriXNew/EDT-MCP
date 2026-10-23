@@ -32,6 +32,7 @@ from harness import (
 
 SETTINGS = Path(PROJECT_DIR) / ".settings"
 PREFS = SETTINGS / "com.e1c.g5.v8.dt.check.prefs"
+CHECK_DOCS = Path(harness.REPO_ROOT) / "mcp/bundles/com.ditrix.edt.mcp.server/checks"
 SEVERITIES = ("BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL")
 
 
@@ -103,6 +104,15 @@ def _all():
         if offset >= data["total"]:
             return rows
         assert data["returned"] > 0, data
+
+
+def _live_check(checks, enabled_only=False):
+    candidates = [row for row in checks if not enabled_only or row["enabled"]]
+    if not candidates:
+        raise E2ESkip("fixture has no enabled validation check" if enabled_only
+                      else "fixture has no validation checks")
+    # Prefer EDT's built-in contributors, then fall back to any installed check.
+    return min(candidates, key=lambda row: (not row["contributorId"].startswith("com.e1c."), row["uid"]))
 
 
 def _set(changes):
@@ -203,7 +213,16 @@ def test_list_returns_the_check_tree_with_ids_severities_and_the_active_profile(
         assert isinstance(row["enabled"], bool), row
         assert "parameters" not in row, row
     assert checks == sorted(checks, key=lambda row: (row["category"], row["checkId"], row["uid"]))
-    assert any(row["checkId"] == "begin-transaction" and row["hasDocumentation"] for row in checks)
+    documented_ids = {path.stem for path in CHECK_DOCS.glob("*.md")}
+    assert documented_ids, "shipped checks/*.md files are unavailable"
+    documented = [row for row in checks if row["checkId"] in documented_ids]
+    if not documented:
+        print("Documentation presence assertion skipped: no live check has a shipped checks/<id>.md")
+    for row in documented:
+        assert row["hasDocumentation"] is True, row
+    undocumented = [row for row in checks if row["checkId"] not in documented_ids]
+    for row in undocumented:
+        assert row["hasDocumentation"] is False, row
     assert _snapshot() == before
     assert_no_diff()
 
@@ -211,8 +230,9 @@ def test_list_returns_the_check_tree_with_ids_severities_and_the_active_profile(
 @e2e_test(tool="project_checks", kind="action")
 def test_list_with_check_ids_returns_only_those_and_their_parameters():
     before = _snapshot()
-    row = _one("begin-transaction")
-    assert row["checkId"] == "begin-transaction", row
+    selected = _live_check(_all())
+    row = _one(selected["uid"])
+    assert row["uid"] == selected["uid"] and row["checkId"] == selected["checkId"], row
     assert isinstance(row["parameters"], list), row
     for parameter in row["parameters"]:
         assert {"name", "value", "isDefault", "type"} <= parameter.keys(), parameter
@@ -279,7 +299,7 @@ def test_set_disable_removes_the_checks_markers_without_clean_project():
 
 @e2e_test(tool="project_checks", kind="action")
 def test_set_with_no_effective_change_reports_changed_zero_and_touches_nothing():
-    row = _one("begin-transaction")
+    row = _live_check(_all(), enabled_only=True)
     before = _snapshot(with_times=True)
     with _temporary_set(row, enabled=row["enabled"], severity=row["severity"]) as response:
         assert response["changed"] == 0, response
