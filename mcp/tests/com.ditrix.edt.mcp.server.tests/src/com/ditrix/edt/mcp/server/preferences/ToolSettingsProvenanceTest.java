@@ -51,7 +51,8 @@ public class ToolSettingsProvenanceTest
         Map.entry(14, Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
             "create_project", "resync_to_disk", "clean_project")),
         Map.entry(15, Set.of("get_form_screenshot")),
-        Map.entry(16, Set.of("business_process_route_map")));
+        Map.entry(16, Set.of("business_process_route_map")),
+        Map.entry(17, Set.of("project_checks")));
 
     private final ToolSettingsService service = ToolSettingsService.getInstance();
     private PreferenceStore store;
@@ -295,10 +296,10 @@ public class ToolSettingsProvenanceTest
         PreferenceStore recorded = stored(Set.of("user_disabled_tool"), 1);
         recorded.setValue(PRESET_ID, "code-review");
         ToolSettingsService.ensureMigratedForTest(recorded);
-        // Recorded identity drives v14/v16; the unrecognized shape gets no v1-v12 preset additions.
+        // Recorded identity drives later steps; the unrecognized shape gets no v1-v12 preset additions.
         Set<String> expected = new HashSet<>(Set.of("user_disabled_tool", "ask_workmate", "get_form_screenshot"));
         expected.addAll(CODE_REVIEW_ADDITIONS.get(14));
-        expected.addAll(CODE_REVIEW_ADDITIONS.get(16));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(14, ToolPreset.CODE_REVIEW, expected);
         assertEquals(expected, disabled(recorded));
         assertEquals("code-review", recorded.getString(PRESET_ID));
     }

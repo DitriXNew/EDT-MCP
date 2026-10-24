@@ -39,7 +39,9 @@ public class RouteMapMigrationTest
         var writes = new ArrayList<String>();
         store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(Set.of("owner_disabled_tool", "get_form_screenshot", TOOL), disabled(store));
+        Set<String> expected = new HashSet<>(Set.of("owner_disabled_tool", "get_form_screenshot", TOOL));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(16, ToolPreset.CODE_REVIEW, expected);
+        assertEquals(expected, disabled(store));
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
@@ -76,7 +78,7 @@ public class RouteMapMigrationTest
         assertEquals(Set.of(TOOL), ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION.get(16));
         assertEquals(Set.of("get_form_screenshot"),
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION.get(15));
-        assertEquals(16, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertEquals(17, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
     }
 
     private static PreferenceStore stored(int version, String preset)

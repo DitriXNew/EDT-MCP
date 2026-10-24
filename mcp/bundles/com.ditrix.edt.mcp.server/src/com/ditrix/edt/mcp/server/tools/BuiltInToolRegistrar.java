@@ -84,6 +84,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListSubsystemsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListToolsetsTool;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool;
+import com.ditrix.edt.mcp.server.tools.impl.ProjectChecksTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
@@ -173,6 +174,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new CreateGitBranchTool());
         catalogue.add(new GitTool());
         catalogue.add(new GetCheckDescriptionTool());
+        catalogue.add(new ProjectChecksTool());
         catalogue.add(new GetContentAssistTool());
         catalogue.add(new GetPlatformDocumentationTool());
         catalogue.add(new GetMetadataObjectsTool());

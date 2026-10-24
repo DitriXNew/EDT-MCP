@@ -4173,6 +4173,110 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "List or change EDT validation checks; switch, create, copy or delete check-settings profiles. Writes ask for consent; profile deletion is destructive. Parameters: get_tool_guide('project_checks').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "set",
+            "profiles",
+            "switch",
+            "createProfile",
+            "copyProfile",
+            "deleteProfile"
+          ],
+          "type": "string"
+        },
+        "changes": {
+          "type": "string"
+        },
+        "checkIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "from": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "onlyCustomized": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "project_checks",
+    "outputSchema": {
+      "properties": {
+        "activeProfile": {
+          "type": "string"
+        },
+        "after": {},
+        "before": {},
+        "changed": {},
+        "checks": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "deletedCustomizedChecks": {
+          "type": "integer"
+        },
+        "deletedProfile": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "project": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "idempotentHint": true,
       "openWorldHint": false,
       "readOnlyHint": true
