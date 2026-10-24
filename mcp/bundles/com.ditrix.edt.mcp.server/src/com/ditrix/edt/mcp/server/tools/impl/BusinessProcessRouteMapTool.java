@@ -434,8 +434,11 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
             ConsentPreview preview = new ConsentPreview(
                 (action.equals("remove") ? "Remove" : "Replace") + " route map of " + fqn,
                 previous.discardedItems() + " are discarded; "
-                    + "infobase tasks keep their point identity only for same-named points"
-                    + (action.equals("remove") ? "." + ConsentPreview.globalContextEditorNotice("route map") : ""),
+                    + (action.equals("remove")
+                        ? "every point identity is discarded, so infobase tasks referring to these points lose them; "
+                            + "a later replace creates new identities even for the same names."
+                            + ConsentPreview.globalContextEditorNotice("route map")
+                        : "infobase tasks keep their point identity only for same-named points"),
                 previous.items(),
                 previous.names());
             ConsentDecision decision = consent.request(NAME, preview);

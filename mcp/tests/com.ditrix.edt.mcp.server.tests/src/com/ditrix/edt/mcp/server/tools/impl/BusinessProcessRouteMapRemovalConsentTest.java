@@ -23,7 +23,9 @@ public class BusinessProcessRouteMapRemovalConsentTest
     @Test
     public void testRemoveConsentDisclosesSavingAllEditorChangesAndClearingUndo()
     {
-        assertPreview("remove", new MapPreview(true, 1, 1, 0, List.of("Check")), CONTENT + "." + WARNING);
+        assertPreview("remove", new MapPreview(true, 1, 1, 0, List.of("Check")), "1 points and 0 connections are discarded; "
+            + "every point identity is discarded, so infobase tasks referring to these points lose them; "
+            + "a later replace creates new identities even for the same names." + WARNING);
     }
 
     @Test
@@ -31,7 +33,8 @@ public class BusinessProcessRouteMapRemovalConsentTest
     {
         assertPreview("remove", new MapPreview(true, 0, 0, 0, List.of()),
             "0 points and 0 connections are discarded; "
-                + "infobase tasks keep their point identity only for same-named points." + WARNING);
+                + "every point identity is discarded, so infobase tasks referring to these points lose them; "
+                + "a later replace creates new identities even for the same names." + WARNING);
     }
 
     @Test
