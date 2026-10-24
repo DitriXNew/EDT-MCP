@@ -254,7 +254,7 @@ public final class StyleValueBuilder
         return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** The inverse of buildFont: only explicit fonts with an integer height and default scale. */
+    /** The inverse of buildFont: explicit fonts with positive integer heights or positive zero, and default scale. */
     static String fontRefusal(Font font)
     {
         if (!(font instanceof FontDef))
@@ -264,6 +264,12 @@ public final class StyleValueBuilder
         }
         FontDef definition = (FontDef)font;
         float height = definition.getHeight();
+        if (Float.floatToRawIntBits(height) == Float.floatToRawIntBits(-0.0f))
+        {
+            return "font height " + height //$NON-NLS-1$
+                + " is negative zero, which the font writer cannot reproduce; " //$NON-NLS-1$
+                + "correct the height in the DCS designer before replacing its container"; //$NON-NLS-1$
+        }
         if (!Float.isFinite(height) || height < 0 || height > (float)Integer.MAX_VALUE
             || height != Math.rint(height))
         {

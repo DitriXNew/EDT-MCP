@@ -17,6 +17,36 @@ import com.google.gson.JsonParser;
 public class StyleFontReproducibilityTest
 {
     @Test
+    public void testNegativeZeroHeightIsRefusedWithoutNormalization()
+    {
+        FontDef font = McoreFactory.eINSTANCE.createFontDef();
+        font.setHeight(-0.0f);
+        assertEquals(Float.floatToRawIntBits(-0.0f), Float.floatToRawIntBits(font.getHeight()));
+        String refusal = StyleValueBuilder.fontRefusal(font);
+        assertEquals("the refusal must preserve the stored sign bit",
+            Float.floatToRawIntBits(-0.0f), Float.floatToRawIntBits(font.getHeight()));
+        assertNotNull("negative zero cannot be rebuilt by the font writer", refusal);
+        assertTrue(refusal, refusal.contains("font height -0.0"));
+        assertTrue(refusal, refusal.contains("negative zero"));
+        assertTrue(refusal, refusal.contains("font writer cannot reproduce"));
+        assertTrue(refusal, refusal.contains("DCS designer"));
+    }
+
+    @Test
+    public void testPositiveZeroAndOmittedHeightRemainReproducible()
+    {
+        FontDef font = McoreFactory.eINSTANCE.createFontDef();
+        font.setHeight(+0.0f);
+        assertNull(StyleValueBuilder.fontRefusal(font));
+        assertEquals(Float.floatToRawIntBits(+0.0f), Float.floatToRawIntBits(font.getHeight()));
+        var built = StyleValueBuilder.build(JsonParser.parseString("{font:{bold:true}}"));
+        assertNull(built.error);
+        FontDef omitted = (FontDef)((FontValue)built.value).getValue();
+        assertEquals(Float.floatToRawIntBits(+0.0f), Float.floatToRawIntBits(omitted.getHeight()));
+        assertNull(StyleValueBuilder.fontRefusal(omitted));
+    }
+
+    @Test
     public void testTheFontConstructorOutputIsReproducible()
     {
         var result = StyleValueBuilder.build(JsonParser.parseString(
