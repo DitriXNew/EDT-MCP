@@ -30,7 +30,9 @@ import com._1c.g5.v8.dt.dcs.model.core.InputParameters;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.ParameterValues;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
+import com._1c.g5.v8.dt.dcs.model.schema.AvailableValue;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
@@ -42,12 +44,14 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
-import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DcsPackage;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
+import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
@@ -336,15 +340,13 @@ public final class DcsReadProjection
         if (root == null) return Collections.emptyList();
         List<Unmodellable> result = new ArrayList<>();
         collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-            "", false, catalogues, result); //$NON-NLS-1$
+            "", catalogues, result); //$NON-NLS-1$
         return result;
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,
-        boolean inAdditionalProperties, DcsWriterCatalogues catalogues, List<Unmodellable> result)
+        DcsWriterCatalogues catalogues, List<Unmodellable> result)
     {
-        boolean additionalProperties = inAdditionalProperties
-            || "additionalProperties".equals(collection); //$NON-NLS-1$
         boolean unsupported = object instanceof DataSet
             && !(object instanceof DataCompositionSchemaDataSetQuery)
             && !(object instanceof DataCompositionSchemaDataSetObject)
@@ -358,18 +360,10 @@ public final class DcsReadProjection
             || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
             || "totalFieldsTemplates".equals(collection); //$NON-NLS-1$
-        // Slots the writer fills only through an untyped ValueSpec; any other Value there is lost.
-        boolean untypedValueSlot = additionalProperties
-            || "periodAdditionBegin".equals(collection) //$NON-NLS-1$
-            || "periodAdditionEnd".equals(collection) //$NON-NLS-1$
-            || object.eContainer() instanceof DataCompositionFilterItem
-                && ("left".equals(collection) || "right".equals(collection)); //$NON-NLS-1$ //$NON-NLS-2$
         String reason = unsupported ? "this node is outside the writer's model" : null; //$NON-NLS-1$
-        if (reason == null && untypedValueSlot && object instanceof Value)
+        if (reason == null && object instanceof Value)
         {
-            // The same verdict as a data parameter's value: value() - the writer of these slots -
-            // must rebuild the stored value exactly.
-            reason = DcsSettingsWriter.untypedValueRefusal((Value)object);
+            reason = valueSlotRefusal((Value)object, catalogues);
         }
         if (object instanceof DataCompositionParameterValue)
         {
@@ -385,6 +379,12 @@ public final class DcsReadProjection
             Object value = object.eGet(reference);
             String feature = canonicalFeature(object, reference.getName());
             String featureAddress = child(address, feature);
+            if (value == null && valueSlot(reference).requiresValue())
+            {
+                result.add(new Unmodellable(object.eClass().getName(), address,
+                    DcsSettingsWriter.untypedValueRefusal(null)));
+                continue;
+            }
             if (reference.isMany() && value instanceof List<?>)
             {
                 List<?> children = (List<?>)value;
@@ -401,16 +401,92 @@ public final class DcsReadProjection
                                 : child(featureAddress,
                                     selector(feature, object, childObject, i));
                         collectUnmodellable(childObject, childAddress, feature,
-                            additionalProperties, catalogues, result);
+                            catalogues, result);
                     }
                 }
             }
             else if (value instanceof EObject)
             {
                 collectUnmodellable((EObject)value, featureAddress, feature,
-                    additionalProperties, catalogues, result);
+                    catalogues, result);
             }
         }
+    }
+
+    /**
+     * Writer sinks keyed by their actual EMF feature. DcsWriterValueSlotCoverageTest discovers
+     * Value-bearing accessors/literals in the compiled writers and requires a classification here.
+     */
+    private static final Map<EReference, ValueSlot> VALUE_SLOTS = Map.ofEntries(
+        Map.entry(com._1c.g5.v8.dt.dcs.model.core.DcsPackage.Literals
+            .DATA_COMPOSITION_PARAMETER_VALUE__PARAMETER, ValueSlot.PARAMETER),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.core.DcsPackage.Literals
+            .DATA_COMPOSITION_PARAMETER_VALUE__VALUES, ValueSlot.PARAMETER),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.core.DcsPackage.Literals
+            .PRESENTATION__LOCAL_VALUE, ValueSlot.PRESENTATION),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_GROUP_FIELD__FIELD, ValueSlot.FIELD),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_SELECTED_FIELD__FIELD, ValueSlot.FIELD),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_SELECTED_FIELD_GROUP__FIELD, ValueSlot.FIELD),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_ORDER_ITEM__FIELD, ValueSlot.FIELD),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_APPEARANCE_FIELD__FIELD, ValueSlot.FIELD),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_FILTER_ITEM__LEFT, ValueSlot.UNTYPED),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_FILTER_ITEM__RIGHT, ValueSlot.UNTYPED),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_BEGIN,
+            ValueSlot.PERIOD_BOUND),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_END,
+            ValueSlot.PERIOD_BOUND),
+        Map.entry(DcsPackage.Literals.DATA_COMPOSITION_USER_FIELDS_VARIANT__VALUE, ValueSlot.UNTYPED),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+            .DATA_COMPOSITION_SCHEMA_PARAMETER__VALUES, ValueSlot.DECLARED),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+            .AVAILABLE_VALUE__VALUE, ValueSlot.REQUIRED_DECLARED),
+        Map.entry(McorePackage.Literals.STRUCTURE_PROPERTY__VALUE, ValueSlot.REQUIRED_UNTYPED),
+        Map.entry(McorePackage.Literals.TYPED_VALUE_LIST_ITEM__VALUE, ValueSlot.UNTYPED));
+
+    enum ValueSlot
+    {
+        UNTYPED, FIELD, PERIOD_BOUND, DECLARED, PARAMETER, PRESENTATION, UNREGISTERED,
+        REQUIRED_UNTYPED, REQUIRED_DECLARED;
+
+        boolean requiresValue()
+        {
+            return this == REQUIRED_UNTYPED || this == REQUIRED_DECLARED;
+        }
+    }
+
+    static ValueSlot valueSlot(EReference feature)
+    {
+        return feature == null ? ValueSlot.UNREGISTERED
+            : VALUE_SLOTS.getOrDefault(feature, ValueSlot.UNREGISTERED);
+    }
+
+    private static String valueSlotRefusal(Value stored, DcsWriterCatalogues catalogues)
+    {
+        return switch (valueSlot(stored.eContainmentFeature()))
+        {
+            case UNTYPED, REQUIRED_UNTYPED -> DcsSettingsWriter.untypedValueRefusal(stored);
+            case FIELD -> DcsSettingsWriter.fieldValueRefusal(stored);
+            case PERIOD_BOUND -> DcsSettingsWriter.periodBoundRefusal(stored);
+            case DECLARED, REQUIRED_DECLARED -> DcsWriter.declaredValueRefusal(schemaValueType(stored.eContainer()),
+                stored, catalogues.languages());
+            // The parent checks identity, catalogue, count, and each value with its actual writer.
+            case PARAMETER -> null;
+            case PRESENTATION -> DcsSettingsWriter.presentationValueRefusal((LocalString)stored,
+                catalogues.languages());
+            case UNREGISTERED -> "this value slot has no registered writer"; //$NON-NLS-1$
+        };
+    }
+
+    private static TypeDescription schemaValueType(EObject owner)
+    {
+        if (owner instanceof AvailableValue) owner = owner.eContainer();
+        if (owner instanceof DataCompositionSchemaParameter)
+            return ((DataCompositionSchemaParameter)owner).getValueType();
+        if (owner instanceof DataCompositionSchemaDataSetField)
+            return ((DataCompositionSchemaDataSetField)owner).getValueType();
+        if (owner instanceof DataCompositionSchemaCalculatedField)
+            return ((DataCompositionSchemaCalculatedField)owner).getValueType();
+        return null;
     }
 
     /** Tests each item against the constructor of its containing parameter collection. */

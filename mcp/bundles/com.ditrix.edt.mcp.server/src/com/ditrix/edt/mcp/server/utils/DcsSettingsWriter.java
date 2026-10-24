@@ -2332,16 +2332,9 @@ public final class DcsSettingsWriter
             return null;
         }
         JsonElement raw = body.get(member);
-        Value bound = null;
-        if (!raw.isJsonNull())
-        {
-            ValueResult value = value(raw, path + "." + member); //$NON-NLS-1$
-            if (value.error != null)
-            {
-                return value.error;
-            }
-            bound = value.value instanceof NullValue ? null : value.value;
-        }
+        ValueResult parsed = periodBoundValue(raw, path + "." + member); //$NON-NLS-1$
+        if (parsed.error != null) return parsed.error;
+        Value bound = parsed.value;
         if (bound == null)
         {
             field.eUnset(feature);
@@ -2351,6 +2344,14 @@ public final class DcsSettingsWriter
             field.eSet(feature, bound);
         }
         return null;
+    }
+
+    /** Shared by the period-bound assignment and its replace dry run, including the clear form. */
+    private static ValueResult periodBoundValue(JsonElement raw, String path)
+    {
+        if (raw.isJsonNull()) return ValueResult.success(null);
+        ValueResult built = value(raw, path);
+        return built.error == null && built.value instanceof NullValue ? ValueResult.success(null) : built;
     }
 
     // ---- selection --------------------------------------------------------------------------
@@ -3827,10 +3828,42 @@ public final class DcsSettingsWriter
      */
     static String untypedValueRefusal(Value stored)
     {
+        return untypedValueRefusal(stored, raw -> value(raw, STORED_VALUE_PATH));
+    }
+
+    /** The same inverse projection, judged by the exact slot writer including storage rules. */
+    static String untypedValueRefusal(Value stored,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
         if (stored == null) return "the stored value is null"; //$NON-NLS-1$
         UntypedProjection projected = untypedProjection(stored);
         if (projected.body() == null) return projected.refusal();
-        return rebuildRefusal(stored, List.of(projected.body()), raw -> value(raw, STORED_VALUE_PATH));
+        return rebuildRefusal(stored, List.of(projected.body()), writer);
+    }
+
+    static String fieldValueRefusal(Value stored)
+    {
+        return untypedValueRefusal(stored, raw -> {
+            FieldResult built = fieldValue(raw, STORED_VALUE_PATH);
+            return built.error == null ? ValueResult.success(built.value) : ValueResult.failure(built.error);
+        });
+    }
+
+    static String periodBoundRefusal(Value stored)
+    {
+        return untypedValueRefusal(stored, raw -> periodBoundValue(raw, STORED_VALUE_PATH));
+    }
+
+    /** Presentations use parse/build, whose empty form clears instead of storing a LocalString. */
+    static String presentationValueRefusal(LocalString stored, DcsPresentationParser.LanguageContext languages)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return rebuildRefusal(stored, typedBodies(stored), raw -> {
+            DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(raw, dryRun, STORED_VALUE_PATH);
+            if (!parsed.isSuccess()) return ValueResult.failure(parsed.error());
+            Presentation built = DcsPresentationParser.build(parsed.plan());
+            return ValueResult.success(built == null ? null : built.getLocalValue());
+        });
     }
 
     /** Where a dry-run error says the projected body came from. */
