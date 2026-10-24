@@ -51,6 +51,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DcsPackage;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
@@ -272,6 +273,14 @@ public final class DcsReadProjection
             DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind, identity);
     }
 
+    /** Canonicalizes writer-supported index aliases without broadening the read address surface. */
+    static String replacementAddress(EObject root, DcsAddress target)
+    {
+        if (!target.hasPointer()) return target.toString();
+        NodeResolution resolved = resolvePointer(target.rootFqn(), root, target.segments(), true);
+        return resolved.isSuccess() ? resolved.node.address : target.toString();
+    }
+
     /** Resolves the same canonical pointer used by reads for the read-only options catalogue. */
     static OptionsNode resolveOptionsNode(String rootFqn, EObject root, DcsAddress address)
     {
@@ -388,6 +397,7 @@ public final class DcsReadProjection
             if (reference.isMany() && value instanceof List<?>)
             {
                 List<?> children = (List<?>)value;
+                Set<Object> keys = new LinkedHashSet<>();
                 for (int i = 0; i < children.size(); i++)
                 {
                     Object contained = children.get(i);
@@ -400,6 +410,15 @@ public final class DcsReadProjection
                                     featureAddress)
                                 : child(featureAddress,
                                     selector(feature, object, childObject, i));
+                        String keyRefusal = collectionKeyRefusal(object, feature, childObject,
+                            keys, catalogues);
+                        if (keyRefusal != null)
+                        {
+                            // A key failure must not hide descendants from a narrower replace.
+                            result.add(new Unmodellable(childObject.eClass().getName(),
+                                object instanceof DataCompositionAppearance ? address : childAddress,
+                                keyRefusal));
+                        }
                         collectUnmodellable(childObject, childAddress, feature,
                             catalogues, result);
                     }
@@ -411,6 +430,43 @@ public final class DcsReadProjection
                     catalogues, result);
             }
         }
+    }
+
+    /** Keys must survive the same object-map or natural-key lookup used by the writer. */
+    private static String collectionKeyRefusal(EObject owner, String collection, EObject item,
+        Set<Object> seen, DcsWriterCatalogues catalogues)
+    {
+        if (owner instanceof DataCompositionAppearance && FEATURE_ITEMS.equals(collection)
+            && item instanceof DataCompositionParameterValue)
+        {
+            DataCompositionParameter parameter = ((DataCompositionParameterValue)item).getParameter();
+            DcsWriterCatalogues.Lookup lookup = catalogues.appearanceCatalogue();
+            // The item guard reports missing/unresolvable identities and catalogue failures.
+            if (parameter == null || parameter.getValue() == null || lookup.failure() != null)
+                return null;
+            DcsAvailableParameter declared = lookup.parameters().findItem(parameter.getValue());
+            return declared != null && !seen.add(declared)
+                ? "duplicate resolved appearance parameter '" + declared.key(0) //$NON-NLS-1$
+                    + "'; an appearance body can write it only once" : null; //$NON-NLS-1$
+        }
+        String member = null;
+        if (owner instanceof Structure && "property".equals(collection) //$NON-NLS-1$
+            || owner instanceof DataCompositionSchema && NATURAL_NAME_COLLECTIONS.contains(collection)
+            || owner instanceof DataCompositionSchemaDataSetUnion && FEATURE_ITEMS.equals(collection))
+        {
+            member = "name"; //$NON-NLS-1$
+        }
+        else if (owner instanceof DataCompositionSchema && DATA_PATH_COLLECTIONS.contains(collection)
+            || owner instanceof DataSet && "fields".equals(collection)) //$NON-NLS-1$
+        {
+            member = "dataPath"; //$NON-NLS-1$
+        }
+        if (member == null) return null; // Indexed arrays preserve repeated or absent identities.
+        String key = stringFeature(item, member);
+        if (key.isEmpty())
+            return "empty '" + member + "' key; the writer needs a non-empty string"; //$NON-NLS-1$ //$NON-NLS-2$
+        return !seen.add(key) ? "duplicate '" + member + "' key '" + key //$NON-NLS-1$ //$NON-NLS-2$
+            + "'; the writer can write it only once in this collection" : null; //$NON-NLS-1$
     }
 
     /**
@@ -534,6 +590,9 @@ public final class DcsReadProjection
             return "typed catalogue for platform " + catalogues.version() + " unavailable: " //$NON-NLS-1$ //$NON-NLS-2$
                 + (catalogue == null ? "missing parameter-value holder" : catalogue.failure()); //$NON-NLS-1$
         }
+        // applyParameterItem accepts {} for every output holder, and EDT reloads that shape.
+        if (!(holder instanceof DataCompositionAppearance) && item.getParameter() == null
+            && values.isEmpty()) return null;
         String name = item.getParameter() == null ? null : item.getParameter().getValue();
         if (name == null)
         {
@@ -1467,6 +1526,12 @@ public final class DcsReadProjection
 
     private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments)
     {
+        return resolvePointer(rootFqn, root, segments, false);
+    }
+
+    private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments,
+        boolean indexFallback)
+    {
         Object current = root;
         EObject owner = null;
         String currentAddress = rootFqn;
@@ -1492,7 +1557,7 @@ public final class DcsReadProjection
                             virtualFields)));
                 }
                 String fieldSelector = segments.get(++i);
-                int selected = find(virtualFields, collectionName, object, fieldSelector);
+                int selected = find(virtualFields, collectionName, object, fieldSelector, indexFallback);
                 if (selected < 0)
                 {
                     return failedSegment(fieldSelector, currentAddress,
@@ -1542,7 +1607,7 @@ public final class DcsReadProjection
                     object, nodeRefs(currentAddress, object, collectionName, list)));
             }
             String selector = segments.get(++i);
-            int selected = find(list, collectionName, object, selector);
+            int selected = find(list, collectionName, object, selector, indexFallback);
             if (selected < 0)
             {
                 return failedSegment(selector, currentAddress, selectors(list, collectionName, object));
@@ -1583,7 +1648,8 @@ public final class DcsReadProjection
         return remaining == 0 ? available : available + ", ... (" + remaining + " more)"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static int find(List<?> list, String collection, EObject owner, String requested)
+    private static int find(List<?> list, String collection, EObject owner, String requested,
+        boolean indexFallback)
     {
         for (int i = 0; i < list.size(); i++)
         {
@@ -1593,6 +1659,11 @@ public final class DcsReadProjection
             {
                 return i;
             }
+        }
+        if (indexFallback && DcsAddress.isZeroBasedIndex(requested))
+        {
+            int index = Integer.parseInt(requested);
+            if (index < list.size()) return index;
         }
         return -1;
     }

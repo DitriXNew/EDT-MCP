@@ -877,6 +877,43 @@ public final class DcsSettingsWriter
         return null;
     }
 
+    /**
+     * Resolves a variant replacement through applyVariant's own name parser and
+     * exact natural-key lookup. Invalid or ambiguous requests are left to the planner to report.
+     */
+    public static synchronized String variantReplacementName(DataCompositionSchema schema,
+        DcsAddress address, JsonObject body)
+    {
+        if (body == null) return null;
+        String pointerName = address.segments().size() == 2 ? address.segments().get(1) : null;
+        VariantName parsed = variantName(pointerName, body, "body"); //$NON-NLS-1$
+        if (parsed.error() != null) return null;
+        return findVariants(schema.getSettingsVariants(), parsed.name()).size() == 1
+            ? parsed.name() : null;
+    }
+
+    private record VariantName(String name, String error) { }
+
+    /** Shared by the planner and the guard, including the exact-pointer natural-key semantics. */
+    private static VariantName variantName(String pointerName, JsonObject body, String path)
+    {
+        String bodyName = optionalString(body, KEY_NAME, path);
+        if (stringError != null) return new VariantName(null, stringError);
+        if (pointerName != null && bodyName != null && !pointerName.equals(bodyName))
+        {
+            return new VariantName(null,
+                "Variant body name '" + bodyName + "' does not match address name '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + pointerName + "'. Make 'name' match the pointer, or omit it."); //$NON-NLS-1$
+        }
+        String name = pointerName != null ? pointerName : bodyName;
+        if (name == null || name.isEmpty())
+        {
+            return new VariantName(null, "Variant body at '" + path //$NON-NLS-1$
+                + "' needs a non-empty 'name'. Add its natural key and retry."); //$NON-NLS-1$
+        }
+        return new VariantName(name, null);
+    }
+
     private static String applyVariant(List<SettingsVariant> variants, String pointerName, String action,
         JsonObject body, DcsPresentationParser.LanguageContext languages, Version version, String path)
     {
@@ -885,22 +922,9 @@ public final class DcsSettingsWriter
         {
             return members;
         }
-        String bodyName = optionalString(body, KEY_NAME, path);
-        if (stringError != null)
-        {
-            return stringError;
-        }
-        if (pointerName != null && bodyName != null && !pointerName.equals(bodyName))
-        {
-            return "Variant body name '" + bodyName + "' does not match address name '" //$NON-NLS-1$ //$NON-NLS-2$
-                + pointerName + "'. Make 'name' match the pointer, or omit it."; //$NON-NLS-1$
-        }
-        String name = pointerName != null ? pointerName : bodyName;
-        if (name == null || name.isEmpty())
-        {
-            return "Variant body at '" + path //$NON-NLS-1$
-                + "' needs a non-empty 'name'. Add its natural key and retry."; //$NON-NLS-1$
-        }
+        VariantName parsedName = variantName(pointerName, body, path);
+        if (parsedName.error() != null) return parsedName.error();
+        String name = parsedName.name();
         List<Integer> matches = findVariants(variants, name);
         if (matches.size() > 1)
         {

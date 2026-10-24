@@ -29,8 +29,10 @@ platform catalogue for the project's version (including an older alias), a value
 match the declared type, or a font other than an explicit font with an integer height and the
 default scale of 100. Use `action='update'` on those items to keep every member the body
 does not name; on a schema root you can also carry the whole schema through the lossless XML
-channel. A schema parameter's own default and available values (`values`, `availableValues`) are
-not checked by this refusal.
+channel. A schema parameter's defaults (`values`) and available values (`availableValues`),
+including available values on data-set and calculated fields, are also dry-run through their
+declared-value writer using the containing parameter or field's `valueType`. A `replace` is refused
+if that writer rejects a value or cannot rebuild it exactly.
 
 ### Lossless XML round-trip
 

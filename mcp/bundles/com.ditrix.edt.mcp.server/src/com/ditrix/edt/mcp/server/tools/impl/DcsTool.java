@@ -23,6 +23,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -777,7 +778,7 @@ public class DcsTool implements IMcpTool
                         if (ACTION_REPLACE.equals(action))
                         {
                             String refusal = replaceRefusal(content.schema(),
-                                content.schema().getDefaultSettings(), type, address, catalogues);
+                                content.schema().getDefaultSettings(), type, address, catalogues, body);
                             if (refusal != null) throw DcsWriteFailure.message(refusal);
                         }
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
@@ -959,7 +960,7 @@ public class DcsTool implements IMcpTool
                 {
                     String refusal = replaceRefusal(extInfo,
                         extInfo == null ? null : extInfo.getListSettings(), type, address,
-                        replaceCatalogues(target.kind(), version, languages, null, namedColors));
+                        replaceCatalogues(target.kind(), version, languages, null, namedColors), body);
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1309,6 +1310,35 @@ public class DcsTool implements IMcpTool
         return source == null ? DcsSettingsWriter.catalogues(version, languages, appearance, namedColors)
             : new DcsWriterCatalogues(version, appearance,
                 languages == null ? "en" : languages.resolvedCode(), languages, namedColors, source); //$NON-NLS-1$
+    }
+
+    /** Body-aware scope for natural-key variants and concrete types at explicit settings roots. */
+    static String replaceRefusal(EObject whole, EObject settingsRoot, String type,
+        DcsAddress address, DcsWriterCatalogues catalogues, JsonObject body)
+    {
+        List<String> segments = address.segments();
+        if ("variant".equals(type) && whole instanceof DataCompositionSchema //$NON-NLS-1$
+            && (segments.isEmpty() || segments.size() <= 2 && "variants".equals(segments.get(0)))) //$NON-NLS-1$
+        {
+            String name = DcsSettingsWriter.variantReplacementName((DataCompositionSchema)whole, address, body);
+            if (name == null) return null; // A new variant discards no existing subtree.
+            DcsAddress target = DcsAddress.parse(DcsAddress.render(address.rootFqn(),
+                List.of("variants", name))).address(); //$NON-NLS-1$
+            return DcsMutationGuard.replaceError(whole, target, catalogues);
+        }
+        List<String> defaultPath = DcsSettingsWriter.defaultSettingsPath(type);
+        boolean settingsTarget = whole instanceof DynamicListExtInfo
+            ? segments.equals(List.of("listSettings")) //$NON-NLS-1$
+            : whole instanceof DataCompositionSchema && (segments.equals(List.of("defaultSettings")) //$NON-NLS-1$
+                || segments.size() == 3 && "variants".equals(segments.get(0)) //$NON-NLS-1$
+                    && "settings".equals(segments.get(2))); //$NON-NLS-1$
+        if (settingsTarget && !defaultPath.isEmpty())
+        {
+            List<String> scoped = new ArrayList<>(segments);
+            scoped.addAll(defaultPath);
+            address = DcsAddress.parse(DcsAddress.render(address.rootFqn(), scoped)).address();
+        }
+        return replaceRefusal(whole, settingsRoot, type, address, catalogues);
     }
 
     /**

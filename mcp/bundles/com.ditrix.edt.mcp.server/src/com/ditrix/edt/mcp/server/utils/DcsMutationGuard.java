@@ -24,7 +24,7 @@ public final class DcsMutationGuard
         DcsWriterCatalogues catalogues)
     {
         if (root == null || target == null) return null;
-        String targetAddress = target.toString();
+        String targetAddress = DcsReadProjection.replacementAddress(root, target);
         List<String> blocked = new ArrayList<>();
         String deliberateRefusal = null;
         boolean parameterRefusal = false;
