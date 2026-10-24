@@ -49,7 +49,7 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 | Preset | What is disabled |
 |---|---|
 | **All Tools** | Nothing (all currently enabled tools) |
-| **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Also off: the Core writers `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, the git branch changes (`switch_git_branch`, `create_git_branch`) and infobase binding (`set_branch_infobase`). Available: Core reads, comparison, git branch listing, Errors & Problems, Code Intelligence, Tags; `revalidate_objects` and `enable_toolset` stay enabled |
+| **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Also off: the Core writers `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, the git branch changes (`switch_git_branch`, `create_git_branch`) and infobase binding (`set_branch_infobase`), plus `project_checks` in Errors & Problems. Available: Core reads, comparison, git branch listing, the other Errors & Problems tools, Code Intelligence, Tags; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | The Debugging group and default-off tools (currently raw `git` and `ask_workmate`). `run_yaxunit_tests` remains available from Applications for normal runs; although `debug=true` can start, its inspection and cleanup tools are disabled, so do not start a debug run until Debugging is enabled. Refactoring, Translation, BSL Code, and the remaining Applications tools are available |
 
@@ -81,11 +81,12 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `export_configuration_to_xml` | Export configuration to XML files (EDT menu: Export -> Configuration to XML Files) | On user request |
 | `import_configuration_from_xml` | Import configuration from XML files (reverse of export) | On user request |
 
-### 2. Errors & Problems (3)
+### 2. Errors & Problems (4)
 
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_problem_summary` | Problem counts by project and severity | **First** — gives the full picture in one call |
+| `project_checks` | List/change validation checks; list, switch, create, copy or delete check-settings profiles (`createProfile`, `copyProfile`, `deleteProfile`). Writes require consent; deletion is destructive | Read settings before changing them; new names use EDT validation, `copyProfile` requires `from`, and active profiles cannot be deleted |
 | `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (loose FQN-fragment array) OR `objectFqns` (exact addresses, reports `objectsNotFound` / `objectsUnsupported`; mutually exclusive with `objects`), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
 | `get_markers` | Workspace markers — bookmarks and/or TODO/FIXME task markers. Filters: `markerKind` (`bookmark`/`task`; omit = both), `projectName`, `filePath`, `priority` (task-only) | On request or during a technical-debt audit |
 
