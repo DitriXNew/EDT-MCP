@@ -204,7 +204,7 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
 
     private String executeRouteMap(Inputs args)
     {
-        ProjectContext ctx = resolveProjectAndScope(args.projectName());
+        ProjectContext ctx = resolveProjectAndScope(args.projectName(), args.fqn());
         if (ctx.hasError())
         {
             return ctx.error;
