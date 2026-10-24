@@ -361,10 +361,12 @@ public final class DcsReadProjection
     {
         java.util.Objects.requireNonNull(catalogues);
         if (root == null) return Collections.emptyList();
-        List<Unmodellable> result = new ArrayList<>();
-        collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-            "", catalogues, outsideScope, result); //$NON-NLS-1$
-        return result;
+        return DcsSettingsWriter.guardDryRun(() -> {
+            List<Unmodellable> result = new ArrayList<>();
+            collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
+                "", catalogues, outsideScope, result); //$NON-NLS-1$
+            return result;
+        });
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,
@@ -418,6 +420,9 @@ public final class DcsReadProjection
                     if (contained instanceof EObject)
                     {
                         EObject childObject = (EObject)contained;
+                        // An indexed target excludes duplicate siblings from both key accounting
+                        // and descendant scans, regardless of their position in the collection.
+                        if (outsideScope.contains(childObject)) continue;
                         String childAddress = object instanceof DataSet
                             && "fields".equals(feature) && childObject instanceof DataSetField //$NON-NLS-1$
                                 ? fieldAddress((DataSet)object, (DataSetField)childObject,
@@ -426,9 +431,6 @@ public final class DcsReadProjection
                                     selector(feature, object, childObject, i));
                         String keyRefusal = collectionKeyRefusal(object, feature, childObject,
                             keys, catalogues);
-                        // Keep key accounting for every entry, but inspect only the indexed
-                        // entry's content when a sibling has the same canonical address.
-                        if (outsideScope.contains(childObject)) continue;
                         if (keyRefusal != null)
                         {
                             // A key failure must not hide descendants from a narrower replace.
@@ -599,6 +601,9 @@ public final class DcsReadProjection
             // One value is restated by 'value', several by 'values'; each through value().
             return eachValueRefusal(values, DcsSettingsWriter::untypedValueRefusal);
         }
+        // Like applyParameterValuesPath, a blank output item needs no typed definition.
+        if (holder instanceof ParameterValues && !(holder instanceof DataCompositionAppearance)
+            && item.getParameter() == null && values.isEmpty()) return null;
         DcsWriterCatalogues.Lookup catalogue = holder instanceof DataCompositionAppearance
             ? catalogues.appearanceCatalogue() : holder instanceof ParameterValues
                 ? catalogues.outputCatalogue((ParameterValues)holder) : null;
@@ -607,9 +612,6 @@ public final class DcsReadProjection
             return "typed catalogue for platform " + catalogues.version() + " unavailable: " //$NON-NLS-1$ //$NON-NLS-2$
                 + (catalogue == null ? "missing parameter-value holder" : catalogue.failure()); //$NON-NLS-1$
         }
-        // applyParameterItem accepts {} for every output holder, and EDT reloads that shape.
-        if (!(holder instanceof DataCompositionAppearance) && item.getParameter() == null
-            && values.isEmpty()) return null;
         String name = item.getParameter() == null ? null : item.getParameter().getValue();
         if (name == null)
         {

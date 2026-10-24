@@ -197,6 +197,12 @@ public final class DcsSettingsWriter
         // Utility class
     }
 
+    /** Runs a guard scan under the same class monitor as planSchema and planSettings. */
+    static synchronized <T> T guardDryRun(Supplier<T> operation)
+    {
+        return operation.get();
+    }
+
     /** Whether {@code type} is one of the supported settings types. */
     public static boolean supports(String type)
     {
