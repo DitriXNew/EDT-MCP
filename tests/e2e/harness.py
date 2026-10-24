@@ -464,24 +464,31 @@ def _post(method, params):
             text = e.read().decode("utf-8", "replace")
         except (TimeoutError, socket.timeout) as body_timeout:
             # Headers arrived, the body did not - still a call we cannot account for.
-            _arm_timeout_latch()
-            raise E2ECallTimeout(_call_timeout_message(body_timeout))
+            _arm_timeout_latch(method, params)
+            raise _call_timeout_error(body_timeout, method, params)
     except urllib.error.URLError as e:
         # A socket read timeout arrives either bare or wrapped in URLError, depending on the
-        # Python build; only the timeout becomes E2ECallTimeout - a refused connection is a
-        # different failure and must keep its own traceback.
+        # Python build. Unclassified/writer timeouts become E2ECallTimeout; shared-table
+        # reads keep an ordinary TimeoutError so earlier completed writes can be cleaned up.
         if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
-            _arm_timeout_latch()
-            raise E2ECallTimeout(_call_timeout_message(e))
+            _arm_timeout_latch(method, params)
+            raise _call_timeout_error(e, method, params)
         raise
     except (TimeoutError, socket.timeout) as e:
-        _arm_timeout_latch()
-        raise E2ECallTimeout(_call_timeout_message(e))
+        _arm_timeout_latch(method, params)
+        raise _call_timeout_error(e, method, params)
     return _parse_response(text)
 
 
-def _arm_timeout_latch():
-    """Remember that a call was abandoned - see _TIMED_OUT."""
+def _is_read_only_model_request(method, params):
+    return (method == "tools/call" and isinstance(params, dict)
+            and _is_read_only_model_action(params.get("name"), params.get("arguments")))
+
+
+def _arm_timeout_latch(method=None, params=None):
+    """Read-only actions cannot leave an in-flight model mutation."""
+    if _is_read_only_model_request(method, params):
+        return
     abort_further_calls("an earlier call timed out and may still be running")
 
 
@@ -530,7 +537,16 @@ def abort_reason():
     return _ABORT_REASON
 
 
-def _call_timeout_message(cause):
+def _call_timeout_error(cause, method, params):
+    # The runner can still clean up earlier writes after a failed read.
+    error = TimeoutError if _is_read_only_model_request(method, params) else E2ECallTimeout
+    return error(_call_timeout_message(cause, method, params))
+
+
+def _call_timeout_message(cause, method=None, params=None):
+    if _is_read_only_model_request(method, params):
+        return ("no response in %gs (MCP_CALL_TIMEOUT). The read-only request may still be "
+                "running on the server. %s" % (CALL_TIMEOUT, cause))
     return ("no response in %gs (MCP_CALL_TIMEOUT). The server may still be RUNNING this call, "
             "so the model is not safe to read or even to reset - the run stops here. Check the "
             "EDT log for the matching 'Completed tools/call: ... in Nms' line to see whether it "
@@ -581,7 +597,8 @@ def call(tool, arguments):
             # export lands on the restored tree and leaks into the next test. So arm the same latch
             # a timeout arms, which also freezes the fixtures, and let the run stop. Reading a write
             # back is what makes it safe to undo; nothing else does.
-            if tool in MODEL_MUTATION_TOOLS and not _TIMED_OUT:
+            if (tool in MODEL_MUTATION_TOOLS and not _is_read_only_model_action(tool, arguments)
+                    and not _TIMED_OUT):
                 abort_further_calls(
                     "a %s request died in flight, so the server may still be executing it" % tool)
             raise
@@ -729,6 +746,8 @@ MODEL_MUTATION_TOOLS = frozenset({
     # failure carries mutationOutcomeUnknown:true. Both forfeit the shortcut without making an
     # ordinary negative test do so.
     "dcs",
+    # Like dcs, get only reads; replace/remove write after validation and consent.
+    "business_process_route_map",
     # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection.
     # Their entry points now mark an exception after invoke() as outcome-unknown, but source
     # scanning still cannot discover their membership; the ratchet pins their names explicitly.
@@ -747,6 +766,18 @@ NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
 })
 
 
+# Action-based writers share one exemption table. All other actions stay conservative.
+READ_ONLY_MODEL_ACTIONS = {
+    "dcs": frozenset({"get", "options"}),
+    "business_process_route_map": frozenset({"get"}),
+}
+
+
+def _is_read_only_model_action(tool, args):
+    return (isinstance(args, dict) and isinstance(args.get("action"), str)
+            and args["action"] in READ_ONLY_MODEL_ACTIONS.get(tool, ()))
+
+
 def _call_moves_the_fixture_model(tool, args, structured):
     """Did THIS call move the fixture's model? Asked per call, not per tool.
 
@@ -763,7 +794,7 @@ def _call_moves_the_fixture_model(tool, args, structured):
     is "preview" is a dry run by construction (rename/delete build the refactoring and report it
     without applying), so it cannot have moved anything.
     """
-    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS or _is_read_only_model_action(tool, args):
         return False
     if isinstance(structured, dict) and structured.get("action") == "preview":
         return False
@@ -881,6 +912,8 @@ def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
     _CALLED_TOOLS.add(tool)
+    if _is_read_only_model_action(tool, args):
+        return
     if _cascades_across_fixtures(tool, args):
         _UNRESOLVED_CASCADE_CALLS += 1
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
@@ -921,14 +954,16 @@ def _record_outcome(tool, args, is_error, structured):
         _UNRESOLVED_CASCADE_CALLS = max(0, _UNRESOLVED_CASCADE_CALLS - 1)
     if tool not in MODEL_MUTATION_TOOLS:
         return
-    if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
-        for project in _candidate_mutation_targets(tool, args):
-            remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
-            if remaining > 0:
-                _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
-            else:
-                _UNRESOLVED_MUTATION_PROJECTS.pop(project, None)
-    _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
+    if not _is_read_only_model_action(tool, args):
+        # Retire only an attempt this call actually recorded; a read cannot settle a writer.
+        if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+            for project in _candidate_mutation_targets(tool, args):
+                remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
+                if remaining > 0:
+                    _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
+                else:
+                    _UNRESOLVED_MUTATION_PROJECTS.pop(project, None)
+        _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
     mutation_committed = (isinstance(structured, dict)
                           and structured.get("mutationCommitted") is True)
     mutation_unknown = (isinstance(structured, dict)
@@ -937,12 +972,13 @@ def _record_outcome(tool, args, is_error, structured):
     call_moves_fixture = (mutation_evidenced
                           and _call_moves_the_fixture_model(tool, args, structured))
     if mutation_evidenced:
-        _MUTATION_CONFIRMED = True
+        if mutation_committed or mutation_unknown or not _is_read_only_model_action(tool, args):
+            _MUTATION_CONFIRMED = True
         if _cascades_across_fixtures(tool, args):
             _CASCADE_CONFIRMED_CALLED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
-        # stays conservative (any success forfeits it), while accusing a test of a mis-declared
-        # kind has to be right about THIS call actually having moved the fixture's model.
+        # stays conservative outside the shared read-only actions, while accusing a test of a
+        # mis-declared kind must be right about THIS call moving the fixture's model.
         if call_moves_fixture:
             _CONFIRMED_MUTATION_TOOLS.add(tool)
     # Keep the named targets correlated with THIS outcome. A success counts only when this call

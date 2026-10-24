@@ -206,6 +206,7 @@ public enum ToolPreset
      * writing, plus the shared workspace, git and comparison writers. CORE and GIT remain partly
      * available for reads, so their writers must be excluded by name.
      * <p>
+     * The preset excludes business_process_route_map in full, including its get action.
      * Comparison reads, the in-memory toolset switch and non-discarding revalidation stay enabled
      * under the documented keep-list. {@code export_common_picture} is a pure model read returning
      * PNG bytes, so it also stays enabled.
