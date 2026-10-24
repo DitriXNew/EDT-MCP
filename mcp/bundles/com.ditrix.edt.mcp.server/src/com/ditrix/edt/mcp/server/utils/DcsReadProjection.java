@@ -361,12 +361,10 @@ public final class DcsReadProjection
     {
         java.util.Objects.requireNonNull(catalogues);
         if (root == null) return Collections.emptyList();
-        return DcsSettingsWriter.guardDryRun(() -> {
-            List<Unmodellable> result = new ArrayList<>();
-            collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-                "", catalogues, outsideScope, result); //$NON-NLS-1$
-            return result;
-        });
+        List<Unmodellable> result = new ArrayList<>();
+        collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
+            "", catalogues, outsideScope, result); //$NON-NLS-1$
+        return result;
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,

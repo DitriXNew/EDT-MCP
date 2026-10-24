@@ -148,6 +148,9 @@ public final class DcsSettingsWriter
     private static final ThreadLocal<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
         new ThreadLocal<>();
     private static final ThreadLocal<AppearanceCatalogue> APPEARANCE_CATALOGUE = new ThreadLocal<>();
+    /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
+    private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
+        ThreadLocal.withInitial(ParseScratch::new);
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
@@ -195,12 +198,6 @@ public final class DcsSettingsWriter
     private DcsSettingsWriter()
     {
         // Utility class
-    }
-
-    /** Runs a guard scan under the same class monitor as planSchema and planSettings. */
-    static synchronized <T> T guardDryRun(Supplier<T> operation)
-    {
-        return operation.get();
     }
 
     /** Whether {@code type} is one of the supported settings types. */
@@ -341,7 +338,7 @@ public final class DcsSettingsWriter
                 JsonObject settingsBody = object(body, "defaultSettings", "schema settings body"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (settingsBody == null)
                 {
-                    return SchemaResult.failure(objectError);
+                    return SchemaResult.failure(parseScratch().objectError);
                 }
                 SettingsResult planned = planSettings(defaultSettings, Collections.emptyList(), action,
                     TYPE_USER_SETTINGS, settingsBody, languages, version);
@@ -357,7 +354,7 @@ public final class DcsSettingsWriter
                 JsonArray array = array(body, "variants", "schema settings body"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (array == null)
                 {
-                    return SchemaResult.failure(arrayError);
+                    return SchemaResult.failure(parseScratch().arrayError);
                 }
                 String duplicate = variantBodyKeyError(array);
                 if (duplicate != null)
@@ -369,7 +366,7 @@ public final class DcsSettingsWriter
                     JsonObject variantBody = arrayObject(array, i, "variants"); //$NON-NLS-1$
                     if (variantBody == null)
                     {
-                        return SchemaResult.failure(arrayObjectError);
+                        return SchemaResult.failure(parseScratch().arrayObjectError);
                     }
                     String error = applyVariant(variants, null, action, variantBody, languages, version,
                         "body.variants[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -569,7 +566,7 @@ public final class DcsSettingsWriter
                 return SettingsResult.success(copy(current), false);
             }
             JsonObject settingsBody = object(body, "listSettings", "dynamic-list settings body"); //$NON-NLS-1$ //$NON-NLS-2$
-            return settingsBody == null ? SettingsResult.failure(objectError)
+            return settingsBody == null ? SettingsResult.failure(parseScratch().objectError)
                 : dynamicListResult(current, planSettings(current, Collections.emptyList(), action,
                     TYPE_USER_SETTINGS, settingsBody, languages, version, address,
                     dynamicListSettingsRootAddress(address)), address);
@@ -871,9 +868,9 @@ public final class DcsSettingsWriter
         for (int i = 0; i < variants.size(); i++)
         {
             JsonObject body = arrayObject(variants, i, "variants"); //$NON-NLS-1$
-            if (body == null) return arrayObjectError;
+            if (body == null) return parseScratch().arrayObjectError;
             String name = optionalString(body, KEY_NAME, "body.variants[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             if (name != null && !name.isEmpty() && !names.add(name))
             {
                 return "The body names variant natural key '" + name //$NON-NLS-1$
@@ -904,7 +901,7 @@ public final class DcsSettingsWriter
     private static VariantName variantName(String pointerName, JsonObject body, String path)
     {
         String bodyName = optionalString(body, KEY_NAME, path);
-        if (stringError != null) return new VariantName(null, stringError);
+        if (parseScratch().stringError != null) return new VariantName(null, parseScratch().stringError);
         if (pointerName != null && bodyName != null && !pointerName.equals(bodyName))
         {
             return new VariantName(null,
@@ -974,7 +971,7 @@ public final class DcsSettingsWriter
             JsonObject settingsBody = object(body, "settings", path); //$NON-NLS-1$
             if (settingsBody == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             SettingsResult settings = planSettings(variant.getSettings(), Collections.emptyList(),
                 action, TYPE_USER_SETTINGS, settingsBody, languages, version);
@@ -1058,7 +1055,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -1076,7 +1073,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
@@ -1098,7 +1095,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1119,7 +1116,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getOrder(), path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1140,7 +1137,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getConditionalAppearance(),
                 path + ".conditionalAppearance"); //$NON-NLS-1$
@@ -1163,7 +1160,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "dataParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getDataParameters(),
                 path + ".dataParameters"); //$NON-NLS-1$
@@ -1186,7 +1183,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getOutputParameters(),
                 path + ".outputParameters"); //$NON-NLS-1$
@@ -1209,7 +1206,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "userFields", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getUserFields(),
                 path + ".userFields"); //$NON-NLS-1$
@@ -1233,7 +1230,7 @@ public final class DcsSettingsWriter
             JsonObject properties = object(body, KEY_ADDITIONAL_PROPERTIES, path);
             if (properties == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String error = applyAdditionalProperties(settings, properties, action,
                 path + "." + KEY_ADDITIONAL_PROPERTIES); //$NON-NLS-1$
@@ -1339,7 +1336,7 @@ public final class DcsSettingsWriter
                     return members;
                 }
                 JsonArray array = array(body, KEY_ITEMS, where);
-                return array == null ? arrayError
+                return array == null ? parseScratch().arrayError
                     : appendGroupings(items, array, action, languages, version, where);
             }
             return appendGrouping(items, body, action, languages, version, where);
@@ -1369,9 +1366,9 @@ public final class DcsSettingsWriter
                     + "chart address returned by get."; //$NON-NLS-1$
             }
             String kind = optionalString(body, KEY_KIND, where + "/" + selector); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             if (kind == null)
             {
@@ -1498,7 +1495,7 @@ public final class DcsSettingsWriter
             JsonObject body = arrayObject(array, i, where);
             if (body == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendGrouping(items, body, action, languages, version,
                 where + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1519,9 +1516,9 @@ public final class DcsSettingsWriter
                 + "'. Copy the grouping address from get; use upsert to append a new grouping."; //$NON-NLS-1$
         }
         String kind = optionalString(body, KEY_KIND, where);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         AxisItemKind axisKind = AxisItemKind.ofToken(kind);
         if (axisKind != null)
@@ -1570,9 +1567,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             for (StructureItem sibling : siblings)
             {
@@ -1590,14 +1587,14 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             group.setUse(use.booleanValue());
         }
         if (body.has(KEY_ID))
         {
             String id = optionalString(body, KEY_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             group.setId(id);
         }
         if (body.has(KEY_GROUP_STATE))
@@ -1617,7 +1614,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getGroupFields(),
                 path + ".groupFields"); //$NON-NLS-1$
@@ -1639,7 +1636,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
@@ -1661,7 +1658,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1682,7 +1679,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getOrder(), path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1703,7 +1700,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getOutputParameters(),
                 path + ".outputParameters"); //$NON-NLS-1$
@@ -1727,7 +1724,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -1859,9 +1856,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             for (StructureItem sibling : siblings)
             {
@@ -1880,14 +1877,14 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             setFeature(item, KEY_USE, use);
         }
         if (body.has(KEY_ID))
         {
             String id = optionalString(body, KEY_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             if (item instanceof DataCompositionTable) ((DataCompositionTable)item).setId(id);
             else ((DataCompositionChart)item).setId(id);
         }
@@ -1916,7 +1913,7 @@ public final class DcsSettingsWriter
         if (body.has("selection")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(owner, "selection"), //$NON-NLS-1$
                 path + ".selection"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1928,7 +1925,7 @@ public final class DcsSettingsWriter
         if (body.has("conditionalAppearance")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action,
                 (EObject)feature(owner, "conditionalAppearance"), //$NON-NLS-1$
                 path + ".conditionalAppearance"); //$NON-NLS-1$
@@ -1943,7 +1940,7 @@ public final class DcsSettingsWriter
         if (body.has("outputParameters")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(owner, "outputParameters"), //$NON-NLS-1$
                 path + ".outputParameters"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2025,7 +2022,7 @@ public final class DcsSettingsWriter
         JsonArray array = array(body, member, path);
         if (array == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action))
         {
@@ -2043,12 +2040,12 @@ public final class DcsSettingsWriter
             String members = checkMembers(body, where, KEY_ITEMS);
             if (members != null) return members;
             JsonArray array = array(body, KEY_ITEMS, where);
-            if (array == null) return arrayError;
+            if (array == null) return parseScratch().arrayError;
             if (ACTION_REPLACE.equals(action)) groups.clear();
             return appendAxisGroups(kind, groups, array, action, languages, version, where);
         }
         int selected = index(path.get(0), groups.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         EObject group = groups.get(selected);
         String at = where + "/" + path.get(0); //$NON-NLS-1$
         if (path.size() == 1)
@@ -2093,7 +2090,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject item = arrayObject(array, i, where);
-            if (item == null) return arrayObjectError;
+            if (item == null) return parseScratch().arrayObjectError;
             EObject group = kind.createGroup();
             String error = applyAxisGroup(kind, group, item, action, languages, version,
                 where + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2114,13 +2111,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             setFeature(group, KEY_NAME, name);
         }
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             setFeature(group, KEY_USE, use);
         }
         if (body.has(KEY_GROUP_STATE))
@@ -2136,7 +2133,7 @@ public final class DcsSettingsWriter
         if (body.has("groupFields")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "groupFields"), //$NON-NLS-1$
                 path + ".groupFields"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2148,7 +2145,7 @@ public final class DcsSettingsWriter
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "filter"), //$NON-NLS-1$
                 path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2160,7 +2157,7 @@ public final class DcsSettingsWriter
         if (body.has("order")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "order"), //$NON-NLS-1$
                 path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2175,7 +2172,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_ITEMS))
         {
             JsonArray array = array(body, KEY_ITEMS, path);
-            if (array == null) return arrayError;
+            if (array == null) return parseScratch().arrayError;
             EList<EObject> items = axisGroups(group, KEY_ITEMS);
             if (fresh) items.clear();
             return appendAxisGroups(kind, items, array, action, languages, version, path + ".items"); //$NON-NLS-1$
@@ -2207,9 +2204,9 @@ public final class DcsSettingsWriter
         else if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int index = index(path.get(1), fields.getItems().size(), where + "/groupFields/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             GroupItem item = fields.getItems().get(index);
             if (!(item instanceof DataCompositionGroupField))
@@ -2254,14 +2251,14 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         for (int i = 0; i < items.size(); i++)
         {
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendGroupField(fields.getItems(), item, action,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2310,7 +2307,7 @@ public final class DcsSettingsWriter
             Boolean value = bool(body, KEY_USE, path);
             if (value == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             field.setUse(value.booleanValue());
         }
@@ -2441,9 +2438,9 @@ public final class DcsSettingsWriter
             return appendSelected(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         SelectedItem item = items.get(selected);
         if (path.size() == 2)
@@ -2458,7 +2455,7 @@ public final class DcsSettingsWriter
                 SelectedItem fresh = newSelectedItem(body, at);
                 if (fresh == null)
                 {
-                    return selectedKindError;
+                    return parseScratch().selectedKindError;
                 }
                 String rebuilt = applySelectedItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
@@ -2497,7 +2494,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) selection.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -2505,7 +2502,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendSelected(selection.getItems(), item, action, languages,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2525,7 +2522,7 @@ public final class DcsSettingsWriter
         SelectedItem item = newSelectedItem(body, path);
         if (item == null)
         {
-            return selectedKindError;
+            return parseScratch().selectedKindError;
         }
         String error = applySelectedItem(item, body, action, languages, path);
         if (error == null)
@@ -2537,16 +2534,16 @@ public final class DcsSettingsWriter
 
     /**
      * A fresh selection item of the kind the body names, or {@code null} with
-     * {@link #selectedKindError} set. Shared by append and by an authoritative replace so both
+     * {@link #parseScratch().selectedKindError} set. Shared by append and by an authoritative replace so both
      * build the same shapes from the same kind vocabulary.
      */
     private static SelectedItem newSelectedItem(JsonObject body, String path)
     {
-        selectedKindError = null;
+        parseScratch().selectedKindError = null;
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            selectedKindError = stringError;
+            parseScratch().selectedKindError = parseScratch().stringError;
             return null;
         }
         if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
@@ -2561,7 +2558,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionSelectedField();
         }
-        selectedKindError = "Selection kind '" + kind //$NON-NLS-1$
+        parseScratch().selectedKindError = "Selection kind '" + kind //$NON-NLS-1$
             + "' is invalid. Use one of: field, group, auto."; //$NON-NLS-1$
         return null;
     }
@@ -2586,7 +2583,7 @@ public final class DcsSettingsWriter
                 Boolean use = bool(body, KEY_USE, path);
                 if (use == null)
                 {
-                    return booleanError;
+                    return parseScratch().booleanError;
                 }
                 ((DataCompositionAutoSelectedField)item).setUse(use.booleanValue());
             }
@@ -2646,7 +2643,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             if (group)
             {
@@ -2691,14 +2688,14 @@ public final class DcsSettingsWriter
                 JsonArray items = array(body, KEY_ITEMS, path);
                 if (items == null)
                 {
-                    return arrayError;
+                    return parseScratch().arrayError;
                 }
                 for (int i = 0; i < items.size(); i++)
                 {
                     JsonObject child = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
                     if (child == null)
                     {
-                        return arrayObjectError;
+                        return parseScratch().arrayObjectError;
                     }
                     String error = appendSelected(selectedGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2767,9 +2764,9 @@ public final class DcsSettingsWriter
             return appendFilter(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         FilterItem item = items.get(selected);
         if (path.size() == 2)
@@ -2780,14 +2777,14 @@ public final class DcsSettingsWriter
                 // Rebuilt, not patched: otherwise comparisonType, right, use and a group's nested
                 // items survive a replace that never mentioned them.
                 String kind = optionalString(body, KEY_KIND, at);
-                if (stringError != null)
+                if (parseScratch().stringError != null)
                 {
-                    return stringError;
+                    return parseScratch().stringError;
                 }
                 FilterItem fresh = newFilterItem(kind, at);
                 if (fresh == null)
                 {
-                    return filterKindError;
+                    return parseScratch().filterKindError;
                 }
                 String rebuilt = applyFilterItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
@@ -2826,7 +2823,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) filter.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -2834,7 +2831,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendFilter(filter.getItems(), item, action, languages,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2852,14 +2849,14 @@ public final class DcsSettingsWriter
         String updateError = updateAppendError(action, "filter item", path); //$NON-NLS-1$
         if (updateError != null) return updateError;
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         FilterItem item = newFilterItem(kind, path);
         if (item == null)
         {
-            return filterKindError;
+            return parseScratch().filterKindError;
         }
         String error = applyFilterItem(item, body, action, languages, path);
         if (error == null)
@@ -2870,12 +2867,12 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh filter item of the named kind, or {@code null} with {@link #filterKindError} set.
+     * A fresh filter item of the named kind, or {@code null} with {@link #parseScratch().filterKindError} set.
      * Shared by append and by an authoritative replace so both build the same shapes.
      */
     private static FilterItem newFilterItem(String kind, String path)
     {
-        filterKindError = null;
+        parseScratch().filterKindError = null;
         if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return DcsFactory.eINSTANCE.createDataCompositionFilterItemGroup();
@@ -2884,7 +2881,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionFilterItem();
         }
-        filterKindError = "Filter kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().filterKindError = "Filter kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use one of: item, group."; //$NON-NLS-1$
         return null;
     }
@@ -2914,7 +2911,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             if (group)
             {
@@ -2948,14 +2945,14 @@ public final class DcsSettingsWriter
                 JsonArray children = array(body, KEY_ITEMS, path);
                 if (children == null)
                 {
-                    return arrayError;
+                    return parseScratch().arrayError;
                 }
                 for (int i = 0; i < children.size(); i++)
                 {
                     JsonObject child = arrayObject(children, i, path + ".items"); //$NON-NLS-1$
                     if (child == null)
                     {
-                        return arrayObjectError;
+                        return parseScratch().arrayObjectError;
                     }
                     String error = appendFilter(filterGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2992,7 +2989,7 @@ public final class DcsSettingsWriter
             JsonArray right = array(body, "right", path); //$NON-NLS-1$
             if (right == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             List<Value> values = new ArrayList<>();
             for (int i = 0; i < right.size(); i++)
@@ -3063,9 +3060,9 @@ public final class DcsSettingsWriter
             return "Order item address at '" + where + "' has extra segments. Copy it from get."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         String at = where + "/items/" + path.get(1); //$NON-NLS-1$
         if (ACTION_REPLACE.equals(action))
@@ -3074,14 +3071,14 @@ public final class DcsSettingsWriter
             // that never named them, and replacing an auto item with a normal one must actually
             // change the item's CLASS rather than patch the old instance.
             String kind = optionalString(body, KEY_KIND, at);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             OrderItem fresh = newOrderItem(kind, at);
             if (fresh == null)
             {
-                return orderKindError;
+                return parseScratch().orderKindError;
             }
             String rebuilt = applyOrderItem(fresh, body, at);
             if (rebuilt != null)
@@ -3111,7 +3108,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) order.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -3119,7 +3116,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendOrder(order.getItems(), item, action,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3139,14 +3136,14 @@ public final class DcsSettingsWriter
                 + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
         }
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         OrderItem item = newOrderItem(kind, path);
         if (item == null)
         {
-            return orderKindError;
+            return parseScratch().orderKindError;
         }
         String error = applyOrderItem(item, body, path);
         if (error == null)
@@ -3157,12 +3154,12 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh order item of the named kind, or {@code null} with {@link #orderKindError} set.
+     * A fresh order item of the named kind, or {@code null} with {@link #parseScratch().orderKindError} set.
      * Shared by append and by an authoritative replace so both build the same shapes.
      */
     private static OrderItem newOrderItem(String kind, String path)
     {
-        orderKindError = null;
+        parseScratch().orderKindError = null;
         if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return DcsFactory.eINSTANCE.createDataCompositionAutoOrderItem();
@@ -3171,7 +3168,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionOrderItem();
         }
-        orderKindError = "Order kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().orderKindError = "Order kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use one of: item, auto."; //$NON-NLS-1$
         return null;
     }
@@ -3195,7 +3192,7 @@ public final class DcsSettingsWriter
                 Boolean use = bool(body, KEY_USE, path);
                 if (use == null)
                 {
-                    return booleanError;
+                    return parseScratch().booleanError;
                 }
                 ((DataCompositionAutoOrderItem)item).setUse(use.booleanValue());
             }
@@ -3237,7 +3234,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             order.setUse(use.booleanValue());
         }
@@ -3291,9 +3288,9 @@ public final class DcsSettingsWriter
         if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             DataCompositionConditionalAppearanceItem item = holder.getItems().get(selected);
             if (path.size() == 2)
@@ -3372,7 +3369,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -3388,7 +3385,7 @@ public final class DcsSettingsWriter
                 JsonObject itemBody = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
                 if (itemBody == null)
                 {
-                    return arrayObjectError;
+                    return parseScratch().arrayObjectError;
                 }
                 DataCompositionConditionalAppearanceItem item =
                     DcsFactory.eINSTANCE.createDataCompositionConditionalAppearanceItem();
@@ -3417,13 +3414,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             item.setUse(use.booleanValue());
         }
         if (body.has("selection")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, item.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -3437,7 +3434,7 @@ public final class DcsSettingsWriter
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, item.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
             DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null : copy(item.getFilter());
@@ -3449,7 +3446,7 @@ public final class DcsSettingsWriter
         if (body.has("appearance")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "appearance", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             DataCompositionAppearance current = ACTION_REPLACE.equals(action)
                 ? null : item.getAppearance();
             AppearanceResult appearance = appearance(value, current, languages, version,
@@ -3488,7 +3485,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) fields.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -3498,7 +3495,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             DataCompositionAppearanceField field = DcsFactory.eINSTANCE.createDataCompositionAppearanceField();
             String error = applyAppearanceField(field, itemBody,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3518,7 +3515,7 @@ public final class DcsSettingsWriter
                 + "' or '" + holderPath + "/items/<index>'. Copy the canonical address from get."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         int selected = index(path.get(1), fields.getItems().size(), holderPath + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         DataCompositionAppearanceField field = fields.getItems().get(selected);
         if (ACTION_REPLACE.equals(action))
         {
@@ -3536,7 +3533,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             field.setUse(use.booleanValue());
         }
         if (body.has(KEY_FIELD))
@@ -3634,7 +3631,7 @@ public final class DcsSettingsWriter
         }
         JsonObject supplied = raw.getAsJsonObject();
         Boolean use = bool(supplied, KEY_USE, path);
-        if (use == null) return AppearanceParameterSpec.failure(booleanError);
+        if (use == null) return AppearanceParameterSpec.failure(parseScratch().booleanError);
         JsonObject value = supplied.deepCopy();
         value.remove(KEY_USE);
         if (value.size() == 0)
@@ -4463,9 +4460,9 @@ public final class DcsSettingsWriter
         if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             DataCompositionParameterValue item = holder.getItems().get(selected);
             if (!(item instanceof SettingsParameterValue))
@@ -4517,7 +4514,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_UPDATE.equals(action) && !items.isEmpty())
         {
@@ -4534,7 +4531,7 @@ public final class DcsSettingsWriter
             JsonObject bodyItem = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (bodyItem == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             SettingsParameterValue item = DcsFactory.eINSTANCE.createSettingsParameterValue();
             String error = applyParameterItem(item, bodyItem, languages, typed.parameters,
@@ -4571,7 +4568,7 @@ public final class DcsSettingsWriter
         else if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), "userFields/items"); //$NON-NLS-1$
-            if (indexError != null) return indexError;
+            if (parseScratch().indexError != null) return parseScratch().indexError;
             String at = "userFields/items/" + path.get(1); //$NON-NLS-1$
             UserField field = holder.getItems().get(selected);
             if (path.size() == 2 && ACTION_REPLACE.equals(action))
@@ -4583,7 +4580,7 @@ public final class DcsSettingsWriter
                 UserField fresh = newUserField(body, at);
                 if (fresh == null)
                 {
-                    return userFieldKindError;
+                    return parseScratch().userFieldKindError;
                 }
                 // A rebuilt field starts empty, so an omitted dataPath would silently produce a
                 // user field with no data path at all rather than keeping the old one. Replace is
@@ -4648,7 +4645,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -4658,9 +4655,9 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             String kind = requiredString(itemBody, KEY_KIND, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             UserField item;
             if ("expression".equalsIgnoreCase(kind)) //$NON-NLS-1$
             {
@@ -4684,17 +4681,17 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh user field of the kind the body names, or {@code null} with {@link #userFieldKindError}
+     * A fresh user field of the kind the body names, or {@code null} with {@link #parseScratch().userFieldKindError}
      * set. Shared by append and by an authoritative replace so both build the same shapes from the
      * same kind vocabulary.
      */
     private static UserField newUserField(JsonObject body, String path)
     {
-        userFieldKindError = null;
+        parseScratch().userFieldKindError = null;
         String kind = requiredString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            userFieldKindError = stringError;
+            parseScratch().userFieldKindError = parseScratch().stringError;
             return null;
         }
         if ("expression".equalsIgnoreCase(kind)) //$NON-NLS-1$
@@ -4705,7 +4702,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionUserFieldCase();
         }
-        userFieldKindError = "User-field kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().userFieldKindError = "User-field kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use kind='expression' or kind='case'."; //$NON-NLS-1$
         return null;
     }
@@ -4731,13 +4728,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             field.setUse(use.booleanValue());
         }
         if (body.has("dataPath")) //$NON-NLS-1$
         {
             String value = requiredString(body, "dataPath", path); //$NON-NLS-1$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             field.setDataPath(value);
         }
         if (body.has(KEY_TITLE))
@@ -4755,7 +4752,7 @@ public final class DcsSettingsWriter
             {
                 if (!body.has(member)) continue;
                 String value = optionalString(body, member, path);
-                if (stringError != null) return stringError;
+                if (parseScratch().stringError != null) return parseScratch().stringError;
                 if ("detailExpression".equals(member)) expression.setDetailExpression(value); //$NON-NLS-1$
                 else if ("detailExpressionPresentation".equals(member)) //$NON-NLS-1$
                     expression.setDetailExpressionPresentation(value);
@@ -4766,7 +4763,7 @@ public final class DcsSettingsWriter
         else if (body.has("variants")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "variants", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             DataCompositionUserFieldCase caseField = (DataCompositionUserFieldCase)field;
             String missing = missingHolderUpdate(action, caseField.getVariants(),
                 path + ".variants"); //$NON-NLS-1$
@@ -4789,7 +4786,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -4799,7 +4796,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             DataCompositionUserFieldsVariant variant =
                 DcsFactory.eINSTANCE.createDataCompositionUserFieldsVariant();
             String error = applyUserFieldVariant(variant, itemBody, action, languages,
@@ -4824,7 +4821,7 @@ public final class DcsSettingsWriter
                 + "' must continue with items/<index>. Copy the canonical address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         DataCompositionUserFieldsVariant variant = holder.getItems().get(selected);
         String at = where + "/items/" + path.get(1); //$NON-NLS-1$
         if (path.size() == 2)
@@ -4867,13 +4864,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             variant.setUse(use.booleanValue());
         }
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject filterBody = object(body, "filter", path); //$NON-NLS-1$
-            if (filterBody == null) return objectError;
+            if (filterBody == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, variant.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
             DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null
@@ -4998,7 +4995,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             item.setUse(use.booleanValue());
         }
@@ -5012,7 +5009,7 @@ public final class DcsSettingsWriter
         JsonArray raw = array(body, KEY_VALUES, path);
         if (raw == null)
         {
-            return new ValuesResult(null, arrayError);
+            return new ValuesResult(null, parseScratch().arrayError);
         }
         List<Value> values = new ArrayList<>();
         for (int i = 0; i < raw.size(); i++)
@@ -5059,9 +5056,9 @@ public final class DcsSettingsWriter
         if (body.has("itemsUserSettingID")) //$NON-NLS-1$
         {
             String value = optionalString(body, "itemsUserSettingID", path); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             settings.setItemsUserSettingID(value);
         }
@@ -5095,9 +5092,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             id = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
         }
         Presentation presentation = null;
@@ -5164,9 +5161,9 @@ public final class DcsSettingsWriter
         if (body.has("itemsUserSettingID")) //$NON-NLS-1$
         {
             String value = optionalString(body, "itemsUserSettingID", path); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             group.setItemsUserSettingID(value);
         }
@@ -5199,9 +5196,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             group.setUserSettingID(value);
         }
@@ -5243,7 +5240,7 @@ public final class DcsSettingsWriter
             if (body.has(idMember))
             {
                 String value = optionalString(body, idMember, path);
-                if (stringError != null) return stringError;
+                if (parseScratch().stringError != null) return parseScratch().stringError;
                 setFeature(target, idMember, value);
             }
             String presentationMember = prefix.isEmpty() ? KEY_USER_SETTING_PRESENTATION
@@ -5273,7 +5270,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             item.setUserSettingID(value);
         }
         if (body.has(KEY_USER_SETTING_PRESENTATION))
@@ -5304,9 +5301,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             id = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
         }
         Presentation userPresentation = null;
@@ -5379,9 +5376,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             item.setUserSettingID(value);
         }
@@ -5429,9 +5426,9 @@ public final class DcsSettingsWriter
             return ValueResult.failure(members);
         }
         String kind = requiredString(object, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return ValueResult.failure(stringError);
+            return ValueResult.failure(parseScratch().stringError);
         }
         JsonElement raw = object.get("value"); //$NON-NLS-1$
         try
@@ -5442,19 +5439,19 @@ public final class DcsSettingsWriter
                     DataCompositionField field = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                         .createDataCompositionField();
                     field.setValue(requiredPrimitiveString(raw, path));
-                    return primitiveStringError == null ? ValueResult.success(field)
-                        : ValueResult.failure(primitiveStringError);
+                    return parseScratch().primitiveStringError == null ? ValueResult.success(field)
+                        : ValueResult.failure(parseScratch().primitiveStringError);
                 case "parameter": //$NON-NLS-1$
                     DataCompositionParameter parameter = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                         .createDataCompositionParameter();
                     parameter.setValue(requiredPrimitiveString(raw, path));
-                    return primitiveStringError == null ? ValueResult.success(parameter)
-                        : ValueResult.failure(primitiveStringError);
+                    return parseScratch().primitiveStringError == null ? ValueResult.success(parameter)
+                        : ValueResult.failure(parseScratch().primitiveStringError);
                 case "expression": //$NON-NLS-1$
                     String expression = requiredPrimitiveString(raw, path);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     com._1c.g5.v8.dt.dcs.model.core.DesignTimeValue design =
                         com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDesignTimeValue();
@@ -5465,9 +5462,9 @@ public final class DcsSettingsWriter
                     return ValueResult.success(designValue);
                 case "string": //$NON-NLS-1$
                     String string = primitiveString(raw, path, true);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     StringValue stringValue = McoreFactory.eINSTANCE.createStringValue();
                     stringValue.setValue(string);
@@ -5490,9 +5487,9 @@ public final class DcsSettingsWriter
                     return ValueResult.success(bool);
                 case "date": //$NON-NLS-1$
                     String date = requiredPrimitiveString(raw, path);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     DateValue dateValue = McoreFactory.eINSTANCE.createDateValue();
                     dateValue.setValue(com._1c.g5.v8.dt.mcore.util.Date.fromString(date));
@@ -5667,12 +5664,12 @@ public final class DcsSettingsWriter
         if (body.has(KEY_ITEMS) && !body.get(KEY_ITEMS).isJsonNull())
         {
             JsonArray items = array(body, KEY_ITEMS, at);
-            if (items == null) return ValueResult.failure(arrayError);
+            if (items == null) return ValueResult.failure(parseScratch().arrayError);
             for (int i = 0; i < items.size(); i++)
             {
                 String itemPath = at + ".items[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
                 JsonObject itemBody = arrayObject(items, i, at + ".items"); //$NON-NLS-1$
-                if (itemBody == null) return ValueResult.failure(arrayObjectError);
+                if (itemBody == null) return ValueResult.failure(parseScratch().arrayObjectError);
                 String itemMembers = checkMembers(itemBody, itemPath, "value", KEY_PRESENTATION, //$NON-NLS-1$
                     KEY_CHECK_STATE, KEY_ID);
                 if (itemMembers != null) return ValueResult.failure(itemMembers);
@@ -5792,9 +5789,9 @@ public final class DcsSettingsWriter
         String member, String path, T[] values)
     {
         String raw = optionalString(body, member, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return EnumResult.failure(stringError);
+            return EnumResult.failure(parseScratch().stringError);
         }
         for (T value : values)
         {
@@ -5891,27 +5888,35 @@ public final class DcsSettingsWriter
 
     // ---- JSON helpers -----------------------------------------------------------------------
 
-    private static String objectError;
-    private static String arrayError;
-    private static String arrayObjectError;
-    private static String selectedKindError;
-    private static String userFieldKindError;
-    private static String filterKindError;
-    private static String orderKindError;
-    private static String stringError;
-    private static String booleanError;
-    private static String indexError;
-    private static String primitiveStringError;
+    private static ParseScratch parseScratch()
+    {
+        return PARSE_SCRATCH.get();
+    }
+
+    private static final class ParseScratch
+    {
+        private String objectError;
+        private String arrayError;
+        private String arrayObjectError;
+        private String selectedKindError;
+        private String userFieldKindError;
+        private String filterKindError;
+        private String orderKindError;
+        private String stringError;
+        private String booleanError;
+        private String indexError;
+        private String primitiveStringError;
+    }
 
     private static JsonObject object(JsonObject body, String member, String path)
     {
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonObject())
         {
-            objectError = "Member '" + path + "." + member + "' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().objectError = "Member '" + path + "." + member + "' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        objectError = null;
+        parseScratch().objectError = null;
         return value.getAsJsonObject();
     }
 
@@ -5920,10 +5925,10 @@ public final class DcsSettingsWriter
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonArray())
         {
-            arrayError = "Member '" + path + "." + member + "' must be a JSON array."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().arrayError = "Member '" + path + "." + member + "' must be a JSON array."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        arrayError = null;
+        parseScratch().arrayError = null;
         return value.getAsJsonArray();
     }
 
@@ -5932,10 +5937,10 @@ public final class DcsSettingsWriter
         JsonElement value = array.get(index);
         if (value == null || !value.isJsonObject())
         {
-            arrayObjectError = "Entry '" + path + "[" + index + "]' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().arrayObjectError = "Entry '" + path + "[" + index + "]' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        arrayObjectError = null;
+        parseScratch().arrayObjectError = null;
         return value.getAsJsonObject();
     }
 
@@ -5943,25 +5948,25 @@ public final class DcsSettingsWriter
     {
         if (!body.has(member) || body.get(member).isJsonNull())
         {
-            stringError = null;
+            parseScratch().stringError = null;
             return null;
         }
         JsonElement value = body.get(member);
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
         {
-            stringError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().stringError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        stringError = null;
+        parseScratch().stringError = null;
         return value.getAsString();
     }
 
     private static String requiredString(JsonObject body, String member, String path)
     {
         String result = optionalString(body, member, path);
-        if (stringError == null && (result == null || result.isEmpty()))
+        if (parseScratch().stringError == null && (result == null || result.isEmpty()))
         {
-            stringError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().stringError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         return result;
     }
@@ -5976,12 +5981,12 @@ public final class DcsSettingsWriter
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
             || !allowEmpty && value.getAsString().isEmpty())
         {
-            primitiveStringError = "ValueSpec at '" + path //$NON-NLS-1$
+            parseScratch().primitiveStringError = "ValueSpec at '" + path //$NON-NLS-1$
                 + (allowEmpty ? "' needs a string in 'value'." //$NON-NLS-1$
                     : "' needs a non-empty string in 'value'."); //$NON-NLS-1$
             return null;
         }
-        primitiveStringError = null;
+        parseScratch().primitiveStringError = null;
         return value.getAsString();
     }
 
@@ -5990,10 +5995,10 @@ public final class DcsSettingsWriter
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
         {
-            booleanError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().booleanError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        booleanError = null;
+        parseScratch().booleanError = null;
         return Boolean.valueOf(value.getAsBoolean());
     }
 
@@ -6001,19 +6006,19 @@ public final class DcsSettingsWriter
     {
         if (!DcsAddress.isZeroBasedIndex(raw))
         {
-            indexError = "Index '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            parseScratch().indexError = "Index '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                 + "' is invalid. Pass a zero-based integer copied from dcs action='get'."; //$NON-NLS-1$
             return -1;
         }
         int value = Integer.parseInt(raw);
         if (value >= size)
         {
-            indexError = "Index '" + raw + "' at '" + path + "' is out of range; existing indices: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().indexError = "Index '" + raw + "' at '" + path + "' is out of range; existing indices: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + (size == 0 ? "(none)" : "0.." + (size - 1)) //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Re-run dcs action='get' and copy the new address."; //$NON-NLS-1$
             return -1;
         }
-        indexError = null;
+        parseScratch().indexError = null;
         return value;
     }
 
@@ -6038,9 +6043,9 @@ public final class DcsSettingsWriter
             return null;
         }
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         return expected.equalsIgnoreCase(kind) ? null
             : "Item kind '" + kind + "' at '" + path + "' collides with existing subtype '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -6271,7 +6276,7 @@ public final class DcsSettingsWriter
                 + "'. Copy the exact node address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(0), items.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 1)
         {
             items.remove(selected);
@@ -6364,7 +6369,7 @@ public final class DcsSettingsWriter
         if (path.isEmpty()) return "action='remove' needs one " + kind.token //$NON-NLS-1$
             + "-axis group index after '" + where + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(0), groups.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 1)
         {
             groups.remove(selected);
@@ -6425,7 +6430,7 @@ public final class DcsSettingsWriter
                 + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             holder.getItems().remove(selected);
@@ -6458,7 +6463,7 @@ public final class DcsSettingsWriter
                 + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
         }
         int variantIndex = index(tail.get(1), variants.getItems().size(), variantsWhere + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (tail.size() == 2)
         {
             variants.getItems().remove(variantIndex);
@@ -6501,7 +6506,7 @@ public final class DcsSettingsWriter
             return "Selection removal at '" + where //$NON-NLS-1$
                 + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             items.remove(selected);
@@ -6527,7 +6532,7 @@ public final class DcsSettingsWriter
             return "Conditional-appearance removal at '" + where //$NON-NLS-1$
                 + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             holder.getItems().remove(selected);
@@ -6557,7 +6562,7 @@ public final class DcsSettingsWriter
         if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
             return "Filter removal at '" + where + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             items.remove(selected);
@@ -6579,7 +6584,7 @@ public final class DcsSettingsWriter
         if (path.size() != 2 || !KEY_ITEMS.equals(path.get(0)))
             return "Removal at '" + where + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         items.remove(selected);
         return null;
     }
