@@ -527,7 +527,7 @@ public final class WrittenObjectMarkers
      * @param sentence the sentence to append
      * @return the joined message
      */
-    static String join(String existing, String sentence)
+    public static String join(String existing, String sentence)
     {
         if (existing == null || existing.isBlank())
         {
