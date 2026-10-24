@@ -246,6 +246,6 @@ public class ToolGroupTest
         assertFalse(tools.contains("add_form_command"));
         assertFalse(tools.contains("delete_form_item"));
         assertFalse(tools.contains("add_form_item"));
-        assertEquals(6, tools.size());
+        assertEquals(7, tools.size());
     }
 }

@@ -1645,23 +1645,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     Boolean fileOnDisk(String projectName, String path)
     {
-        if (projectName == null || path == null)
-        {
-            return null;
-        }
-        try
-        {
-            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
-            com.ditrix.edt.mcp.server.utils.ProjectContext context =
-                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
-            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
-            return location == null ? null : Boolean.valueOf(location.toFile().exists());
-        }
-        catch (RuntimeException e)
-        {
-            Activator.logError("delete_metadata: could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            return null;
-        }
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.fileOnDisk(projectName, path);
     }
 
     /**
@@ -5590,8 +5574,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     .append(" - the confirmed response lists them."); //$NON-NLS-1$
             }
             // The global editing context's commit saves another context that last modified the form.
-            sb.append(" An open editor of this form with unsaved changes has them all saved with the " //$NON-NLS-1$
-                + "delete, not only its changes to this form, and loses its undo history."); //$NON-NLS-1$
+            sb.append(ConsentPreview.globalContextEditorNotice("form")); //$NON-NLS-1$
             return sb.toString();
         }
 

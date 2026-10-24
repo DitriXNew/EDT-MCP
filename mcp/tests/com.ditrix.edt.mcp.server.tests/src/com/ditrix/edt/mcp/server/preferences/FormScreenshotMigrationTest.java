@@ -22,7 +22,8 @@ public class FormScreenshotMigrationTest
         PreferenceStore store = stored(Set.of("owner_disabled_tool"), 14, "custom");
         ToolSettingsService.ensureMigratedForTest(store);
         assertEquals(Set.of("owner_disabled_tool", SCREENSHOT), disabled(store));
-        assertEquals(15, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         assertEquals("custom", store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
     }
 
@@ -43,10 +44,12 @@ public class FormScreenshotMigrationTest
         store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
         ToolSettingsService.ensureMigratedForTest(store);
         assertEquals(Set.of("owner_disabled_tool", SCREENSHOT, "switch_git_branch", "create_git_branch",
-            "set_branch_infobase", "create_project", "resync_to_disk", "clean_project"), disabled(store));
+            "set_branch_infobase", "create_project", "resync_to_disk", "clean_project",
+            "business_process_route_map"), disabled(store));
         assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
-        assertEquals(15, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test
@@ -67,7 +70,8 @@ public class FormScreenshotMigrationTest
     {
         PreferenceStore store = stored(Set.of("owner_disabled_tool"), 14, "custom");
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(15, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "owner_disabled_tool");
         ToolSettingsService.ensureMigratedForTest(store);
         assertEquals(Set.of("owner_disabled_tool"), disabled(store));
@@ -91,7 +95,8 @@ public class FormScreenshotMigrationTest
         assertEquals(Set.of("git", "ask_workmate", SCREENSHOT), disabled(store));
         assertTrue(store.isDefault(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertFalse(store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID));
-        assertEquals(15, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test

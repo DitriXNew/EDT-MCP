@@ -94,6 +94,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> STORED_PROFILE_V15_ADDITIONS = Set.of(
         "get_form_screenshot"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V16_ADDITIONS = Set.of(
+        "business_process_route_map"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -108,7 +111,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
-        Map.entry(15, STORED_PROFILE_V15_ADDITIONS));
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -124,7 +128,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
-        Map.entry(15, STORED_PROFILE_V15_ADDITIONS));
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -500,6 +505,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 15)
             {
                 changed |= disabled.addAll(STORED_PROFILE_V15_ADDITIONS);
+            }
+            if (storedVersion < 16)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V16_ADDITIONS);
             }
             if (changed)
             {
