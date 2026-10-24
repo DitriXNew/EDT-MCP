@@ -321,6 +321,15 @@ public final class DcsPresentationParser
             return Collections.unmodifiableSet(usedCodes);
         }
 
+        /**
+         * A copy that validates against the same codes but records its own usage, so a dry run of a
+         * writer - the replace guard's - leaves this call's {@link #usedCodes()} untouched.
+         */
+        public LanguageContext dryRun()
+        {
+            return new LanguageContext(declaredCodes, resolvedCode, configurationCode, languageSelected);
+        }
+
         private String canonical(String requested)
         {
             for (String code : declaredCodes)

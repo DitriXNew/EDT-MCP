@@ -128,6 +128,16 @@ public final class DcsSchemaWriter
         DcsWriter.TypeResolver resolver, Version version,
         StyleValueBuilder.NamedColorResolver namedColors)
     {
+        return apply(schema, request, resolver, version, namedColors,
+            DcsSettingsWriter.catalogues(version, request == null ? null : request.languages,
+                DcsSettingsWriter.AppearanceCatalogue.SCHEMA, namedColors));
+    }
+
+    /** Reuses the tool's per-mutation catalogue snapshot when both layers are replaced. */
+    public static Result apply(DataCompositionSchema schema, Request request,
+        DcsWriter.TypeResolver resolver, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, DcsWriterCatalogues catalogues)
+    {
         if (schema == null)
         {
             return Result.failure("The DCS schema content is unavailable. Re-open the template and retry."); //$NON-NLS-1$
@@ -136,7 +146,7 @@ public final class DcsSchemaWriter
         if (stringError != null) return Result.failure(stringError);
         if (ACTION_REPLACE.equals(request.action))
         {
-            String refusal = DcsMutationGuard.replaceError(schema, request.address);
+            String refusal = DcsMutationGuard.replaceError(schema, request.address, catalogues);
             if (refusal != null) return Result.failure(refusal);
         }
         String selectorError = selectorAmbiguityError(schema, request);
