@@ -138,7 +138,7 @@ public class ProjectChecksProfileSafetyTest
         }
         available.add("Escaped");
         assertFileStemRefusal(invoke("copyProfile", "New", "Escaped"));
-        assertNoWritesOrConsent(1);
+        assertNoWritesOrConsent(5);
     }
 
     @Test
@@ -197,7 +197,7 @@ public class ProjectChecksProfileSafetyTest
             }
         }
         assertTrue("Every unsafe name must be refused as a file stem: " + unexpected, unexpected.isEmpty());
-        assertNoWritesOrConsent("switch".equals(action) ? UNSAFE_NAMES.size() : 0);
+        assertNoWritesOrConsent(UNSAFE_NAMES.size());
     }
 
     private void assertNoWritesOrConsent(int expectedRefreshes)

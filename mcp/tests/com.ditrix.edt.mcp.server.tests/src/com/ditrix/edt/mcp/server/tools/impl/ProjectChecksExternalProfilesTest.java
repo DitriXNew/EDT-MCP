@@ -129,7 +129,7 @@ public class ProjectChecksExternalProfilesTest
         assertTrue(result.get("persisted").getAsBoolean());
         assertEquals(1, tool.consents);
         verify(repo).setActiveSettingsProfile("Review", List.of(), project);
-        verify(folder, times(2)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
         assertEquals("refresh", events.get(0));
         assertTrue(events.toString(), events.indexOf("refresh") < events.indexOf("consent"));
     }
@@ -211,7 +211,8 @@ public class ProjectChecksExternalProfilesTest
     public void switchPostWriteRefreshFailureRetainsTheVerifiedRestoreRecipe() throws Exception
     {
         writeProfile("Review");
-        doAnswer(call -> { deliverResourceDelta(); return null; }).doThrow(refreshFailure())
+        doAnswer(call -> { deliverResourceDelta(); return null; })
+            .doAnswer(call -> { deliverResourceDelta(); return null; }).doThrow(refreshFailure())
             .when(folder).refreshLocal(anyInt(), any(IProgressMonitor.class));
 
         JsonObject result = ok(invoke("switch", "Review"));

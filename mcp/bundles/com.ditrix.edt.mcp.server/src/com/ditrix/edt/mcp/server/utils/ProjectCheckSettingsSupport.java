@@ -26,6 +26,8 @@ import java.util.stream.Collectors;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
@@ -54,6 +56,36 @@ public final class ProjectCheckSettingsSupport
     private static Object profileMutationLock(IProject project)
     {
         return PROFILE_MUTATION_LOCKS.computeIfAbsent(project, key -> new Object());
+    }
+
+    /** Deliver external profile deltas before both the preview and locked post-consent revalidation. */
+    public static void refreshSettingsBeforeRead(IProject project)
+    {
+        String error = refreshSettings(project, false);
+        if (error != null)
+        {
+            throw new IllegalArgumentException(error);
+        }
+    }
+
+    public static String refreshSettings(IProject project, boolean afterWrite)
+    {
+        try
+        {
+            project.getFolder(".settings").refreshLocal(IResource.DEPTH_ONE, new NullProgressMonitor());
+            return null;
+        }
+        catch (CoreException e)
+        {
+            if (!afterWrite)
+            {
+                return "EDT could not refresh .settings before reading check profiles: " + e.getMessage()
+                    + ". Refresh the project in EDT, then retry project_checks.";
+            }
+            // The repository write has succeeded: preserve the restore recipe and its read-back.
+            return "Check settings were applied, but EDT could not refresh .settings: " + e.getMessage()
+                + ". Refresh the project in EDT, then poll get_project_errors.";
+        }
     }
 
     private static boolean sameProfile(String left, String right)
@@ -308,6 +340,7 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
+            refreshSettingsBeforeRead(project);
             List<ICheckSettings> settings = new ArrayList<>();
             for (int i = 0; i < plan.changes().size(); i++)
             {
@@ -679,6 +712,7 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
+            refreshSettingsBeforeRead(project);
             // Consent can take time; EDT's duplicate call overwrites an existing target, so revalidate.
             String listedSource = validateProfileCopy(repo, project, profile,
                 implicitDefault ? null : source, !implicitDefault);
@@ -738,6 +772,7 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
+            refreshSettingsBeforeRead(project);
             requirePlannedActiveProfile(repo, project, plannedActive);
             String listed = validateProfileDelete(repo, project, profile);
             List<ProfileSetting> current = profileFingerprint(repo, project, listed);
@@ -851,6 +886,7 @@ public final class ProjectCheckSettingsSupport
     {
         synchronized (profileMutationLock(project))
         {
+            refreshSettingsBeforeRead(project);
             // Revalidate at the write boundary as well as before consent.
             String target = switchTarget(repo, project, plan.target());
             if (!plan.changed())

@@ -103,7 +103,7 @@ public class ProjectChecksProfilesTest
         verify(repo).duplicateSettingsProfile("Default", "New", project);
         assertProfiles(result, "Default", "New", "Review");
         assertConsent("Create", "New");
-        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
         // Native duplication creates empty defaults when the implicit Default has no file.
         profiles.remove("Default");
         active = "Review";
@@ -134,7 +134,7 @@ public class ProjectChecksProfilesTest
         verify(repo).duplicateSettingsProfile("Review", "Copy", project);
         assertProfiles(result, "Copy", "Default", "Review");
         assertConsent("Copy", "Copy");
-        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test
@@ -149,7 +149,7 @@ public class ProjectChecksProfilesTest
         assertConsent("Delete", "Review");
         assertTrue(tool.previews.get(0).getSubtitle().contains("2 customized checks"));
         assertTrue(tool.previews.get(0).getSubtitle().contains("destructive"));
-        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test
@@ -213,7 +213,7 @@ public class ProjectChecksProfilesTest
         {
             assertTrue(error(invoke("copyProfile", "New", source)).contains("from is required"));
         }
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(2);
     }
 
     @Test
@@ -236,7 +236,7 @@ public class ProjectChecksProfilesTest
             String message = error(invoke("deleteProfile", name, null));
             assertTrue(message, message.contains("Unknown profile '" + name + "'"));
         }
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(2);
     }
 
     @Test
@@ -250,7 +250,7 @@ public class ProjectChecksProfilesTest
             assertTrue(message, message.contains("Cannot delete active profile '" + name + "'"));
             assertTrue(message, message.contains("project_checks switch"));
         }
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(2);
     }
 
     @Test
@@ -259,7 +259,7 @@ public class ProjectChecksProfilesTest
         active = "Review";
         String message = error(invoke("deleteProfile", "Review", null));
         assertTrue(message, message.contains("Cannot delete active profile 'Review'"));
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(1);
     }
 
     @Test
@@ -287,7 +287,7 @@ public class ProjectChecksProfilesTest
         String message = error(invoke("copyProfile", "New", "Review"));
         assertTrue(message, message.contains("already exists"));
         assertEquals(1, tool.previews.size());
-        verifyNoWrites();
+        verifyNoWrites(2);
     }
 
     @Test
@@ -297,7 +297,7 @@ public class ProjectChecksProfilesTest
         String message = error(invoke("createProfile", "New", "Review"));
         assertTrue(message, message.contains("Unknown from profile 'Review'"));
         assertEquals(1, tool.previews.size());
-        verifyNoWrites();
+        verifyNoWrites(2);
     }
 
     @Test
@@ -308,7 +308,7 @@ public class ProjectChecksProfilesTest
         assertTrue(message, message.contains("active profile changed"));
         assertTrue(message, message.contains("re-run the preview"));
         assertEquals(1, tool.previews.size());
-        verifyNoWrites();
+        verifyNoWrites(2);
     }
 
     @Test
@@ -318,7 +318,7 @@ public class ProjectChecksProfilesTest
         String message = error(invoke("deleteProfile", "Review", null));
         assertTrue(message, message.contains("Unknown profile 'Review'"));
         assertEquals(1, tool.previews.size());
-        verifyNoWrites();
+        verifyNoWrites(2);
     }
 
     @Test
@@ -376,7 +376,7 @@ public class ProjectChecksProfilesTest
         assertTrue(message, message.contains("EDT: The profile name EDTRejected is invalid. "
             + "The profile name should not contain spaces, $ or %"));
         verify(repo).validateProfileName("EDTRejected");
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(1);
     }
 
     private void duplicateName(String action) throws Exception
@@ -390,7 +390,7 @@ public class ProjectChecksProfilesTest
         assertTrue(message, message.contains("EDT: The profile with the name " + name + " already exists. "
             + "Please enter another name"));
         assertEquals(2, profiles.get("Review").size());
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(1);
     }
 
     private void missingName(String action) throws Exception
@@ -399,7 +399,7 @@ public class ProjectChecksProfilesTest
         {
             assertTrue(error(invoke(action, name, "Review")).contains("profile is required"));
         }
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(2);
     }
 
     private void absentFrom(String action) throws Exception
@@ -407,7 +407,7 @@ public class ProjectChecksProfilesTest
         String message = error(invoke(action, "New", "Missing"));
         assertTrue(message, message.contains("Unknown from profile 'Missing'"));
         assertTrue(message, message.contains("project_checks profiles"));
-        assertNoWritesOrConsent();
+        assertNoWritesOrConsent(1);
     }
 
     private void denied(String action, String name, String source) throws Exception
@@ -428,7 +428,7 @@ public class ProjectChecksProfilesTest
             assertEquals(before, profiles);
             assertEquals("Default", active);
         }
-        verifyNoWrites();
+        verifyNoWrites(ConsentDecision.values().length - 1);
     }
 
     private void assertConsent(String verb, String name)
@@ -456,19 +456,19 @@ public class ProjectChecksProfilesTest
         }
     }
 
-    private void assertNoWritesOrConsent() throws Exception
+    private void assertNoWritesOrConsent(int expectedRefreshes) throws Exception
     {
         assertTrue(tool.previews.isEmpty());
-        verifyNoWrites();
+        verifyNoWrites(expectedRefreshes);
     }
 
-    private void verifyNoWrites() throws Exception
+    private void verifyNoWrites(int expectedRefreshes) throws Exception
     {
         verify(repo, never()).duplicateSettingsProfile(anyString(), anyString(), same(project));
         verify(repo, never()).deleteSettingsProfile(anyString(), same(project));
         verify(repo, never()).setActiveSettingsProfile(anyString(), anyCollection(), same(project));
         verify(repo, never()).applyChanges(anyCollection(), same(project));
-        verify(folder, never()).refreshLocal(anyInt(), any(IProgressMonitor.class));
+        verify(folder, times(expectedRefreshes)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     private String invoke(String action, String name, String source)

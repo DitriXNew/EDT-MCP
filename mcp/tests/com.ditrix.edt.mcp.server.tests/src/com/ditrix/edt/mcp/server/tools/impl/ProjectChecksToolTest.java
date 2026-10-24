@@ -171,7 +171,8 @@ public class ProjectChecksToolTest
             assertTrue(preview, preview.contains("begin-transaction|example.checks"));
         }
         verify(repo, never()).applyChanges(anyCollection(), same(project));
-        verify(folder, never()).refreshLocal(anyInt(), any(IProgressMonitor.class));
+        verify(folder, times(ConsentDecision.values().length - 1))
+            .refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
         assertTrue(enabled.get());
     }
 
@@ -187,7 +188,7 @@ public class ProjectChecksToolTest
         assertTrue(result.get("criticalDataIntegrityWarning").getAsString()
             .contains("EDT will now load the configuration without"));
         verify(repo, times(1)).applyChanges(anyCollection(), same(project));
-        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
         assertEquals(List.of("building", "project", "repository"), tool.events);
     }
 
@@ -198,13 +199,14 @@ public class ProjectChecksToolTest
         assertEquals(0, result.get("changed").getAsInt());
         assertTrue(tool.previews.isEmpty());
         verify(repo, never()).applyChanges(anyCollection(), same(project));
-        verify(folder, never()).refreshLocal(anyInt(), any(IProgressMonitor.class));
+        verify(folder).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test
     public void testARefreshFailureRetainsTheRestoreRecipeAndReportsTheWorkspaceProblem() throws Exception
     {
-        doThrow(new CoreException(new Status(IStatus.ERROR, "com.ditrix.edt.mcp.server", "Refresh blocked")))
+        doNothing().doNothing().doThrow(new CoreException(
+            new Status(IStatus.ERROR, "com.ditrix.edt.mcp.server", "Refresh blocked")))
             .when(folder).refreshLocal(anyInt(), any(IProgressMonitor.class));
         JsonObject result = ok(tool.execute(set(false)));
         assertTrue(result.get("persisted").getAsBoolean());
@@ -238,7 +240,7 @@ public class ProjectChecksToolTest
         assertEquals("Review", result.getAsJsonObject("after").get("activeProfile").getAsString());
         assertTrue(result.get("persisted").getAsBoolean());
         verify(repo).setActiveSettingsProfile("Review", List.of(), project);
-        verify(folder, times(2)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
+        verify(folder, times(3)).refreshLocal(eq(IResource.DEPTH_ONE), any(IProgressMonitor.class));
     }
 
     @Test

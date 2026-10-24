@@ -10,9 +10,6 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IResource;
-import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
@@ -146,15 +143,13 @@ public class ProjectChecksTool implements IMcpTool
             }
             try
             {
-                if ("profiles".equals(action) || "switch".equals(action))
+                try
                 {
-                    // EDT caches profile names until its resource listener sees an external .cset delta.
-                    // Refresh before reading the active name too: removing a profile may restore Default.
-                    String refreshError = refreshSettings(project, false);
-                    if (refreshError != null)
-                    {
-                        return ToolResult.error(refreshError).toJson();
-                    }
+                    ProjectCheckSettingsSupport.refreshSettingsBeforeRead(project);
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return ToolResult.error(e.getMessage()).toJson();
                 }
                 // getActiveSettingsProfile dereferences a missing store; getSettings supplies
                 // the platform's specific unregistered-project exception for our recovery path.
@@ -226,7 +221,7 @@ public class ProjectChecksTool implements IMcpTool
                     return setDenied;
                 }
                 data = ProjectCheckSettingsSupport.applyAll(repo, project, plan);
-                refreshWarning = refreshSettings(project, true);
+                refreshWarning = ProjectCheckSettingsSupport.refreshSettings(project, true);
                 break;
             case "switch":
                 String profile = JsonUtils.extractStringArgument(params, "profile");
@@ -245,7 +240,7 @@ public class ProjectChecksTool implements IMcpTool
                     return switchDenied;
                 }
                 data = ProjectCheckSettingsSupport.switchProfile(repo, project, switchPlan);
-                refreshWarning = refreshSettings(project, true);
+                refreshWarning = ProjectCheckSettingsSupport.refreshSettings(project, true);
                 break;
             case "createProfile":
             case "copyProfile":
@@ -266,7 +261,7 @@ public class ProjectChecksTool implements IMcpTool
                 }
                 data = ProjectCheckSettingsSupport.copyProfile(repo, project, newProfile, source,
                     "createProfile".equals(action) && from == null, sourceFingerprint, active);
-                refreshWarning = refreshSettings(project, true);
+                refreshWarning = ProjectCheckSettingsSupport.refreshSettings(project, true);
                 break;
             case "deleteProfile":
                 String deletedProfile = ProjectCheckSettingsSupport.validateProfileDelete(repo, project,
@@ -283,7 +278,7 @@ public class ProjectChecksTool implements IMcpTool
                     return deleteDenied;
                 }
                 data = ProjectCheckSettingsSupport.deleteProfile(repo, project, deletedProfile, active, fingerprint);
-                refreshWarning = refreshSettings(project, true);
+                refreshWarning = ProjectCheckSettingsSupport.refreshSettings(project, true);
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -340,23 +335,4 @@ public class ProjectChecksTool implements IMcpTool
         return ProjectStateChecker.withUnstartedContextReason(project, refusal);
     }
 
-    private static String refreshSettings(IProject project, boolean afterWrite)
-    {
-        try
-        {
-            project.getFolder(".settings").refreshLocal(IResource.DEPTH_ONE, new NullProgressMonitor());
-            return null;
-        }
-        catch (CoreException e)
-        {
-            if (!afterWrite)
-            {
-                return "EDT could not refresh .settings before reading check profiles: " + e.getMessage()
-                    + ". Refresh the project in EDT, then retry project_checks.";
-            }
-            // The repository write has succeeded: preserve the restore recipe and its read-back.
-            return "Check settings were applied, but EDT could not refresh .settings: " + e.getMessage()
-                + ". Refresh the project in EDT, then poll get_project_errors.";
-        }
-    }
 }
