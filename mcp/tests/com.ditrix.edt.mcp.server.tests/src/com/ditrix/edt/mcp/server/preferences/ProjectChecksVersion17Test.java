@@ -19,12 +19,12 @@ public class ProjectChecksVersion17Test
     @Test
     public void version17IsRegisteredWithoutTakingTheVersion16Step()
     {
-        assertTrue(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION >= 17);
+        assertEquals(17, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
         for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
         {
             assertEquals(Set.of("get_form_screenshot"), additions.get(15));
-            assertFalse("#449 owns v16", additions.getOrDefault(16, Set.of()).contains("project_checks"));
+            assertEquals(Set.of("business_process_route_map"), additions.get(16));
             assertEquals(Set.of("project_checks"), additions.get(17));
         }
     }
@@ -49,7 +49,7 @@ public class ProjectChecksVersion17Test
             PreferenceStore store = stored(id, 14);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = id.equals("analysis-only")
-                ? Set.of("owner_disabled", "get_form_screenshot", "project_checks")
+                ? Set.of("owner_disabled", "get_form_screenshot", "business_process_route_map", "project_checks")
                 : Set.of("owner_disabled", "get_form_screenshot");
             assertEquals(expected, disabled(store));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
@@ -63,7 +63,10 @@ public class ProjectChecksVersion17Test
         {
             PreferenceStore store = stored(id, version);
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled", "project_checks"), disabled(store));
+            Set<String> expected = version < 16
+                ? Set.of("owner_disabled", "business_process_route_map", "project_checks")
+                : Set.of("owner_disabled", "project_checks");
+            assertEquals(expected, disabled(store));
             assertEquals(id, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
                 store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));

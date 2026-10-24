@@ -113,6 +113,7 @@ public final class PreferenceConstants
      * 14 = a stored read-only profile, identified by its recorded provenance, gains the six
      * workspace/git writers the presets had missed;
      * 15 = every stored list gains the now-default-disabled {@code get_form_screenshot}.
+     * 16 = recorded read-only presets gain the destructive {@code business_process_route_map}.
      * 17 = a stored read-only profile gains {@code project_checks}.
      */
     public static final int TOOL_PREFS_MIGRATION_VERSION = 17;

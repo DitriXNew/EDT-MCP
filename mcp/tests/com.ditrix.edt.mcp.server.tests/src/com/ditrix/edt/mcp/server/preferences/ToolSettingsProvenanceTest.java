@@ -49,7 +49,10 @@ public class ToolSettingsProvenanceTest
         Map.entry(11, Set.of("import_project_from_file")),
         Map.entry(12, Set.of(EXPORT)),
         Map.entry(14, Set.of("switch_git_branch", "create_git_branch", "set_branch_infobase",
-            "create_project", "resync_to_disk", "clean_project")));
+            "create_project", "resync_to_disk", "clean_project")),
+        Map.entry(15, Set.of("get_form_screenshot")),
+        Map.entry(16, Set.of("business_process_route_map")),
+        Map.entry(17, Set.of("project_checks")));
 
     private final ToolSettingsService service = ToolSettingsService.getInstance();
     private PreferenceStore store;

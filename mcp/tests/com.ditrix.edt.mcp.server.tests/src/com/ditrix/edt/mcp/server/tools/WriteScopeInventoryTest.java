@@ -57,6 +57,8 @@ public class WriteScopeInventoryTest
         "com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool", //$NON-NLS-1$
         "com.ditrix.edt.mcp.server.tools.impl.ResyncToDiskTool", //$NON-NLS-1$
         "com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool", //$NON-NLS-1$
+        // Route-map writes export their external top object; get explicitly queues nothing.
+        "com.ditrix.edt.mcp.server.tools.impl.BusinessProcessRouteMapTool", //$NON-NLS-1$
         // CANNOT DECLARE: EDT's quick-fix extension point reports nothing about what the fix
         // touched, so this one states that outright and names what to wait for instead. It is the
         // only member of this class, and a second one should be argued for, not assumed.

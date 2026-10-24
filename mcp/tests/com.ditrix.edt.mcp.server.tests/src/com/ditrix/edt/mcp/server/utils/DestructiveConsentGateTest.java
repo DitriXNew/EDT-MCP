@@ -231,7 +231,7 @@ public class DestructiveConsentGateTest
         assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "delete_infobase", "update_database", "infobase_sessions", "modify_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                "dcs", "git", "project_checks", //$NON-NLS-1$ //$NON-NLS-2$
+                "dcs", "git", "business_process_route_map", "project_checks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "merge_rules", "evaluate_expression"), //$NON-NLS-1$ //$NON-NLS-2$
             DestructiveConsentGate.GATED_TOOLS);
     }

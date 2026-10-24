@@ -93,6 +93,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> STORED_PROFILE_V15_ADDITIONS = Set.of(
         "get_form_screenshot"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V16_ADDITIONS = Set.of(
+        "business_process_route_map"); //$NON-NLS-1$
+
     private static final Set<String> READ_ONLY_V17_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
@@ -110,6 +113,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
         Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS),
         Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
@@ -127,6 +131,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(12, READ_ONLY_V12_ADDITIONS),
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
         Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS),
         Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /*
@@ -423,6 +428,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 15)
             {
                 changed |= disabled.addAll(STORED_PROFILE_V15_ADDITIONS);
+            }
+            if (storedVersion < 16)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V16_ADDITIONS);
             }
             if (storedVersion < 17)
             {

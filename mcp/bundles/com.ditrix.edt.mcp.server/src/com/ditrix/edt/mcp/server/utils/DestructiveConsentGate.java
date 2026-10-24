@@ -130,7 +130,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code modify_metadata} and {@code dcs} (gated only for a destructive retype),
      * {@code git} (gated per write-capable subcommand), {@code merge_rules} (gated only
      * for the same-path rewrite) and {@code evaluate_expression} (gated always, because
-     * arbitrary BSL cannot be classified), plus {@code project_checks} (gated only for
+     * arbitrary BSL cannot be classified), {@code business_process_route_map} (gated for
+     * replace/remove), plus {@code project_checks} (gated only for
      * set/switch that change something and create/copy/delete profile writes).
      * Each tool decides when to call, the gate does not.
      *
@@ -154,6 +155,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "infobase_sessions", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
+        "business_process_route_map", //$NON-NLS-1$
         // Settings/profile writes ask, including destructive deletion; reads and effective no-ops do not.
         "project_checks", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
