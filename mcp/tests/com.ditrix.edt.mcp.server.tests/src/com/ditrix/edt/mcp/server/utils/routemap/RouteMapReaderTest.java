@@ -23,6 +23,7 @@ public class RouteMapReaderTest
             "[{\"from\":\"Check\",\"to\":\"Done\",\"branch\":\"false\"},"
                 + "{\"from\":\"Check\",\"to\":\"Done\",\"branch\":\"true\"}]"), "en", null, bp -> List.of());
         ((GraphicalSchemeCondition)scheme.getItems().get(0)).setTruePortIndex(1);
+        ((GraphicalSchemeCondition)scheme.getItems().get(0)).setFalsePortIndex(3);
         var connections = RouteMapReader.read(scheme, "en").getAsJsonArray("connections");
         assertEquals("true", connections.get(0).getAsJsonObject().get("branch").getAsString());
         assertEquals("false", connections.get(1).getAsJsonObject().get("branch").getAsString());

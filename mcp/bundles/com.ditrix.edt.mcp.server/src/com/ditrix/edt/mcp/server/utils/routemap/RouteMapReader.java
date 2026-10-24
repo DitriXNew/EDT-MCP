@@ -106,8 +106,14 @@ public final class RouteMapReader
                 GraphicalSchemeFigure source = byName.get(connection.getSourceItemName());
                 if (source instanceof GraphicalSchemeCondition condition)
                 {
-                    value.addProperty("branch", connection.getSourcePortIndex() == condition.getTruePortIndex()
-                        ? "true" : "false");
+                    if (connection.getSourcePortIndex() == condition.getTruePortIndex())
+                    {
+                        value.addProperty("branch", "true");
+                    }
+                    else if (connection.getSourcePortIndex() == condition.getFalsePortIndex())
+                    {
+                        value.addProperty("branch", "false");
+                    }
                 }
                 if (source instanceof GraphicalSchemeSwitch selection)
                 {

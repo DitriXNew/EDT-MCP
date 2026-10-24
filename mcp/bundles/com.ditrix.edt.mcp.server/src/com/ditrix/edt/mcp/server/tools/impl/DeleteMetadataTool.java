@@ -5574,8 +5574,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     .append(" - the confirmed response lists them."); //$NON-NLS-1$
             }
             // The global editing context's commit saves another context that last modified the form.
-            sb.append(" An open editor of this form with unsaved changes has them all saved with the " //$NON-NLS-1$
-                + "delete, not only its changes to this form, and loses its undo history."); //$NON-NLS-1$
+            sb.append(ConsentPreview.globalContextEditorNotice("form")); //$NON-NLS-1$
             return sb.toString();
         }
 
