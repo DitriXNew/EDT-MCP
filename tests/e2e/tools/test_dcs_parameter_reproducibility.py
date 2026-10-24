@@ -78,11 +78,18 @@ def _flushed_bytes(report_name, fqn):
     expected = _xml_structure(_xml(fqn))
     deadline = time.monotonic() + 30
     while True:
-        payload = path.read_bytes()
-        if _xml_structure(payload.decode("utf-8-sig")) == expected:
-            return path, payload
+        try:
+            payload = path.read_bytes()
+            if not payload:
+                last = "empty file"
+            elif _xml_structure(payload.decode("utf-8-sig")) == expected:
+                return path, payload
+            else:
+                last = "XML structure differs from the schema model"
+        except (OSError, ET.ParseError, UnicodeDecodeError) as error:
+            last = "%s: %s" % (type(error).__name__, error)
         if time.monotonic() >= deadline:
-            raise AssertionError("Template.dcs export did not catch up with the schema model")
+            raise AssertionError("Template.dcs export did not catch up with the schema model; last read: %s" % last)
         time.sleep(0.2)
 
 
