@@ -24,12 +24,13 @@ public final class DcsMutationGuard
         DcsWriterCatalogues catalogues)
     {
         if (root == null || target == null) return null;
-        String targetAddress = DcsReadProjection.replacementAddress(root, target);
+        DcsReadProjection.ReplacementScope scope = DcsReadProjection.replacementScope(root, target);
+        String targetAddress = scope.address();
         List<String> blocked = new ArrayList<>();
         String deliberateRefusal = null;
         boolean parameterRefusal = false;
         for (DcsReadProjection.Unmodellable node :
-            DcsReadProjection.unmodellableNodes(root, target.rootFqn(), catalogues))
+            DcsReadProjection.unmodellableNodes(root, target.rootFqn(), catalogues, scope.outsideScope()))
         {
             String address = node.address();
             if (!target.hasPointer() || address.equals(targetAddress)

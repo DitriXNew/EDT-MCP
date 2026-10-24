@@ -273,12 +273,20 @@ public final class DcsReadProjection
             DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind, identity);
     }
 
-    /** Canonicalizes writer-supported index aliases without broadening the read address surface. */
-    static String replacementAddress(EObject root, DcsAddress target)
+    /** Canonical diagnostics plus positional exclusions for indexed entries with duplicate keys. */
+    record ReplacementScope(String address, Set<EObject> outsideScope) { }
+
+    /** Resolves writer-supported index aliases without merging duplicate siblings into the scope. */
+    static ReplacementScope replacementScope(EObject root, DcsAddress target)
     {
-        if (!target.hasPointer()) return target.toString();
-        NodeResolution resolved = resolvePointer(target.rootFqn(), root, target.segments(), true);
-        return resolved.isSuccess() ? resolved.node.address : target.toString();
+        if (!target.hasPointer())
+            return new ReplacementScope(target.toString(), Collections.emptySet());
+        Set<EObject> outsideScope = new LinkedHashSet<>();
+        NodeResolution resolved = resolvePointer(target.rootFqn(), root, target.segments(), true,
+            outsideScope);
+        return resolved.isSuccess()
+            ? new ReplacementScope(resolved.node.address, outsideScope)
+            : new ReplacementScope(target.toString(), Collections.emptySet());
     }
 
     /** Resolves the same canonical pointer used by reads for the read-only options catalogue. */
@@ -345,16 +353,22 @@ public final class DcsReadProjection
     public static List<Unmodellable> unmodellableNodes(EObject root, String rootFqn,
         DcsWriterCatalogues catalogues)
     {
+        return unmodellableNodes(root, rootFqn, catalogues, Collections.emptySet());
+    }
+
+    static List<Unmodellable> unmodellableNodes(EObject root, String rootFqn,
+        DcsWriterCatalogues catalogues, Set<EObject> outsideScope)
+    {
         java.util.Objects.requireNonNull(catalogues);
         if (root == null) return Collections.emptyList();
         List<Unmodellable> result = new ArrayList<>();
         collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-            "", catalogues, result); //$NON-NLS-1$
+            "", catalogues, outsideScope, result); //$NON-NLS-1$
         return result;
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,
-        DcsWriterCatalogues catalogues, List<Unmodellable> result)
+        DcsWriterCatalogues catalogues, Set<EObject> outsideScope, List<Unmodellable> result)
     {
         boolean unsupported = object instanceof DataSet
             && !(object instanceof DataCompositionSchemaDataSetQuery)
@@ -412,6 +426,9 @@ public final class DcsReadProjection
                                     selector(feature, object, childObject, i));
                         String keyRefusal = collectionKeyRefusal(object, feature, childObject,
                             keys, catalogues);
+                        // Keep key accounting for every entry, but inspect only the indexed
+                        // entry's content when a sibling has the same canonical address.
+                        if (outsideScope.contains(childObject)) continue;
                         if (keyRefusal != null)
                         {
                             // A key failure must not hide descendants from a narrower replace.
@@ -420,14 +437,14 @@ public final class DcsReadProjection
                                 keyRefusal));
                         }
                         collectUnmodellable(childObject, childAddress, feature,
-                            catalogues, result);
+                            catalogues, outsideScope, result);
                     }
                 }
             }
             else if (value instanceof EObject)
             {
                 collectUnmodellable((EObject)value, featureAddress, feature,
-                    catalogues, result);
+                    catalogues, outsideScope, result);
             }
         }
     }
@@ -1532,6 +1549,12 @@ public final class DcsReadProjection
     private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments,
         boolean indexFallback)
     {
+        return resolvePointer(rootFqn, root, segments, indexFallback, null);
+    }
+
+    private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments,
+        boolean indexFallback, Set<EObject> outsideScope)
+    {
         Object current = root;
         EObject owner = null;
         String currentAddress = rootFqn;
@@ -1564,6 +1587,8 @@ public final class DcsReadProjection
                         selectors(virtualFields, collectionName, object));
                 }
                 current = virtualFields.get(selected);
+                excludeDuplicateSiblings(virtualFields, collectionName, object, fieldSelector,
+                    selected, outsideScope);
                 currentAddress = child(currentAddress, selector(collectionName, object,
                     (EObject)current, selected));
                 continue;
@@ -1613,11 +1638,29 @@ public final class DcsReadProjection
                 return failedSegment(selector, currentAddress, selectors(list, collectionName, object));
             }
             current = list.get(selected);
+            excludeDuplicateSiblings(list, collectionName, object, selector, selected, outsideScope);
             currentAddress = child(currentAddress, selector(collectionName, object,
                 (EObject)current, selected));
         }
         return NodeResolution.success(new NodeRef(current, currentAddress, collectionName,
             owner, Collections.<NodeRef> emptyList()));
+    }
+
+    /** An index selects one entry even when its natural-key address also names other entries. */
+    private static void excludeDuplicateSiblings(List<?> list, String collection, EObject owner,
+        String requested, int selected, Set<EObject> outsideScope)
+    {
+        if (outsideScope == null || !DcsAddress.isZeroBasedIndex(requested)) return;
+        String key = selector(collection, owner, (EObject)list.get(selected), selected);
+        for (int i = 0; i < list.size(); i++)
+        {
+            Object sibling = list.get(i);
+            if (i != selected && sibling instanceof EObject
+                && key.equals(selector(collection, owner, (EObject)sibling, i)))
+            {
+                outsideScope.add((EObject)sibling);
+            }
+        }
     }
 
     private static NodeResolution failedSegment(String segment, String address, List<String> existing)
