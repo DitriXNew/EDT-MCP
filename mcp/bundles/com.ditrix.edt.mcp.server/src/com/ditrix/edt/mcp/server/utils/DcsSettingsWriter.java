@@ -5464,8 +5464,9 @@ public final class DcsSettingsWriter
     /**
      * All JSON number write paths meet here. Like JsonUtils.parseExactDecimalLong, use exact
      * decimal arithmetic to remove an integral transport Double's fraction; retain real fractions
-     * verbatim. Bound integer digits before setScale can expand a compact exponent; use the
-     * platform's widest Number precision, shared with TypeDescription validation.
+     * verbatim within the platform's Number limits. Check integer digits, fractional scale and
+     * significant precision before expansion or model construction. Number qualifiers require
+     * scale <= precision, so MAX_NUMBER_PRECISION also bounds the fractional scale.
      */
     private static ValueResult numberValue(JsonElement raw, String path)
     {
@@ -5480,13 +5481,24 @@ public final class DcsSettingsWriter
             // on the numeric error path, rather than the generic Date ValueSpec catch.
             return numberValueFailure(raw, path);
         }
+        // Zero has no significant exponent: discard even an extreme scale without expanding it.
+        if (decimal.signum() == 0)
+        {
+            decimal = BigDecimal.ZERO;
+        }
         long integerDigits = (long)decimal.precision() - decimal.scale();
-        if (decimal.signum() != 0 && integerDigits > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
+        if (integerDigits > MetadataTypeBuilder.MAX_NUMBER_PRECISION
+            || decimal.scale() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
+        {
+            return numberValueFailure(raw, path);
+        }
+        BigDecimal significant = decimal.stripTrailingZeros();
+        if (significant.precision() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
         {
             return numberValueFailure(raw, path);
         }
         // Inspect integrality without growing a power of ten for a tiny fractional exponent.
-        if (decimal.scale() <= 0 || decimal.stripTrailingZeros().scale() <= 0)
+        if (decimal.scale() <= 0 || significant.scale() <= 0)
         {
             decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
         }
@@ -5500,7 +5512,9 @@ public final class DcsSettingsWriter
         return ValueResult.failure("Number ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' cannot be stored as a 1C Number. Pass a finite JSON number with at most " //$NON-NLS-1$
             + MetadataTypeBuilder.MAX_NUMBER_PRECISION
-            + " integer digits and a supported decimal scale."); //$NON-NLS-1$
+            + " integer digits, " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
+            + " fractional digits and " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
+            + " significant digits."); //$NON-NLS-1$
     }
 
     /**
@@ -5623,8 +5637,9 @@ public final class DcsSettingsWriter
                 if (checkState.value != null) item.setCheckState(checkState.value.intValue());
                 IntResult id = optionalInt(itemBody, KEY_ID, itemPath);
                 if (id.error != null) return ValueResult.failure(id.error);
-                int itemId = id.value != null ? id.value.intValue()
-                    : highest == null ? 1 : highest.intValue() + 1;
+                if (id.value == null) id = nextItemId(highest, itemPath);
+                if (id.error != null) return ValueResult.failure(id.error);
+                int itemId = id.value.intValue();
                 item.setId(itemId);
                 highest = highest == null ? itemId : Math.max(highest.intValue(), itemId);
                 list.getItems().add(item);
@@ -5635,6 +5650,18 @@ public final class DcsSettingsWriter
         list.setLastId(lastId.value != null ? lastId.value.intValue()
             : highest == null ? -1 : highest.intValue());
         return ValueResult.success(list);
+    }
+
+    /** Share the checked successor for automatically assigned item IDs; explicit IDs bypass it. */
+    private static IntResult nextItemId(Integer highest, String path)
+    {
+        if (highest != null && highest.intValue() == Integer.MAX_VALUE)
+        {
+            return new IntResult(null, "Cannot auto-assign an item id at '" + path //$NON-NLS-1$
+                + "': the previous maximum is " + Integer.MAX_VALUE //$NON-NLS-1$
+                + ". Supply explicit ids for the remaining items."); //$NON-NLS-1$
+        }
+        return new IntResult(Integer.valueOf(highest == null ? 1 : highest.intValue() + 1), null);
     }
 
     /** A platform-enum member of a standard period or beginning date; omitted or null means the model default. */

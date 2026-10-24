@@ -8,7 +8,6 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 
 import org.junit.Test;
@@ -46,16 +45,16 @@ public class DcsNumberExpansionLimitTest
     @Test(timeout = 2000)
     public void testTinyFractionsDoNotExpandWhileTestingWhetherTheyAreIntegral()
     {
-        ExpansionProbe received = new ExpansionProbe("1e-9999");
-        JsonObject body = number("1e-9999");
+        DcsNumberExpansionProbe received = new DcsNumberExpansionProbe("1e-38");
+        JsonObject body = number("1e-38");
         body.add("value", new JsonPrimitive(received));
         ValueResult result = DcsSettingsWriter.buildValue(body, "value");
         assertNull(result.error, result.error);
         assertSame(received, ((NumberValue)result.value).getValue());
         assertFalse(received.expansionAttempted);
-        ValueResult ordinary = DcsSettingsWriter.buildValue(number("1e-9999"), "value");
+        ValueResult ordinary = DcsSettingsWriter.buildValue(number("1e-38"), "value");
         assertNull(ordinary.error, ordinary.error);
-        assertEquals(new BigDecimal("1e-9999"), ((NumberValue)ordinary.value).getValue());
+        assertEquals(new BigDecimal("1e-38"), ((NumberValue)ordinary.value).getValue());
     }
 
     @Test
@@ -155,7 +154,7 @@ public class DcsNumberExpansionLimitTest
     @Test(timeout = 2000)
     public void testStoredNumbersAlsoRefuseBeforeTheReplaceDryRunCanExpand()
     {
-        ExpansionProbe received = new ExpansionProbe("1e100000000");
+        DcsNumberExpansionProbe received = new DcsNumberExpansionProbe("1e100000000");
         NumberValue stored = McoreFactory.eINSTANCE.createNumberValue();
         stored.setValue(received);
         assertLimit(DcsSettingsWriter.untypedValueRefusal(stored), "1E+100000000");
@@ -164,7 +163,7 @@ public class DcsNumberExpansionLimitTest
 
     private static void assertRefusedWithoutExpansion(JsonObject original)
     {
-        ExpansionProbe received = new ExpansionProbe(original.get("value").getAsString());
+        DcsNumberExpansionProbe received = new DcsNumberExpansionProbe(original.get("value").getAsString());
         JsonObject instrumented = original.deepCopy();
         instrumented.add("value", new JsonPrimitive(received));
         ValueResult result = DcsSettingsWriter.buildValue(instrumented, "value");
@@ -192,22 +191,4 @@ public class DcsNumberExpansionLimitTest
         return JsonParser.parseString(text).getAsJsonObject();
     }
 
-    /** Stops unsafe base/mutant code before it can allocate a huge BigInteger. */
-    private static final class ExpansionProbe extends BigDecimal
-    {
-        private static final long serialVersionUID = 1L;
-        private boolean expansionAttempted;
-
-        ExpansionProbe(String literal)
-        {
-            super(literal);
-        }
-
-        @Override
-        public BigDecimal setScale(int scale, RoundingMode rounding)
-        {
-            expansionAttempted = true;
-            throw new AssertionError("Oversized exponent reached setScale before the size check: " + toString());
-        }
-    }
 }

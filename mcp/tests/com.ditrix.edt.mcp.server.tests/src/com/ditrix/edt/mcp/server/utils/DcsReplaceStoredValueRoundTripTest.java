@@ -146,7 +146,7 @@ public class DcsReplaceStoredValueRoundTripTest
         String[] bodies = {"{\"kind\":\"string\",\"value\":\"\"}", "{\"kind\":\"string\",\"value\":\"abc\"}",
             "{\"kind\":\"number\",\"value\":1.50}", "{\"kind\":\"number\",\"value\":10.0}",
             "{\"kind\":\"number\",\"value\":-3.25}", "{\"kind\":\"number\",\"value\":0}",
-            "{\"kind\":\"number\",\"value\":123456789012345678901234567890.123456789}",
+            "{\"kind\":\"number\",\"value\":123456789012345678901234567890.12345678}",
             "{\"kind\":\"number\",\"value\":1E+3}", "{\"kind\":\"boolean\",\"value\":true}",
             "{\"kind\":\"boolean\",\"value\":false}", "{\"kind\":\"date\",\"value\":\"0001-01-01T00:00:00\"}",
             "{\"kind\":\"date\",\"value\":\"2026-01-31T23:59:59\"}", "{\"kind\":\"field\",\"value\":\"Amount\"}",
