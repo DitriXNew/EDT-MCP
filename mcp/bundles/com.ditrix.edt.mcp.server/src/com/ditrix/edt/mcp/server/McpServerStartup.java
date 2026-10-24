@@ -69,7 +69,7 @@ public class McpServerStartup implements IStartup
         McpCallHistoryFileLog.reconfigure();
 
         // Auto-start when the preference is set OR the env override forces it.
-        boolean autoStart = "true".equalsIgnoreCase(System.getenv(ENV_AUTO_START)) //$NON-NLS-1$
+        boolean autoStart = "true".equalsIgnoreCase(getEnvironmentVariable(ENV_AUTO_START)) //$NON-NLS-1$
             || Activator.getDefault().getPreferenceStore().getBoolean(PreferenceConstants.PREF_AUTO_START);
 
         if (autoStart)
@@ -91,10 +91,16 @@ public class McpServerStartup implements IStartup
         UpdateChecker.getInstance().scheduleCheck();
     }
 
+    /** Reads launch overrides; package visibility allows startup tests without changing process env. */
+    String getEnvironmentVariable(String name)
+    {
+        return System.getenv(name);
+    }
+
     /** Port from the {@link #ENV_PORT} override, else the {@code PREF_PORT} preference. */
     private int resolvePort()
     {
-        String envPort = System.getenv(ENV_PORT);
+        String envPort = getEnvironmentVariable(ENV_PORT);
         if (envPort != null && !envPort.isBlank())
         {
             try
@@ -116,7 +122,7 @@ public class McpServerStartup implements IStartup
      */
     private void importConfiguredProjects()
     {
-        String spec = System.getenv(ENV_IMPORT_PROJECTS);
+        String spec = getEnvironmentVariable(ENV_IMPORT_PROJECTS);
         if (spec == null || spec.isBlank())
         {
             return;

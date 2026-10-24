@@ -242,6 +242,25 @@ Quickly switch between common tool configurations using presets:
 
 Select a preset from the dropdown in the Tools tab. The dropdown shows the preset you last chose and keeps it when you tick or untick individual tools, so later preset-owed updates (for example a new mutating tool disabled in the read-only presets) still reach your edited profile. Choose "Custom", "Disable all" or "Restore Defaults" to opt out. Profiles saved by older versions are recognised once, on upgrade.
 
+For scripted launches, set **`EDT_MCP_TOOL_PRESET=<preset id>`** on the EDT process before
+startup: `all-tools`, `analysis-only`, `code-review`, or `development`. These predefined IDs are
+case-insensitive; surrounding whitespace is ignored. The value is resolved once, on first use,
+including in-process bridge calls and manual server starts when early
+startup is disabled. A predefined preset replaces the effective tool selection **for this
+session only**; stored Tools preferences are untouched by launch-preset resolution and registry
+reads, including their migration state. An unset variable, a blank value or `custom` uses the
+stored selection; explicit `custom` logs one INFO line explaining that there is no launch override.
+An unknown ID is ignored and logged once at WARNING, listing only the predefined override IDs
+and explaining that unset or `custom` uses the stored selection.
+
+The Tools tab always displays and edits the saved selection, and shows a read-only note when
+a launch preset is active. Opening the tab still runs normal stored-preference migrations;
+unchanged OK/Apply preserves the saved selection and preset ID. Deliberate edits are saved for
+a launch without the override, while the active session keeps its launch preset. Progressive
+disclosure still narrows the enabled preset's tools; set `EDT_MCP_PROGRESSIVE_DISCLOSURE=false`
+when checking its full `tools/list` catalogue. See
+[the preset wire checks](tests/TESTING.md#launch-preset-wire-checks) for the e2e launch recipe.
+
 ### Per-Tool Parameter Defaults
 
 Some tools have configurable default values for parameters like result limits. These defaults are used when the AI client doesn't specify the parameter explicitly:
