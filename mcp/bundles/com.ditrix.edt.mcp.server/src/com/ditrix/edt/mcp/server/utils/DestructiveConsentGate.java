@@ -130,16 +130,21 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code modify_metadata} and {@code dcs} (gated only for a destructive retype),
      * {@code git} (gated per write-capable subcommand), {@code merge_rules} (gated only
      * for the same-path rewrite) and {@code evaluate_expression} (gated always, because
-     * arbitrary BSL cannot be classified). Each tool decides when to call, the gate does not.
+     * arbitrary BSL cannot be classified), {@code business_process_route_map} (gated for
+     * replace/remove), plus {@code project_checks} (gated only for
+     * set/switch that change something and create/copy/delete profile writes).
+     * Each tool decides when to call, the gate does not.
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
      * {@code delete_launch_config} (which is cheap/recoverable and NOT gated) and
-     * omits the conditional four, whose TYPICAL call is not destructive and whose hint
-     * therefore stays {@code false} — one hint per tool cannot say "this depends on the
-     * arguments", and marking a mostly-read tool destructive would steer clients away
-     * from it. The exact relationship is asserted by {@code DestructiveConsentGateTest}
-     * so the two lists never silently drift.
+     * omits five gated tools ({@code modify_metadata}, {@code dcs}, {@code git},
+     * {@code evaluate_expression} and {@code project_checks}). {@code modify_metadata} and
+     * {@code evaluate_expression} fall to the classifier's non-destructive-write default because
+     * their typical call destroys nothing. {@code dcs}, {@code git} and {@code project_checks}
+     * override {@code getAnnotations} with {@code destructiveHint:true} because one action can
+     * discard data. The exact relationship is asserted by
+     * {@code DestructiveConsentGateTest} so the two lists never silently drift.
      */
     public static final Set<String> GATED_TOOLS = Set.of(
         "delete_metadata", //$NON-NLS-1$
@@ -151,6 +156,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
         "business_process_route_map", //$NON-NLS-1$
+        // Settings/profile writes ask, including destructive deletion; reads and effective no-ops do not.
+        "project_checks", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
         // whether one destroys work depends on git's per-subcommand option grammar - see

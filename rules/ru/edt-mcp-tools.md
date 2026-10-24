@@ -50,7 +50,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | Пресет | Что выключено |
 |---|---|
 | **All Tools** | Ничего (все включённые на данный момент инструменты) |
-| **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Также выключены изменяющие инструменты Core: `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, смена веток git (`switch_git_branch`, `create_git_branch`) и привязка базы (`set_branch_infobase`). Доступны: чтение Core, сравнение, список веток git, Errors & Problems, Code Intelligence, Tags; `revalidate_objects` и `enable_toolset` остаются включёнными |
+| **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Также выключены изменяющие инструменты Core: `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, смена веток git (`switch_git_branch`, `create_git_branch`) и привязка базы (`set_branch_infobase`), а также `project_checks` из Errors & Problems. Доступны: чтение Core, сравнение, список веток git, остальные инструменты Errors & Problems, Code Intelligence, Tags; `revalidate_objects` и `enable_toolset` остаются включёнными |
 | **Code Review** | То же, что Analysis Only, **минус** добавляются доступными все инструменты BSL Code **кроме** `write_module_source`. То есть доступны `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | Группа Debugging и инструменты, выключенные по умолчанию (сейчас raw `git` и `ask_workmate`). `run_yaxunit_tests` остаётся доступен через Applications для обычных прогонов; `debug=true` может запуститься, но инструменты исследования и очистки выключены, поэтому не начинай debug-прогон, пока Debugging не включён. Refactoring, Translation, BSL Code и остальные инструменты Applications — доступны |
 
@@ -82,11 +82,12 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `export_configuration_to_xml` | Экспорт конфигурации в XML (EDT menu: Export → Configuration to XML Files) | По запросу пользователя |
 | `import_configuration_from_xml` | Импорт конфигурации из XML (обратный к экспорту) | По запросу пользователя |
 
-### 2. Errors & Problems — ошибки и задачи (3)
+### 2. Errors & Problems — ошибки и задачи (4)
 
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_problem_summary` | Сводка по числу проблем по проектам и severity | **Первым** — даёт картину одним вызовом |
+| `project_checks` | Чтение/изменение проверок; список, переключение, создание, копирование и удаление профилей (`createProfile`, `copyProfile`, `deleteProfile`). Запись требует согласия; удаление разрушительно | Сначала прочитать настройки; имена проверяет EDT, для `copyProfile` нужен `from`, активный профиль удалить нельзя |
 | `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN-фрагментов, неточный) ЛИБО `objectFqns` (точные адреса, возвращает `objectsNotFound` / `objectsUnsupported`; взаимоисключаются с `objects`), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
 | `get_markers` | Маркеры workspace — закладки и/или TODO/FIXME-маркеры. Фильтры: `markerKind` (`bookmark`/`task`; без него — оба), `projectName`, `filePath`, `priority` (только для задач) | По запросу или при аудите технического долга |
 

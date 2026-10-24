@@ -43,9 +43,11 @@ public class FormScreenshotMigrationTest
         List<String> writes = new ArrayList<>();
         store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(Set.of("owner_disabled_tool", SCREENSHOT, "switch_git_branch", "create_git_branch",
-            "set_branch_infobase", "create_project", "resync_to_disk", "clean_project",
-            "business_process_route_map"), disabled(store));
+        Set<String> expected = new HashSet<>(Set.of("owner_disabled_tool", SCREENSHOT,
+            "switch_git_branch", "create_git_branch", "set_branch_infobase", "create_project",
+            "resync_to_disk", "clean_project"));
+        ToolMigrationTestSupport.addReadOnlyAdditionsAfter(15, ToolPreset.CODE_REVIEW, expected);
+        assertEquals(expected, disabled(store));
         assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
