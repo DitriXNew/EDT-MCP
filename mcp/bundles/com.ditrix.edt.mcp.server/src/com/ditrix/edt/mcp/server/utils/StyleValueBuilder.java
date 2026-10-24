@@ -7,6 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
+import java.util.Objects;
+
+import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.mcore.AutoColor;
 import com._1c.g5.v8.dt.mcore.Color;
@@ -254,7 +258,7 @@ public final class StyleValueBuilder
         return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** The inverse of buildFont: explicit fonts with positive integer heights or positive zero, and default scale. */
+    /** Dry-runs the real font writer; only an exactly reproducible stored font can be replaced. */
     static String fontRefusal(Font font)
     {
         if (!(font instanceof FontDef))
@@ -264,23 +268,63 @@ public final class StyleValueBuilder
         }
         FontDef definition = (FontDef)font;
         float height = definition.getHeight();
-        if (Float.floatToRawIntBits(height) == Float.floatToRawIntBits(-0.0f))
-        {
-            return "font height " + height //$NON-NLS-1$
-                + " is negative zero, which the font writer cannot reproduce; " //$NON-NLS-1$
-                + "correct the height in the DCS designer before replacing its container"; //$NON-NLS-1$
-        }
         if (!Float.isFinite(height) || height < 0 || height > (float)Integer.MAX_VALUE
             || height != Math.rint(height))
         {
-            return "font height " + height //$NON-NLS-1$
-                + " is not a whole number in the supported range; the font writer takes an integer height"; //$NON-NLS-1$
+            return fontRebuildRefusal("font height " + Float.toString(height) //$NON-NLS-1$
+                + " is not a whole number in the supported range; the font writer takes an integer height"); //$NON-NLS-1$
         }
         if (definition.getScale() != 100)
         {
-            return "font scale " + definition.getScale() + " cannot be written; the font writer uses scale 100"; //$NON-NLS-1$ //$NON-NLS-2$
+            return fontRebuildRefusal("font scale " + definition.getScale() //$NON-NLS-1$
+                + " cannot be written; the font writer uses scale 100"); //$NON-NLS-1$
         }
-        return null;
+
+        JsonObject body = new JsonObject();
+        if (definition.getFaceName() != null) body.addProperty("faceName", definition.getFaceName()); //$NON-NLS-1$
+        // Zero means an omitted height to this writer. Equality below still compares the stored
+        // float, so projecting it never normalizes or changes the original font.
+        if (height > 0) body.addProperty("height", (int)height); //$NON-NLS-1$
+        body.addProperty("bold", definition.isBold()); //$NON-NLS-1$
+        body.addProperty("italic", definition.isItalic()); //$NON-NLS-1$
+        body.addProperty("underline", definition.isUnderline()); //$NON-NLS-1$
+        body.addProperty("strikeout", definition.isStrikeout()); //$NON-NLS-1$
+        // Explicit false flags keep even the writer's all-default output representable. Scale
+        // and every other feature the writer leaves alone must retain its factory default.
+        Result result = buildFont(body);
+        if (result.error != null)
+        {
+            return fontRebuildRefusal("font writer dry run refused the stored font: " + result.error); //$NON-NLS-1$
+        }
+        Font rebuilt = ((FontValue)result.value).getValue();
+        if (EcoreUtil.equals(definition, rebuilt)) return null;
+
+        for (EStructuralFeature feature : definition.eClass().getEAllStructuralFeatures())
+        {
+            Object storedValue = definition.eGet(feature);
+            Object rebuiltValue = rebuilt.eGet(feature);
+            boolean storedSet = definition.eIsSet(feature);
+            boolean rebuiltSet = rebuilt.eIsSet(feature);
+            if (storedSet != rebuiltSet || !Objects.equals(storedValue, rebuiltValue))
+            {
+                return fontRebuildRefusal("font " + feature.getName() + " " + fontFeatureValue(storedValue) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " (set=" + storedSet + "), rebuilt " + fontFeatureValue(rebuiltValue) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " (set=" + rebuiltSet + "); the font writer cannot reproduce the stored font exactly"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return fontRebuildRefusal("the font writer cannot reproduce the stored font's model class exactly"); //$NON-NLS-1$
+    }
+
+    private static String fontFeatureValue(Object value)
+    {
+        if (value instanceof Float) return Float.toString((Float)value);
+        if (value instanceof String) return new JsonPrimitive((String)value).toString();
+        return String.valueOf(value);
+    }
+
+    private static String fontRebuildRefusal(String reason)
+    {
+        return reason + ". Correct the font in the DCS designer or use action='update' to keep it."; //$NON-NLS-1$
     }
 
     private static Result buildFont(JsonElement fontEl)

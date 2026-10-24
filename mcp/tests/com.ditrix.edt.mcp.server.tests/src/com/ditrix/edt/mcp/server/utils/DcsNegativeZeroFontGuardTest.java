@@ -46,7 +46,7 @@ public class DcsNegativeZeroFontGuardTest
         assertTrue(refusal, refusal.contains(ROOT
             + "#/defaultSettings/conditionalAppearance/items/0/appearance/items/0"));
         assertTrue(refusal, refusal.contains("font height -0.0"));
-        assertTrue(refusal, refusal.contains("negative zero"));
+        assertTrue(refusal, refusal.contains("rebuilt 0.0"));
         assertTrue(refusal, refusal.contains("font writer cannot reproduce"));
         assertSame(original, schema.getDefaultSettings());
         assertSame(font, font(schema));
@@ -80,7 +80,7 @@ public class DcsNegativeZeroFontGuardTest
                 catalogues(kind));
             assertNotNull(kind + " must use the shared negative-zero refusal", refusal);
             assertTrue(refusal, refusal.contains("font height -0.0"));
-            assertTrue(refusal, refusal.contains("negative zero"));
+            assertTrue(refusal, refusal.contains("rebuilt 0.0"));
             assertEquals(Float.floatToRawIntBits(-0.0f), Float.floatToRawIntBits(font.getHeight()));
             assertTrue(EcoreUtil.equals(snapshot, root));
             assertEquals(0, writes.get());

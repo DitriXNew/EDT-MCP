@@ -26,8 +26,9 @@ localized text, a color channel outside 0-255, an AutoColor, which EDT saves as 
 reference whose name no longer resolves), more values than the parameter takes, an input parameter
 without a parameter name, a conditional-appearance item with no value, a name absent from the
 platform catalogue for the project's version (including an older alias), a value that does not
-match the declared type, or a font other than an explicit font with a positive integer height or
-positive zero and the default scale of 100 (negative zero, `-0.0`, cannot be reproduced). Use
+match the declared type, or a font the writer cannot rebuild exactly. A font is accepted only
+when a dry run of the font writer rebuilds it exactly, including every feature and its set or
+unset state. Use
 `action='update'` on those items to keep every member the body does not name; on a schema root you can also carry the whole schema through the lossless XML
 channel. A schema parameter's defaults (`values`) and available values (`availableValues`),
 including available values on data-set and calculated fields, are also dry-run through their

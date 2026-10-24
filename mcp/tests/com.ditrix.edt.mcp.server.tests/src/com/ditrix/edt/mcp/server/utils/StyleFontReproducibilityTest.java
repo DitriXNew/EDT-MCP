@@ -27,7 +27,7 @@ public class StyleFontReproducibilityTest
             Float.floatToRawIntBits(-0.0f), Float.floatToRawIntBits(font.getHeight()));
         assertNotNull("negative zero cannot be rebuilt by the font writer", refusal);
         assertTrue(refusal, refusal.contains("font height -0.0"));
-        assertTrue(refusal, refusal.contains("negative zero"));
+        assertTrue(refusal, refusal.contains("rebuilt 0.0"));
         assertTrue(refusal, refusal.contains("font writer cannot reproduce"));
         assertTrue(refusal, refusal.contains("DCS designer"));
     }
