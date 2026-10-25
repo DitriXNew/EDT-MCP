@@ -118,7 +118,7 @@ public class DcsSettingsWriterTest
         assertEquals("AgentMarker", property.getName()); //$NON-NLS-1$
         assertEquals("kept", ((StringValue)property.getValue()).getValue()); //$NON-NLS-1$
         assertTrue("all authored members must be reproducible by authoritative replace", //$NON-NLS-1$
-            DcsReadProjection.unmodellableNodes(result.settings(), "Report.Small").isEmpty()); //$NON-NLS-1$
+            DcsReadProjection.unmodellableNodes(result.settings(), "Report.Small", DcsReplaceTestCatalogues.schema()).isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -1794,7 +1794,7 @@ public class DcsSettingsWriterTest
         // The writer has no ValueSpec for an UndefinedValue, so an authoritative replace would drop the
         // bound; the shared replace guard lists it as unmodellable and refuses (unchanged by #672).
         String refusal = DcsMutationGuard.replaceError(read,
-            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0")); //$NON-NLS-1$
+            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull("replace must not silently drop an xsi:nil bound", refusal); //$NON-NLS-1$
         assertTrue(refusal, refusal.contains("UndefinedValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
             + "/groupFields/items/0/periodAdditionBegin")); //$NON-NLS-1$
@@ -1819,7 +1819,7 @@ public class DcsSettingsWriterTest
         assertFalse(xml, xml.contains("periodAdditionBegin")); //$NON-NLS-1$
         assertTrue(xml, xml.contains("periodAdditionType>Month<")); //$NON-NLS-1$
         assertNull("a cleared field is fully modelled again", DcsMutationGuard.replaceError(clearedSchema, //$NON-NLS-1$
-            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0"))); //$NON-NLS-1$
+            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     @Test
@@ -1917,20 +1917,20 @@ public class DcsSettingsWriterTest
         schema.setDefaultSettings(settings);
         DcsAddress target = address("Report.Sales#/defaultSettings"); //$NON-NLS-1$
         assertNull("an empty/supported Structure is fully modelled", //$NON-NLS-1$
-            DcsMutationGuard.replaceError(schema, target));
+            DcsMutationGuard.replaceError(schema, target, DcsReplaceTestCatalogues.schema()));
 
         StructureProperty unsupported = McoreFactory.eINSTANCE.createStructureProperty();
         unsupported.setName("DesignerColor"); //$NON-NLS-1$
         unsupported.setValue(McoreFactory.eINSTANCE.createColorValue());
         additionalProperties.getProperty().add(unsupported);
-        String refusal = DcsMutationGuard.replaceError(schema, target);
+        String refusal = DcsMutationGuard.replaceError(schema, target, DcsReplaceTestCatalogues.schema());
         assertNotNull(refusal);
         assertTrue(refusal, refusal.contains("ColorValue")); //$NON-NLS-1$
         assertTrue(refusal, refusal.contains("additionalProperties")); //$NON-NLS-1$
 
         DataCompositionSchema supported = DcsFactory.eINSTANCE.createDataCompositionSchema();
         supported.setDefaultSettings(plan(settingsBody()));
-        assertNull(DcsMutationGuard.replaceError(supported, target));
+        assertNull(DcsMutationGuard.replaceError(supported, target, DcsReplaceTestCatalogues.schema()));
         DcsSettingsWriter.SchemaResult replaced = DcsSettingsWriter.planSchema(supported,
             "replace", "userSettings", target, //$NON-NLS-1$ //$NON-NLS-2$
             json("{\"selection\":{\"items\":[]}}"), LANGUAGES); //$NON-NLS-1$

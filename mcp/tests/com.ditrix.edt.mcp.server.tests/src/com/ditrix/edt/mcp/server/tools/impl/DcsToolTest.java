@@ -36,6 +36,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.DcsReplaceTestCatalogues;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.google.gson.JsonArray;
@@ -281,15 +282,15 @@ public class DcsToolTest
     {
         DcsAddress address = address("Report.Sales"); //$NON-NLS-1$
         DataCompositionSchema schema = schemaWithUnsupportedField();
-        assertNull(DcsTool.replaceRefusal(schema, null, "selection", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(schema, null, "selection", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
         DataCompositionSchemaDataSetFieldFolder folder = com._1c.g5.v8.dt.dcs.model.schema
             .DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetFieldFolder();
         folder.setDataPath("UnsupportedFolder"); //$NON-NLS-1$
         dynamic.getFields().add(folder);
-        assertNull(DcsTool.replaceRefusal(dynamic, null, "selection", address)); //$NON-NLS-1$
-        assertNull(DcsTool.replaceRefusal(dynamic, null, "userSettings", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(dynamic, null, "selection", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(dynamic, null, "userSettings", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     @Test
@@ -300,17 +301,17 @@ public class DcsToolTest
         DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionSettings();
         schema.setDefaultSettings(settings);
-        assertNull(DcsTool.replaceRefusal(schema, settings, "userSettings", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(schema, settings, "userSettings", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         // A chart is modelled now; its nested output-parameter values are not.
         settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionChart());
         assertNull("a fully modelled chart must not block a replacement", //$NON-NLS-1$
-            DcsTool.replaceRefusal(schema, settings, "userSettings", address)); //$NON-NLS-1$
+            DcsTool.replaceRefusal(schema, settings, "userSettings", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         settings.getItems().add(chartWithNestedOutputParameter());
-        assertNull(DcsTool.replaceRefusal(schema, settings, "selection", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(schema, settings, "selection", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         String reportSettingsRefusal =
-            DcsTool.replaceRefusal(schema, settings, "userSettings", address); //$NON-NLS-1$
+            DcsTool.replaceRefusal(schema, settings, "userSettings", address, DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(reportSettingsRefusal);
         assertUnmodellableRefusal(reportSettingsRefusal);
 
@@ -321,10 +322,10 @@ public class DcsToolTest
             .eINSTANCE.createDataCompositionSettings();
         variant.setSettings(variantSettings);
         schema.getSettingsVariants().add(variant);
-        assertNull(DcsTool.replaceRefusal(schema, settings, "variant", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(schema, settings, "variant", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
 
         variantSettings.getItems().add(chartWithNestedOutputParameter());
-        String variantRefusal = DcsTool.replaceRefusal(schema, settings, "variant", address); //$NON-NLS-1$
+        String variantRefusal = DcsTool.replaceRefusal(schema, settings, "variant", address, DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(variantRefusal);
         assertUnmodellableRefusal(variantRefusal);
 
@@ -334,11 +335,11 @@ public class DcsToolTest
         DataCompositionSettings listSettings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
             .eINSTANCE.createDataCompositionSettings();
         dynamic.setListSettings(listSettings);
-        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         listSettings.getItems().add(chartWithNestedOutputParameter());
-        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "selection", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "selection", address, DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
         String listSettingsRefusal =
-            DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address); //$NON-NLS-1$
+            DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address, DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(listSettingsRefusal);
         assertUnmodellableRefusal(listSettingsRefusal);
     }
@@ -354,25 +355,25 @@ public class DcsToolTest
         listSettings.getItems().add(chartWithNestedOutputParameter());
 
         String bare = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
-            address(root));
+            address(root), DcsReplaceTestCatalogues.schema());
         assertNotNull("the established bare-root scan must remain guarded", bare); //$NON-NLS-1$
         assertUnmodellableRefusal(bare);
 
         String settingsPointer = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
-            address(root + "#/listSettings")); //$NON-NLS-1$
+            address(root + "#/listSettings"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull("a pointer to the whole non-containment settings root must be guarded", //$NON-NLS-1$
             settingsPointer);
         assertUnmodellableRefusal(settingsPointer);
 
         String itemPointer = DcsTool.replaceRefusal(dynamic, listSettings, "grouping", //$NON-NLS-1$
-            address(root + "#/listSettings/items/0")); //$NON-NLS-1$
+            address(root + "#/listSettings/items/0"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull("the relative pointer must line up with the scanned chart address", //$NON-NLS-1$
             itemPointer);
         assertUnmodellableRefusal(itemPointer);
 
         assertNull("a sibling holder replacement does not discard the chart", //$NON-NLS-1$
             DcsTool.replaceRefusal(dynamic, listSettings, "selection", //$NON-NLS-1$
-                address(root + "#/listSettings/selection"))); //$NON-NLS-1$
+                address(root + "#/listSettings/selection"), DcsReplaceTestCatalogues.schema())); //$NON-NLS-1$
     }
 
     @Test

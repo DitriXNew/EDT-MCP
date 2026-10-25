@@ -1643,9 +1643,8 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
     assert "99" in changed_projection, "the selected filter item must carry its new value"
     assert "20" not in changed_projection, \
         "the selected filter item must not retain its old value"
-    # the platform serializes an xs:decimal with its fraction, so the literal on disk is 99.0 -
-    # asserting ">99<" can never match and says nothing about the write actually landing
-    poll_disk_contains(dcs_rel, ">99.0<",
+    # Integral JSON numbers must keep EDT's integer spelling after the Gson Double transport.
+    poll_disk_contains(dcs_rel, ">99<",
                        ctx="the indexed settings update must reach Template.dcs")
 
 

@@ -7,6 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
+import java.util.Objects;
+
+import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.mcore.AutoColor;
 import com._1c.g5.v8.dt.mcore.Color;
@@ -19,7 +23,6 @@ import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.MutableFont;
-import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.PaletteColor;
 import com._1c.g5.v8.dt.mcore.StyleAppearanceItem;
 import com._1c.g5.v8.dt.mcore.StyleColor;
@@ -29,6 +32,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -43,7 +47,10 @@ import com.google.gson.JsonPrimitive;
  * <ul>
  * <li><b>Color</b> {@code {color:{red:0-255, green:0-255, blue:0-255}}} - an explicit RGB color;
  * {@code {color:"auto"}} - the platform automatic color; or
- * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color.</li>
+ * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color, a
+ * style or palette name falling back to the platform color of that source and name; or
+ * {@code {color:{web:"Name"}}} / {@code {color:{windows:"Name"}}} - a platform web or Windows color.
+ * Platform colors resolve only through a resolver that carries the platform color catalogue.</li>
  * <li><b>Font</b> {@code {font:{faceName?, height?, bold?, italic?, underline?, strikeout?}}} -
  * at least one of the listed members must be present.</li>
  * </ul>
@@ -61,14 +68,17 @@ public final class StyleValueBuilder
     /** Error-message fragment between the expected range/value and the actual one. */
     private static final String GOT_SEPARATOR = ", got "; //$NON-NLS-1$
 
-    /** Resolves the mcore appearance object owned by a named project style/palette item. */
+    private static final String COLOR_FORMS = "Use {color:{red:0-255, green:0-255, blue:0-255}}, " //$NON-NLS-1$
+        + "{color:'auto'}, or a named color {color:{<source>:'<Name>'}} with source style " //$NON-NLS-1$
+        + "(a configuration style item or a platform style color), palette, web or windows - " //$NON-NLS-1$
+        + "e.g. {color:{web:'Red'}} or {color:{style:'FormBackColor'}}."; //$NON-NLS-1$
+
+    /** Resolves a named color by the shared source, precedence and refusal rule. */
+    @FunctionalInterface
     public interface NamedColorResolver
     {
-        /** @return the style item's {@link StyleColor}, or {@code null} when it is absent/not a color. */
-        StyleColor resolveStyle(String name);
-
-        /** @return the palette item's {@link PaletteColor}, or {@code null} when it is absent/not a color. */
-        PaletteColor resolvePalette(String name);
+        /** @return the shared lookup result, including an actionable refusal when unresolved */
+        AppearanceValueBuilder.Result resolveColor(String source, String name);
     }
 
     /** A successfully built style value (the mcore {@link Value} + the matching element {@link StyleElementType}),
@@ -169,40 +179,31 @@ public final class StyleValueBuilder
                 + "the string 'auto'."); //$NON-NLS-1$
         }
         JsonObject color = colorEl.getAsJsonObject();
-        boolean hasStyle = color.has("style"); //$NON-NLS-1$
-        boolean hasPalette = color.has("palette"); //$NON-NLS-1$
-        if (hasStyle || hasPalette)
+        String source = null;
+        int sources = 0;
+        for (String member : AppearanceValueBuilder.COLOR_SOURCES.keySet())
         {
-            if (hasStyle && hasPalette || color.size() != 1)
+            if (color.has(member))
             {
-                return Result.error("A named 'color' must be exactly {style:'<name>'} or " //$NON-NLS-1$
-                    + "{palette:'<name>'}, with no RGB or other members."); //$NON-NLS-1$
+                source = member;
+                sources++;
             }
-            String member = hasStyle ? "style" : "palette"; //$NON-NLS-1$ //$NON-NLS-2$
-            String name = strictStringMember(color, member);
+        }
+        if (source != null)
+        {
+            if (sources > 1 || color.size() != 1)
+            {
+                return Result.error("A named 'color' must be exactly one of {style:'<name>'}, " //$NON-NLS-1$
+                    + "{palette:'<name>'}, {web:'<name>'} or {windows:'<name>'}, with no RGB or other " //$NON-NLS-1$
+                    + "members."); //$NON-NLS-1$
+            }
+            String name = strictStringMember(color, source);
             if (name == null || name.trim().isEmpty())
             {
                 return Result.error("A named 'color' needs a non-empty string name: " //$NON-NLS-1$
-                    + "{color:{" + member + ":'<name>'}}."); //$NON-NLS-1$ //$NON-NLS-2$
+                    + "{color:{" + source + ":'<name>'}}."); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            name = name.trim();
-            Color resolved = hasStyle && namedColors != null ? namedColors.resolveStyle(name)
-                : !hasStyle && namedColors != null ? namedColors.resolvePalette(name) : null;
-            if (resolved == null)
-            {
-                String kind = hasStyle ? "style color" : "palette color"; //$NON-NLS-1$ //$NON-NLS-2$
-                String location = hasStyle
-                    ? "Configuration > Style items (Common/StyleItems)" //$NON-NLS-1$
-                    : "Configuration > Palette colors (Common/PaletteColors)"; //$NON-NLS-1$
-                return Result.error("Named " + kind + " '" + name + "' cannot be resolved. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "Such items are defined in the project's " + location + "."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            ColorRef colorRef = McoreFactory.eINSTANCE.createColorRef();
-            colorRef.setColor(resolved);
-            ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
-            colorValue.setValue(colorRef);
-            return Result.ok(colorValue, StyleElementType.COLOR,
-                "Color=" + (hasStyle ? "Style." : "Palette.") + name); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return namedColor(source, name.trim(), namedColors);
         }
         Integer red = intMember(color, "red"); //$NON-NLS-1$
         Integer green = intMember(color, "green"); //$NON-NLS-1$
@@ -225,6 +226,105 @@ public final class StyleValueBuilder
         colorValue.setValue(colorDef);
         return Result.ok(colorValue, StyleElementType.COLOR,
             "Color RGB(" + red + ", " + green + ", " + blue + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * The body member that names a color of a catalogue prefix ({@code Web} to {@code web}), the
+     * inverse of the named-color forms; {@code null} for a prefix no body names.
+     */
+    static String namedColorMember(String prefix)
+    {
+        for (java.util.Map.Entry<String, String> entry : AppearanceValueBuilder.COLOR_SOURCES.entrySet())
+        {
+            if (entry.getValue().equals(prefix)) return entry.getKey();
+        }
+        return null;
+    }
+
+    /** Constructs the DCS/StyleItem wrapper around the shared named-color lookup result. */
+    private static Result namedColor(String source, String name, NamedColorResolver namedColors)
+    {
+        String prefix = AppearanceValueBuilder.COLOR_SOURCES.get(source);
+        AppearanceValueBuilder.Result resolved = namedColors == null
+            ? AppearanceValueBuilder.namedColor(prefix, name, null, null, COLOR_FORMS)
+            : namedColors.resolveColor(prefix, name);
+        if (resolved.error != null) return Result.error(resolved.error);
+        if (resolved.configurationItem != null)
+        {
+            AppearanceValueBuilder.bind(resolved.value, resolved.configurationItem);
+        }
+        ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
+        colorValue.setValue((Color)resolved.value);
+        return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Dry-runs the real font writer; only an exactly reproducible stored font can be replaced. */
+    static String fontRefusal(Font font)
+    {
+        if (!(font instanceof FontDef))
+        {
+            return "font form " + (font == null ? "null" : font.eClass().getName()) //$NON-NLS-1$ //$NON-NLS-2$
+                + " cannot be written; the font writer emits FontDef"; //$NON-NLS-1$
+        }
+        FontDef definition = (FontDef)font;
+        float height = definition.getHeight();
+        if (!Float.isFinite(height) || height < 0 || height > (float)Integer.MAX_VALUE
+            || height != Math.rint(height))
+        {
+            return fontRebuildRefusal("font height " + Float.toString(height) //$NON-NLS-1$
+                + " is not a whole number in the supported range; the font writer takes an integer height"); //$NON-NLS-1$
+        }
+        if (definition.getScale() != 100)
+        {
+            return fontRebuildRefusal("font scale " + definition.getScale() //$NON-NLS-1$
+                + " cannot be written; the font writer uses scale 100"); //$NON-NLS-1$
+        }
+
+        JsonObject body = new JsonObject();
+        if (definition.getFaceName() != null) body.addProperty("faceName", definition.getFaceName()); //$NON-NLS-1$
+        // Zero means an omitted height to this writer. Equality below still compares the stored
+        // float, so projecting it never normalizes or changes the original font.
+        if (height > 0) body.addProperty("height", (int)height); //$NON-NLS-1$
+        body.addProperty("bold", definition.isBold()); //$NON-NLS-1$
+        body.addProperty("italic", definition.isItalic()); //$NON-NLS-1$
+        body.addProperty("underline", definition.isUnderline()); //$NON-NLS-1$
+        body.addProperty("strikeout", definition.isStrikeout()); //$NON-NLS-1$
+        // Explicit false flags keep even the writer's all-default output representable. Scale
+        // and every other feature the writer leaves alone must retain its factory default.
+        Result result = buildFont(body);
+        if (result.error != null)
+        {
+            return fontRebuildRefusal("font writer dry run refused the stored font: " + result.error); //$NON-NLS-1$
+        }
+        Font rebuilt = ((FontValue)result.value).getValue();
+        if (EcoreUtil.equals(definition, rebuilt)) return null;
+
+        for (EStructuralFeature feature : definition.eClass().getEAllStructuralFeatures())
+        {
+            Object storedValue = definition.eGet(feature);
+            Object rebuiltValue = rebuilt.eGet(feature);
+            boolean storedSet = definition.eIsSet(feature);
+            boolean rebuiltSet = rebuilt.eIsSet(feature);
+            if (storedSet != rebuiltSet || !Objects.equals(storedValue, rebuiltValue))
+            {
+                return fontRebuildRefusal("font " + feature.getName() + " " + fontFeatureValue(storedValue) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " (set=" + storedSet + "), rebuilt " + fontFeatureValue(rebuiltValue) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " (set=" + rebuiltSet + "); the font writer cannot reproduce the stored font exactly"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return fontRebuildRefusal("the font writer cannot reproduce the stored font's model class exactly"); //$NON-NLS-1$
+    }
+
+    private static String fontFeatureValue(Object value)
+    {
+        if (value instanceof Float) return Float.toString((Float)value);
+        if (value instanceof String) return new JsonPrimitive((String)value).toString();
+        return String.valueOf(value);
+    }
+
+    private static String fontRebuildRefusal(String reason)
+    {
+        return reason + ". Correct the font in the DCS designer or use action='update' to keep it."; //$NON-NLS-1$
     }
 
     private static Result buildFont(JsonElement fontEl)
@@ -457,12 +557,10 @@ public final class StyleValueBuilder
         }
         if (color instanceof ColorRef)
         {
-            Color referenced = ((ColorRef)color).getColor();
-            if (referenced instanceof NamedElement)
+            String name = AppearanceValueBuilder.colorReferenceName((ColorRef)color);
+            if (name != null)
             {
-                String prefix = referenced instanceof StyleColor ? "Style." //$NON-NLS-1$
-                    : referenced instanceof PaletteColor ? "Palette." : ""; //$NON-NLS-1$ //$NON-NLS-2$
-                return prefix + ((NamedElement)referenced).getName();
+                return name;
             }
         }
         return color.eClass().getName();
@@ -476,22 +574,22 @@ public final class StyleValueBuilder
      */
     public static NamedColorResolver forConfiguration(Configuration configuration)
     {
-        return new NamedColorResolver()
-        {
-            @Override
-            public StyleColor resolveStyle(String name)
-            {
-                StyleAppearanceItem item = appearanceOf(findStyleItem(configuration, name));
-                return item instanceof StyleColor ? (StyleColor)item : null;
-            }
+        return forConfiguration(configuration, null);
+    }
 
-            @Override
-            public PaletteColor resolvePalette(String name)
-            {
-                StyleAppearanceItem item = appearanceOf(findPaletteColor(configuration, name));
-                return item instanceof PaletteColor ? (PaletteColor)item : null;
-            }
-        };
+    /**
+     * {@link #forConfiguration(Configuration)} that also resolves platform colors from the given
+     * platform color catalogue ({@link AppearanceValueBuilder#colorCatalogue}).
+     *
+     * @param configuration the project configuration, may be {@code null}
+     * @param colorCatalogue the platform color catalogue of the project's version, may be {@code null}
+     * @return the resolver
+     */
+    public static NamedColorResolver forConfiguration(Configuration configuration,
+        IEObjectProvider colorCatalogue)
+    {
+        return (source, name) -> AppearanceValueBuilder.namedColor(source, name, configuration,
+            colorCatalogue, COLOR_FORMS);
     }
 
     /**

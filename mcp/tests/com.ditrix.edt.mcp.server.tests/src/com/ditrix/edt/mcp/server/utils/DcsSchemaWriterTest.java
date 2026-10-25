@@ -628,7 +628,7 @@ public class DcsSchemaWriterTest
         assertEquals("Customer", folder.getTitle().getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(folder.getUseRestriction().isField());
         assertTrue("a fully authorable folder must leave the losslessness guard", //$NON-NLS-1$
-            DcsReadProjection.unmodellableNodes(schema, "Report.Sales").isEmpty()); //$NON-NLS-1$
+            DcsReadProjection.unmodellableNodes(schema, "Report.Sales", DcsReplaceTestCatalogues.schema()).isEmpty()); //$NON-NLS-1$
 
         String folderAddress = "Report.Sales#/dataSets/Sales/fields/Customer"; //$NON-NLS-1$
         String fieldAddress = folderAddress + "/fields/Customer.Name"; //$NON-NLS-1$
@@ -797,7 +797,7 @@ public class DcsSchemaWriterTest
         assertUnsupportedNestedDataSet(parentBody.error());
 
         String collection = DcsMutationGuard.replaceError(schema,
-            address("Report.Sales#/dataSets/Sales/fields")); //$NON-NLS-1$
+            address("Report.Sales#/dataSets/Sales/fields"), DcsReplaceTestCatalogues.schema()); //$NON-NLS-1$
         assertNotNull(collection);
         assertUnsupportedNestedDataSet(collection);
     }
@@ -1780,7 +1780,9 @@ public class DcsSchemaWriterTest
         DcsSchemaWriter.PrepareResult prepared =
             DcsSchemaWriter.prepare(action, type, parsed.address(), body, languages);
         assertTrue(prepared.error(), prepared.isSuccess());
-        return DcsSchemaWriter.apply(schema, prepared.request(), null);
+        return DcsSchemaWriter.apply(schema, prepared.request(), null,
+            com._1c.g5.v8.dt.platform.version.Version.LATEST, null,
+            DcsReplaceTestCatalogues.schema(com._1c.g5.v8.dt.platform.version.Version.LATEST));
     }
 
     private static JsonObject json(String value)

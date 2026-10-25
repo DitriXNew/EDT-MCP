@@ -91,7 +91,7 @@ public final class AppearanceValueBuilder
     private static final String PALETTE = "Palette"; //$NON-NLS-1$
 
     /** Colour sources: the object-form member and the catalogue prefix it stands for. */
-    private static final Map<String, String> COLOR_SOURCES = Map.of("style", STYLE, "palette", PALETTE, //$NON-NLS-1$ //$NON-NLS-2$
+    static final Map<String, String> COLOR_SOURCES = Map.of("style", STYLE, "palette", PALETTE, //$NON-NLS-1$ //$NON-NLS-2$
         "web", "Web", "windows", "Windows"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /** Font sources: the object-form member and the catalogue prefix it stands for. */
@@ -235,7 +235,7 @@ public final class AppearanceValueBuilder
                 return Result.error("'" + text + "' is not a color. " + COLOR_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
             }
             return named(Kind.COLOR_KIND, source, text.substring(dot + 1).trim(),
-                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue);
+                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue, COLOR_FORMS);
         }
         if (!color.isJsonObject())
         {
@@ -261,7 +261,7 @@ public final class AppearanceValueBuilder
                     + COLOR_FORMS);
             }
             return named(Kind.COLOR_KIND, COLOR_SOURCES.get(sourceKey), name.trim(),
-                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue);
+                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue, COLOR_FORMS);
         }
         for (String key : object.keySet())
         {
@@ -317,7 +317,7 @@ public final class AppearanceValueBuilder
                 return Result.error("'" + text + "' is not a font. " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
             }
             return named(Kind.FONT_KIND, source, text.substring(dot + 1).trim(),
-                McoreFactory.eINSTANCE.createFontRef(), configuration, catalogue);
+                McoreFactory.eINSTANCE.createFontRef(), configuration, catalogue, FONT_FORMS);
         }
         if (!font.isJsonObject())
         {
@@ -363,7 +363,7 @@ public final class AppearanceValueBuilder
         FontRef ref = McoreFactory.eINSTANCE.createFontRef();
         StyleValueBuilder.applyFontMembers(ref, parsed);
         return named(Kind.FONT_KIND, FONT_SOURCES.get(sourceKey), name.trim(), ref, configuration,
-            catalogue);
+            catalogue, FONT_FORMS);
     }
 
     // ---- named values ---------------------------------------------------------------------------
@@ -373,12 +373,12 @@ public final class AppearanceValueBuilder
      * has one (as the designer's merged list does), else the platform catalogue.
      */
     private static Result named(Kind kind, String source, String name, EObject ref, // NOSONAR one named lookup's inputs
-        Configuration configuration, IEObjectProvider catalogue)
+        Configuration configuration, IEObjectProvider catalogue, String forms)
     {
         if (name.isEmpty())
         {
             return Result.error("A named " + kind.label + " needs a name after '" + source + ".'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + forms(kind));
+                + forms);
         }
         Configuration searched = hasConfigurationSource(kind, source) ? configuration : null;
         MdObject item = searched == null ? null : configurationItem(searched, source, name);
@@ -400,7 +400,15 @@ public final class AppearanceValueBuilder
             return Result.ok(ref, null);
         }
         return Result.error("Unknown " + source + " " + kind.label + " '" + name + "'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + candidatesTail(kind, source, name, searched, catalogue, found.status));
+            + candidatesTail(kind, source, name, searched, catalogue, found.status, forms));
+    }
+
+    /** The shared named-color lookup; attachment and accepted forms are caller-specific. */
+    static Result namedColor(String source, String name, Configuration configuration,
+        IEObjectProvider catalogue, String forms)
+    {
+        return named(Kind.COLOR_KIND, source, name, McoreFactory.eINSTANCE.createColorRef(),
+            configuration, catalogue, forms);
     }
 
     /** Whether a source has configuration items: Style (colours and fonts), Palette (colours). */
@@ -420,7 +428,7 @@ public final class AppearanceValueBuilder
      * precedence and kind rule as resolution, so every listed name resolves when retried.
      */
     private static String candidatesTail(Kind kind, String source, String name, // NOSONAR one refusal's inputs
-        Configuration configuration, IEObjectProvider catalogue, PlatformCatalogue.Status status)
+        Configuration configuration, IEObjectProvider catalogue, PlatformCatalogue.Status status, String forms)
     {
         StringBuilder sb = new StringBuilder();
         if (status == PlatformCatalogue.Status.UNAVAILABLE)
@@ -454,7 +462,7 @@ public final class AppearanceValueBuilder
         }
         if (candidates.isEmpty())
         {
-            return sb.append(forms(kind)).toString();
+            return sb.append(forms).toString();
         }
         // Similar names first (the shared not-found suggestion rule), then the rest, bounded.
         List<String> ordered = new ArrayList<>();
@@ -479,11 +487,6 @@ public final class AppearanceValueBuilder
             sb.append(", ... (").append(ordered.size() - MAX_LISTED).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return sb.append('.').toString();
-    }
-
-    private static String forms(Kind kind)
-    {
-        return kind == Kind.COLOR_KIND ? COLOR_FORMS : FONT_FORMS;
     }
 
     private static void setTarget(EObject ref, EObject target)
@@ -542,6 +545,21 @@ public final class AppearanceValueBuilder
             return referenceName((EObject)value, McorePackage.Literals.COLOR_REF__COLOR);
         }
         return value instanceof Color ? StyleValueBuilder.renderColor((Color)value) : null;
+    }
+
+    /**
+     * The {@code <Source>.<Name>} a color reference names - {@code Web.Red}, {@code Style.X},
+     * {@code Palette.X} - read without resolving it, by the same rule as {@link #renderColor}.
+     *
+     * @param reference the color reference
+     * @return the name, or {@code null} when the reference names no target in that form
+     */
+    public static String colorReferenceName(ColorRef reference)
+    {
+        String name = reference == null ? null
+            : referenceName(reference, McorePackage.Literals.COLOR_REF__COLOR);
+        int dot = name == null ? -1 : name.indexOf('.');
+        return dot > 0 && dot < name.length() - 1 && name.indexOf(' ') < 0 ? name : null;
     }
 
     /**
@@ -683,6 +701,13 @@ public final class AppearanceValueBuilder
                 return PALETTE + fqn.substring("PaletteColor".length()); //$NON-NLS-1$
             }
             return null;
+        }
+        if ("unresolved".equals(uri.scheme()) && uri.segmentCount() > 0) //$NON-NLS-1$
+        {
+            // What EDT's DCS reader makes of web:Red without a platform catalogue:
+            // unresolved:/Web.Red, named by its first segment as EDT's own writer reads it back.
+            String name = uri.segment(0);
+            return name != null && name.indexOf('.') > 0 ? name : null;
         }
         String fragment = uri.fragment();
         if (fragment == null)
