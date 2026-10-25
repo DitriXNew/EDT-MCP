@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.jface.preference.IPreferenceStore;
@@ -21,8 +22,8 @@ import com.ditrix.edt.mcp.server.SseStreamRegistry;
 
 /**
  * Service managing tool enablement state.
- * Reads and writes disabled tool names to the preference store.
- * Thread-safe: the disabled set is parsed on each access from the volatile preference store.
+ * Keeps stored preferences separate from the effective launch-preset view used for tool enablement.
+ * Thread-safe: the launch selection is resolved once and published through an immutable volatile holder.
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
@@ -216,6 +217,18 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 
+    static final String ENV_TOOL_PRESET = "EDT_MCP_TOOL_PRESET"; //$NON-NLS-1$
+
+    /** Package-visible environment seam; tests never change the process environment. */
+    Function<String, String> environment = System::getenv;
+
+    /** Null until first use; a holder with a null preset records a resolved stored-selection launch. */
+    private volatile SessionPreset sessionPreset;
+
+    private record SessionPreset(ToolPreset preset)
+    {
+    }
+
     private ToolSettingsService()
     {
         // Singleton
@@ -230,11 +243,81 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Returns the set of disabled tool names from preferences, falling back to the SHIPPED defaults
-     * when no store is available - never to "nothing is disabled", which would enable a default-off
-     * tool.
+     * Returns the active predefined launch preset from {@code EDT_MCP_TOOL_PRESET}, or null
+     * when the stored selection applies. IDs are case-insensitive and trimmed.
+     * An unset or blank value, or {@code custom}, uses the stored selection. Explicit {@code custom}
+     * logs once at INFO; unknown IDs log once at WARNING with only the predefined override IDs.
+     * Resolves once on first use, including bridge calls and manual starts without earlyStartup.
+     * The immutable holder publishes the complete decision atomically, including blank/invalid values.
+     */
+    public ToolPreset getSessionPreset()
+    {
+        SessionPreset resolved = sessionPreset;
+        if (resolved == null)
+        {
+            synchronized (this)
+            {
+                resolved = sessionPreset;
+                if (resolved == null)
+                {
+                    ToolPreset preset = resolveSessionPreset(environment.apply(ENV_TOOL_PRESET));
+                    resolved = new SessionPreset(preset);
+                    sessionPreset = resolved;
+                }
+            }
+        }
+        return resolved.preset();
+    }
+
+    private ToolPreset resolveSessionPreset(String value)
+    {
+        if (value == null || value.isBlank())
+        {
+            return null;
+        }
+        String id = value.trim();
+        for (ToolPreset preset : ToolPreset.values())
+        {
+            if (preset.getId().equalsIgnoreCase(id))
+            {
+                if (preset == ToolPreset.CUSTOM)
+                {
+                    Activator.logInfo("EDT_MCP_TOOL_PRESET=custom uses the stored tool selection; " //$NON-NLS-1$
+                        + "no launch override."); //$NON-NLS-1$
+                    return null;
+                }
+                return preset;
+            }
+        }
+        String validIds = Arrays.stream(ToolPreset.values())
+            .filter(preset -> preset != ToolPreset.CUSTOM)
+            .map(ToolPreset::getId).collect(Collectors.joining(", ")); //$NON-NLS-1$
+        Activator.logWarning("Invalid EDT_MCP_TOOL_PRESET value: " + value //$NON-NLS-1$
+            + ". Valid preset ids: " + validIds //$NON-NLS-1$
+            + ". Unset or custom uses the stored tool selection. Ignoring launch override."); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Returns the effective disabled set for registry reads and call enablement.
+     * A predefined launch preset bypasses the store and its migrations.
      */
     public Set<String> getDisabledTools()
+    {
+        ToolPreset preset = getSessionPreset();
+        if (preset != null)
+        {
+            return preset.getDisabledTools();
+        }
+        return getStoredDisabledTools();
+    }
+
+    /**
+     * Returns the persisted selection after its normal lazy migrations, ignoring the launch preset.
+     * Preference editors and read-modify-write operations must use this view.
+     * Falls back to the shipped defaults when no store is available.
+     */
+    public Set<String> getStoredDisabledTools()
     {
         IPreferenceStore store = getStore();
         if (store == null)
@@ -477,10 +560,14 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         return ToolPreset.fromId(store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
     }
 
-    /**
-     * Returns the recorded preset ID, or the custom ID if provenance is unavailable.
-     */
+    /** Returns the recorded preset ID, independent of the launch preset. */
     public String getPresetId()
+    {
+        return getStoredPresetId();
+    }
+
+    /** Returns stored provenance after its normal lazy migrations, or custom without a store. */
+    public String getStoredPresetId()
     {
         IPreferenceStore store = getStore();
         if (store == null)
@@ -726,8 +813,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * <p>
      * Only a real change notifies: Apply with nothing edited must not wake every client. The
      * comparison is on the parsed SETS, so a reordered or differently-spaced stored value reads as
-     * unchanged. Under progressive disclosure a disabled tool may already be hidden by its toolset,
-     * which makes the notification redundant rather than wrong - over-notifying costs one
+     * unchanged, preserving the original stored bytes. Under progressive disclosure a disabled tool
+     * may already be hidden by its toolset, which makes the notification redundant rather than wrong - over-notifying costs one
      * {@code tools/list}, under-notifying is the bug.
      * </p>
      *
@@ -755,7 +842,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             {
                 store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset.getId());
             }
-            store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+            if (changed)
+            {
+                store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+            }
         }
         if (changed)
         {
@@ -805,7 +895,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     public void setToolEnabled(String toolName, boolean enabled)
     {
-        Set<String> disabled = new HashSet<>(getDisabledTools());
+        Set<String> disabled = new HashSet<>(getStoredDisabledTools());
         if (enabled)
         {
             disabled.remove(toolName);
@@ -864,7 +954,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     public void setGroupEnabled(ToolGroup group, boolean enabled)
     {
-        Set<String> disabled = new HashSet<>(getDisabledTools());
+        Set<String> disabled = new HashSet<>(getStoredDisabledTools());
         if (enabled)
         {
             disabled.removeAll(group.getToolNames());
@@ -888,7 +978,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         }
         else
         {
-            setDisabledTools(getDisabledTools(), ToolPreset.CUSTOM);
+            setDisabledTools(getStoredDisabledTools(), ToolPreset.CUSTOM);
         }
     }
 
