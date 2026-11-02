@@ -785,6 +785,8 @@ rather than blocking it until EDT restarts.
 1C XDTO packages (`XDTOPackage`) can be authored end-to-end through MCP, down to their
 package-local structure, without hand-editing XML:
 
+- **`create_metadata`** generates owned list, choice, record, and record-set forms through EDT with `generateContent=true` and `formType`. Registers default to `LIST`; `setAsDefault` assigns the matching model slot. Unsupported generation requests return an actionable error.
+
 - **`create_metadata`** / **`modify_metadata`** / **`delete_metadata`** address XDTO
   package members by FQN, layered on top of the existing top-level `XDTOPackage.<Name>`
   create/delete:
