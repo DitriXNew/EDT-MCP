@@ -93,6 +93,19 @@ from harness import (
 BOGUS_APP_ID = "no_such_app_e2e_zzz"
 
 
+@e2e_test(tool="update_database", kind="read")
+def test_timeout_guide_preserves_unknown_outcome_and_server_cancellation():
+    """Read the live guide without mutating an infobase; cancellation needs a dedicated stand."""
+    r = call("get_tool_guide", {"toolName": "update_database"})
+    assert_ok(r, "update_database timeout guide")
+    for text in ("unknown outcome", "includeBodies=true", "Command execution cancelled",
+                 "does not prove that nothing happened", "Check the infobase state"):
+        assert_contains(r.text, text, "timeout recovery must preserve observed evidence")
+    assert_not_contains(r.text, "keeps running in EDT to completion",
+                        "the transport cannot promise successful platform completion")
+    assert_no_diff("reading the update guide must leave project sources unchanged")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # "HAPPY"/CONTRACT PATH (SAFE — real resolution, NO destructive update, NO mutation)
 # ──────────────────────────────────────────────────────────────────────────────
