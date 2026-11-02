@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.md.resource.MdTypeUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -64,6 +65,8 @@ import com.google.gson.JsonObject;
  * DefinedType is accepted as
  * {@code {"kind":"DefinedType", "ref":"Name"}}, as a Ref to {@code DefinedType.Name}, or as the
  * inline kind {@code {"kind":"DefinedType.Name"}}; its type set is shared from the metadata model.
+ * A characteristic value uses {@code {"kind":"Characteristic", "ref":"Name"}} or
+ * {@code {"kind":"Characteristic.Name"}} (also {@code Характеристика}); it shares the named chart's TypeSet.
  * The {@code types} list may mix several (a composite type). The shape is validated before any
  * platform call, so a malformed spec fails fast.
  * <p>
@@ -105,6 +108,8 @@ public final class MetadataTypeBuilder
 
     /** The reusable metadata type-set kind in both supported type-token languages. */
     private static final String DEFINED_TYPE_KIND = "DefinedType"; //$NON-NLS-1$
+    private static final String CHARACTERISTIC_KIND = "Characteristic"; //$NON-NLS-1$
+    private static final String RU_CHARACTERISTIC_KIND = "Характеристика"; //$NON-NLS-1$
     private static final String RU_DEFINED_TYPE_KIND = MetadataLanguageUtils.cp(0x041E, 0x043F, 0x0440,
         0x0435, 0x0434, 0x0435, 0x043B, 0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438,
         0x043F);
@@ -372,13 +377,13 @@ public final class MetadataTypeBuilder
         {
             accepted = DATE_ITEM_MEMBERS;
         }
-        // Inline DefinedType and Ref classifications must stay in this order as in addType; a mismatch
+        // Inline type-set and Ref classifications must stay in this order as in addType; a mismatch
         // can validate a member that the selected addType branch ignores.
-        else if (isInlineDefinedTypeKind(kind))
+        else if (isInlineDefinedTypeKind(kind) || inlineCharacteristicName(kind) != null)
         {
             accepted = MEMBERLESS_ITEM_MEMBERS;
         }
-        else if (isRefKind(kind) || producedKind != null)
+        else if (isRefKind(kind) || isCharacteristicKind(kind) || producedKind != null)
         {
             accepted = REF_ITEM_MEMBERS;
         }
@@ -410,7 +415,7 @@ public final class MetadataTypeBuilder
         {
             return validateDateItem(item, index);
         }
-        if (isInlineDefinedTypeKind(kind))
+        if (isInlineDefinedTypeKind(kind) || inlineCharacteristicName(kind) != null)
         {
             return null;
         }
@@ -418,7 +423,7 @@ public final class MetadataTypeBuilder
         {
             return item.has("ref") ? validateRefItem(item, index) : null; //$NON-NLS-1$
         }
-        if (isRefKind(kind))
+        if (isRefKind(kind) || isCharacteristicKind(kind))
         {
             return validateRefItem(item, index);
         }
@@ -529,7 +534,7 @@ public final class MetadataTypeBuilder
         {
             return invalidMember("ref", index, //$NON-NLS-1$
                 "a non-empty reference target string such as 'Catalog.Products' or 'MoneyAmount' " //$NON-NLS-1$
-                    + "for kind 'DefinedType'"); //$NON-NLS-1$
+                    + "for kind 'DefinedType' or 'Characteristic'"); //$NON-NLS-1$
         }
         return null;
     }
@@ -943,7 +948,8 @@ public final class MetadataTypeBuilder
         // family would silently change the behaviour of the thing most callers depend on, to reach a
         // type that branch already builds. The family exists for what Ref cannot name.
         // No produced-type prefix contains a dot, but an inline DefinedType name may end in a suffix.
-        if (isRefKind(candidate) || isInlineDefinedTypeKind(candidate))
+        if (isRefKind(candidate) || isInlineDefinedTypeKind(candidate)
+            || inlineCharacteristicName(candidate) != null)
         {
             return null;
         }
@@ -1218,6 +1224,22 @@ public final class MetadataTypeBuilder
                 isExtensionProject, typeTarget);
         }
 
+        String characteristicName = inlineCharacteristicName(kind);
+        if (isCharacteristicKind(kind) || characteristicName != null)
+        {
+            String name = characteristicName != null ? characteristicName : asString(item.get("ref")); //$NON-NLS-1$
+            MdObject chart = MetadataTypeUtils.findObject(config, "ChartOfCharacteristicTypes", name); //$NON-NLS-1$
+            String requested = CHARACTERISTIC_KIND + "." + name; //$NON-NLS-1$
+            if (!(chart instanceof ChartOfCharacteristicTypes))
+            {
+                return error("Cannot resolve '" + requested + "'. Use the programmatic Name of an existing " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "ChartOfCharacteristicTypes, not its synonym. Use get_metadata_objects to find it, " //$NON-NLS-1$
+                    + "then pass {kind:'Characteristic', ref:'Name'} or {kind:'Characteristic.Name'}." //$NON-NLS-1$
+                    + extensionAdoptHint(isExtensionProject));
+            }
+            return addContainerTypeSet(td, chart, requested, CHARACTERISTIC_KIND);
+        }
+
         if (isInlineDefinedTypeKind(kind))
         {
             MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, kind);
@@ -1225,7 +1247,7 @@ public final class MetadataTypeBuilder
             {
                 return error(unresolvedDefinedType(kind, kind, isExtensionProject));
             }
-            return addDefinedTypeSet(td, node.object, kind);
+            return addContainerTypeSet(td, node.object, kind, DEFINED_TYPE_KIND);
         }
 
         if (isRefKind(kind))
@@ -1246,7 +1268,7 @@ public final class MetadataTypeBuilder
             if (isDefinedType(target))
             {
                 String requested = isDefinedTypeKind(kind) ? kind + "." + ref : ref; //$NON-NLS-1$
-                return addDefinedTypeSet(td, target, requested);
+                return addContainerTypeSet(td, target, requested, DEFINED_TYPE_KIND);
             }
             String memberRefusal = ReferencedTopObjects.memberOperationRefusal("Metadata type assignment", ref); //$NON-NLS-1$
             if (memberRefusal != null)
@@ -1605,34 +1627,54 @@ public final class MetadataTypeBuilder
             + "', ref:'Invoice'}."; //$NON-NLS-1$
     }
 
-    /** Adds the model-owned TypeSet produced by a DefinedType to the non-containment type list. */
-    private static Result addDefinedTypeSet(TypeDescription td, MdObject definedType, String requested)
+    /** Adds a DefinedType's or characteristic chart's model-owned TypeSet without expanding it. */
+    private static Result addContainerTypeSet(TypeDescription td, MdObject owner, String requested,
+        String typeKind)
     {
         TypeItem typeSet = null;
         try
         {
-            MdTypes producedTypes = MdClassUtil.getProducedTypes(definedType);
+            MdTypes producedTypes = MdClassUtil.getProducedTypes(owner);
             EObject containerType = featureValue(producedTypes, "containerType", EObject.class); //$NON-NLS-1$
             typeSet = featureValue(containerType, "typeSet", TypeItem.class); //$NON-NLS-1$
         }
         catch (RuntimeException e)
         {
-            return platformError(unavailableDefinedTypeChain(requested), e);
+            return platformError(unavailableContainerTypeChain(requested, typeKind), e);
         }
         if (typeSet == null)
         {
-            return platformError(unavailableDefinedTypeChain(requested));
+            return platformError(unavailableContainerTypeChain(requested, typeKind));
         }
         // TypeDescription.types is NON-containment: share the model-owned TypeSet, do not copy it.
         td.getTypes().add(typeSet);
         return null;
     }
 
-    private static String unavailableDefinedTypeChain(String requested)
+    private static String unavailableContainerTypeChain(String requested, String typeKind)
     {
-        return "DefinedType '" + requested + "' resolved, but " + DEFINED_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "Wait for project indexing to finish, run revalidate_objects for the DefinedType if " //$NON-NLS-1$
+        return typeKind + " '" + requested + "' resolved, but " + CONTAINER_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "Wait for project indexing to finish, run revalidate_objects for the " + typeKind + " if " //$NON-NLS-1$ //$NON-NLS-2$
             + "needed, and retry."; //$NON-NLS-1$
+    }
+
+    private static boolean isCharacteristicKind(String kind)
+    {
+        return kind != null && (CHARACTERISTIC_KIND.equalsIgnoreCase(kind.trim())
+            || RU_CHARACTERISTIC_KIND.equalsIgnoreCase(kind.trim()));
+    }
+
+    /** The token is bilingual; the remaining segment is the chart's programmatic Name. */
+    private static String inlineCharacteristicName(String kind)
+    {
+        if (kind == null)
+        {
+            return null;
+        }
+        String candidate = kind.trim();
+        int dot = candidate.indexOf('.');
+        return dot > 0 && dot < candidate.length() - 1 && isCharacteristicKind(candidate.substring(0, dot))
+            ? candidate.substring(dot + 1) : null;
     }
 
     /** Reads one named EMF feature without depending on a per-kind generated holder interface. */
@@ -1827,8 +1869,8 @@ public final class MetadataTypeBuilder
     /** A produced type whose model type chain the platform did not yield - not the spec's fault. */
     private static final String PRODUCED_TYPE_CHAIN_UNAVAILABLE = "/type chain is not available yet."; //$NON-NLS-1$
 
-    /** An existing DefinedType whose produced-type chain the platform did not yield - not the spec's fault. */
-    private static final String DEFINED_TYPE_CHAIN_UNAVAILABLE =
+    /** An existing metadata type set whose produced chain the platform did not yield. */
+    private static final String CONTAINER_TYPE_CHAIN_UNAVAILABLE =
         "its producedTypes/containerType/typeSet chain is not available yet."; //$NON-NLS-1$
 
     /**

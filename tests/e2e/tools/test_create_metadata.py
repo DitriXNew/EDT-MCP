@@ -488,6 +488,61 @@ def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_predefined_characteristic_with_characteristic_value_type_bilingual():
+    names = ("E2EValueChart811", "ЗначенияХарактеристик811")
+    for name in names:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + name,
+        }), "seed the value chart " + name)
+    owner = "E2ECharacteristicOwner811"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + owner,
+    }), "seed the predefined-item owner")
+    wait_for_project_ready()
+    cases = (
+        {"kind": "Characteristic", "ref": names[0]},
+        {"kind": "Characteristic." + names[1]},
+        {"kind": "Характеристика", "ref": names[1]},
+        {"kind": "Характеристика." + names[0]},
+    )
+    for index, item in enumerate(cases):
+        name = "Value%d" % index
+        fqn = "ChartOfCharacteristicTypes.%s.Predefined.%s" % (owner, name)
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "valueType", "value": {"types": [item]}}],
+        })
+        assert_ok(r, "create predefined characteristic with value type %r" % item)
+        expected = "Characteristic." + (item["ref"] if "ref" in item else item["kind"].split(".", 1)[1])
+        root = ET.fromstring(read_disk("src/ChartsOfCharacteristicTypes/%s/%s.mdo" % (owner, owner)))
+        stored, _ = _type_of(_named_element(root, name, "the new characteristic"), name)
+        assert stored == [expected], "must store the characteristic TypeSet, got %r" % stored
+        details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+        assert_ok(details, "read the predefined characteristic value type")
+        assert_contains(details.text, expected, "value type round-trips using the same token")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_predefined_characteristic_rejects_unknown_value_chart_without_changes():
+    owner = "E2EUnknownValueChart811"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + owner,
+    }), "seed the predefined-item owner")
+    wait_for_project_ready()
+    for item in ({"kind": "Characteristic", "ref": "MissingChart811"},
+                 {"kind": "Характеристика.НетТакогоПВХ811"}):
+        before = tree_snapshot()
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes.%s.Predefined.InvalidValue" % owner,
+            "properties": [{"name": "valueType", "value": {"types": [item]}}],
+        })
+        error = assert_error(r, "unknown characteristic value chart at creation")
+        name = item.get("ref") or item["kind"].split(".", 1)[1]
+        assert_error_quality(error, names=[name], suggests=["ChartOfCharacteristicTypes", "get_metadata_objects"])
+        assert_tree_unchanged(before, "a refused type must not create the predefined item")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_characteristic_without_value_type_takes_the_chart_type():
     """#700, extended by the maintainer to predefined characteristics: an item created without
     valueType gets a copy of its chart's own type, as EDT's wizard does. An item left untyped crashes
