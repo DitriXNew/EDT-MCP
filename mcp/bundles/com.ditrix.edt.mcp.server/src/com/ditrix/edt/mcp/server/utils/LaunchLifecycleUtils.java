@@ -629,9 +629,9 @@ public final class LaunchLifecycleUtils
     {
         private final ReentrantLock lock = new ReentrantLock();
 
-        private LaunchLock()
+        LaunchLock()
         {
-            // Instantiated only by lockFor.
+            // Independent recovery guards reuse the same acquisition protocol.
         }
 
         /**
