@@ -3469,10 +3469,8 @@ public final class LaunchLifecycleUtils
     // Existing-CLIENT-session layer. Moved here from
     // LaunchTool so EVERY tool that spawns a 1C client (launch, the YAXUnit
     // debug path) shares ONE detect+terminate policy: a session counts as an existing
-    // CLIENT session only with ≥1 live CLIENT-typed thread (the type-aware
-    // discriminator, DebugServerTargetSupport.findFirstLiveClientThread), so a
-    // debug-mode standalone server — whose live thread is typed SERVER — never
-    // short-circuits a client launch and is NEVER terminated.
+    // CLIENT session only with ≥1 live CLIENT-typed thread on a target not owned
+    // by a standalone-server launch (DebugServerTargetSupport.findFirstLiveClientThread).
     // ==================================================================================
 
     /** Max wait (ms) for a non-interactive terminate to take effect — mirrors the
@@ -3503,7 +3501,8 @@ public final class LaunchLifecycleUtils
      *       target at all (the already-running guard); the thread-type gate
      *       does not apply because there is no debug target to inspect.</li>
      * </ul>
-     * A DEBUG launch/target whose live threads are all server-typed (a debug-mode
+     * A target owned by a standalone-server launch is excluded even with live client
+     * threads. A DEBUG launch/target whose live threads are all server-typed (a debug-mode
      * standalone server carries a live thread typed {@code SERVER}) — or that has no
      * live thread at all (profiling/idle server target) — is NEVER a client session:
      * it must not short-circuit the client (the client proceeds and attaches) and
@@ -3909,8 +3908,8 @@ public final class LaunchLifecycleUtils
      * Each found CLIENT session is terminated non-interactively
      * ({@link #terminateExistingSessionAndWait} /
      * {@link #terminateExistingLaunchAndWait}: terminate + {@code forgetApplication}
-     * + ≤3s wait). A debug-mode standalone server session — live thread typed
-     * {@code SERVER} — is NEVER matched and NEVER terminated.
+     * + ≤3s wait). A target owned by a standalone-server launch is NEVER matched
+     * or terminated, including when it retains live CLIENT-typed threads.
      * A launch OWNED by another MCP tool ({@link #registerOwnedLaunch} — e.g. a
      * concurrent {@code run_yaxunit_tests} RUN launch of the same application) is
      * never terminated by the {@code ILaunchManager}-sourced sweep either: it is
@@ -4010,7 +4009,8 @@ public final class LaunchLifecycleUtils
      * whose owning {@link ILaunch} is MCP-owned ({@link #registerOwnedLaunch}) is SKIPPED
      * (managed by its own tool), closing the gap where a concurrent MCP DEBUG session on the
      * same infobase was silently terminated; any other (UI-started / foreign) client is
-     * terminated. Returns whether termination was CONFIRMED, not merely attempted.
+     * terminated after rechecking the shared client discriminator. Returns whether
+     * termination was CONFIRMED, not merely attempted.
      *
      * <p>Package-visible so the owned-vs-foreign decision is unit-testable without a live
      * target manager.
@@ -4023,7 +4023,7 @@ public final class LaunchLifecycleUtils
      */
     static boolean sweepTargetManagerSession(IDebugTarget existing, String delegateAppId)
     {
-        if (existing == null)
+        if (DebugServerTargetSupport.findFirstLiveClientThread(existing) == null)
         {
             return false;
         }
