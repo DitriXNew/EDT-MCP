@@ -1217,14 +1217,7 @@ def test_characteristic_value_type_on_tabular_section_attribute_bilingual():
         assert len(attrs) == 1
         stored = [el.text for el in attrs[0].iter() if el.tag.rsplit("}", 1)[-1] == "types"]
         assert stored == [expected], "must store the characteristic TypeSet, got %r" % stored
-        details = call("get_metadata_details", {
-            "projectName": PROJECT, "objectFqns": [section], "full": True,
-        })
-        assert_ok(details, "read back the tabular-section attribute")
-        rows = [row for row in details.text.splitlines()
-                if row.startswith("|") and row.split("|")[1].strip() == attr]
-        assert len(rows) == 1, "expected one attribute row for %s: %s" % (attr, details.text)
-        assert_contains(rows[0], expected, "read side uses the feedable Characteristic token")
+        _assert_assignable_current(fqn, "type", "TYPE_DESCRIPTION", expected)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
