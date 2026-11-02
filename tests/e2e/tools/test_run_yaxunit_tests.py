@@ -11,8 +11,8 @@ up to `timeout`: a short run returns the original Markdown report in r.text; oth
 arguments is only a live duplicate guard and is not how a known run is addressed.
 The report.md / junit.xml / xUnitParams.json files all live under the SYSTEM TEMP
 dir (java.io.tmpdir/edt-mcp-yaxunit/...), NEVER inside the TestConfiguration/ git
-tree — so a correct run leaves the fixture clean. Every test here ends with
-assert_no_diff(); a YAXUnit tool that wrote into the project tree would be a bug.
+tree — so a correct run leaves the fixture clean. The attended #668 regression is
+gated by EDT_MCP_LIVE_INFOBASE=1 and needs a debug standalone server already running.
 
 ENVIRONMENT (this EDT / fixture) — why the SENTINEL is the realistic happy contract
 -----------------------------------------------------------------------------------
@@ -104,8 +104,17 @@ from harness import (
     call,
     assert_error,
     assert_error_quality,
+    assert_ok,
     assert_no_diff,
+    assert_no_substantive_diff,
     e2e_test,
+    E2ESkip,
+    follow_pending,
+    extract_application_id,
+    requires_live_infobase,
+    wait_for_project_ready,
+    wait_until_no_running_launch,
+    LIVE_LAUNCH_CONFIG,
     PROJECT,
     TESTS_PROJECT,
 )
@@ -306,6 +315,63 @@ def test_unknown_external_infobase_changes_value_is_rejected():
     assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
                          ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
     assert_no_diff("a rejected run must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_live_debug_rerun_after_client_termination_preserves_standalone_server():
+    """Requires a prestarted debug standalone server; never pauses the debugger (#668)."""
+    requires_live_infobase("repeat a debug YAXUnit launch while preserving its standalone server")
+    wait_for_project_ready(timeout=180)
+    status = call("debug_status", {})
+    assert_ok(status, "find the prestarted standalone server")
+    servers = [entry for entry in (status.structured or {}).get("launches", [])
+               if entry.get("project") == PROJECT and entry.get("configurationType") ==
+               "com.e1c.g5.v8.dt.platform.standaloneserver.launchConfigurationType"]
+    if not servers:
+        raise E2ESkip("Start the standalone server in debug mode before testing #668")
+    assert len(servers) == 1, "#668 needs one unambiguous standalone server: %r" % servers
+    server_id = servers[0]["applicationId"]
+    server_config = servers[0]["launchConfiguration"]
+
+    def assert_server_alive(phase):
+        observed = call("debug_status", {"applicationId": server_id})
+        assert_ok(observed, phase)
+        entries = [entry for entry in (observed.structured or {}).get("launches", [])
+                   if entry.get("applicationId") == server_id]
+        assert len(entries) == 1, "%s: standalone server disappeared: %r" % (phase, observed.structured)
+        configs = call("list_configurations", {"projectName": PROJECT, "type": "all"})
+        assert_ok(configs, phase + ": configuration state")
+        matching = [entry for entry in (configs.structured or {}).get("configurations", [])
+                    if entry.get("name") == server_config]
+        assert len(matching) == 1 and matching[0].get("running") is True, (
+            "%s: standalone server is not running: %r" % (phase, matching))
+        return entries[0]
+
+    def terminate_client():
+        result = call("terminate_launch", {"launchConfigurationName": LIVE_LAUNCH_CONFIG})
+        assert_ok(result, "terminate only the thin client")
+        wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
+
+    try:
+        terminate_client()
+        assert_server_alive("before the first debug run")
+        for attempt in range(2):
+            result = follow_pending(call("run_yaxunit_tests", {
+                "launchConfigurationName": LIVE_LAUNCH_CONFIG,
+                "tests": ["tests_SampleTests.TwoPlusTwoIsFour"],
+                "debug": True,
+            }), "debug YAXUnit run %d" % (attempt + 1))
+            assert_ok(result, "debug YAXUnit run %d" % (attempt + 1))
+            assert extract_application_id(result.text), "debug run returned no launch applicationId"
+            assert_server_alive("after debug run %d" % (attempt + 1))
+            if attempt == 0:
+                terminate_client()
+                remaining = assert_server_alive("after terminating the first client")
+                assert remaining.get("threadCount", 0) > 0, (
+                    "#668 requires lingering threads on the standalone-server target")
+    finally:
+        terminate_client()
+    assert_no_substantive_diff("a repeated debug launch must preserve the fixture")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
