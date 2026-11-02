@@ -84,9 +84,10 @@ a plausible-looking implementation that breaks every such caller.
 Whenever the call has not finished the work it returns **Pending** with a `jobId`, the
 `run_yaxunit_tests` owning-tool name, and progress naming the phase (`resolve` /
 `prep:terminate` / `prep:check-changes` / `prep:recompute` / `prep:settle` /
-`prep:db-update` / `spawn` / `run`). `prep:recompute` is CONDITIONAL - the change gate
-publishes it only for a scope it could not certify as unchanged, and a certified one goes
-`prep:check-changes` -> `prep:settle` instead (#310). The job continues
+`prep:db-update` / `spawn` / `run`). `prep:recompute` is CONDITIONAL - only dirty
+extensions require a full rebuild. Configurations drain EDT's existing incremental
+contexts under `prep:settle` (#663). An unchanged scope also goes
+`prep:check-changes` -> `prep:settle` (#310). The job continues
 independently of this window and is polled by id, never by rebuilt arguments.
 
 The named job declares a YAXUnit-specific destructive cancellation capability. A
@@ -102,6 +103,14 @@ Fixture inventory used (TestConfiguration, English Names): the project itself
 
 from harness import (
     call,
+    assert_ok,
+    assert_contains,
+    assert_diff_contains,
+    follow_pending,
+    requires_live_infobase,
+    parse_yaxunit_counts,
+    wait_until_no_running_launch,
+    wait_for_project_ready,
     assert_error,
     assert_error_quality,
     assert_ok,
@@ -117,7 +126,50 @@ from harness import (
     LIVE_LAUNCH_CONFIG,
     PROJECT,
     TESTS_PROJECT,
+    LIVE_LAUNCH_CONFIG,
 )
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="write-metadata")
+def test_live_changed_configuration_module_is_current_on_first_run():
+    """Prove model/infobase freshness without a forced configuration rebuild.
+
+    The existing extension test expects Calc.Add(2, 3) == 5. Changing only the base
+    module makes that test fail on the FIRST run; stale code would incorrectly pass.
+    The large-configuration FORM denominator is a separate attended log/progress check.
+    """
+    requires_live_infobase("changes Calc and runs the real YAXUnit suite")
+    module = "CommonModules/Calc/Module.bsl"
+    old = "A + B"
+    new = "A + B + 663"
+    launch = {"launchConfigurationName": LIVE_LAUNCH_CONFIG}
+    try:
+        assert_ok(call("terminate_launch", launch), "quiet the selected infobase")
+        wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
+        wait_for_project_ready(timeout=180)
+        write = call("write_module_source", {
+            "projectName": PROJECT, "modulePath": module,
+            "mode": "searchReplace", "oldSource": old, "source": new,
+        })
+        assert_ok(write, "change one base configuration module")
+        assert_diff_contains(new, "the edited module is persisted")
+        readback = call("read_module_source", {"projectName": PROJECT, "modulePath": module})
+        assert_ok(readback, "read back the changed model")
+        assert_contains(readback.text, new, "the model contains the new expression")
+        arguments = dict(launch, tests="tests_SampleTests.CallsBaseConfigCalcModule",
+                         updateBeforeLaunch=True, updateScope="configuration", timeout=45)
+        for attempt in range(2):
+            result = follow_pending(call("run_yaxunit_tests", arguments),
+                                    "first changed run" if attempt == 0 else "unchanged repeat")
+            assert_ok(result, "YAXUnit returns the real test report")
+            counts = parse_yaxunit_counts(result.text)
+            assert counts.get("total") == 1, counts
+            assert counts.get("failed") == 1 and counts.get("errors") == 0, counts
+            assert counts.get("result") == "FAILED", counts
+            wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
+    finally:
+        assert_ok(call("terminate_launch", launch), "stop the test client before fixture restoration")
+        wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
