@@ -72,6 +72,27 @@ from harness import (
 _KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_form_parameter_collection_types_refused_at_creation():
+    for member in ("Parameter", "Attribute"):
+        for kind in ("Array", "Structure", "Map", "FixedArray", "FixedStructure", "FixedMap"):
+            r = call("create_metadata", {
+                "projectName": PROJECT,
+                "fqn": "Catalog.Catalog.Form.ItemForm.%s.E2EInvalidType" % member,
+                "properties": [{"name": "valueType", "value": {"types": [{"kind": kind}]}}],
+            })
+            err = assert_error(r, "refuse %s on a new form %s" % (kind, member))
+            assert_error_quality(err, names=[kind, member],
+                                 suggests=["without a type", "arbitrary", "modify_metadata"])
+            assert_no_diff()
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"], "full": True,
+    })
+    assert_ok(details, "read back the form after refused creates")
+    assert_not_contains(details.text, "E2EInvalidType", "no member created after refusal")
+    assert_no_diff()
+
+
 def _objects_text(metadata_type):
     """Read back the model's object list for one type as markdown (the client view)."""
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": metadata_type})

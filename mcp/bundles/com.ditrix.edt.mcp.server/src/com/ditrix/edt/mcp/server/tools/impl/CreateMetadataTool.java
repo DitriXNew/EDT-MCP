@@ -62,6 +62,7 @@ import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.FormValueTypePolicy;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -2549,6 +2550,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (pName == null || pName.isEmpty())
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
+            }
+            if ((kind == FormElementWriter.Kind.PARAMETER || kind == FormElementWriter.Kind.ATTRIBUTE)
+                && ("valueType".equalsIgnoreCase(pName) || "type".equalsIgnoreCase(pName))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return ToolResult.error(FormValueTypePolicy.creationRefusal(prop.get(KEY_VALUE),
+                    kind == FormElementWriter.Kind.PARAMETER)).toJson();
             }
             // A COLUMN accepts only a title. Its owner comes from the FQN, it is not a visual item so
             // it nests under nothing, and it binds to nothing - every other property would be parsed,
