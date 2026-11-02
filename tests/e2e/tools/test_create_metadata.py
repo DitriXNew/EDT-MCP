@@ -3280,3 +3280,53 @@ def test_create_error_carries_no_marker_fields():
     assert_error_quality(e, names=["Catalog.Catalog"], suggests=["already exists"], ctx="duplicate create")
     assert_no_marker_fields(r.structured, "an error reports no markers")
     assert_no_diff("a refused create must not touch disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_external_data_source_nested_members_survive_refresh_825():
+    eds = "ExternalDataSource.E2E825Create"
+    cube = eds + ".Cube.C"
+    dimension_table = cube + ".DimensionTable.DT"
+    base = "src/ExternalDataSources/E2E825Create"
+    cases = [
+        (eds, eds, "ExternalDataSource", base + "/E2E825Create.mdo", "E2E825Create"),
+        (eds + ".Table.TableT1", eds + ".Таблица.TableT1", "Table",
+         base + "/Tables/TableT1/TableT1.mdo", "TableT1"),
+        (eds + ".Table.TableT1.Field.F", eds + ".Table.TableT1.Поле.F", "Field",
+         base + "/Tables/TableT1/TableT1.mdo", "F"),
+        (eds + ".Function.Fn", eds + ".Функция.Fn", "Function", base + "/E2E825Create.mdo", "Fn"),
+        (cube, eds + ".Куб.C", "Cube", base + "/Cubes/C/C.mdo", "C"),
+        (cube + ".Dimension.D", cube + ".Измерение.D", "Dimension", base + "/Cubes/C/C.mdo", "D"),
+        (cube + ".Resource.R", cube + ".Ресурс.R", "Resource", base + "/Cubes/C/C.mdo", "R"),
+        (dimension_table, cube + ".ТаблицаИзмерения.DT", "DimensionTable",
+         base + "/Cubes/C/DimensionTables/DT/DT.mdo", "DT"),
+        (dimension_table + ".Field.DF", cube + ".DimensionTable.DT.Поле.DF", "Field",
+         base + "/Cubes/C/DimensionTables/DT/DT.mdo", "DF"),
+    ]
+    for canonical, requested, kind, path, name in cases:
+        assert wait_for_project_ready(), "indexing before " + requested
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": requested})
+        assert_ok(created, requested)
+        assert created.structured.get("kind") == kind, created.structured
+        assert created.structured.get("fqn") == canonical, created.structured
+        assert created.structured.get("persisted") is True, created.structured
+        assert_contains(read_disk(path), "<name>" + name + "</name>", "immediate disk create " + canonical)
+    assert_contains(read_disk("src/Configuration/Configuration.mdo"),
+                    "<externalDataSources>" + eds + "</externalDataSources>")
+    assert_contains(read_disk(base + "/E2E825Create.mdo"), "<tables>" + eds + ".Table.TableT1</tables>")
+    assert_contains(read_disk(base + "/Cubes/C/C.mdo"),
+                    "<dimensionTables>" + dimension_table + "</dimensionTables>")
+    assert_contains(read_disk(base + "/Cubes/C/DimensionTables/DT/DT.mdo"), "<parentCube>" + cube + "</parentCube>")
+    before = read_disk(base + "/Cubes/C/C.mdo")
+    invalid = call("create_metadata", {"projectName": PROJECT, "fqn": cube + ".Field.Invalid"})
+    assert_error_quality(assert_error(invalid), names=["Field"], suggests=["DimensionTable", "Resource"])
+    assert read_disk(base + "/Cubes/C/C.mdo") == before, "invalid member kind must preserve the Cube"
+    assert_ok(call("clean_project", {"projectName": PROJECT}), "reload only after checking exported bytes")
+    assert wait_for_project_ready(), "reload the created metadata from disk"
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [case[0] for case in cases], "assignable": True,
+    })
+    assert_ok(details)
+    assert_not_contains(details.text, "## Errors", "every new node survives refresh")
+    for canonical, _, _, _, _ in cases:
+        assert_contains(details.text, canonical, "model read-back after refresh")

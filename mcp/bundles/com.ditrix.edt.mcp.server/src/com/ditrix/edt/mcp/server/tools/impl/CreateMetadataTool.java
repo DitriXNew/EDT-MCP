@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -541,7 +542,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (isReferencedTopTarget(target))
         {
             return createReferencedTopObject(project, projectName, target, props, synonymLanguage,
-                localesMissing, localeUnused, normReport);
+                localesMissing, localeUnused, normReport, ((IBmObject)config).bmGetFqn());
         }
         if (target.topLevel)
         {
@@ -1678,7 +1679,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Create and attach a separate file, then register it with its owner in both directions. */
     private String createReferencedTopObject(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract
         Props props, String synonymLanguage, List<String> localesMissing, boolean localeUnused,
-        MdNameNormalizer.Report normReport)
+        MdNameNormalizer.Report normReport, String configFqn)
     {
         if (!(target.owner instanceof IBmObject))
         {
@@ -1726,7 +1727,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Error creating referenced top object", e); //$NON-NLS-1$
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
-        boolean persisted = BmTransactions.forceExportToDisk(project, List.of(childFqn[0], parentFqn[0]));
+        List<String> exportFqns = dirtyFqns(childFqn[0], configFqn);
+        exportFqns.add(parentFqn[0]);
+        boolean persisted = BmTransactions.forceExportToDisk(project, exportFqns);
         return success(new SuccessInfo(childFqn[0], target.elementType, target.childName, persisted, props,
             synonymLanguage, localesMissing, localeUnused, null, normReport));
     }
@@ -3248,6 +3251,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         EReference typeFeature = mandatoryTypeFeature(member.eClass());
         if (typeFeature == null || member.eGet(typeFeature) != null)
         {
+            return;
+        }
+        // CubeInitializer starts a dimension with an empty type description.
+        if (MdClassPackage.Literals.DIMENSION.isSuperTypeOf(member.eClass()))
+        {
+            member.eSet(typeFeature, McoreFactory.eINSTANCE.createTypeDescription());
             return;
         }
         MetadataTypeBuilder.Result built = MetadataTypeBuilder.buildWithProvider(

@@ -42,6 +42,7 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -1791,14 +1792,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return false;
         }
         Element current = root;
+        var classifier = MdClassPackage.eINSTANCE.getEClassifier(elementName(root));
+        EClass ownerType = classifier instanceof EClass ? (EClass)classifier : null;
         String addressedPrefix = registeringContainer;
         for (int i = 0; i < remainder.length; i += 2)
         {
             // A subsystem's registration is a reference, deliberately absent from the generic
             // containment-kind map. Recognize it only for this serialized registration check.
             boolean subsystem = SubsystemUtils.isSubsystemTypeToken(remainder[i]);
+            EReference reference = MetadataNodeResolver.childFeature(ownerType, remainder[i]);
             String feature = subsystem ? "subsystems" //$NON-NLS-1$
-                : MetadataNodeResolver.featureNameForKind(remainder[i]);
+                : reference == null ? null : reference.getName();
             if (feature == null)
             {
                 return false;
@@ -1822,6 +1826,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 return false;
             }
             current = match;
+            ownerType = reference == null ? null : reference.getEReferenceType();
         }
         return true;
     }

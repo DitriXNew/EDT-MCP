@@ -59,6 +59,41 @@ public class ModifyMetadataToolExternalDataSourceTest
         assertNotNull(MetadataNodeResolver.resolveExisting(f.config, FIELD));
         assertEquals(TypeChangeDefaults.Reset.NONE, TypeChangeDefaults.resetFor(f.field));
         assertEquals(TypeChangeDefaults.Reset.NONE, TypeChangeDefaults.resetFor(f.function));
+        assertEquals(TypeChangeDefaults.Reset.NONE, TypeChangeDefaults.resetFor(f.dimension));
+        assertEquals(TypeChangeDefaults.Reset.NONE, TypeChangeDefaults.resetFor(f.resource));
+    }
+
+    @Test public void dimensionTableFetchesItsBmIdAndMembersWalkAcrossBothReferenceLists() throws Exception
+    {
+        var f = new ExternalDataSourceFixtures();
+        var eds = mock(ExternalDataSource.class, withSettings().extraInterfaces(IBmObject.class, InternalEObject.class));
+        when(eds.getName()).thenReturn("Eds");
+        when(eds.eClass()).thenReturn(MdClassPackage.Literals.EXTERNAL_DATA_SOURCE);
+        when(((IBmObject)eds).bmGetId()).thenReturn(11L);
+        var cubes = new BasicEList<com._1c.g5.v8.dt.metadata.mdclass.Cube>();
+        cubes.add(f.cube);
+        when(eds.eGet(MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__CUBES)).thenReturn(cubes);
+        f.config.getExternalDataSources().clear();
+        f.config.getExternalDataSources().add(eds);
+        var table = mock(com._1c.g5.v8.dt.metadata.mdclass.DimensionTable.class,
+            withSettings().extraInterfaces(IBmObject.class, InternalEObject.class));
+        when(table.getName()).thenReturn("DT");
+        when(table.eClass()).thenReturn(MdClassPackage.Literals.DIMENSION_TABLE);
+        when(((IBmObject)table).bmGetId()).thenReturn(73L);
+        when(table.eGet(MdClassPackage.Literals.DIMENSION_TABLE__FIELDS)).thenReturn(f.dimensionTable.getFields());
+        f.cube.getDimensionTables().clear();
+        f.cube.getDimensionTables().add(table);
+        Object tablePlan = plan(f.scope(), DIMENSION_TABLE);
+        assertNull(get(tablePlan, "error"));
+        assertEquals(73L, get(tablePlan, "topBmId"));
+        assertNull(get(tablePlan, "memberFeature"));
+        for (String fqn : java.util.List.of(DIMENSION_FIELD, DIMENSION, RESOURCE))
+        {
+            Object memberPlan = plan(f.scope(), fqn);
+            assertNull(get(memberPlan, "error"));
+            assertEquals(11L, get(memberPlan, "topBmId"));
+            assertSame(MetadataNodeResolver.resolveExisting(f.scope(), fqn).feature, get(memberPlan, "memberFeature"));
+        }
     }
 
     @Test public void notFoundHintNamesTheEdsShapes()

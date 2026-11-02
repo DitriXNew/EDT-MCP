@@ -96,6 +96,29 @@ def _assignable_text(fqn):
     return r.text
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_external_data_source_cube_members_825():
+    eds = "ExternalDataSource.E2E825Modify"
+    cube = eds + ".Cube.C"
+    table = cube + ".DimensionTable.DT"
+    members = [table, table + ".Field.F", cube + ".Dimension.D", cube + ".Resource.R"]
+    for fqn in [eds, cube] + members:
+        assert wait_for_project_ready(), "indexing before create " + fqn
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    for fqn in members:
+        assert wait_for_project_ready(), "indexing before modify " + fqn
+        requested = fqn.replace(".DimensionTable.", ".ТаблицаИзмерения.").replace(".Field.", ".Поле.")
+        value = "E2E825 changed " + fqn.rsplit(".", 1)[-1]
+        changed = call("modify_metadata", {"projectName": PROJECT, "fqn": requested,
+                       "properties": [{"name": "comment", "value": value}]})
+        assert_ok(changed, requested)
+        assert changed.structured.get("persisted") is True, changed.structured
+        path = "src/ExternalDataSources/E2E825Modify/Cubes/C/"
+        path += "DimensionTables/DT/DT.mdo" if fqn.startswith(table) else "C.mdo"
+        assert_contains(read_disk(path), "<comment>" + value + "</comment>", "immediate member export")
+        assert_contains(_assignable_text(fqn), value, "the addressed member changed in the model")
+
+
 def _commands_group_cells(owner_fqn, command):
     """The `Group` cell of `command`'s row in the owner's `### Commands` table, read in the default
     and the `full: true` view (issue #733), as {full: cell}."""
