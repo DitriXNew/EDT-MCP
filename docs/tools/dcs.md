@@ -132,13 +132,14 @@ Send the reassembled WHOLE document in that one `replace`; `body.xml` is not chu
 must never receive an individual page. It is mutually exclusive with every structured
 schema member, is accepted only for `replace` + `schema` at a bare root, and still requires
 `expectedHash`. The XML is deserialized before the write; malformed or truncated XML is
-refused without mutation. Inside the existing BM write transaction, the imported result is
+refused without mutation. Inside the existing BM write transaction, every imported schema feature
+is deep-copied into the already attached external-property root, preserving its BM FQN. The attached
+model is compared with the parsed schema, including counts of root data sources, root data sets,
+concrete fields (including union/folder fields), schema parameters, and variants. It is also
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
-namespace-prefix/formatting changes are allowed, but the first submitted path whose content was
-lost is refused and the transaction rolls back. Every imported schema feature is then deep-copied
-into the already attached external-property root. Keeping that root
-preserves its BM FQN; the normal DCS force-export path then writes `Template.dcs` after
-commit.
+namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
+refuses the call and rolls back the transaction. The normal DCS force-export path writes
+`Template.dcs` after commit. The success response includes `xml=wholesale` and those model counts.
 
 ### Start with a root summary
 

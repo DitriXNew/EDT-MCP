@@ -343,6 +343,91 @@ def _read_all_text_value(fqn, target_type, *, limit):
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_xml_replace_keeps_four_parameters_and_followup_dataset_write_in_model_and_disk():
+    source = _seed_report("E2EDcs664Source")
+    period_name = "СтандартныйПериод"
+    parameter_names = [period_name, "НачалоПериода", "КонецПериода", "Дата"]
+    period = {"kind": "standardPeriod", "value": {"variant": "ThisYear"}}
+    fields = [{"dataPath": "F%d" % i, "field": "F%d" % i} for i in range(14)]
+    fields[0].update({"role": {"periodNumber": 1, "periodType": "Main"},
+                      "useRestriction": {"field": True},
+                      "attributeUseRestriction": {"condition": True},
+                      "appearance": {"Format": "NFD=2"}})
+    query = "SELECT " + ", ".join("%d AS F%d" % (i, i) for i in range(14))
+    source_before = _get(source, "schema")
+    assert_ok(source_before)
+    authored = _write(source, "replace", "schema", {
+        "dataSources": [{"name": "Main", "type": "Local"}],
+        "dataSets": [{"name": "DataSet1", "dataSource": "Main", "query": query, "autoFillFields": False,
+                      "fields": fields}],
+        "parameters": [
+            {"name": period_name, "values": [period]},
+            {"name": parameter_names[1], "expression": "&" + period_name + ".StartDate"},
+            {"name": parameter_names[2], "expression": "&" + period_name + ".EndDate"},
+            {"name": parameter_names[3]},
+        ],
+        "variants": [{"name": "Main", "presentation": "Main", "settings": {
+            "dataParameters": {"items": [{"parameter": {"kind": "parameter", "value": period_name},
+                                           "value": period, "use": True}]},
+            "outputParameters": {"items": [{"parameter": {"kind": "parameter", "value": "Title"},
+                                             "value": "Issue 664 title", "use": True}]},
+            "conditionalAppearance": {"items": [{"appearance": {"Format": "NFD=2"}}]},
+        }}],
+    }, expectedHash=_hash(source_before))
+    assert_ok(authored, "seed the four-parameter XML import fixture")
+    source_xml, _ = _read_all_xml(source)
+    ns = {"d": "http://v8.1c.ru/8.1/data-composition-system/schema"}
+    source_document = ET.fromstring(source_xml)
+    source_parameters = source_document.findall("d:parameter", ns)
+    assert [item.findtext("d:name", namespaces=ns) for item in source_parameters] == parameter_names
+    assert len(source_document.findall("d:dataSet/d:field", ns)) == 14
+    assert "ThisYear" in source_xml
+
+    target_name = "E2EDcs664Target"
+    target = _seed_report(target_name)
+    target_path = _poll_report_dcs(target_name, ctx="seed the existing XML replacement target")
+    for attempt in range(2):
+        before = _get(target, "schema")
+        assert_ok(before)
+        replaced = _write(target, "replace", "schema", {"xml": source_xml}, expectedHash=_hash(before))
+        assert_ok(replaced, "replace the attached schema, pass %d" % attempt)
+        assert_contains(replaced.text,
+                        "xml=wholesale, dataSources=1, dataSets=1, fields=14, parameters=4, variants=1")
+        # Check the submitted export before a model read can give an early export time to finish.
+        disk = read_disk(target_path)
+        assert _xml_structure(disk) == _xml_structure(source_xml), \
+            "the complete imported schema must be exported by the same call"
+        parameters = _get(target, "parameter")
+        assert_ok(parameters)
+        for name in parameter_names:
+            assert_contains(parameters.text, name)
+        model_xml, _ = _read_all_xml(target)
+        assert _xml_structure(model_xml) == _xml_structure(source_xml), \
+            "the attached model must retain every parameter, field role, appearance and variant value"
+
+    updated = _write(target + "#/dataSets/DataSet1", "update", "dataSet", {"query": query + "\n"})
+    assert_ok(updated, "the write after XML replacement must use a healthy model")
+    disk_after_update = ET.fromstring(read_disk(target_path))
+    assert [ET.tostring(p) for p in disk_after_update.findall("d:parameter", ns)] == [
+        ET.tostring(p) for p in source_parameters], "the following write must not erase imported parameters"
+    model_after_update, _ = _read_all_xml(target)
+    assert _xml_structure(model_after_update) == _xml_structure(read_disk(target_path))
+
+    before_refusal = read_disk(target_path)
+    current = _get(target, "schema")
+    assert_ok(current)
+    opening, closing = source_xml.rsplit("</", 1)
+    lossy_xml = opening + "<Issue664Unsupported>must survive</Issue664Unsupported></" + closing
+    refused = _write(target, "replace", "schema", {"xml": lossy_xml}, expectedHash=_hash(current))
+    message = assert_error(refused, "refuse an XML member EDT cannot retain")
+    assert_error_quality(message, names=["Issue664Unsupported"], suggests=["nothing was written", "retry"])
+    assert read_disk(target_path) == before_refusal, "refused import must roll back and leave disk unchanged"
+    after_refusal = _get(target, "schema")
+    assert_ok(after_refusal)
+    assert _hash(after_refusal) == _hash(current), "refused import must leave the model unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk():
     language = "Language.E2EDcsRussianXml"
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),
