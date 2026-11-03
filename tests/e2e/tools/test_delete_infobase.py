@@ -402,6 +402,7 @@ def _kept_directory_case(locked):
         data = result.structured
         assert data["action"] == "deleted", data
         assert data["deleteRegistration"] is True, data
+        assert data["registrationId"] == registration_id, data
         assert data["databaseFilesDeleted"] is False, data
         assert data["databaseFilesKept"] == "deleteFailed", data
         assert "were NOT deleted" in data["message"], data

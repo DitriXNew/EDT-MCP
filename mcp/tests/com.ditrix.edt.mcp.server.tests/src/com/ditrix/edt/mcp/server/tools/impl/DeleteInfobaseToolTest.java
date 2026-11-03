@@ -52,6 +52,83 @@ import com.google.gson.JsonParser;
 public class DeleteInfobaseToolTest
 {
     @Test
+    public void applicationDeletionClearsSharedFileBindingsLeftByEdt() throws Exception
+    {
+        assertApplicationDeletionClearsSharedFileBindings(false);
+    }
+
+    @Test
+    public void applicationDeletionExcludesSharedFileBindingsClearedByEdt() throws Exception
+    {
+        assertApplicationDeletionClearsSharedFileBindings(true);
+    }
+
+    private void assertApplicationDeletionClearsSharedFileBindings(boolean reset) throws Exception
+    {
+        var target = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var other = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var factory = com._1c.g5.v8.dt.platform.services.model.ModelFactory.eINSTANCE;
+        var connection = factory.createFileConnectionString();
+        connection.setFile("C:/bases/shared");
+        var ref = factory.createInfobaseReference();
+        ref.setUuid(java.util.UUID.randomUUID());
+        ref.setName("shared");
+        ref.setConnectionString(connection);
+        when(((IInfobaseApplication)target.prior).getInfobase()).thenReturn(ref);
+        when(target.prior.getName()).thenReturn("shared");
+        when(((IInfobaseApplication)other.prior).getInfobase()).thenReturn(ref);
+        when(other.project.getName()).thenReturn("other");
+        when(other.configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+        when(other.copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+        when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.of(other.prior));
+        org.mockito.Mockito.doAnswer(call -> {
+            IApplication application = call.getArgument(1);
+            other.defaultId.set(application == null ? null : application.getId());
+            return null;
+        }).when(target.manager).setDefaultApplication(org.mockito.ArgumentMatchers.eq(other.project),
+            org.mockito.ArgumentMatchers.any());
+        var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+        var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+        var context = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/bindings");
+        var tool = new DeleteInfobaseTool() {
+            @Override String checkDestructiveConsent(String name, String subtitle) { return null; }
+
+            @Override com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(IApplicationManager manager)
+            {
+                return com.ditrix.edt.mcp.server.utils.InfobaseBindings.capture(manager,
+                    new IProject[] {target.project, other.project},
+                    new org.eclipse.debug.core.ILaunchConfiguration[] {target.configuration, other.configuration},
+                    project -> project == target.project ? target.defaultId.get() : other.defaultId.get());
+            }
+
+            @Override String deregisterFileInfobase(
+                    com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager manager,
+                    InfobaseReference captured, IbIdentity id, DbFileOutcome db, boolean remove, Runnable guard)
+            {
+                assertTrue(remove);
+                assertEquals(ref.getUuid(), captured.getUuid());
+                when(target.manager.getApplication(target.project, "prior")).thenReturn(Optional.empty());
+                when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.empty());
+                if (reset) { target.reset(); other.reset(); }
+                return null; // Simulate confirmed launcher removal through the existing service seam.
+            }
+        };
+        var result = parse(tool.deleteInfobase(
+            DeleteInfobaseTool.DeleteContext.of(target.project, target.manager, associations, infobases),
+            "project", "prior", null, null, true, false, true, () -> context));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(ref.getUuid().toString(), result.get("registrationId").getAsString());
+        assertNull(result.toString(), target.defaultId.get());
+        assertNull(result.toString(), target.launchId.get());
+        assertNull(result.toString(), other.defaultId.get());
+        assertNull(result.toString(), other.launchId.get());
+        assertEquals(4, result.getAsJsonArray("removedBindings").size());
+        assertEquals(0, result.getAsJsonArray("restoredBindings").size());
+        assertEquals(0, result.getAsJsonArray("unrestoredBindings").size());
+        org.mockito.Mockito.verify(associations).dissociate(target.project, ref, context);
+    }
+
+    @Test
     public void partialDeregistrationPreservesOtherProjectsSharingTheUuid() throws Exception
     {
         for (boolean resetOther : new boolean[] {false, true})
@@ -964,19 +1041,19 @@ public class DeleteInfobaseToolTest
     {
         // One assertion per branch databaseResultNote can take - the serialized payload, because
         // that is what a client reads. A record or a sentence proves nothing about the wire.
-        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(false, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
-        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, null, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
-        JsonObject shared = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject shared = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.SHARED)));
-        JsonObject unknown = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject unknown = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.UNKNOWN)));
-        JsonObject deleteFailed = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject deleteFailed = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
 
@@ -997,7 +1074,7 @@ public class DeleteInfobaseToolTest
     {
         // The over-correction guard for the delete side: a reason always attached would make
         // "kept" meaningless, and would contradict databaseFilesDeleted=true in the same payload.
-        JsonObject deleted = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject deleted = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, true,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
 
@@ -1021,7 +1098,7 @@ public class DeleteInfobaseToolTest
                     for (boolean deleted : new boolean[] { true, false })
                     {
                         JsonObject payload =
-                            parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+                            parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
                                 new DeleteInfobaseTool.DbFileOutcome(requested, dir, deleted,
                                     state)));
                         boolean reportedDeleted =

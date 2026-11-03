@@ -620,6 +620,7 @@ public class DeleteInfobaseTool implements IMcpTool
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         return buildDeleteSuccessResult(id, plan.deleteRegistration,
+            plan.registrationSnapshot == null ? null : plan.registrationSnapshot.getUuid(),
             new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared));
     }
 
@@ -1065,20 +1066,24 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the final success tool-result JSON after a file infobase was removed. Byte-for-byte
-     * identical to the inline result the success path produced. Read-only — all mutations
+     * Builds the final success tool-result JSON, carrying the confirmed removed launcher UUID.
+     * Read-only — all mutations
      * (dissociate / deregister / file deletion) have already happened at the call site.
      */
-    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
+    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration, UUID registrationId,
             DbFileOutcome db)
     {
-        return applyDatabaseFilesOutcome(ToolResult.success()
+        ToolResult result = applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
-            .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db);
+        if (deleteRegistration && registrationId != null)
+        {
+            result.put(KEY_REGISTRATION_ID, registrationId.toString());
+        }
+        return result.put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' removed from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).") //$NON-NLS-1$
