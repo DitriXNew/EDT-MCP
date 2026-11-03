@@ -8,11 +8,10 @@ package com.ditrix.edt.mcp.server.history;
 
 /**
  * One immutable record of a single MCP JSON-RPC request/response exchange, as
- * captured at the transport choke point ({@code McpProtocolHandler.processRequest}).
+ * captured by the protocol handler or the interruptible transport.
  *
  * <p>Instances are value objects: every field is {@code final}, there are no
- * setters, and the only stored references are {@link String}s (themselves
- * immutable) and primitives. A record can therefore be handed to the UI reader
+ * setters, and stored references are immutable values. A record can therefore be handed to the UI reader
  * thread and to file-log consumers without any copying or synchronization.</p>
  *
  * <p>The {@code requestJson} / {@code responseJson} payloads may already have been
@@ -56,6 +55,9 @@ public final class McpCallRecord
     /** Character count of the response payload BEFORE any truncation (0 when null). */
     private final int originalResponseChars;
 
+    private final boolean interrupted;
+    private final BackgroundOutcome backgroundOutcome;
+
     /**
      * Creates an immutable call record. The {@code requestJson} / {@code responseJson}
      * bodies are stored verbatim (the caller caps them for the bounded ring); the
@@ -74,6 +76,14 @@ public final class McpCallRecord
     public McpCallRecord(long timestampMs, String method, String toolName, String requestJson,
         String responseJson, long durationMs, int originalRequestChars, int originalResponseChars)
     {
+        this(timestampMs, method, toolName, requestJson, responseJson, durationMs,
+            originalRequestChars, originalResponseChars, false, null);
+    }
+
+    McpCallRecord(long timestampMs, String method, String toolName, String requestJson,
+        String responseJson, long durationMs, int originalRequestChars, int originalResponseChars,
+        boolean interrupted, BackgroundOutcome backgroundOutcome)
+    {
         this.timestampMs = timestampMs;
         this.method = method;
         this.toolName = toolName;
@@ -82,6 +92,24 @@ public final class McpCallRecord
         this.durationMs = durationMs;
         this.originalRequestChars = originalRequestChars;
         this.originalResponseChars = originalResponseChars;
+        this.interrupted = interrupted;
+        this.backgroundOutcome = backgroundOutcome;
+    }
+
+    public boolean isInterrupted()
+    {
+        return interrupted;
+    }
+
+    public BackgroundOutcome getBackgroundOutcome()
+    {
+        return backgroundOutcome;
+    }
+
+    McpCallRecord withBackgroundOutcome(BackgroundOutcome outcome)
+    {
+        return new McpCallRecord(timestampMs, method, toolName, requestJson, responseJson,
+            durationMs, originalRequestChars, originalResponseChars, interrupted, outcome);
     }
 
     /**

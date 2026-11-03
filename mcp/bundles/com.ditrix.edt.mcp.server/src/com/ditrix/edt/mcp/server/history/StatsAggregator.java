@@ -143,7 +143,7 @@ public final class StatsAggregator
                 acc.requestWords += countWords(request);
                 acc.responseChars += record.getOriginalResponseChars();
                 acc.responseWords += countWords(response);
-                if (isErrorResponse(response))
+                if (isErrorRecord(record))
                 {
                     acc.errorCount++;
                 }
@@ -264,6 +264,12 @@ public final class StatsAggregator
         {
             return false;
         }
+    }
+
+    /** Signals remain errors even if the stored response was too large to retain as valid JSON. */
+    public static boolean isErrorRecord(McpCallRecord record)
+    {
+        return record != null && (record.isInterrupted() || isErrorResponse(record.getResponseJson()));
     }
 
     /**

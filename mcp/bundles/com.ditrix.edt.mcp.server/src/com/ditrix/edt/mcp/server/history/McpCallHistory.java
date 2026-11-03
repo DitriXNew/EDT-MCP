@@ -133,11 +133,17 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
     public void record(String method, String toolName, String requestJson, String responseJson,
         long durationMs)
     {
+        append(method, toolName, requestJson, responseJson, durationMs, false, null);
+    }
+
+    private McpCallRecord append(String method, String toolName, String requestJson, String responseJson,
+        long durationMs, boolean interrupted, BackgroundOutcome outcome)
+    {
         try
         {
             if (!recordingEnabled)
             {
-                return;
+                return null;
             }
 
             // Cap payloads BEFORE taking the buffer lock so the critical section is
@@ -149,7 +155,7 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
             int origResponseChars = responseJson == null ? 0 : responseJson.length();
             McpCallRecord entry = new McpCallRecord(System.currentTimeMillis(), method, toolName,
                 capPayload(requestJson), capPayload(responseJson), durationMs, origRequestChars,
-                origResponseChars);
+                origResponseChars, interrupted, outcome);
 
             int cap = clampCap(bufferSize);
             synchronized (bufferLock)
@@ -163,10 +169,91 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
             }
 
             fireRecorded(entry);
+            return entry;
         }
         catch (RuntimeException e) // NOSONAR record() must never throw to the served request
         {
             // Intentionally swallowed: history capture must never disturb the caller.
+            return null;
+        }
+    }
+
+    /** Creates an isolated capture for a call whose response may be replaced by a signal. */
+    public CallCapture beginCall(String method, String toolName, String requestJson, long startNanos)
+    {
+        return new CallCapture(method, toolName, requestJson, startNanos);
+    }
+
+    /** Coordinates response selection and background completion in either order. */
+    public final class CallCapture
+    {
+        private final String method;
+        private final String toolName;
+        private final String requestJson;
+        private final long startNanos;
+        private boolean recorded;
+        private McpCallRecord entry;
+        private BackgroundOutcome outcome;
+
+        private CallCapture(String method, String toolName, String requestJson, long startNanos)
+        {
+            this.method = method;
+            this.toolName = toolName;
+            this.requestJson = requestJson;
+            this.startNanos = startNanos;
+        }
+
+        /** Records only the selected client response, never the discarded completion response. */
+        public synchronized void recordResponse(String response, boolean interrupted)
+        {
+            if (!recorded)
+            {
+                recorded = true;
+                entry = append(method, toolName, requestJson, response,
+                    (System.nanoTime() - startNanos) / 1_000_000L, interrupted, interrupted ? outcome : null);
+            }
+        }
+
+        /** Completion is metadata on an interrupted row; it never appends a row. */
+        public synchronized void completed(String response)
+        {
+            if (outcome != null)
+            {
+                return;
+            }
+            outcome = BackgroundOutcome.fromResponse(response);
+            if (entry != null && entry.isInterrupted())
+            {
+                updateBackgroundOutcome(entry, outcome);
+            }
+        }
+    }
+
+    private void updateBackgroundOutcome(McpCallRecord entry, BackgroundOutcome outcome)
+    {
+        McpCallRecord updated = entry.withBackgroundOutcome(outcome);
+        synchronized (bufferLock)
+        {
+            List<McpCallRecord> rows = new ArrayList<>(buffer);
+            int index = rows.indexOf(entry);
+            if (index < 0)
+            {
+                return; // Cleared or evicted rows must not reappear on completion.
+            }
+            rows.set(index, updated);
+            buffer.clear();
+            buffer.addAll(rows);
+        }
+        for (HistoryListener listener : listeners)
+        {
+            try
+            {
+                listener.onUpdate(updated);
+            }
+            catch (RuntimeException ignored)
+            {
+                // Metadata updates must not disturb the completed operation.
+            }
         }
     }
 
@@ -393,6 +480,12 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
          * @param record the newly appended, immutable record
          */
         void onRecord(McpCallRecord record);
+
+        /** Invoked for metadata changes on an existing row; never a new exchange. */
+        default void onUpdate(McpCallRecord record)
+        {
+            // Append-only consumers keep the original client response.
+        }
 
         /**
          * Invoked when the recorder's configuration (recording flag / ring capacity)

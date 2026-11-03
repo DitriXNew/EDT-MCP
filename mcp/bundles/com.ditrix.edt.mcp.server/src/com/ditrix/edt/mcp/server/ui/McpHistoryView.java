@@ -575,6 +575,12 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
         scheduleRefresh();
     }
 
+    @Override
+    public void onUpdate(McpCallRecord record)
+    {
+        scheduleRefresh();
+    }
+
     /**
      * Recorder-config-change callback (recording toggled or ring resized via the MCP
      * Server preferences). Runs on the caller thread, so it only marshals the refresh
@@ -952,7 +958,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
      */
     static boolean isError(McpCallRecord record)
     {
-        return record != null && isErrorResponse(record.getResponseJson());
+        return StatsAggregator.isErrorRecord(record);
     }
 
     /**
