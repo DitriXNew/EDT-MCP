@@ -180,8 +180,8 @@ final class GuidedWorkflows
         {
             throw invalid("Invalid EDT resource path: " + rawUri + ". Use resources/templates/list.");
         }
-        String project = decodeSegment(segments[1]);
-        String guideName = guide ? decodeSegment(segments[3]) : null;
+        String project = decodeSegment(segments[1], McpKeys.PROJECT_NAME);
+        String guideName = guide ? decodeSegment(segments[3], "guideName") : null;
         requireProject(project, RESOURCE_NOT_FOUND);
         if (problems)
         {
@@ -352,12 +352,14 @@ final class GuidedWorkflows
             && value.codePoints().noneMatch(c -> Character.isISOControl(c) || c == 0xFFFD || (c >= 0xD800 && c <= 0xDFFF));
     }
 
-    private static String decodeSegment(String raw)
+    private static String decodeSegment(String raw, String argumentName)
     {
         String value = URLDecoder.decode(raw.replace("+", "%2B"), StandardCharsets.UTF_8);
         if (!validSegment(value))
         {
-            throw invalid("Invalid resource argument: " + raw + ". Supply a single UTF-8 percent-encoded path segment.");
+            throw invalid("Invalid resource argument '" + argumentName + "': " + raw
+                + ". Supply a non-empty UTF-8 percent-encoded path segment (maximum 255 characters),"
+                + " excluding '.', '..', slashes, backslashes, and control characters.");
         }
         return value;
     }

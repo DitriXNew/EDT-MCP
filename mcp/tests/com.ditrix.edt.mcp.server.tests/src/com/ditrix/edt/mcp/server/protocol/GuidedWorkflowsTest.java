@@ -265,6 +265,54 @@ public class GuidedWorkflowsTest
     }
 
     @Test
+    public void testDotSegmentErrorNamesExactTemplateVariable()
+    {
+        String projectError = "Invalid resource argument 'projectName': %2e%2e. Supply a non-empty UTF-8"
+            + " percent-encoded path segment (maximum 255 characters), excluding '.', '..', slashes,"
+            + " backslashes, and control characters.";
+        for (String uri : List.of("edt://projects/%2e%2e/problems",
+            "edt://projects/%2e%2e/guides/get_project_errors"))
+        {
+            JsonObject response = resource(uri);
+            assertError(response, -32602, "projectName");
+            assertEquals(projectError, response.getAsJsonObject("error").get("message").getAsString());
+        }
+        JsonObject response = resource("edt://projects/TestConfiguration/guides/%2e%2e");
+        assertError(response, -32602, "guideName");
+        assertEquals("Invalid resource argument 'guideName': %2e%2e. Supply a non-empty UTF-8"
+            + " percent-encoded path segment (maximum 255 characters), excluding '.', '..', slashes,"
+            + " backslashes, and control characters.",
+            response.getAsJsonObject("error").get("message").getAsString());
+        verify(problems, never()).execute(anyMap());
+    }
+
+    @Test
+    public void testInvalidSegmentsConsistentlyNameVariableValueAndFixAcrossTemplates()
+    {
+        for (String badValue : List.of("", ".", "..", "%2e", "A%2fB", "A%5cB", "A%00B", "%FF",
+            "%C0%AF", "x".repeat(256)))
+        {
+            for (String template : List.of(GuidedWorkflows.PROBLEMS_URI, GuidedWorkflows.GUIDES_URI))
+            {
+                String uri = template.replace("{projectName}", badValue).replace("{guideName}", "get_project_errors");
+                assertInvalidSegmentMessage(uri, "projectName", badValue);
+            }
+            assertInvalidSegmentMessage("edt://projects/TestConfiguration/guides/" + badValue, "guideName", badValue);
+        }
+        verify(problems, never()).execute(anyMap());
+    }
+
+    private void assertInvalidSegmentMessage(String uri, String variable, String badValue)
+    {
+        JsonObject response = resource(uri);
+        assertError(response, -32602, variable);
+        assertEquals("Invalid resource argument '" + variable + "': " + badValue
+            + ". Supply a non-empty UTF-8 percent-encoded path segment (maximum 255 characters),"
+            + " excluding '.', '..', slashes, backslashes, and control characters.",
+            response.getAsJsonObject("error").get("message").getAsString());
+    }
+
+    @Test
     public void testInvalidPromptArgumentsAndCursorsDoNotRunTools()
     {
         for (String params : List.of("{}", "{\"name\":\"missing\"}", "{\"name\":42}",
