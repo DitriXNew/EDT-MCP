@@ -164,8 +164,9 @@ def test_external_data_source_delete_field_function_and_russian_table_registrati
     result = _delete(RU_EDS + ".E2E448Source." + RU_TABLE + ".T")
     poll_disk_path_gone("src/ExternalDataSources/E2E448Source/Tables/T")
     poll_disk_count(EDS_PATH, "<tables>" + TABLE + "</tables>", 0)
-    # The echo keeps the caller's address with only the type token normalized, as for every delete.
-    assert result.structured.get("fqn") == EDS + "." + RU_TABLE + ".T", result.structured
+    # Write echoes are canonical English (type and kind tokens), as for every delete.
+    assert result.structured.get("fqn") == TABLE, result.structured
+    assert RU_TABLE not in result.structured.get("fqn", ""), result.structured
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
