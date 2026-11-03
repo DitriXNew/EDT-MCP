@@ -258,25 +258,32 @@ public final class DcsXmlCodec
     {
         if (xml == null || xml.trim().isEmpty())
         {
-            return SchemaResult.failure("body.xml is empty. Pass the complete DataCompositionSchema " //$NON-NLS-1$
-                + "XML returned by dcs format='xml'."); //$NON-NLS-1$
+            return SchemaResult.failure(invalidXmlError("body.xml is empty")); //$NON-NLS-1$
         }
         try (ByteArrayInputStream input = new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
         {
             DataCompositionSchema schema = serializer.deserializeXML(input);
             if (schema == null)
             {
-                return SchemaResult.failure("body.xml does not contain a DataCompositionSchema root. " //$NON-NLS-1$
-                    + "Pass the complete XML returned by dcs format='xml'."); //$NON-NLS-1$
+                return SchemaResult.failure(invalidXmlError(
+                    "body.xml does not contain a DataCompositionSchema root")); //$NON-NLS-1$
             }
             return SchemaResult.success(schema);
         }
         catch (Exception e)
         {
-            return SchemaResult.failure("body.xml is malformed or is not valid EDT DCS XML: " //$NON-NLS-1$
-                + exceptionMessage(e) + ". Pass the complete XML returned by dcs format='xml' " //$NON-NLS-1$ //$NON-NLS-2$
-                + "without editing or truncating it."); //$NON-NLS-1$
+            return SchemaResult.failure(invalidXmlError("body.xml is malformed or is not valid EDT DCS XML: " //$NON-NLS-1$
+                + exceptionMessage(e)));
         }
+    }
+
+    /** Shared recovery for rejected XML, before mutation or after the caller rolls its transaction back. */
+    public static String invalidXmlError(String diagnostic)
+    {
+        return diagnostic + ". Remove or correct the invalid element or XML syntax at the reported line " //$NON-NLS-1$
+            + "(if provided), then retry with the complete DataCompositionSchema XML. " //$NON-NLS-1$
+            + "Read the current schema with dcs action='get', type='schema', format='xml' " //$NON-NLS-1$
+            + "if needed; nothing was written."; //$NON-NLS-1$
     }
 
     /**

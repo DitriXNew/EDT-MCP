@@ -140,8 +140,57 @@ public class DcsXmlCodecTest
         assertFalse(result.isSuccess());
         assertTrue(result.error(), result.error().contains("body.xml")); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("malformed")); //$NON-NLS-1$
-        assertTrue(result.error(), result.error().contains("format='xml'")); //$NON-NLS-1$
-        assertTrue(result.error(), result.error().contains("without editing or truncating")); //$NON-NLS-1$
+        assertInvalidXmlRecovery(result);
+    }
+
+    @Test
+    public void testUnknownXmlElementPreservesItsNameAndLineAndExplainsRecovery()
+    {
+        var codec = new DcsXmlCodec(new DcsV8Serializer((IResourceLookup)null), null);
+        var result = codec.deserialize("""
+            <DataCompositionSchema xmlns="http://v8.1c.ru/8.1/data-composition-system/schema">
+            <Issue664Unsupported/>
+            </DataCompositionSchema>
+            """);
+
+        assertInvalidXmlRecovery(result);
+        assertTrue(result.error(), result.error().contains("Issue664Unsupported"));
+        assertTrue(result.error(), result.error().contains("Line number = 2"));
+    }
+
+    @Test
+    public void testEmptyXmlExplainsNothingWasWrittenAndHowToRetry()
+    {
+        var codec = new DcsXmlCodec(new DcsV8Serializer((IResourceLookup)null), null);
+        for (String xml : new String[] {null, "", " \r\n "})
+        {
+            var result = codec.deserialize(xml);
+            assertTrue(result.error(), result.error().contains("body.xml is empty"));
+            assertInvalidXmlRecovery(result);
+        }
+    }
+
+    @Test
+    public void testMissingSchemaRootExplainsNothingWasWrittenAndHowToRetry() throws Exception
+    {
+        var serializer = Mockito.mock(DcsV8Serializer.class);
+        Mockito.when(serializer.deserializeXML(Mockito.any(java.io.InputStream.class))).thenReturn(null);
+        var codec = new DcsXmlCodec(serializer, null);
+
+        var result = codec.deserialize("<!-- no schema root -->");
+
+        assertTrue(result.error(), result.error().contains("does not contain a DataCompositionSchema root"));
+        assertInvalidXmlRecovery(result);
+    }
+
+    private static void assertInvalidXmlRecovery(DcsXmlCodec.SchemaResult result)
+    {
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("nothing was written"));
+        assertTrue(result.error(), result.error().contains("Remove or correct"));
+        assertTrue(result.error(), result.error().contains("reported line"));
+        assertTrue(result.error(), result.error().contains("retry with the complete DataCompositionSchema XML"));
+        assertTrue(result.error(), result.error().contains("action='get', type='schema', format='xml'"));
     }
 
     @Test

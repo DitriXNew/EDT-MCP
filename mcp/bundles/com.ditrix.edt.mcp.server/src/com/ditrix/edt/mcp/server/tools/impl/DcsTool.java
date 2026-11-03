@@ -464,8 +464,8 @@ public class DcsTool implements IMcpTool
         if (!xml.isJsonPrimitive() || !xml.getAsJsonPrimitive().isString()
             || xml.getAsString().trim().isEmpty())
         {
-            return ToolResult.error("body.xml must be a non-empty string containing the complete " //$NON-NLS-1$
-                + "DataCompositionSchema XML returned by dcs format='xml'.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DcsXmlCodec.invalidXmlError(
+                "body.xml must be a non-empty string containing the complete DataCompositionSchema XML")).toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -767,8 +767,9 @@ public class DcsTool implements IMcpTool
                         }
                         catch (IllegalArgumentException e)
                         {
-                            throw DcsWriteFailure.message("XML replacement was refused because its " //$NON-NLS-1$
-                                + "deserialize/serialize loss check failed: " + e.getMessage()); //$NON-NLS-1$
+                            throw DcsWriteFailure.message(DcsXmlCodec.invalidXmlError(
+                                "XML replacement was refused because its deserialize/serialize loss check failed: " //$NON-NLS-1$
+                                + e.getMessage()));
                         }
                         if (missing != null)
                         {
