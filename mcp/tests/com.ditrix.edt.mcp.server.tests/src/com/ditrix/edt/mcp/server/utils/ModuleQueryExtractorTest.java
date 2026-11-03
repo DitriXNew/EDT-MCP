@@ -63,6 +63,33 @@ public class ModuleQueryExtractorTest
     }
 
     @Test
+    public void quotedProjectionsKeepStructureInBothLanguages()
+    {
+        for (String query : List.of("SELECT \"value\" AS Label", "SELECT \"value\" FROM Catalog.Catalog",
+            "SELECT \"\" AS Label", "SELECT \"a \"\"FROM\"\" value\" AS Label",
+            "ВЫБРАТЬ \"значение\" КАК Метка", "ВЫБРАТЬ \"значение\" ИЗ Справочник.Catalog"))
+        {
+            var literals = extract(module("Q = \"" + query.replace("\"", "\"\"") + "\";"), null);
+            assertEquals(query, 1, literals.size());
+            assertNull(query, literals.get(0).reason());
+            assertEquals(query, literals.get(0).queryText());
+        }
+    }
+
+    @Test
+    public void quotedKeywordsAndCommentsCannotSupplyQueryStructure()
+    {
+        for (String query : List.of("SELECT \"FROM AS INTO\"", "SELECT \"value\" // FROM Catalog.Catalog",
+            "SELECT // \"value\"\nAS Label", "ВЫБРАТЬ \"ИЗ КАК ПОМЕСТИТЬ\""))
+        {
+            String framed = query.replace("\"", "\"\"").replace("\n", "\n|");
+            var literals = extract(module("Q = \"" + framed + "\";"), null);
+            assertEquals(query, 1, literals.size());
+            assertEquals(query, "no query structure", literals.get(0).reason());
+        }
+    }
+
+    @Test
     public void requiresProjectionBeforeStructuralKeyword()
     {
         var literals = extract(module("A = \"SELECT FROM Menu\"; B = \"SELECT file.FROM\";"), null);

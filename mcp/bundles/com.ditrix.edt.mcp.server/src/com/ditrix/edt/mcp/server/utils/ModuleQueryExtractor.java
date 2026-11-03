@@ -96,8 +96,9 @@ public final class ModuleQueryExtractor
 
     private static boolean hasStructure(String projection)
     {
-        // Ignore quoted QL text and comments: keywords inside them are not query structure.
-        String masked = projection.replaceAll("\"(?:\"\"|[^\"])*\"|//[^\\r\\n]*", " ").strip();
+        // Keep quoted operands nonblank without exposing their keywords; comments remain whitespace.
+        String masked = Pattern.compile("\"(?:\"\"|[^\"])*\"|//[^\\r\\n]*").matcher(projection)
+            .replaceAll(match -> match.group().startsWith("\"") ? " _ " : " ").strip();
         if (SIMPLE_PROJECTION.matcher(masked).find()) return true;
         var structure = STRUCTURE.matcher(masked);
         return structure.find() && !masked.substring(0, structure.start()).isBlank();

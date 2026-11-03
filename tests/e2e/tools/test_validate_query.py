@@ -249,14 +249,18 @@ def test_stored_module_queries_map_diagnostics_and_skip_dynamic_in_both_language
          '\tQueryText = "SELECT\n\t| C.MissingField538\n\t|FROM Catalog.Catalog AS C";\n'
          '\tDynamicText = "SELECT C.Ref FROM Catalog.Catalog AS C" + Condition;\n'
          '\tCaption = "Select file";\n'
-         '\tReturn New Structure("Query,Dynamic,Caption", QueryText, DynamicText, Caption);\n'
+         '\tQuotedAlias = "SELECT ""value"" AS Label";\n'
+         '\tQuotedFrom = "SELECT ""value"" FROM Catalog.Catalog";\n'
+         '\tReturn New Structure("Query,Dynamic,Caption,QuotedAlias,QuotedFrom", QueryText, DynamicText, Caption, QuotedAlias, QuotedFrom);\n'
          'EndFunction\n'),
         ("E2EЗапросы538", "Запросы538", "зАПРОСЫ538", 17,
          'Функция Запросы538(Условие) Экспорт\n'
          '\tТекстЗапроса = "ВЫБРАТЬ\n\t| C.MissingField538\n\t|ИЗ Справочник.Catalog КАК C";\n'
          '\tДинамическийТекст = "ВЫБРАТЬ C.Ссылка ИЗ Справочник.Catalog КАК C" + Условие;\n'
          '\tЗаголовок = "Выбрать файл";\n'
-         '\tВозврат Новый Структура("Запрос,Динамический,Заголовок", ТекстЗапроса, ДинамическийТекст, Заголовок);\n'
+         '\tСтрокаСМеткой = "ВЫБРАТЬ ""значение"" КАК Метка";\n'
+         '\tСтрокаИзТаблицы = "ВЫБРАТЬ ""значение"" ИЗ Справочник.Catalog";\n'
+         '\tВозврат Новый Структура("Запрос,Динамический,Заголовок,СМеткой,ИзТаблицы", ТекстЗапроса, ДинамическийТекст, Заголовок, СтрокаСМеткой, СтрокаИзТаблицы);\n'
          'КонецФункции\n'),
     ]
     for module, expected_method, requested_method, column, source in cases:
@@ -278,7 +282,7 @@ def test_stored_module_queries_map_diagnostics_and_skip_dynamic_in_both_language
             r = call("validate_query", {"projectName": PROJECT, "modulePath": path, **scope})
             assert_ok(r, "stored bilingual module queries")
             payload = r.structured
-            assert payload and payload["foundCount"] == 1 and payload["skippedCount"] == 2, payload
+            assert payload and payload["foundCount"] == 3 and payload["skippedCount"] == 2, payload
             query = payload["queries"][0]
             assert query["method"] == expected_method and query["line"] == 2, query
             assert query["column"] == column, query
@@ -290,6 +294,12 @@ def test_stored_module_queries_map_diagnostics_and_skip_dynamic_in_both_language
             assert skipped["method"] == expected_method, skipped
             caption = payload["skipped"][1]
             assert caption["reason"] == "no query structure" and caption["line"] == 6, caption
+            quoted = payload["queries"][1:]
+            assert len(quoted) == 2 and [q["line"] for q in quoted] == [7, 8], quoted
+            for projection in quoted:
+                assert projection["method"] == expected_method and projection["valid"] is True, projection
+                assert projection["validationState"] == "VALID" and projection["validationComplete"] is True, projection
+                assert projection["errorCount"] == 0 and projection["dcsMode"] is scope.get("dcsMode", False), projection
             assert read_disk("src/" + path) == saved, "validation must leave the saved module unchanged"
 
 
