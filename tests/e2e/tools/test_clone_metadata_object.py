@@ -4,6 +4,7 @@ The orchestrator owns fixture resets. Every apply checks disk before another MCP
 """
 import os
 import hashlib
+import copy
 import xml.etree.ElementTree as ET
 
 from harness import (
@@ -60,8 +61,32 @@ def _details(fqn):
 
 
 def _hash_file(path):
+    return hashlib.sha256(_read_bytes(path)).hexdigest()
+
+
+def _read_bytes(path):
     with open(os.path.join(PROJECT_DIR, *path.split("/")), "rb") as stream:
-        return hashlib.sha256(stream.read()).hexdigest()
+        return stream.read()
+
+
+def _assert_module_copy(source, clone, before):
+    current = _read_bytes(source)
+    assert current == before, "Source module changed: " + source
+    assert _read_bytes(clone) == current, "Module bytes differ: " + source + " -> " + clone
+
+
+def _rights_row_xml(row, object_name=None):
+    expected = copy.deepcopy(row)
+    expected.tail = None
+    if object_name is not None:
+        expected.find("{*}name").text = object_name
+    return ET.tostring(expected, encoding="unicode")
+
+
+def _assert_rights_copy(source, clone, clone_fqn):
+    expected = _rights_row_xml(source, clone_fqn)
+    actual = _rights_row_xml(clone)
+    assert actual == expected, "Copied rights row differs:\nEXPECTED:\n%s\nACTUAL:\n%s" % (expected, actual)
 
 
 def _absent(fqn):
@@ -149,6 +174,7 @@ def test_clone_preserves_named_forms_modules_templates_types_and_predefined():
     source_hash = _hash_file("src/Catalogs/Catalog/Catalog.mdo")
     form_before = _xml("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
     template_hash = _hash_file("src/Catalogs/Catalog/Templates/Invoice/Template.mxlx")
+    module_bytes = {module: _read_bytes("src/" + module) for module in modules}
     before = tree_snapshot()
     preview = _preview(fqn="Catalog.Catalog", newName="E2ERichClone")
     _assert_only_external_incoming(preview)
@@ -178,7 +204,7 @@ def test_clone_preserves_named_forms_modules_templates_types_and_predefined():
     expected_hits = set()
     for module in modules:
         copied = module.replace("Catalogs/Catalog/", "Catalogs/" + name + "/")
-        assert read_disk("src/" + copied) == code, "BSL must remain byte-for-byte text"
+        _assert_module_copy("src/" + module, "src/" + copied, module_bytes[module])
         expected_hits.add(("src/" + copied, 2))
     assert expected_hits <= {(hit["file"], hit["line"]) for hit in data["codeReferences"]}, data
     assert data["namePolicy"] == "callerSupplied"
@@ -219,6 +245,7 @@ def test_clone_ignores_unowned_sidecar_files():
 
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
 def test_clone_reports_and_copies_only_selected_incoming_relations():
+    condition = "WHERE Description IN (\n    SELECT Description FROM Catalog.Catalog\n)"
     for name in ("E2ECloneSelected", "E2ECloneUntouched"):
         assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + name}), "seed subsystem")
         assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + name,
@@ -226,9 +253,11 @@ def test_clone_reports_and_copies_only_selected_incoming_relations():
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Role.E2ECloneRole"}), "seed role")
     assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Role.E2ECloneRole",
               "rights": [{"object": "Catalog.Catalog", "right": "Read", "value": "set",
-                          "rls": "WHERE TRUE", "rlsFields": ["Description"]}]}), "seed authored rights and RLS field")
+                          "rls": condition, "rlsFields": ["Description"]}]}), "seed authored rights and RLS field")
     wait_for_project_ready()
     role_path = "src/Roles/E2ECloneRole/Rights.rights"
+    source_row = next(row for row in _xml(role_path).findall("{*}object")
+                      if row.findtext("{*}name") == "Catalog.Catalog")
     selection = [{"kind": "subsystem", "owner": "Subsystem.E2ECloneSelected"},
                  {"kind": "roleRights", "owner": "Role.E2ECloneRole"}]
     base = _preview(fqn="Catalog.Catalog", newName="E2ECloneTransfers")
@@ -255,11 +284,20 @@ def test_clone_reports_and_copies_only_selected_incoming_relations():
     for fqn in ("Catalog.Catalog", data["fqn"]):
         assert objects[fqn].findtext("{*}right/{*}name") == "Read"
         assert objects[fqn].findtext("{*}right/{*}value") == "true"
-    expected_row = ET.tostring(objects["Catalog.Catalog"], encoding="unicode").replace("Catalog.Catalog", data["fqn"])
-    assert ET.tostring(objects[data["fqn"]], encoding="unicode") == expected_row, "RLS fields and text must follow the copied row"
-    assert "WHERE TRUE" in expected_row, "fixture must exercise nonempty RLS"
+    assert _rights_row_xml(objects["Catalog.Catalog"]) == _rights_row_xml(source_row), "Source rights row changed"
+    _assert_rights_copy(source_row, objects[data["fqn"]], data["fqn"])
+    assert objects[data["fqn"]].findtext("{*}right/{*}restrictionByCondition/{*}condition") == source_row.findtext(
+        "{*}right/{*}restrictionByCondition/{*}condition"), "RLS query text must remain verbatim"
     assert data["transferred"] == selection
-    assert all(hit["file"].startswith("src/Catalogs/E2ECloneTransfers/") for hit in data["codeReferences"]), data
+    role_text = read_disk(role_path)
+    clone_row_start = role_text.index("<name>" + data["fqn"] + "</name>")
+    condition_start = role_text.index("<condition>", clone_row_start)
+    source_mention = role_text.index("Catalog.Catalog", condition_start)
+    assert source_mention < role_text.index("</condition>", condition_start)
+    rls_line = role_text[:source_mention].count("\n") + 1
+    assert (role_path, rls_line) in {(hit["file"], hit["line"]) for hit in data["codeReferences"]}, data
+    assert all(hit["file"].startswith("src/Catalogs/E2ECloneTransfers/") or hit["file"] == role_path
+               for hit in data["codeReferences"]), data
     assert any(row["owner"] == "Subsystem.E2ECloneUntouched" for row in data["notCopied"])
     assert_contains(_details(data["fqn"]), "E2ECloneTransfers", "clone model")
     assert_contains(_details("Role.E2ECloneRole"), data["fqn"], "transferred rights model")

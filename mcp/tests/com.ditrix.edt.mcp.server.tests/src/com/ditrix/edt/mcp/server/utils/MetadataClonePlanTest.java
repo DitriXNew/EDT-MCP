@@ -434,6 +434,10 @@ public class MetadataClonePlanTest
         read.setName("Read");
         right.setRight(read);
         right.setValue(RightValue.UNSET);
+        var restriction = RightsFactory.eINSTANCE.createRls();
+        String query = "WHERE Ref IN (SELECT Ref FROM Catalog.Source)\n// \u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Source";
+        restriction.setCondition(query);
+        right.getRestrictionsByCondition().add(restriction);
         row.getRights().add(right);
         role.getRights().add(row);
         role.setSetForNewObjects(true);
@@ -445,6 +449,8 @@ public class MetadataClonePlanTest
         assertSame(clone, copied.getObject());
         assertSame(read, copied.getRights().get(0).getRight());
         assertEquals(RightValue.UNSET, copied.getRights().get(0).getValue());
+        assertEquals(query, copied.getRights().get(0).getRestrictionsByCondition().get(0).getCondition());
+        assertEquals(query, restriction.getCondition());
         assertTrue(role.isSetForNewObjects());
     }
 

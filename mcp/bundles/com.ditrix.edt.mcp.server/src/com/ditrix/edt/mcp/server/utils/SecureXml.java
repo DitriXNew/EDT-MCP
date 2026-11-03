@@ -26,6 +26,19 @@ public final class SecureXml
     {
     }
 
+    /** Hardened streaming reader for XML inspections that need original character positions. */
+    public static javax.xml.stream.XMLInputFactory streamFactory()
+    {
+        javax.xml.stream.XMLInputFactory factory = javax.xml.stream.XMLInputFactory.newFactory();
+        factory.setProperty(javax.xml.stream.XMLInputFactory.SUPPORT_DTD, false);
+        factory.setProperty(javax.xml.stream.XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
+        factory.setProperty(javax.xml.stream.XMLInputFactory.IS_COALESCING, true);
+        factory.setXMLResolver((publicId, systemId, baseUri, namespace) -> {
+            throw new javax.xml.stream.XMLStreamException("External XML resources are not allowed");
+        });
+        return factory;
+    }
+
     /**
      * A namespace-aware factory with DOCTYPE declarations rejected and every external-entity,
      * DTD and schema access path switched off.

@@ -304,7 +304,12 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                     {
                         if (object instanceof IBmObject && ((IBmObject)object).bmIsTop())
                         {
-                            addModelResource(resources, object, fs);
+                            JsonObject resource = addModelResource(resources, object, fs);
+                            if ("roleRights".equals(selected.get("kind").getAsString())
+                                && object instanceof com._1c.g5.v8.dt.rights.model.RoleDescription)
+                            {
+                                resource.addProperty("rlsObject", created);
+                            }
                         }
                     }
                 }
@@ -453,7 +458,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         return manifest;
     }
 
-    private static void addModelResource(JsonArray resources, EObject object, IProjectFileSystemSupport fs)
+    private static JsonObject addModelResource(JsonArray resources, EObject object, IProjectFileSystemSupport fs)
     {
         IFile file = fs.getFile(object);
         if (file == null)
@@ -479,6 +484,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         resource.addProperty("modeled", true);
         resource.addProperty("modelFqn", ((IBmObject)object).bmGetFqn());
         resource.addProperty("modelHash", ContentHash.of(MetadataClonePlan.modelFingerprint(object)));
+        return resource;
     }
 
     private static ToolResult answer(MetadataClonePlan preview, String newName)
@@ -651,6 +657,13 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 {
                     references.addAll(MetadataClonePlan.textReferences(file.getProjectRelativePath().toPortableString(),
                         text, resultString(response, "sourceFqn")));
+                }
+                if (resource.has("rlsObject"))
+                {
+                    references.addAll(com.ditrix.edt.mcp.server.utils.MetadataCloneRlsReferences.find(
+                        file.getProjectRelativePath().toPortableString(), text, resultString(response, "sourceFqn"),
+                        resource.get("rlsObject").getAsString()));
+                    resource.remove("rlsObject");
                 }
                 resource.addProperty("verified", true);
                 resource.remove("modelHash");
