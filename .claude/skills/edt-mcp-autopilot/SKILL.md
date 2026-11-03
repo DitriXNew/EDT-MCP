@@ -32,6 +32,15 @@ until answered (Phase 4 gate). Everything else proceeds on its own.
 - **Skip-bias.** Every agent brief ends with: *"no behaviour change unless the spec says so;
   if the cited code is actually meaningful or risky, SKIP and report instead of forcing a
   change."*
+- **Watch every running worker every 5-10 minutes.** A worker can die silently (provider
+  capacity, a crash) or hang; waiting only for its result file hides that for as long as you
+  wait. Check its log for growth and for an error tail, and resume a dead or idle worker at once.
+- **Brief workers with the build ratchets.** A worker that runs only targeted tests misses the
+  ratchets new work trips (generated tool docs, guide size, preset groups, schema parity —
+  the table in `edt-mcp-ready-to-deploy` step 3). Name them in the brief and have it run the
+  FULL unit suite on top of current master before handing off.
+- **Incidental defects.** A defect outside the task is fixed in place when cheap and safe, or
+  parked as a local kanban card under the incidental-defects epic — never silently dropped.
 
 ## Checklist (create one todo per phase)
 
