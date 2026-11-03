@@ -35,6 +35,7 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.Picture;
 import com._1c.g5.v8.dt.mcore.PictureRef;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -54,11 +55,11 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         JsonObject result = run(FORM_FQN);
 
         assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertEquals(List.of(mdForm, logo), adoptedSources);
+        assertEquals(List.of(logo, mdForm), adoptedSources);
         assertNames(result, "found", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
-        verify(models).forceExport(dtExtension,
-            List.of("Catalog.Goods", "CommonPicture.Logo", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        verify(models).forceExport(dtExtension, List.of("CommonPicture.Logo", "Configuration"));
+        verify(models).forceExport(dtExtension, List.of("Catalog.Goods", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(List.of("tests"), scope.writtenProjects()); //$NON-NLS-1$
         assertTrue(scope.exportedTopObjects("tests").contains("CommonPicture.Logo")); //$NON-NLS-1$ //$NON-NLS-2$
         verify(baseModel, never()).execute(any());
@@ -76,7 +77,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         baseReadRoot = common;
 
         JsonObject result = run("CommonForm.Dashboard"); //$NON-NLS-1$
-        assertEquals(List.of(common, logo), adoptedSources);
+        assertEquals(List.of(logo, common), adoptedSources);
         assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -130,6 +131,10 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         copy.setForm(edited);
         copies.put(mdForm, copy);
         extensionReadRoot = copy;
+        Catalog owner = MD.createCatalog();
+        owner.setName(goods.getName());
+        owner.getForms().add(copy);
+        nativeConfig.getCatalogs().add(owner);
         when(extensionTx.getTopObjectByFqn("Configuration")).thenReturn((IBmObject)nativeConfig); //$NON-NLS-1$
 
         JsonObject result = run(FORM_FQN);
@@ -147,6 +152,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         URI uri = URI.createURI("bm:/extension#Catalog.Goods.Form.Item"); //$NON-NLS-1$
         ((InternalEObject)proxy).eSetProxyURI(uri);
         copies.put(mdForm, proxy);
+        extensionReadRoot = mdForm;
         when(extensionTx.getObjectByUri(uri)).thenReturn((IBmObject)mdForm);
 
         JsonObject result = run(FORM_FQN);
@@ -169,7 +175,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         form.getItems().add(field);
 
         JsonObject result = run(FORM_FQN);
-        assertEquals(List.of(mdForm, logo), adoptedSources);
+        assertEquals(List.of(logo, mdForm), adoptedSources);
         assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -187,7 +193,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         form.getItems().add(item);
 
         JsonObject result = run(FORM_FQN);
-        assertEquals(List.of(mdForm, logo), adoptedSources);
+        assertEquals(List.of(logo, mdForm), adoptedSources);
         assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -237,7 +243,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         JsonObject result = run(FORM_FQN);
         assertNames(result, "found", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNames(result, "unresolved"); //$NON-NLS-1$
-        assertEquals(List.of(mdForm, logo), adoptedSources);
+        assertEquals(List.of(logo, mdForm), adoptedSources);
     }
 
     @Test
@@ -274,7 +280,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
             + russianGoods + ".\u0424\u043e\u0440\u043c\u0430." + russianItem; //$NON-NLS-1$
         JsonObject again = run(russian);
         assertNames(again, "alreadyPresent", "CommonPicture." + russianLogo); //$NON-NLS-1$ //$NON-NLS-2$
-        verify(adopter, times(1)).adoptAndAttach(anyList(), eq(target), any());
+        verify(adopter, times(2)).adoptAndAttach(anyList(), eq(target), any());
     }
 
     @Test

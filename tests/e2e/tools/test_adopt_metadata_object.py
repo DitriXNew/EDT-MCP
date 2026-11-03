@@ -644,6 +644,9 @@ def test_readoption_reads_extension_item_form_instead_of_base_only_picture():
     form_disk = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
     extension_before = read_fixture_file(TESTS_PROJECT_REL, form_disk)
     try:
+        assert_ok(call("clean_project", {"projectName": TESTS_PROJECT}),
+                  "reload the persisted extension form before testing base-only references")
+        settle_or_fail("reading the persisted extension form")
         assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": picture_fqn}),
                   "seed a picture referenced only by the base form")
         settle_or_fail("preparing the picture-adoption fixture")
@@ -722,7 +725,7 @@ def test_common_form_without_pictures_has_empty_dependencies():
     fqn = "CommonForm." + name
     try:
         assert_ok(call("create_metadata", {
-            "projectName": PROJECT, "fqn": fqn, "generateContent": True,
+            "projectName": PROJECT, "fqn": fqn,
         }), "seed a common form")
         settle_or_fail("adopting a common form")
         result = call("adopt_metadata_object", {
@@ -749,4 +752,8 @@ def _assert_no_adoption_errors(*fqns):
         "projectName": TESTS_PROJECT, "objectFqns": list(fqns), "severity": "ERRORS",
     })
     assert_ok(checked, "validate adopted form and picture dependencies")
-    assert_contains(checked.text, "# No Errors Found", "adopted form and pictures must validate cleanly")
+    payload = checked.structured
+    report = payload.get("report") if isinstance(payload, dict) else checked.text
+    assert isinstance(report, str), "missing validation report: %r / %r" % (payload, checked.text)
+    assert_contains(report, "# No Errors Found",
+                    "adopted form and pictures must validate cleanly; actual report:\n" + report)

@@ -16,9 +16,14 @@ import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com.ditrix.edt.mcp.server.Activator;
 
 /** Read-only CommonPicture dependencies of a metadata form. */
 public final class FormPictureDependencies
@@ -43,28 +48,42 @@ public final class FormPictureDependencies
     }
 
     /**
-     * Re-fetches the source inside its model's read transaction, including an adopted-copy proxy.
+     * Reads the selected project's persisted metadata and external form top object by address.
      *
      * @param model the model owning the source
-     * @param source the global-context object or proxy returned by the platform adopter
+     * @param fqn the form's metadata address, independent of any cross-project lookup proxy
      * @return the dependency names
      */
-    public static Result collect(IBmModel model, EObject source)
+    public static Result collectPersisted(IBmModel model, String fqn)
     {
-        if (!(source instanceof BasicForm))
-        {
-            return collect((EObject)null);
-        }
         return BmTransactions.read(model, "adopt_metadata_object: read form pictures", (tx, monitor) -> { //$NON-NLS-1$
-            URI uri = source.eIsProxy() ? ((InternalEObject)source).eProxyURI() : null;
-            long id = uri == null && source instanceof IBmObject ? ((IBmObject)source).bmGetId() : 0L;
-            EObject inTx = uri != null ? (EObject)tx.getObjectByUri(uri) : (EObject)tx.getObjectById(id);
-            if (inTx == null || inTx.eIsProxy())
+            IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+            MdObject mdForm = root instanceof Configuration ? MetadataNodeResolver.resolveAddress(
+                MetadataScope.ofConfiguration((Configuration)root), fqn, false) : null;
+            ITopObjectFqnGenerator generator = Activator.getDefault().getTopObjectFqnGenerator();
+            if (!(mdForm instanceof BasicForm) || generator == null)
             {
-                throw new IllegalStateException("The form source could not be read. Wait for the project " //$NON-NLS-1$
-                    + "to finish loading, then retry adopt_metadata_object."); //$NON-NLS-1$
+                throw new IllegalStateException("The persisted form '" + fqn //$NON-NLS-1$
+                    + "' could not be read. Save the form and wait for the project to finish loading, then retry."); //$NON-NLS-1$
             }
-            return collect(inTx);
+            String contentFqn = generator.generateExternalPropertyFqn(mdForm, MdClassPackage.Literals.BASIC_FORM__FORM);
+            IBmObject content = contentFqn == null ? null : tx.getTopObjectByFqn(contentFqn);
+            if (content != null && content.eIsProxy())
+            {
+                return new Result(Set.of(), Set.of("Form content: " + ((InternalEObject)content).eProxyURI())); //$NON-NLS-1$
+            }
+            if (content == null
+                || tx.getPlatformTransaction().getContainingDataStore((IBmObject)mdForm) != tx.getNamespace().getPrimaryStore()
+                || tx.getPlatformTransaction().getContainingDataStore(content) != tx.getNamespace().getPrimaryStore())
+            {
+                throw new IllegalStateException("Persisted form content '" + contentFqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                    + " is unavailable in this project. Save the extension form and reload with clean_project, then retry."); //$NON-NLS-1$
+            }
+            Set<String> found = new LinkedHashSet<>();
+            Set<String> unresolved = new LinkedHashSet<>();
+            collectPictures(mdForm, found, unresolved);
+            collectPictures(content, found, unresolved);
+            return new Result(found, unresolved);
         });
     }
 

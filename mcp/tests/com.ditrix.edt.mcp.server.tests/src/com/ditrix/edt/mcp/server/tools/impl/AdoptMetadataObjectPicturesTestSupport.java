@@ -34,6 +34,7 @@ import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.IWorkspaceRunnable;
 import org.eclipse.core.runtime.Plugin;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.After;
 import org.junit.Before;
@@ -44,6 +45,9 @@ import org.osgi.framework.ServiceReference;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.core.IBmEngine;
+import com._1c.g5.v8.bm.core.IBmNamespace;
+import com._1c.g5.v8.bm.core.IBmNamespaceDataStore;
+import com._1c.g5.v8.bm.core.IBmPlatformTransaction;
 import com._1c.g5.v8.bm.core.event.BmEvent;
 import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -65,6 +69,9 @@ import com._1c.g5.v8.dt.mcore.PictureRef;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
@@ -115,9 +122,13 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
     protected final Map<Long, IBmObject> committedObjects = new LinkedHashMap<>();
     protected final List<IBmSyncEventListener> listeners = new ArrayList<>();
     protected final List<IBmObject> associated = new ArrayList<>();
+    protected int commits;
     protected boolean writing;
     protected boolean workspaceRule;
     protected boolean emitCommitEvent = true;
+    protected EObject persistedExtensionContent;
+    protected final IBmPlatformTransaction extensionPlatformTx = mock(IBmPlatformTransaction.class);
+    protected final IBmNamespaceDataStore extensionStore = mock(IBmNamespaceDataStore.class);
 
     @Before
     public void setUp() throws Exception
@@ -142,6 +153,32 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         Activator activator = mock(Activator.class);
         when(activator.getV8ProjectManager()).thenReturn(projects);
         when(activator.getBmModelManager()).thenReturn(models);
+        ITopObjectFqnGenerator generator = mock(ITopObjectFqnGenerator.class);
+        when(activator.getTopObjectFqnGenerator()).thenReturn(generator);
+        when(generator.generateExternalPropertyFqn(any(), eq(MdClassPackage.Literals.BASIC_FORM__FORM)))
+            .thenAnswer(inv -> {
+                MdObject md = inv.getArgument(0);
+                return (md instanceof CommonForm ? "CommonForm." + md.getName()
+                    : "Catalog." + goods.getName() + ".Form." + md.getName()) + ".Form"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            });
+        when(baseTx.getTopObjectByFqn(any())).thenAnswer(inv -> "Configuration".equals(inv.getArgument(0)) //$NON-NLS-1$
+            ? (IBmObject)config : baseReadRoot instanceof BasicForm
+                ? (IBmObject)((BasicForm)baseReadRoot).getForm() : null);
+        when(extensionTx.getTopObjectByFqn(any())).thenAnswer(inv ->
+            persistedExtensionContent != null ? (IBmObject)persistedExtensionContent
+                : extensionReadRoot instanceof BasicForm ? (IBmObject)((BasicForm)extensionReadRoot).getForm() : null);
+        IBmNamespace baseNamespace = mock(IBmNamespace.class);
+        IBmPlatformTransaction basePlatformTx = mock(IBmPlatformTransaction.class);
+        IBmNamespaceDataStore baseStore = mock(IBmNamespaceDataStore.class);
+        when(baseTx.getNamespace()).thenReturn(baseNamespace);
+        when(baseTx.getPlatformTransaction()).thenReturn(basePlatformTx);
+        when(baseNamespace.getPrimaryStore()).thenReturn(baseStore);
+        when(basePlatformTx.getContainingDataStore(any())).thenReturn(baseStore);
+        IBmNamespace extensionNamespace = mock(IBmNamespace.class);
+        when(extensionTx.getNamespace()).thenReturn(extensionNamespace);
+        when(extensionTx.getPlatformTransaction()).thenReturn(extensionPlatformTx);
+        when(extensionNamespace.getPrimaryStore()).thenReturn(extensionStore);
+        when(extensionPlatformTx.getContainingDataStore(any())).thenReturn(extensionStore);
         when(models.getModel(baseProject)).thenReturn(baseModel);
         when(models.getModel(extensionProject)).thenReturn(extensionModel);
         when(baseTx.getObjectById(anyLong())).thenAnswer(inv -> baseReadRoot);
@@ -155,6 +192,28 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
 
         Configuration extConfig = mock(Configuration.class, withSettings().extraInterfaces(IBmObject.class));
         when(extConfig.eClass()).thenReturn(MdClassPackage.Literals.CONFIGURATION);
+        Catalog extGoods = mock(Catalog.class);
+        when(extGoods.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(extGoods.getName()).thenAnswer(inv -> goods.getName());
+        when(extGoods.getForms()).thenAnswer(inv -> extensionReadRoot instanceof CatalogForm
+            ? new BasicEList<>(List.of((CatalogForm)extensionReadRoot)) : new BasicEList<>());
+        when(extGoods.eGet(MdClassPackage.Literals.CATALOG__FORMS)).thenAnswer(inv -> extGoods.getForms());
+        when(extConfig.eGet(any())).thenAnswer(inv -> {
+            String feature = ((org.eclipse.emf.ecore.EStructuralFeature)inv.getArgument(0)).getName();
+            if ("catalogs".equals(feature)) //$NON-NLS-1$
+            {
+                return new BasicEList<>(List.of(extGoods));
+            }
+            if ("commonPictures".equals(feature)) //$NON-NLS-1$
+            {
+                return new BasicEList<>(copies.values().stream().filter(CommonPicture.class::isInstance).toList());
+            }
+            if ("commonForms".equals(feature) && extensionReadRoot instanceof CommonForm) //$NON-NLS-1$
+            {
+                return new BasicEList<>(List.of(extensionReadRoot));
+            }
+            return new BasicEList<>();
+        });
         when(((IBmObject)extConfig).bmGetFqn()).thenReturn("Configuration"); //$NON-NLS-1$
         when(extensionTx.getTopObjectByFqn("Configuration")).thenReturn((IBmObject)extConfig); //$NON-NLS-1$
         IBmEngine engine = mock(IBmEngine.class);
@@ -185,6 +244,7 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
             {
                 listener.handleSyncEvent(event);
             }
+            commits++;
             return result;
         });
         IWorkspace workspace = mock(IWorkspace.class);
@@ -321,6 +381,10 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
 
     protected JsonObject run(String fqn, Boolean includePictures) throws Exception
     {
+        if (extensionReadRoot instanceof MdObject && ((MdObject)extensionReadRoot).getName() == null)
+        {
+            ((MdObject)extensionReadRoot).setName(mdForm.getName());
+        }
         scope = new WriteScope();
         String[] response = {null};
         WriteScope.runWithScope(scope, () -> {
@@ -392,6 +456,7 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         MdObject copy = mock(MdObject.class, withSettings().extraInterfaces(IBmObject.class));
         when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)copy);
         when(((IBmObject)copy).bmGetFqn()).thenReturn(fqn);
+        when(copy.getName()).thenReturn(fqn.substring(fqn.indexOf('.') + 1));
         return copy;
     }
 
@@ -400,6 +465,8 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         CommonPicture copy = mock(CommonPicture.class, withSettings().extraInterfaces(IBmObject.class));
         when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)copy);
         when(((IBmObject)copy).bmGetFqn()).thenReturn(fqn);
+        when(copy.getName()).thenReturn(fqn.substring(fqn.indexOf('.') + 1));
+        when(copy.eClass()).thenReturn(MdClassPackage.Literals.COMMON_PICTURE);
         return copy;
     }
 
