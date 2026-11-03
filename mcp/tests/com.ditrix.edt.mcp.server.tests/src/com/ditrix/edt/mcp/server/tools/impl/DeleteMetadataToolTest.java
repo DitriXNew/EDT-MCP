@@ -394,6 +394,19 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void testExpectedHashIsOptionalAndExplainsItsScopeAtTheWireBoundary()
+    {
+        DeleteMetadataTool tool = new DeleteMetadataTool();
+        JsonObject schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject();
+        assertFalse(schema.getAsJsonArray("required").toString().contains("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        String compacted = com.ditrix.edt.mcp.server.protocol.InputSchemaCompactor.compact(
+            tool.getName(), schema).toString();
+        assertTrue(compacted, compacted.contains("preview's contentHash")); //$NON-NLS-1$
+        assertTrue(compacted, compacted.contains("Omit to use the current scope")); //$NON-NLS-1$
+        assertTrue(tool.getOutputSchema().contains("\"contentHash\"")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testOutputSchemaDocumentsBlockedAction()
     {
         String schema = new DeleteMetadataTool().getOutputSchema();
@@ -1293,7 +1306,7 @@ public class DeleteMetadataToolTest
             RecordingWrite write = new RecordingWrite();
             String result = toolAnswering(refused).gateFormMemberDelete(
                 "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
-                columnRef(), false, previewWithDescendants(0), write);
+                columnRef(), false, previewWithDescendants(0), null, write);
             assertEquals("a refused member delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
                 0, write.calls);
             assertTrue(result.contains("error")); //$NON-NLS-1$
@@ -1302,7 +1315,7 @@ public class DeleteMetadataToolTest
         RecordingWrite allowed = new RecordingWrite();
         String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormMemberDelete(
             "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
-            columnRef(), false, previewWithDescendants(2), allowed);
+            columnRef(), false, previewWithDescendants(2), null, allowed);
         assertEquals("an allowed member delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
         assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
     }
@@ -1590,7 +1603,7 @@ public class DeleteMetadataToolTest
             seenSubtitle[0] = preview.getSubtitle();
             return DestructiveConsentGate.ConsentDecision.REJECT;
         }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Field.Price", //$NON-NLS-1$
-            columnRef(), false, data, new RecordingWrite());
+            columnRef(), false, data, null, new RecordingWrite());
 
         assertTrue("the prompt must name what it actually found: " + seenSubtitle[0], //$NON-NLS-1$
             seenSubtitle[0].contains("1 FormGroup") && seenSubtitle[0].contains("1 EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1809,7 +1822,7 @@ public class DeleteMetadataToolTest
             seen[0] = preview.getTotalCount();
             return DestructiveConsentGate.ConsentDecision.REJECT;
         }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
-            columnRef(), false, previewWithDescendants(3), new RecordingWrite());
+            columnRef(), false, previewWithDescendants(3), null, new RecordingWrite());
         assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
     }
 

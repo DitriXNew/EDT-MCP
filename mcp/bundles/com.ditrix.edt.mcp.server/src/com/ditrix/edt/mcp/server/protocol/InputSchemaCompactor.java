@@ -334,6 +334,8 @@ public final class InputSchemaCompactor
         // "failed" and retries - or starts editing - while the first rename is still mutating.
         keep.put("rename_metadata_object", //$NON-NLS-1$
             asSet("expectedHash", "timeout", "waitSeconds", "textOccurrences")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Omitting this token authorizes the current form-attribute scope, not the earlier preview.
+        keep.put("delete_metadata", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
         // An OPTIONAL parameter whose omission widens the blast radius to the whole
         // workspace: without projectName, clean_project rebuilds EVERY EDT project and
         // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to
