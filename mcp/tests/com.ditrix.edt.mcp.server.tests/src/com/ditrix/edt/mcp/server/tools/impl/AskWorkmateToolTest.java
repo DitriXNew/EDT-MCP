@@ -457,7 +457,8 @@ public class AskWorkmateToolTest
         String withPreamble = sent.get();
         assertTrue(withPreamble.contains("edt.mcp.bridge=v1")); //$NON-NLS-1$
         assertTrue(withPreamble.contains("java.util.function.BiFunction")); //$NON-NLS-1$
-        assertTrue(withPreamble.contains("jshell_edt_canonical_imports")); //$NON-NLS-1$
+        assertTrue(withPreamble.contains("JShellManual (manual_id active_workbench)")); //$NON-NLS-1$
+        assertTrue(withPreamble.contains("then JShellSession, then JShell with scope=eclipse")); //$NON-NLS-1$
         // The question itself must survive verbatim and come last.
         assertTrue(withPreamble.endsWith("Question:\nWhich catalogs exist?")); //$NON-NLS-1$
 
