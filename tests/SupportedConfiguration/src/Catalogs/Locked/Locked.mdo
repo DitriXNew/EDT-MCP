@@ -48,4 +48,8 @@
     <fullTextSearch>Use</fullTextSearch>
     <dataHistory>Use</dataHistory>
   </attributes>
+  <templates uuid="6456c144-c2fe-443f-a1de-3250743c3826">
+    <name>Text826</name>
+    <templateType>TextDocument</templateType>
+  </templates>
 </mdclass:Catalog>

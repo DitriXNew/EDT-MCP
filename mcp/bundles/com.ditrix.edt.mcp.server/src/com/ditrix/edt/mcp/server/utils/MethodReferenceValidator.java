@@ -340,8 +340,20 @@ public final class MethodReferenceValidator
         // module tolerantly (e.g. a case difference), but the folder on disk carries the metadata
         // name's exact casing - building the path from the raw input would miss the file on a
         // case-sensitive filesystem and mis-report the method as missing.
-        List<String> lines = readModuleLines(project, module.getName());
-        return decide(module, parsed.moduleName, lines, parsed.methodName, propertyLabel);
+        try
+        {
+            List<String> lines = readModuleLines(project, module.getName());
+            return decide(module, parsed.moduleName, lines, parsed.methodName, propertyLabel);
+        }
+        catch (RuntimeException e)
+        {
+            if (Refusals.messageOf(e) == null)
+            {
+                throw e;
+            }
+            Refusals.log("Method-reference module resolution refused", e); //$NON-NLS-1$
+            return ToolResult.error(Refusals.messageOf(e)).toJson();
+        }
     }
 
     /**

@@ -32,7 +32,7 @@ import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
  * <p>
  * Reports: listening port, MCP protocol version, plugin and EDT version, the
  * enabled/total tool counts, the {@code plainTextMode} and {@code checksFolder}
- * preference flags, the startup, requested and runtime-forced states of the two form-render modes
+ * preference flags, the startup modes and requested properties of the two form-render modes
  * ({@code -DnativeFormBufferedLayoutRender} / {@code -DnativeFormLayoutRender}),
  * and whether authentication is enabled.
  * <p>
@@ -102,9 +102,8 @@ public class GetServerStatusTool implements IMcpTool
             .booleanProperty("authEnabled", "Whether bearer-token authentication is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("formRenderFlags", //$NON-NLS-1$
                 "atStartup is the mode when this plugin activated; requested is the current " //$NON-NLS-1$
-                    + "system property; forcedAtRuntime marks a later live-mode change, which " //$NON-NLS-1$
-                    + "reaches the renderer only if it preceded EDT's layout-service init - not " //$NON-NLS-1$
-                    + "observable from here, so none of the three states the effective mode") //$NON-NLS-1$
+                    + "system property. EDT binds these modes at class initialization; changing them " //$NON-NLS-1$
+                    + "requires an EDT restart") //$NON-NLS-1$
             .build();
     }
 
@@ -172,16 +171,14 @@ public class GetServerStatusTool implements IMcpTool
             result.put("checksFolderConfigured", checksFolderConfigured); //$NON-NLS-1$
             result.put("authEnabled", authEnabled); //$NON-NLS-1$
 
-            // EDT-startup render modes, current live modes and raw requested System properties:
+            // EDT-startup render modes and raw requested System properties:
             // the diagnostic for a blank get_form_screenshot / get_form_layout_snapshot.
             Map<String, Object> formRenderFlags = new LinkedHashMap<>();
             formRenderFlags.put(FLAG_NATIVE_LAYOUT_RENDER,
                 createRenderFlagState(NativeRenderModeProbe.getStartupNativeRenderMode(),
-                    NativeRenderModeProbe.getNativeRenderMode(),
                     System.getProperty(FLAG_NATIVE_LAYOUT_RENDER)));
             formRenderFlags.put(FLAG_BUFFERED_LAYOUT_RENDER,
                 createRenderFlagState(NativeRenderModeProbe.getStartupBufferedRenderMode(),
-                    NativeRenderModeProbe.getBufferedRenderMode(),
                     System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             result.put("formRenderFlags", formRenderFlags); //$NON-NLS-1$
 
@@ -195,32 +192,19 @@ public class GetServerStatusTool implements IMcpTool
     }
 
     /**
-     * Builds one render-flag state: the mode at plugin activation, the raw requested system
-     * property, and whether the live mode has since been forced away from it.
-     *
-     * <p>Deliberately NOT called "effective". EDT binds buffered render ONCE: {@code
-     * HippoLayoutService.INSTANCE} is a static final singleton whose constructor creates its
-     * {@code offscreenHandler} if and only if {@code NativeRenderService.isBufferedRender()} held
-     * at that moment, and every later render branches on that field rather than re-reading the
-     * flag. So a runtime force reaches the renderer only when it precedes that class
-     * initialisation - and this tool cannot find out which happened, because reading the
-     * singleton to ask would itself initialise the class and decide the answer. Reporting the
-     * two states we can actually observe, plus the fact that a force happened, is the whole of
-     * what is provable here.</p>
+     * Builds one render-flag state from the mode at MCP activation and the raw requested
+     * system property. EDT reads the flags into static finals at class initialization and
+     * binds its offscreen handler once in {@code HippoLayoutService.INSTANCE}; changing
+     * a property later cannot reconfigure that handler. An EDT restart is required.
      */
     private static Map<String, Object> createRenderFlagState(NativeRenderMode startupMode,
-        NativeRenderMode liveMode, String requested)
+        String requested)
     {
         Map<String, Object> state = new LinkedHashMap<>();
         state.put("atStartup", startupMode.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
         if (requested != null)
         {
             state.put("requested", requested); //$NON-NLS-1$
-        }
-        if (startupMode != NativeRenderMode.UNKNOWN && liveMode != NativeRenderMode.UNKNOWN
-            && startupMode != liveMode)
-        {
-            state.put("forcedAtRuntime", true); //$NON-NLS-1$
         }
         return state;
     }

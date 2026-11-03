@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -16,6 +17,7 @@ import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.Path;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -74,6 +76,35 @@ public final class ProjectContext
             ? null
             : ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         return new ProjectContext(projectName, resolved);
+    }
+
+    /**
+     * Observes a project-relative file directly, without waiting for a workspace rule.
+     *
+     * @return whether the file exists on disk, or {@code null} when it cannot be observed
+     */
+    public static Boolean fileOnDisk(String projectName, String path)
+    {
+        if (projectName == null || path == null)
+        {
+            return null;
+        }
+        try
+        {
+            ProjectContext context = of(projectName);
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            if (location == null)
+            {
+                return null;
+            }
+            var file = location.toFile().toPath();
+            return Files.exists(file) ? Boolean.TRUE : Files.notExists(file) ? Boolean.FALSE : null;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return null;
+        }
     }
 
     /**
@@ -282,8 +313,7 @@ public final class ProjectContext
         if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
         {
             return new ConfigurationResult(project, null, null,
-                ToolResult.error(noConfigurationMessage(projectName, scope.isExternalObjects()))
-                    .toJson());
+                ToolResult.error(noConfigurationMessage(projectName, project, scope)).toJson());
         }
 
         return new ConfigurationResult(project, config, scope, null);
@@ -323,6 +353,19 @@ public final class ProjectContext
 
     public static String noConfigurationMessage(String projectName, boolean externalObjects)
     {
+        return noConfigurationMessage(projectName, externalObjects, null);
+    }
+
+    /** Resolves context advice only for a configuration project, never for external objects. */
+    public static String noConfigurationMessage(String projectName, IProject project, MetadataScope scope)
+    {
+        return noConfigurationMessage(projectName, scope.isExternalObjects(),
+            scope.isExternalObjects() ? null : ProjectStateChecker.unstartedContextReasonOrNull(project));
+    }
+
+    /** Adds a context recovery sentence only to the generic configuration refusal. */
+    public static String noConfigurationMessage(String projectName, boolean externalObjects, String reasonOrNull)
+    {
         if (externalObjects)
         {
             return "Project '" + projectName + "' is an EXTERNAL-OBJECTS project with no base " //$NON-NLS-1$ //$NON-NLS-2$
@@ -331,7 +374,8 @@ public final class ProjectContext
                 + "create_metadata / modify_metadata / delete_metadata; link the project to a " //$NON-NLS-1$
                 + "configuration project to use the rest."; //$NON-NLS-1$
         }
-        return "Could not get configuration for project: " + projectName; //$NON-NLS-1$
+        String message = "Could not get configuration for project: " + projectName; //$NON-NLS-1$
+        return reasonOrNull == null ? message : message + ". " + reasonOrNull; //$NON-NLS-1$
     }
 
     /**

@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -20,6 +22,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
+import com.ditrix.edt.mcp.server.utils.LifecycleWaiter.ProjectReleaseWaiter;
 
 /**
  * Tool to remove an EDT project from the workspace, optionally deleting its
@@ -39,6 +43,9 @@ public class DeleteProjectTool implements IMcpTool
 
     /** Input/output param: whether the project's disk files are deleted too. */
     private static final String KEY_DELETE_CONTENT = "deleteContent"; //$NON-NLS-1$
+
+    /** Bound on asynchronous EDT context release after the Eclipse resource is deleted. */
+    static final long RELEASE_TIMEOUT_MS = 30_000L;
 
     @Override
     public String getName()
@@ -78,6 +85,7 @@ public class DeleteProjectTool implements IMcpTool
                 "true on a preview (no change made); absent/false once deleted.") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Name of the targeted project.") //$NON-NLS-1$
             .booleanProperty(KEY_DELETE_CONTENT, "Whether disk files were (or would be) deleted too.") //$NON-NLS-1$
+            .stringProperty("state", "EDT context release: released, releasing, or unverified; absent on preview.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
@@ -126,9 +134,9 @@ public class DeleteProjectTool implements IMcpTool
                 .toJson();
         }
 
-        // Destructive-operation consent gate: the LAST check before the project is removed. On ALLOW the
-        // behaviour is byte-identical, on REJECT nothing is mutated. Headless / env-bypass / non-ASK
-        // never block. The project is confirmed to exist above, so the preview names a real target.
+        // The final consent check before deletion. A refusal leaves the project untouched.
+        // Headless / env-bypass / non-ASK never block. The project exists, so the preview names
+        // a real target; after consent, the release listener is armed before the deletion.
         ConsentPreview preview = new ConsentPreview(
             "Delete project", //$NON-NLS-1$
             deleteContent
@@ -144,20 +152,50 @@ public class DeleteProjectTool implements IMcpTool
             return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
 
+        return deleteProject(project, projectName, deleteContent,
+            () -> {
+                ProjectReleaseWaiter waiter = LifecycleWaiter.prepareForRelease(project, projectName);
+                return waiter == null ? null : new IReleaseWait()
+                {
+                    @Override
+                    public boolean await(long timeoutMs)
+                    {
+                        return waiter.await(timeoutMs);
+                    }
+
+                    @Override
+                    public void cleanup()
+                    {
+                        waiter.cleanup();
+                    }
+                };
+            }, () -> project.delete(deleteContent, true, new NullProgressMonitor()));
+    }
+
+    /** The platform mutation and its pre-armed release wait, shared with headless tests. */
+    static String deleteProject(IProject project, String projectName, boolean deleteContent,
+        Supplier<IReleaseWait> prepare, IProjectDeleter deleter)
+    {
+        IReleaseWait waiter;
+        try
+        {
+            waiter = prepare.get();
+        }
+        catch (Exception e)
+        {
+            String message = "Failed to prepare EDT context release verification for project '" + projectName //$NON-NLS-1$
+                + "': " + e.getMessage() + ". Nothing was deleted; retry delete_project when lifecycle " //$NON-NLS-1$ //$NON-NLS-2$
+                + "services are available."; //$NON-NLS-1$
+            Activator.logWarning(message);
+            return ToolResult.error(message).toJson();
+        }
         try
         {
             Activator.logInfo("Delete project: name=" + projectName //$NON-NLS-1$
                 + ", deleteContent=" + deleteContent); //$NON-NLS-1$
-            // force=true so a project that is slightly out of sync with disk still deletes.
-            project.delete(deleteContent, true, new NullProgressMonitor());
-
-            return ToolResult.success()
-                .put(McpKeys.ACTION, "deleted") //$NON-NLS-1$
-                .put(McpKeys.PROJECT, projectName)
-                .put(KEY_DELETE_CONTENT, deleteContent)
-                .put(McpKeys.MESSAGE, "Project '" + projectName + "' removed from the workspace" //$NON-NLS-1$ //$NON-NLS-2$
-                    + (deleteContent ? " (files deleted from disk)." : " (files kept on disk).")) //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
+            deleter.delete();
+            boolean released = waiter != null && waiter.await(RELEASE_TIMEOUT_MS);
+            return deleteOutcome(projectName, deleteContent, released, waiter != null);
         }
         catch (Exception e)
         {
@@ -169,5 +207,60 @@ public class DeleteProjectTool implements IMcpTool
             return (!project.exists() ? ToolResult.errorAfterMutation(message)
                 : ToolResult.errorWithUnknownMutationOutcome(message)).toJson();
         }
+        finally
+        {
+            if (waiter != null)
+            {
+                waiter.cleanup();
+            }
+        }
+    }
+
+    /** Reports resource deletion separately from the platform's asynchronous context release. */
+    static String deleteOutcome(String projectName, boolean deleteContent, boolean released, boolean verifiable)
+    {
+        String state;
+        String message;
+        if (verifiable && released)
+        {
+            state = "released"; //$NON-NLS-1$
+            message = "Project '" + projectName + "' removed from the workspace" //$NON-NLS-1$ //$NON-NLS-2$
+                + (deleteContent ? " (files deleted from disk)." : " (files kept on disk).") //$NON-NLS-1$ //$NON-NLS-2$
+                + " EDT has released its project context."; //$NON-NLS-1$
+        }
+        else
+        {
+            state = verifiable ? "releasing" : "unverified"; //$NON-NLS-1$ //$NON-NLS-2$
+            message = "Project '" + projectName + "' files were " + (deleteContent ? "deleted" : "kept") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                + " and the project is gone from the workspace, but " //$NON-NLS-1$
+                + (verifiable ? "EDT is still releasing its project context after " //$NON-NLS-1$
+                    + TimeUnit.MILLISECONDS.toSeconds(RELEASE_TIMEOUT_MS) + " s - it was not released yet. " //$NON-NLS-1$
+                    : "EDT context release could not be verified because lifecycle services are unavailable. ") //$NON-NLS-1$
+                + "Do not clean_project its base or create_project the same name yet: EDT may try to restart " //$NON-NLS-1$
+                + "the deleted project and fail. list_projects shows workspace resources, so absence there " //$NON-NLS-1$
+                + "does not prove context release. Let EDT finish its background work; if release cannot be " //$NON-NLS-1$
+                + "verified, restart EDT before retrying."; //$NON-NLS-1$
+            Activator.logWarning(message);
+        }
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "deleted") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(KEY_DELETE_CONTENT, deleteContent)
+            .put("state", state) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, message)
+            .toJson();
+    }
+
+    @FunctionalInterface
+    interface IProjectDeleter
+    {
+        void delete() throws Exception;
+    }
+
+    interface IReleaseWait
+    {
+        boolean await(long timeoutMs);
+
+        void cleanup();
     }
 }

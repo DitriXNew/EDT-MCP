@@ -38,6 +38,9 @@ import com.google.gson.JsonObject;
  */
 public final class DcsDynamicListWriter
 {
+    /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
+    private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
+        ThreadLocal.withInitial(ParseScratch::new);
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
 
@@ -244,43 +247,43 @@ public final class DcsDynamicListWriter
         if (body.has("queryText")) //$NON-NLS-1$
         {
             result.queryText = stringValue(body, "queryText", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (valueError != null)
+            if (parseScratch().valueError != null)
             {
-                return ScalarResult.failure(valueError);
+                return ScalarResult.failure(parseScratch().valueError);
             }
             result.queryTextTouched = true;
         }
         if (body.has("customQuery")) //$NON-NLS-1$
         {
             result.customQuery = bool(body, "customQuery", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (valueError != null)
+            if (parseScratch().valueError != null)
             {
-                return ScalarResult.failure(valueError);
+                return ScalarResult.failure(parseScratch().valueError);
             }
         }
         if (body.has("mainTable")) //$NON-NLS-1$
         {
             result.mainTable = requiredString(body, "mainTable", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (valueError != null)
+            if (parseScratch().valueError != null)
             {
-                return ScalarResult.failure(valueError);
+                return ScalarResult.failure(parseScratch().valueError);
             }
         }
         result.dynamicDataRead = optionalBool(body, "dynamicDataRead", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (valueError != null) return ScalarResult.failure(valueError);
+        if (parseScratch().valueError != null) return ScalarResult.failure(parseScratch().valueError);
         result.autoFillAvailableFields = optionalBool(body, "autoFillAvailableFields", //$NON-NLS-1$
             "dynamic-list body"); //$NON-NLS-1$
-        if (valueError != null) return ScalarResult.failure(valueError);
+        if (parseScratch().valueError != null) return ScalarResult.failure(parseScratch().valueError);
         result.autoSaveUserSettings = optionalBool(body, "autoSaveUserSettings", //$NON-NLS-1$
             "dynamic-list body"); //$NON-NLS-1$
-        if (valueError != null) return ScalarResult.failure(valueError);
+        if (parseScratch().valueError != null) return ScalarResult.failure(parseScratch().valueError);
         result.getInvisibleFieldPresentations = optionalBool(body,
             "getInvisibleFieldPresentations", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (valueError != null) return ScalarResult.failure(valueError);
+        if (parseScratch().valueError != null) return ScalarResult.failure(parseScratch().valueError);
         if (body.has("keyType")) //$NON-NLS-1$
         {
             String token = requiredString(body, "keyType", "dynamic-list body"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (valueError != null) return ScalarResult.failure(valueError);
+            if (parseScratch().valueError != null) return ScalarResult.failure(parseScratch().valueError);
             result.keyType = resolveEnum(token, DynamicListKeyType.values());
             if (result.keyType == null)
             {
@@ -380,7 +383,15 @@ public final class DcsDynamicListWriter
         return null;
     }
 
-    private static String valueError;
+    private static ParseScratch parseScratch()
+    {
+        return PARSE_SCRATCH.get();
+    }
+
+    private static final class ParseScratch
+    {
+        private String valueError;
+    }
 
     private static String requiredString(JsonObject body, String member, String path)
     {
@@ -388,10 +399,10 @@ public final class DcsDynamicListWriter
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
             || value.getAsString().trim().isEmpty())
         {
-            valueError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().valueError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        valueError = null;
+        parseScratch().valueError = null;
         return value.getAsString();
     }
 
@@ -401,10 +412,10 @@ public final class DcsDynamicListWriter
         if (value == null || !value.isJsonPrimitive()
             || !value.getAsJsonPrimitive().isString())
         {
-            valueError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().valueError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        valueError = null;
+        parseScratch().valueError = null;
         return value.getAsString();
     }
 
@@ -413,10 +424,10 @@ public final class DcsDynamicListWriter
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
         {
-            valueError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().valueError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        valueError = null;
+        parseScratch().valueError = null;
         return Boolean.valueOf(value.getAsBoolean());
     }
 
@@ -424,7 +435,7 @@ public final class DcsDynamicListWriter
     {
         if (!body.has(member))
         {
-            valueError = null;
+            parseScratch().valueError = null;
             return null;
         }
         return bool(body, member, path);

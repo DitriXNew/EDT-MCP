@@ -1,6 +1,6 @@
 # get_tags
 
-Get list of all tags defined in the project. Tags are user-defined labels for organizing metadata objects. Returns tag name, color, description, and number of assigned objects.
+Discover user-defined tags used to organize project metadata. Parameters and examples: get_tool_guide('get_tags').
 
 ## Parameters
 | Parameter | Required | Type | Description |

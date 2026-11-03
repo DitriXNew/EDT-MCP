@@ -407,21 +407,11 @@ public final class DebugServerTargetSupport
      *
      * <p><strong>A live CLIENT-typed thread is required.</strong> The
      * application id alone does NOT discriminate a thin-CLIENT debug session from a
-     * 1C standalone-SERVER (or profiling) target: both a "Автономный сервер …" server
-     * target and a thin client of the same project resolve to the SAME
-     * {@code ServerApplication.<proj>} app id. And mere thread <em>liveness</em> is
-     * not enough either: a standalone server launched in DEBUG mode (ibsrv with
-     * debugging on) carries a LIVE thread typed {@code SERVER} (presented as
-     * «Сервер»), so the earlier "a server target carries zero live threads"
-     * assumption mis-classified it as a client session — and
-     * {@code restartIfRunning=true} then terminated the SERVER session and hung on
-     * its restart. The thread's {@code IRuntimeDebugTargetThread.getType()} is the
-     * only reliable kind signal (one impl class serves ALL targets, and the thread
-     * name is just the localized presentation of the type): a same-app-id+project
-     * target matches ONLY when it has at least one non-terminated thread that
-     * classifies as CLIENT-side ({@link #findFirstLiveClientThread} — a thread whose
-     * type {@code DebugTargetTypeUtil.isServer} positively marks as server-side
-     * never counts; unknown/non-1C threads conservatively do).
+     * standalone-server target: it shares the client's application id and project,
+     * and can retain live CLIENT-typed threads after the client has terminated.
+     * {@link #findFirstLiveClientThread} excludes targets owned by a standalone-server
+     * launch before checking thread types. EDT uses the same runtime-target class
+     * hierarchy for both owners, so the target's Java class cannot distinguish them.
      *
      * <p><strong>Scans the UNFILTERED enumeration.</strong> This detect looks for
      * CLIENT sessions — exactly what the {@link #isServerTarget(IDebugTarget)}
@@ -485,11 +475,8 @@ public final class DebugServerTargetSupport
             {
                 continue;
             }
-            // A server/profiling target shares the client's app id+project — and a
-            // DEBUG-mode standalone server even carries a LIVE thread (typed SERVER,
-            // named «Сервер») — so neither the app id nor bare thread liveness makes
-            // it the client's duplicate. Require a live CLIENT-typed thread: only a
-            // session with one is a client worth short-circuiting/restarting.
+            // The shared discriminator checks the owning launch as well as thread type;
+            // client threads on a standalone-server target do not make it a client target.
             if (findFirstLiveClientThread(target) != null)
             {
                 return target;
@@ -718,16 +705,10 @@ public final class DebugServerTargetSupport
 
     /**
      * Finds the first non-terminated {@link IThread} of a target that classifies as
-     * CLIENT-side ({@link #isClientThread}), or {@code null} if the target has none.
-     * This is THE existing-client-session discriminator: one EDT impl
-     * class serves ALL 1C debug targets, so the target itself cannot be told apart —
-     * the {@code IRuntimeDebugTargetThread.getType()} of its live threads is the only
-     * kind signal. A debug-mode standalone server (ibsrv) target carries a LIVE
-     * thread typed {@code SERVER} (presented as «Сервер»), which bare-liveness
-     * checks mis-read as a client session; this finder skips such threads, so a
-     * server session never short-circuits a client launch and is never terminated
-     * by {@code restartIfRunning} / a fresh YAXUnit debug run. Best-effort and fully
-     * guarded — never throws.
+     * CLIENT-side ({@link #isClientThread}), or {@code null} if the target has none
+     * or belongs to a standalone-server launch. Server-owned targets can retain client
+     * threads; their owning launch type takes precedence over those threads. This is
+     * the shared discriminator for existing-client guards. Best-effort; never throws.
      *
      * @param target the target viewed as an Eclipse debug target
      * @return a non-terminated CLIENT-side thread, or {@code null}
@@ -740,6 +721,12 @@ public final class DebugServerTargetSupport
         }
         try
         {
+            ILaunch owningLaunch = target.getLaunch();
+            if (owningLaunch != null && LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID.equals(
+                LaunchConfigUtils.getConfigTypeId(owningLaunch.getLaunchConfiguration())))
+            {
+                return null;
+            }
             for (IThread thread : target.getThreads())
             {
                 if (thread != null && !thread.isTerminated() && isClientThread(thread))

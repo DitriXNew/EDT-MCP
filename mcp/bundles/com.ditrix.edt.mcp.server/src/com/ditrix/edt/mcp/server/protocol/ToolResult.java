@@ -81,6 +81,30 @@ public class ToolResult
         return error(message).put("mutationOutcomeUnknown", true); //$NON-NLS-1$
     }
 
+    /** True only for an explicit boolean success:false; Markdown and malformed JSON are not errors. */
+    public static boolean isErrorPayload(String result)
+    {
+        if (result == null)
+        {
+            return false;
+        }
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(result);
+            if (!parsed.isJsonObject())
+            {
+                return false;
+            }
+            JsonElement success = parsed.getAsJsonObject().get("success"); //$NON-NLS-1$
+            return success != null && success.isJsonPrimitive()
+                && success.getAsJsonPrimitive().isBoolean() && !success.getAsBoolean();
+        }
+        catch (RuntimeException e)
+        {
+            return false;
+        }
+    }
+
     /**
      * Adds the post-mutation marker to an already-built error result.
      *

@@ -38,7 +38,9 @@ import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
 import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
 import com.e1c.g5.v8.dt.check.qfix.IFixManager;
@@ -222,8 +224,9 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         IDtProject dtProject = dtProjectManager.getDtProject(project);
         if (dtProject == null)
         {
-            return ToolResult.error("Project '" + projectName //$NON-NLS-1$
-                + "' is not an EDT project (no IDtProject); quick-fixes apply to configuration/extension projects.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(ProjectStateChecker.withUnstartedContextReason(project,
+                "Project '" + projectName //$NON-NLS-1$
+                + "' is not an EDT project (no IDtProject); quick-fixes apply to configuration/extension projects.")).toJson(); //$NON-NLS-1$
         }
 
         List<MarkerMatch> matches = findMatches(markerManager, checkRepository, project,
@@ -293,7 +296,16 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         String refusal;
         if (chosen.modulePath != null && !chosen.modulePath.isEmpty())
         {
-            IFile file = BslModuleUtils.resolveModuleFile(project, chosen.modulePath);
+            IFile file;
+            try
+            {
+                file = BslModuleUtils.resolveModuleFile(project, chosen.modulePath);
+            }
+            catch (RuntimeException e)
+            {
+                Refusals.log("Failed to resolve quick-fix module", e); //$NON-NLS-1$
+                return ToolResult.error(e.getMessage()).toJson();
+            }
             refusal = file == null
                 ? VendorSupportGuard.uncheckedRefusal(chosen.location(), FIXED, "the module file was not found") //$NON-NLS-1$
                 : VendorSupportGuard.refusalForModuleFile(project, scope, file);

@@ -1,1 +1,24 @@
 Use this when the lean tools/list entry is not enough — it returns the same guide a client gets from the resource guide://<toolName>. Pass the exact tool name (run it on itself: toolName=get_tool_guide) to see a worked example. An unknown name returns an error pointing back to tools/list.
+
+## Reading a large guide
+
+Pass exactly one optional selector, or omit all selectors for the full guide:
+
+- `mode="summary"`: tool description, parameter table, and a table of the guide's `##` headings and anchors. `mode="full"` is the default full text.
+- `section="Setting the data type"`: one whole section, including nested subsections, up to the next heading of the same or higher level. Headings at every level are addressable, including `###` and `####`; the summary lists only `##`. Pass a title or an anchor such as `#setting-the-data-type`. Matching ignores case and treats Russian ё/е alike; pasted heading markers, backticks and extra whitespace in titles are accepted.
+- `query="predefined"`: up to 20 matching lines in document order, each with its enclosing heading, `#anchor` and a trimmed snippet of at most 200 characters plus an ellipsis. The header counts all matching lines and sections; `... (N more)` gives the exact number of matching lines beyond the cap. Search is literal, ignores case and treats Russian ё/е alike, and includes examples and text outside `##` sections. Leading/trailing query whitespace is ignored; use at least two characters. Fetch a complete matching section with its title or anchor.
+
+The selectors `mode`, `section`, and `query` are mutually exclusive, including explicit `mode="full"`. Blank sections and queries are rejected. A query with no matches returns the available headings; an unknown section returns an error with those headings.
+
+Headings inside backtick or tilde code fences are searchable text, not sections. Nested headings remain inside their parent's span and are also individually addressable. Duplicate headings select the first occurrence by title; the unique anchor in a query result (or the summary for `##`) selects a later occurrence. A matching `#anchor` takes priority over a title with the same literal text; an exact title wins before removing pasted heading markers. A document's `#` heading selects its full span, including all subsections.
+
+## Examples
+
+```json
+{"toolName":"modify_metadata","mode":"summary"}
+{"toolName":"modify_metadata","section":"Setting the data type"}
+{"toolName":"modify_metadata","query":"predefined"}
+{"toolName":"modify_metadata","section":"### Adjustable flags (view / edit / userVisible / use)"}
+```
+
+The default call returns the original full renderer output unchanged. The resource `guide://<toolName>` always serves the full guide; the summary includes this resource address.

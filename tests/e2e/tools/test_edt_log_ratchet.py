@@ -23,9 +23,15 @@ are the ones this server writes; a live workspace can belong to a different EDT 
 
 Only entries whose plugin is `com.ditrix.edt.mcp.server` at severity 4 (ERROR), and only
 those stamped at or after this run started. Platform noise is deliberately out of scope: EDT
-logs plenty of its own errors (its Moxel editor touching a stopped namespace, its Xtext
-builder opening a nested transaction, legacy BSL checks throwing) and we neither cause nor
-can fix those. Ours are the ones we own.
+logs plenty of its own errors (its Xtext builder opening a nested transaction, legacy BSL checks
+throwing) and we neither cause nor can fix those. Ours are the ones we own.
+
+The plugin filter is also a blind spot: an entry logged under a PLATFORM plugin can still be
+caused by us. "Moxel editor touching a stopped namespace" (BmNamespaceInactiveException from
+MoxelControl under com._1c.g5.v8.dt.core) once sat in the noise list above, and it was ours -
+get_template_screenshot leaked the off-screen control's listeners (issue #770). That case is
+now checked by its own test in test_get_template_screenshot.py; this ratchet still sees only
+our plugin's entries.
 
 Known, accepted messages live in `edt_log_baseline.txt`, one normalized message per line.
 Most of what is in there is a VALIDATION REFUSAL logged at ERROR - a tool correctly rejecting
@@ -42,7 +48,8 @@ import re
 import uuid
 
 from harness import (
-    RUN_STARTED_AT, HARNESS_DIR, E2ESkip, call, e2e_test, _fail, _workspace_dir,
+    RUN_STARTED_AT, HARNESS_DIR, E2ESkip, building_refusals_seen, call, e2e_test, _fail,
+    _workspace_dir,
 )
 
 OUR_PLUGIN = "com.ditrix.edt.mcp.server"
@@ -216,3 +223,102 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
           "acceptable.\n%s"
           % (len(new), "y" if len(new) == 1 else "ies", OUR_PLUGIN, workspace,
              BASELINE_FILE, "\n".join(lines)))
+
+
+# -- Issue #769: the "still building" refusal must name the build state, not a Java object ------
+#
+# ProjectStateChecker appended DerivedDataStatus.toString() to the refusal. The platform class does
+# not override it, so the client got "Project is building: com._1c.g5.v8.derived.DerivedDataStatus@
+# 6749e34c" - a JVM identity that changes on every call - and the EDT log carried one such WARNING
+# per refused call. Nothing noticed, because call() retries every building refusal away and no
+# assertion ever reads one. This test reads them: the texts call() retried (recorded by the
+# harness) and our plugin's own log lines of this run, which include the refusals of the reset
+# cycles and of the final cleanup - it runs after both, as a ratchet.
+# Coverage is opportunistic: this read-only test does not trigger a busy pipeline. A run without a
+# refusal skips and is not positive evidence for issue #769. At stand time, record the pre-deploy
+# DerivedDataStatus@ count as a positive control, then the post-deploy count (expected 0) from NEW
+# entries after redeploy. Historical entries in .log and .bak_*.log are not post-deploy evidence.
+
+# Only the derived-data verdict's own wordings: participant/discovery refusals name projects instead.
+_BUILD_STATE_REFUSAL = re.compile(r"Project is building|Project build in progress")
+# Object.toString() as the JVM renders it - <class>@<hex identity hash> - or the class named at all.
+_JAVA_IDENTITY = re.compile(r"DerivedDataStatus|[A-Za-z_$][\w$]*@[0-9a-fA-F]{4,}\b")
+
+
+def _our_log_messages_this_run(workspace):
+    """The !MESSAGE text of every entry of our plugin stamped this run, at any severity.
+
+    A refusal is logged at WARNING ("Failed tools/call: <tool> - <error>"), so the ERROR-only
+    collector above cannot see it.
+    """
+    metadata = os.path.join(workspace, ".metadata")
+    files = sorted(glob.glob(os.path.join(metadata, ".bak_*.log"))) + \
+        [os.path.join(metadata, ".log")]
+    messages = []
+    for path in files:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError:
+            continue
+        for index, line in enumerate(lines):
+            match = _ENTRY.match(line)
+            if not match or match.group(1) != OUR_PLUGIN:
+                continue
+            try:
+                if _entry_epoch(match.group(4)) < RUN_STARTED_AT - 1:
+                    continue
+            except ValueError:
+                continue
+            for follow in lines[index + 1:index + 3]:
+                if follow.startswith("!MESSAGE"):
+                    messages.append(follow[len("!MESSAGE"):].strip())
+                    break
+    return messages
+
+
+@e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
+def test_building_refusals_name_the_build_state_not_a_java_object_identity():
+    texts = [("response", text) for text in building_refusals_seen()
+             if _BUILD_STATE_REFUSAL.search(text)]
+
+    workspace = _workspace_dir()
+    log_note = "the EDT log was not read (no workspace located)"
+    if workspace is not None:
+        # Same binding as the error ratchet: only a run-unique line of the server's own proves these
+        # files are the ones this server writes.
+        token = _emit_log_probe()
+        messages = _our_log_messages_this_run(workspace)
+        if any(token in message for message in messages):
+            texts += [("EDT log", message) for message in messages
+                      if _BUILD_STATE_REFUSAL.search(message)]
+            log_note = "the EDT log at %s was read" % workspace
+        else:
+            log_note = ("the EDT log at %s does not carry this server's run-unique probe, so it was "
+                        "not used" % workspace)
+
+    if not texts:
+        raise E2ESkip(
+            "no derived-data building refusal was issued during this run (%s), so there was no "
+            "refusal text to check; this ratchet is opportunistic. At stand time record the "
+            "pre-deploy DerivedDataStatus@ count and the post-deploy count (expected 0) from new "
+            "entries after redeploy" % log_note)
+
+    leaks = [(source, text) for source, text in texts if _JAVA_IDENTITY.search(text)]
+    if leaks:
+        sample = "\n".join("  [%s] %s" % (source, text[:300]) for source, text in leaks[:5])
+        _fail(
+            "%d of %d building refusal(s) seen this run carry a Java object identity instead of "
+            "the build state (issue #769: ProjectStateChecker must word the DerivedDataStatus from "
+            "its getters and never call its toString()). %s.\n%s"
+            % (len(leaks), len(texts), log_note, sample))
+
+    # The prefix is a wire contract: call() retries on it and the guides quote it.
+    for source, text in texts:
+        if "Project is building" in text:
+            tail = text.split("Project is building", 1)[1]
+            if not tail.startswith(": ") or re.search(r"\bnull\b", tail):
+                _fail("[%s] a building refusal lost its 'Project is building: <state>' shape or "
+                      "renders a literal null: %s" % (source, text[:300]))

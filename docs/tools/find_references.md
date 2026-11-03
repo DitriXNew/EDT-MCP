@@ -1,6 +1,6 @@
 # find_references
 
-Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the type token may be English or Russian (e.g. 'Catalog.Products' or its Russian spelling). Use this for all USAGES of a symbol; for where it is DEFINED use go_to_definition, for a literal (non-symbol) text scan use search_in_code. Full parameters and examples: call get_tool_guide('find_references').
+Discover where a metadata object is used throughout the configuration and BSL code. Parameters and examples: get_tool_guide('find_references').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -35,6 +35,7 @@ References are grouped by where they were found, e.g.:
 - Wider budget: `{projectName, objectFqn: "Document.SalesOrder", limit: 500}`.
 
 ## Notes & gotchas
+- Before scanning, the tool waits up to 10 s for search-scope projects to become ready (not for an unknown, closed or non-EDT project, which errors at once, and not when called on the EDT UI thread). If adopted copies or the code index still cannot be searched, a `**Scan incomplete:**` paragraph after the count explains the gap and how to retry; the count may be low.
 - An unknown or malformed `objectFqn` (no `Type.Name`, or a type/name that does not exist) returns an error - check the type token and the programmatic name.
 - Resolution is by the object's `Name`, NOT by its synonym; passing a synonym will not match.
 - The result is a hint-limited snapshot: a truncation notice means there are more references than `limit*10` - raise `limit` to see them.

@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Tool to navigate to the definition of a symbol (method, metadata object).
@@ -140,7 +141,7 @@ public class GoToDefinitionTool implements IMcpTool
             }
             catch (Exception e)
             {
-                Activator.logError("Error resolving definition", e); //$NON-NLS-1$
+                Refusals.log("Error resolving definition", e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });

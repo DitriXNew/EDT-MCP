@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -110,7 +109,9 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.StandardCommandGroupResolver;
+import com.ditrix.edt.mcp.server.utils.TableFieldReferences;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -120,7 +121,6 @@ import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
-import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -406,8 +406,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
                 + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash " //$NON-NLS-1$
-                + "with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to " //$NON-NLS-1$
+                "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, " //$NON-NLS-1$
+                + "overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; " //$NON-NLS-1$
+                + "only replace creates a missing file. Replacing an existing file requires expectedHash or " //$NON-NLS-1$
+                + "expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
@@ -1717,6 +1719,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return "Node not found: " + fqn + ". Use 'Type.Name' for a top object, " //$NON-NLS-1$ //$NON-NLS-2$
             + "'Type.Name.Kind.Name' for a member, or '" + ConfigurationRoot.FQN + "' for the " //$NON-NLS-1$ //$NON-NLS-2$
             + "configuration root. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+            + (normFqn != null && normFqn.startsWith("ExternalDataSource.") //$NON-NLS-1$
+                ? " External data source members use 'ExternalDataSource.<X>.Table.<T>(.Field.<F>)' " //$NON-NLS-1$
+                    + "or 'ExternalDataSource.<X>.Function.<F>'." : "") //$NON-NLS-1$ //$NON-NLS-2$
             + MetadataNodeResolver.yoNotFoundHint(normFqn)
             + scope.addressingHint(normFqn);
     }
@@ -2021,6 +2026,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "' no longer exists; re-read get_metadata_details.").toJson());
                 }
                 BasicTemplate current = (BasicTemplate)object;
+                String locked = VendorSupportGuard.refusalFor(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
+                if (locked != null)
+                {
+                    throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                }
+                EObject owner = current.eContainer();
+                if (owner instanceof MdObject && !(owner instanceof Configuration))
+                {
+                    locked = VendorSupportGuard.refusalFor(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
+                    if (locked != null)
+                    {
+                        throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                    }
+                }
                 String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
                 if (error != null)
                 {
@@ -2035,14 +2054,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         .toJson());
                 }
                 IFile file = TemplateContentSupport.contentFile(ctx.project, current);
-                error = TemplateContentSupport.writeText(current, file, templateSpec, files);
-                if (error != null)
+                TemplateContentSupport.TextWriteResult written =
+                    TemplateContentSupport.writeTextResult(current, file, templateSpec, files);
+                if (written.error() != null)
                 {
-                    throw new TemplateWriteException(error);
+                    throw new TemplateWriteException(written.error());
                 }
                 TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
                     writeCtx.dtProject, writeCtx.fqnGenerator, file);
-                return ContentHash.of(templateSpec.get("text").getAsString());
+                return written.contentHash();
             });
             files.commit();
         }
@@ -2549,7 +2569,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         // The top object that owns the node's .mdo file.
-        final String topFqn = topFqn(normFqn);
+        final String[] fileOwnerFqn = { null };
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
@@ -2607,6 +2627,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(applyTo);
                 // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
                 // namespace change - null otherwise, so the cascade below never fires).
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
@@ -2677,9 +2698,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(topFqn);
+        exportFqns.add(fileOwnerFqn[0]);
         String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(topFqn))
+        if (contentFqn != null && !contentFqn.equals(fileOwnerFqn[0]))
         {
             exportFqns.add(contentFqn);
         }
@@ -4064,7 +4085,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node, MdObject target, String[] parts)
     {
         BmFetchPlan plan = new BmFetchPlan();
-        if (node.topLevel)
+        if (node.topLevel || ReferencedTopObjects.isReferencedTopCollection(node.feature))
         {
             if (!(target instanceof IBmObject))
             {
@@ -4250,7 +4271,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
                     + "Decoration / Table, " //$NON-NLS-1$
-                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
+                    + "or Column: '...Attribute.AttrName.Column.ColName' / " //$NON-NLS-1$
+                    + "'...Attribute.AttrName.Column.TabularSection.ColName')."); //$NON-NLS-1$
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
             final Version version = platformVersionOf(ctx);
@@ -4311,8 +4333,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     // otherwise "not found" contradicts what get_metadata_details lists.
                     throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
                         + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
-                            ref.name, normFqn),
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn),
                             ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
                 // A form COMMAND's action is its handler member ('...Command.<Name>.Handler.Action'),
@@ -4616,8 +4637,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     // of another kind, say so instead of advising a create that would collide.
                     throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
                         + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
-                            ref.name, normFqn),
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn),
                             ". Create it with create_metadata, then set its query.")).toJson()); //$NON-NLS-1$
                 }
                 // This branch retypes the attribute to DynamicList without going through the
@@ -6523,7 +6543,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case MCORE_VALUE_LIST:
                 return prepareMcoreValueList(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
-                return prepareStyleValue(ctx.config, name, prop, target, info, out);
+                return prepareStyleValue(ctx, name, prop, target, info, out);
             case PICTURE:
                 return preparePicture(ctx, name, prop, info, out);
             case QNAME:
@@ -7089,7 +7109,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return null;
         }
         MdObject targetMd = resolveReferenceTarget(scope, owner, value);
-        String vErr = validateReferenceTarget(name, info.feature, targetMd, value, groupCatalogue);
+        String vErr = validateReferenceTarget(name, info.feature, targetMd, value, groupCatalogue, owner);
         if (vErr != null)
         {
             return vErr;
@@ -7235,11 +7255,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
      * on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareStyleValue(Configuration configuration, String name, JsonObject prop,
+    private String prepareStyleValue(PrepareContext ctx, String name, JsonObject prop,
         EObject target, PropertyInfo info, List<PreparedChange> out)
     {
         StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE),
-            StyleValueBuilder.forConfiguration(configuration));
+            StyleValueBuilder.forConfiguration(ctx.config, AppearanceValueBuilder.colorCatalogue(ctx.version)));
         if (sv.error != null)
         {
             return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -7540,7 +7560,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Validates a reference target: it must resolve, be re-fetchable (a top object, a FORM member, or a
-     * {@link BasicTemplate} member). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
+     * {@link BasicTemplate} member; with an owner, also the owner's own Field - see the overload that
+     * takes one). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
      * ({@code mainDataCompositionSchema}) legitimately cross-reference members owned by another object;
      * both are BM objects with stable {@code bmGetId()} values and are re-fetched with
      * {@link IBmTransaction#getObjectById(long)} inside the write transaction. The target must also be
@@ -7571,6 +7592,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static String validateReferenceTarget(String prop, EStructuralFeature feature,
         MdObject target, String fqn, IEObjectProvider groupCatalogue)
     {
+        return validateReferenceTarget(prop, feature, target, fqn, groupCatalogue, null);
+    }
+
+    /**
+     * The full single-reference check, with the object the property is being set on. Besides a top
+     * object, a form and a template, it admits the owner's OWN Field for a {@code refers Field}
+     * property (an external data source Table's {@code presentationField} / {@code parentField},
+     * issue #448) with the owner check in {@link TableFieldReferences}. A list reference
+     * passes no owner, so a Field never passes there.
+     *
+     * @param prop the property name
+     * @param feature the reference feature
+     * @param target the resolved target, or {@code null} when nothing resolved
+     * @param fqn the reference value as supplied by the caller
+     * @param groupCatalogue the platform command-group catalogue, may be {@code null}
+     * @param owner the element the property is being set on, or {@code null}
+     * @return a JSON error, or {@code null} when the target is usable
+     */
+    static String validateReferenceTarget(String prop, EStructuralFeature feature, // NOSONAR the owner joins the existing reference inputs
+        MdObject target, String fqn, IEObjectProvider groupCatalogue, EObject owner)
+    {
         if (target == null)
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' was not found. " //$NON-NLS-1$
@@ -7583,11 +7625,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
         boolean isTemplate = target instanceof BasicTemplate;
-        if (!isForm && !isTemplate && !((IBmObject)target).bmIsTop())
+        boolean isField = TableFieldReferences.isFieldReference(feature, target);
+        if (!isForm && !isTemplate && !isField && !((IBmObject)target).bmIsTop())
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported (forms and templates " //$NON-NLS-1$
                 + "are the supported member references because BM can re-fetch both by id).").toJson(); //$NON-NLS-1$
+        }
+        String fieldRefusal = isField ? TableFieldReferences.refusal(prop, owner, target, fqn) : null;
+        if (fieldRefusal != null)
+        {
+            return ToolResult.error(fieldRefusal).toJson();
         }
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
@@ -8400,18 +8448,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     private static Long parseLong(String value)
     {
-        if (value == null || value.isEmpty())
-        {
-            return null;
-        }
-        try
-        {
-            return Long.valueOf(new BigDecimal(value.trim()).longValueExact());
-        }
-        catch (NumberFormatException | ArithmeticException e)
-        {
-            return null;
-        }
+        return JsonUtils.parseExactDecimalLong(value);
     }
 
     private static EObject childByName(EObject owner, EStructuralFeature feature, String name)
@@ -8428,12 +8465,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
-    }
-
-    private static String topFqn(String normFqn)
-    {
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
     }
 
     /**

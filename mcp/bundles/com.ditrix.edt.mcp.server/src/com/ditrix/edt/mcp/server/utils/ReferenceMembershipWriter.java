@@ -477,6 +477,11 @@ public final class ReferenceMembershipWriter
                 + "'Справочник.Товары').").toJson()); //$NON-NLS-1$
         }
 
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal("Membership content", fqn); //$NON-NLS-1$
+        if (memberRefusal != null)
+        {
+            return EntryPlan.failed(ToolResult.error(memberRefusal).toJson());
+        }
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
         if (node == null || node.object == null)

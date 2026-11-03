@@ -1,6 +1,6 @@
 # switch_git_branch
 
-Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/feature/x'); a remote-only branch is rejected (create a local branch first). Refuses to switch when the working tree has uncommitted changes (untracked files alone do not block) or when already on the target branch. The 1C application/infobase binding follows the checkout automatically; the result reports it. Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('switch_git_branch').
+Change the active version of an EDT project through Git branch checkout. Parameters and examples: get_tool_guide('switch_git_branch').
 
 ## Parameters
 | Parameter | Required | Type | Description |

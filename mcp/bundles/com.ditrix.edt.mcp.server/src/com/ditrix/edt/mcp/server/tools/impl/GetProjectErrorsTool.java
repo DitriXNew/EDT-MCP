@@ -23,12 +23,15 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EReference;
 
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -57,6 +60,7 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -131,16 +135,16 @@ public class GetProjectErrorsTool implements IMcpTool
                     + "elsewhere in that object. Returns objectsNotFound / objectsUnsupported." ) //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
-                "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$
+                "Output verbosity (optional): concise (default) = leaner table; detailed = adds stored Offset/Length and 'Has docs'", //$NON-NLS-1$
                 "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
     /**
-     * A successful exact-address call returns a machine-readable payload (the Markdown report plus
+     * A successful exact-address call returns a machine-readable payload (rows, the Markdown report and
      * the {@code objectsResolved} / {@code objectsNotFound} / {@code objectsUnsupported} verdicts)
-     * in {@code structuredContent}; an all-miss exact call is refused, and every other call keeps
-     * the historical Markdown response byte for byte. Mirrors {@code list_projects}' per-call
+     * in {@code structuredContent}; an all-miss exact call is refused, and other calls keep
+     * the Markdown response format. Mirrors {@code list_projects}' per-call
      * format switch.
      */
     @Override
@@ -190,9 +194,8 @@ public class GetProjectErrorsTool implements IMcpTool
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String checkId = JsonUtils.extractStringArgument(params, "checkId"); //$NON-NLS-1$
 
-        // Output verbosity: concise (default) trims the secondary 'Has docs' column; // NOSONAR explanatory comment, not commented-out code
-        // detailed renders the full historical table. Any absent/blank/unrecognized value
-        // falls back to concise (the lean default), never an error.
+        // Detailed adds saved text ranges and documentation availability to the compact table.
+        // An absent/blank/unrecognized value falls back to concise.
         String responseFormat = JsonUtils.extractStringArgument(params, "responseFormat"); //$NON-NLS-1$
         boolean detailed = responseFormat != null && responseFormat.equalsIgnoreCase("detailed"); //$NON-NLS-1$
 
@@ -277,9 +280,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param checkId filter by check ID substring
      * @param objects filter by object FQNs (empty list for all objects)
      * @param limit maximum number of results
-     * @param detailed when {@code true} render the full table (incl. the secondary
-     *        {@code Has docs} column); when {@code false} (the default) render a leaner
-     *        table that omits {@code Has docs}. Only the table presentation changes — the
+     * @param detailed when {@code true} include saved text ranges and {@code Has docs};
+     *        when {@code false} (the default) render the existing compact table.
+     *        Only the table presentation changes — the
      *        marker collection, model reads and transaction boundaries are identical.
      * @return Markdown formatted string with error details
      */
@@ -563,7 +566,7 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 return resolution.error;
             }
-            return addressPayload(report, errors.size(), resolution);
+            return addressPayload(report, errors, resolution);
         }
         catch (Exception e)
         {
@@ -672,20 +675,21 @@ public class GetProjectErrorsTool implements IMcpTool
 
     /**
      * Assembles the {@code structuredContent} payload of an {@code objectFqns} call: the Markdown
-     * report a human reads, plus the three address verdicts a machine consumes. All three verdict
+     * report a human reads, the detached problem rows and the three address verdicts a machine consumes. All three verdict
      * lists are ALWAYS emitted (empty when there is nothing to report), so a consumer never has to
      * distinguish "absent" from "none" - the consistency rule the response contract requires.
      *
      * @param report the rendered Markdown report
-     * @param problemsFound how many problem rows the report carries
+     * @param problems the detached marker rows, already filtered and limited
      * @param resolution the per-address verdicts
      * @return the JSON payload
      */
-    static String addressPayload(String report, int problemsFound, AddressResolution resolution)
+    static String addressPayload(String report, List<ErrorInfo> problems, AddressResolution resolution)
     {
         return ToolResult.success()
             .put(KEY_REPORT, report)
-            .put(KEY_PROBLEMS_FOUND, problemsFound)
+            .put(KEY_PROBLEMS_FOUND, problems.size())
+            .put("problems", problems) //$NON-NLS-1$
             .put(KEY_OBJECTS_RESOLVED, resolution.resolved)
             .put(KEY_OBJECTS_NOT_FOUND, resolution.notFound)
             .put(KEY_OBJECTS_UNSUPPORTED, resolution.unsupported)
@@ -1499,6 +1503,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * prevent. Scoping by the owning node instead widens the answer to that node's problems, which
      * is visible in every row's Location and never hides one.</p>
      *
+     * <p>Referenced top objects are marker roots too: their contained members use the file owner
+     * declared by the shared metadata grammar, while a Table/Cube address itself stays exact.</p>
+     *
      * @param normFqn the type-normalized address that resolved
      * @return the owning node's address, or {@code null} when {@code normFqn} is already it
      */
@@ -1520,7 +1527,8 @@ public class GetProjectErrorsTool implements IMcpTool
             // Type.Name is the object itself, and a one-segment address names nothing narrower.
             return null;
         }
-        return parts[0] + "." + parts[1]; //$NON-NLS-1$
+        String owner = ReferencedTopObjects.fileOwnerFqn(normFqn);
+        return normFqn.equals(owner) ? null : owner;
     }
 
     /**
@@ -1786,28 +1794,19 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return false;
         }
+        EClass ownerType = (EClass)MdClassPackage.eINSTANCE.getEClassifier(
+            MetadataTypeUtils.toEnglishSingular(parts[0]));
         for (int i = 2; i < parts.length; i += 2)
         {
-            // The NAVIGABLE-child catalogue, not the segment-alias one. The alias catalogue also
-            // holds kinds that exist only INSIDE a form (Field, Group, Button, ...), so asking it
-            // let 'Catalog.Products.Field.Code' - a form kind hung directly off a mdclass object -
-            // pass as a shape some configuration might hold. Nothing can: the mdclass metamodel has
-            // no such containment. Form / Handler are absent here on purpose; they lead out of the
-            // mdclass model and the two form grammars above own them.
-            String feature = MetadataNodeResolver.featureNameForKind(parts[i]);
-            if (feature == null)
+            // Tokens alone do not establish a path: Field and Table also name form items.
+            // Check the actual owner EClass at EVERY step, then follow the reference's element
+            // type. This accepts EDS.Table.Field while rejecting Catalog.TabularSection.Field.
+            EReference child = MetadataNodeResolver.childFeature(ownerType, parts[i]);
+            if (child == null || !child.isMany())
             {
                 return false;
             }
-            // ...and, at the FIRST level, whether THIS owner can hold that child at all: 'Column' is
-            // a real kind but a containment of DocumentJournal, so 'Catalog.Products.Column.Number'
-            // names nothing in any configuration. Only the first level is checked because deeper
-            // owners are not named by a type token (the owner of an Attribute under a TabularSection
-            // is the tabular section, which no segment types), and a gap here is the safe direction.
-            if (i == 2 && !ownerTypeCanContain(parts[0], feature))
-            {
-                return false;
-            }
+            ownerType = child.getEReferenceType();
         }
         return true;
     }
@@ -2497,7 +2496,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param md the Markdown builder to append to
      * @param errors the collected errors (must be non-empty)
      * @param limit the result limit (drives the "limit reached" notice)
-     * @param detailed when {@code true} include the secondary {@code Has docs} column
+     * @param detailed when {@code true} include saved ranges and {@code Has docs}
      */
     private static void appendProblemsTable(StringBuilder md, List<ErrorInfo> errors, int limit,
         boolean detailed)
@@ -2520,19 +2519,19 @@ public class GetProjectErrorsTool implements IMcpTool
     /**
      * Appends the Configuration Problems table header to {@code md}. Built via the shared
      * {@link MarkdownUtils} table builder so every cell is escaped. concise (default) drops the
-     * secondary 'Has docs' column to save tokens; detailed keeps the full historical set of
-     * columns. Every essential / actionable column (Description, Location, Module path, Line,
+     * range and 'Has docs' columns to save tokens; detailed includes saved Offset/Length.
+     * Every essential / actionable column (Description, Location, Module path, Line,
      * Check code) is present in BOTH modes.
      *
      * @param md the Markdown builder to append to
-     * @param detailed when {@code true} include the secondary {@code Has docs} column
+     * @param detailed when {@code true} include saved ranges and {@code Has docs}
      */
     private static void appendProblemsTableHeader(StringBuilder md, boolean detailed)
     {
         if (detailed)
         {
             md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                "Module path", "Line", "Check code", "Fix registered", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "Module path", "Line", "Offset", "Length", "Check code", "Fix registered", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         }
         else
         {
@@ -2547,7 +2546,7 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * @param md the Markdown builder to append to
      * @param error the error to render
-     * @param detailed when {@code true} include the secondary {@code Has docs} cell
+     * @param detailed when {@code true} include saved range cells and {@code Has docs}
      */
     private static void appendProblemRow(StringBuilder md, ErrorInfo error, boolean detailed)
     {
@@ -2572,7 +2571,10 @@ public class GetProjectErrorsTool implements IMcpTool
         if (detailed)
         {
             md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                modulePathCell, lineCell, checkCell, fixCell,
+                modulePathCell, lineCell,
+                error.offset != null ? error.offset.toString() : "", //$NON-NLS-1$
+                error.length != null ? error.length.toString() : "", //$NON-NLS-1$
+                checkCell, fixCell,
                 error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         else

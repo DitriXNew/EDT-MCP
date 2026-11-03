@@ -25,7 +25,6 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 
-import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
@@ -1599,10 +1598,10 @@ public final class MetadataPropertyIntrospector
         }
         if (resolvedPicture instanceof CommonPicture)
         {
-            String name = resolvedPicture.eIsProxy() ? null : pictureName(resolvedPicture);
-            if (name != null)
+            String fqn = PictureValueBuilder.commonPictureFqn((CommonPicture)resolvedPicture);
+            if (fqn != null)
             {
-                return PictureValueBuilder.COMMON_PREFIX + name;
+                return fqn;
             }
             return unresolvedCommonPictureValue(proxyUri);
         }
@@ -1645,14 +1644,10 @@ public final class MetadataPropertyIntrospector
      */
     private static String unresolvedCommonPictureValue(URI proxyUri)
     {
-        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri))
+        String fqn = PictureValueBuilder.commonPictureFqn(proxyUri);
+        if (fqn != null)
         {
-            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
-            if (fqn != null && fqn.startsWith(PictureValueBuilder.COMMON_PREFIX)
-                && fqn.length() > PictureValueBuilder.COMMON_PREFIX.length())
-            {
-                return fqn;
-            }
+            return fqn;
         }
         return proxyUri == null ? "Unresolved CommonPicture reference" //$NON-NLS-1$
             : "Unresolved CommonPicture reference: " + proxyUri; //$NON-NLS-1$

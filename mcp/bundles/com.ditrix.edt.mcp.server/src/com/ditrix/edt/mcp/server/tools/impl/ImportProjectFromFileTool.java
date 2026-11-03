@@ -6,6 +6,13 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_CONFIGURATION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTENSION;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTERNAL_OBJECTS;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.runtimeVersionOf;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.trimToNull;
+import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.validateBaseProject;
+
 import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -99,9 +106,9 @@ public class ImportProjectFromFileTool implements IMcpTool
     private static final String MARKER_COMMITTED = "mutationCommitted"; //$NON-NLS-1$
     private static final String MARKER_UNKNOWN = "mutationOutcomeUnknown"; //$NON-NLS-1$
 
-    private static final String NATURE_CONFIGURATION = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTENSION = "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
-    private static final String NATURE_EXTERNAL_OBJECTS = "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"; //$NON-NLS-1$
+    /** The preflight advice after an existing-project refusal, exact name or case variant. */
+    private static final String NEW_PROJECT_ADVICE = "The import creates a NEW project: pass a new project " //$NON-NLS-1$
+        + "name, or remove the old one with delete_project first."; //$NON-NLS-1$
 
     private final BackgroundJobs jobs;
     private final IThickClientProvider thickClients;
@@ -352,11 +359,12 @@ public class ImportProjectFromFileTool implements IMcpTool
             return "projectName '" + projectName + "' is not a legal project name: " + problem //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Pass another name."; //$NON-NLS-1$
         }
-        if (ProjectContext.of(projectName).exists())
+        IProject existing = WorkspacePaths.existingProjectVariant(projectName);
+        if (existing != null)
         {
-            return "Project already exists in workspace: " + projectName //$NON-NLS-1$
-                + ". The import creates a NEW project: pass a new project name, or remove the old " //$NON-NLS-1$
-                + "one with delete_project first."; //$NON-NLS-1$
+            return ImportConfigurationFromXmlTool.existingProjectMessage(projectName, existing,
+                "Project already exists in workspace: " + projectName + ". " + NEW_PROJECT_ADVICE, //$NON-NLS-1$ //$NON-NLS-2$
+                NEW_PROJECT_ADVICE);
         }
         Path folder = WorkspacePaths.defaultProjectFolder(projectName);
         if (folder != null && Files.exists(folder))
@@ -364,79 +372,13 @@ public class ImportProjectFromFileTool implements IMcpTool
             return "The workspace folder " + folder + " already exists, so project '" + projectName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' cannot be created there. Pass a new project name, or remove that folder."; //$NON-NLS-1$
         }
-        Long claimedAt = ImportConfigurationFromXmlTool.importClaimedAt(projectName);
-        if (claimedAt != null)
+        ImportConfigurationFromXmlTool.ImportClaim runningImport =
+            ImportConfigurationFromXmlTool.importClaimedAt(projectName);
+        if (runningImport != null)
         {
-            return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, claimedAt.longValue());
+            return ImportConfigurationFromXmlTool.importInProgressMessage(projectName, runningImport);
         }
         return null;
-    }
-
-    /**
-     * Applies the base-project rule of each file kind.
-     *
-     * @param kind what the file holds
-     * @param baseProjectName the requested base, or {@code null}
-     * @param resolved receives the base project when one is valid
-     * @return {@code null} when the rule is met, otherwise the refusal
-     */
-    private static String validateBaseProject(SourceKind kind, String baseProjectName,
-        AtomicReference<IProject> resolved)
-    {
-        if (kind == SourceKind.CONFIGURATION && baseProjectName != null)
-        {
-            return "baseProjectName does not apply to a .cf file: a configuration depends on no " //$NON-NLS-1$
-                + "other project. Omit baseProjectName."; //$NON-NLS-1$
-        }
-        if (kind == SourceKind.EXTENSION && baseProjectName == null)
-        {
-            return "baseProjectName is required for a .cfe file: an extension project is linked to " //$NON-NLS-1$
-                + "the configuration project it extends. Use list_projects to find it."; //$NON-NLS-1$
-        }
-        if (baseProjectName == null)
-        {
-            return null;
-        }
-        if (WorkspacePaths.projectNameProblem(baseProjectName) != null
-            || !ProjectContext.of(baseProjectName).exists())
-        {
-            return ProjectContext.notFoundMessage(baseProjectName);
-        }
-        ProjectContext base = ProjectContext.of(baseProjectName);
-        if (!base.isOpen())
-        {
-            return "Base project '" + baseProjectName + "' is closed. Open it in EDT first."; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        Set<String> natures = ProjectContext.naturesOf(base.project());
-        if (natures == null || !natures.contains(NATURE_CONFIGURATION))
-        {
-            return "Base project '" + baseProjectName + "' is not a configuration project. Pass the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "configuration project the " + kind.label() //$NON-NLS-1$
-                + " belongs to, not an extension or external-objects project."; //$NON-NLS-1$
-        }
-        resolved.set(base.project());
-        return null;
-    }
-
-    /**
-     * @param baseProject the configuration project the import depends on
-     * @return its runtime version, so the new project matches it; {@code null} lets EDT derive one
-     *     from the XML
-     */
-    private static String runtimeVersionOf(IProject baseProject)
-    {
-        try
-        {
-            Activator activator = Activator.getDefault();
-            IV8ProjectManager manager = activator == null ? null : activator.getV8ProjectManager();
-            IV8Project v8Project = manager == null ? null : manager.getProject(baseProject);
-            return v8Project == null || v8Project.getVersion() == null ? null
-                : v8Project.getVersion().toString();
-        }
-        catch (RuntimeException e)
-        {
-            return null;
-        }
     }
 
     /**
@@ -482,11 +424,12 @@ public class ImportProjectFromFileTool implements IMcpTool
         AtomicReference<Mutation> mutation) throws Exception
     {
         String name = request.projectName;
-        Long otherStartedAt = ImportConfigurationFromXmlTool.tryClaimImport(name);
-        if (otherStartedAt != null)
+        ImportConfigurationFromXmlTool.ImportClaim runningImport =
+            ImportConfigurationFromXmlTool.tryClaimImport(name);
+        if (runningImport != null)
         {
             throw new ImportFailure(
-                ImportConfigurationFromXmlTool.importInProgressMessage(name, otherStartedAt.longValue()));
+                ImportConfigurationFromXmlTool.importInProgressMessage(name, runningImport));
         }
         Path workDir = null;
         try
@@ -516,12 +459,17 @@ public class ImportProjectFromFileTool implements IMcpTool
                     + "was created."); //$NON-NLS-1$
             }
             // Asked again: the conversion took time, and the name was free only when the call came.
+            IProject existing = WorkspacePaths.existingProjectVariant(name);
             Path folder = WorkspacePaths.defaultProjectFolder(name);
-            if (ProjectContext.of(name).exists() || folder != null && Files.exists(folder))
+            if (existing != null || folder != null && Files.exists(folder))
             {
-                throw new ImportFailure("A project or workspace folder named '" + name + "' appeared " //$NON-NLS-1$ //$NON-NLS-2$
+                String appeared = "A project or workspace folder named '" + name + "' appeared " //$NON-NLS-1$ //$NON-NLS-2$
                     + "while the file was being converted, so nothing was imported. Pass a new project " //$NON-NLS-1$
-                    + "name."); //$NON-NLS-1$
+                    + "name."; //$NON-NLS-1$
+                throw new ImportFailure(existing == null ? appeared
+                    : ImportConfigurationFromXmlTool.existingProjectMessage(name, existing, appeared,
+                        "It appeared while the file was being converted, so nothing was imported. Pass a " //$NON-NLS-1$
+                            + "new project name.")); //$NON-NLS-1$
             }
             mutation.set(Mutation.UNKNOWN);
             progress.add("Importing the XML files into new project " + name + "."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -825,16 +773,6 @@ public class ImportProjectFromFileTool implements IMcpTool
             + "`. Poll it with `get_job_status` using `jobId=\"" + job.getId() //$NON-NLS-1$
             + "\"`; do not call " + NAME + " again for this project.\n\n" //$NON-NLS-1$ //$NON-NLS-2$
             + BackgroundJobRenderer.render(job);
-    }
-
-    private static String trimToNull(String value)
-    {
-        if (value == null)
-        {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** What a job did to the workspace, for the markers of an error answer. */

@@ -22,6 +22,8 @@ The success envelope (ToolResult.success().put(...)) is:
     {"success": true,
      "projectsCleaned": <int>,            # == len(projects)
      "projects": [ "<name>", ... ],       # the cleaned project names
+     "dependentsStillBuilding": [ "<name> (<state>)", ... ],  # restarted dependents not
+                                          # settled when the wait ended; [] when all settled
      "message": "Clean and revalidation completed."}
 On error the envelope is {"success": false, "error": "<message>"} and the protocol
 layer marks the result isError; assert_error returns that error string.
@@ -71,6 +73,9 @@ a clean that silently rewrote a tracked file fails assert_no_diff; a tool that
 stopped rejecting an unknown project fails assert_error.
 """
 
+import os
+
+import harness
 from harness import (
     call,
     assert_ok,
@@ -79,6 +84,12 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
+    ALL_FIXTURE_PROJECTS,
+    EXT_OBJECTS_PROJECT,
+    settle_or_fail,
+    wait_for_project_ready,
+    wait_for_named_projects_ready,
 )
 
 
@@ -294,3 +305,142 @@ def test_whitespace_project_name_errors_and_does_not_mutate():
     assert_error_quality(err, names=["Project not found"], suggests=["list_projects"],
                          ctx="whitespace projectName surfaces the 'Project not found' error with a list_projects next step")
     assert_no_diff("a rejected clean must not touch the project on disk")
+
+
+# Keep this last: the test deliberately breaks only its disposable extension's manifest.
+@e2e_test(tool="clean_project", kind="action")
+def test_clean_names_a_dependent_the_platform_could_not_restart_and_brings_the_siblings_back():
+    """#789: a missing extension manifest deterministically fails EDT's restart job.
+
+    Stand prerequisite P3 checks the trigger on the base jar. The changed jar must report
+    the broken extension and restore all fixture siblings, regardless of HashSet order.
+    """
+    settle_or_fail("failed restart regression precondition")
+    name = PROJECT + ".CleanStranded_e2e"
+    call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+    extension_created = False
+    try:
+        created = call("create_project", {"projectKind": "extension", "name": "CleanStranded_e2e",
+                                          "baseProjectName": PROJECT})
+        assert_ok(created, "create disposable extension for failed restart")
+        extension_created = True
+        settle_or_fail("break the disposable extension's manifest")
+        listed = call("list_projects", {"format": "json"})
+        assert_ok(listed, "locate the extension directory and fixture projects")
+        rows = listed.structured.get("projects") if isinstance(listed.structured, dict) else None
+        assert isinstance(rows, list), "list_projects must return structured project rows"
+        extension = next((row for row in rows if row.get("name") == name), None)
+        assert extension and extension.get("path"), "created extension must have a directory"
+        fixture_names = {row["name"] for row in rows if row["name"] in ALL_FIXTURE_PROJECTS}
+        assert {PROJECT, TESTS_PROJECT} <= fixture_names, "both required fixture projects must exist"
+        manifest = os.path.join(extension["path"], "DT-INF", "PROJECT.PMF")
+        assert os.path.isfile(manifest), "expected the created extension's manifest: %s" % manifest
+        os.remove(manifest)
+
+        cleaned = call("clean_project", {"projectName": PROJECT})
+        error = assert_error(cleaned, "the broken dependent must make a failed restart visible")
+        assert_error_quality(error, names=[name], suggests=["list_projects", "delete_project"],
+                             ctx="failed restart names the broken project and recovery steps")
+        sc = cleaned.structured
+        assert isinstance(sc, dict), "failed clean must return structuredContent"
+        assert sc.get("mutationCommitted") is True, sc
+        assert sc.get("projects") == [PROJECT] and sc.get("projectsCleaned") == 1, sc
+        assert sc.get("notRestarted") == [name], sc
+        assert "PROJECT.PMF" in sc.get("restartFailure", ""), sc
+        assert isinstance(sc.get("recovered"), list), sc
+        assert set(sc["recovered"]) <= fixture_names, sc
+        # #797: a stranded EDT context must stay on the established state wire value,
+        # with an actionable reason instead of being called a plain Eclipse project.
+        stranded_list = call("list_projects", {"format": "json"})
+        assert_ok(stranded_list, "inspect the stranded extension's reason")
+        stranded_rows = (stranded_list.structured or {}).get("projects")
+        assert isinstance(stranded_rows, list), stranded_list.structured
+        stranded = next((row for row in stranded_rows if row.get("name") == name), None)
+        # A context without a DtProject reads not_available. A registered one that EDT has not
+        # started keeps its derived-data state (as before #797) and the reason names the start.
+        assert stranded and stranded.get("state") in ("not_available", "building", "unknown"), stranded
+        reason = stranded.get("reason", "")
+        low_reason = reason.lower()
+        if stranded.get("state") != "not_available":
+            assert "is starting this project's context" in reason, stranded
+        assert "context" in low_reason and any(
+            state in low_reason for state in ("not started", "starting", "restart")), stranded
+        assert any(remedy in low_reason for remedy in (
+            "close and reopen", "clean_project", "delete_project", "poll list_projects")), stranded
+        assert "Not an EDT project" not in reason, stranded
+        print("#797 stranded context observed: %s" % reason)
+
+        table = call("list_projects", {"format": "md"})
+        assert_ok(table, "the stranded extension's Markdown reason")
+        header = next((line for line in table.text.splitlines() if line.startswith("| Name |")), "")
+        assert header.endswith("| Reason |"), header
+        extension_cells = next((harness.split_markdown_row(line) for line in table.text.splitlines()
+                                if line.startswith("| ") and
+                                harness.split_markdown_row(line)[0] == name), None)
+        assert extension_cells and len(extension_cells) == 7 and extension_cells[6], extension_cells
+
+        # The stand may reach a different gate before the configuration lookup. Pin the
+        # shared reason when that lookup is reached, and report the other branch verbatim.
+        write = call("create_metadata", {"projectName": name, "fqn": "Catalog.Zz797"})
+        write_error = assert_error(write, "a write on the stranded extension must fail")
+        configuration_refusal = "Could not get configuration for project: " + name
+        if configuration_refusal in write_error:
+            assert "context" in write_error.lower(), write_error
+            assert any(remedy in write_error.lower() for remedy in (
+                "close and reopen", "clean_project", "delete_project", "poll list_projects")), write_error
+        else:
+            print("#797 write gate reached another refusal: %s" % write_error)
+
+        failures = []
+        assert wait_for_project_ready(failure_details=failures, ignore_projects=(name,)), \
+            "fixture siblings were stranded after failed restart: %s" % failures
+        # Siblings can still be building immediately after the failed clean. Re-read
+        # both formats only after the recovery wait before asserting their readiness.
+        settled_list = call("list_projects", {"format": "json"})
+        assert_ok(settled_list, "inspect the recovered fixture's reason omission")
+        settled_rows = (settled_list.structured or {}).get("projects")
+        assert isinstance(settled_rows, list), settled_list.structured
+        ready_fixture = next((row for row in settled_rows if row.get("name") == PROJECT), None)
+        assert ready_fixture and ready_fixture.get("state") == "ready", ready_fixture
+        assert "reason" not in ready_fixture, ready_fixture
+        settled_table = call("list_projects", {"format": "md"})
+        assert_ok(settled_table, "inspect recovered siblings' Markdown readiness")
+        blockers = []
+        assert harness._all_edt_projects_ready(
+            settled_table.text, not_ready=blockers, ignore=(name,)), blockers
+
+        states = wait_for_named_projects_ready(fixture_names, ctx="recovered fixture siblings")
+        assert all(states.get(fixture) == "ready" for fixture in fixture_names), \
+            "all fixture projects must be ready after recovery: %r" % states
+    finally:
+        if extension_created:
+            deleted = call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+            assert_ok(deleted, "delete the disposable broken extension")
+            assert deleted.structured.get("state") == "released", deleted.structured
+            settle_or_fail("failed restart regression cleanup")
+        else:
+            try:
+                call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+            except Exception as cleanup_error:
+                print("Best-effort cleanup after failed extension creation: %s" % cleanup_error)
+    assert_no_diff("failed restart and sibling recovery must preserve committed fixture files")
+
+
+@e2e_test(tool="clean_project", kind="action")
+def test_clean_waits_for_the_dependents_it_restarted():
+    """The response covers derived data of both extension and external-object dependents."""
+    cleaned = call("clean_project", {"projectName": PROJECT})
+    assert_ok(cleaned, "clean with dependent settlement")
+    listed = call("list_projects", {"format": "json"})
+    assert_ok(listed, "dependent states immediately after clean")
+    sc = cleaned.structured
+    pending = sc.get("dependentsStillBuilding")
+    assert isinstance(pending, list), "clean must declare dependentsStillBuilding: %r" % sc
+    states = {row["name"]: row["state"] for row in listed.structured["projects"]}
+    for name in (TESTS_PROJECT, EXT_OBJECTS_PROJECT):
+        assert name in states, "required fixture dependent is missing: %r" % states
+        assert states[name] == "ready" or any(item.startswith(name + " (") for item in pending), \
+            "clean silently returned before %s settled: %r, %r" % (name, states, sc)
+    assert pending == [], "healthy fixture dependents must settle within the wait: %r" % sc
+    assert "still computing" not in sc.get("message", ""), sc
+    assert_no_diff("waiting for restarted dependents must not alter fixture sources")

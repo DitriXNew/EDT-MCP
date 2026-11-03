@@ -1,6 +1,6 @@
 # create_launch_config
 
-Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by launch/run_yaxunit_tests — there is no separate debug-config type). Use delete_launch_config to remove it. Full parameters and examples: call get_tool_guide('create_launch_config').
+Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -9,6 +9,8 @@ Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME c
 | clientType | — | string (one of: thin, thick, web) | Client kind: thin (default), thick, or web. |
 | name | — | string | Config name; default '<Project> Thin\|Thick\|Web Client', uniquified. If a config with this name already exists the call is rejected. |
 | applicationId | — | string | Application (infobase) ID from get_applications. If omitted the project's default application is used. If the project has no applications, the call is rejected with a hint. |
+| automatedTestingMode | — | string (one of: TESTCLIENT, TESTMANAGER) | Native EDT testing mode; runtime-client configurations only. |
+| automatedTestingPort | — | integer | TESTCLIENT only: port 1..65535; omitted uses EDT default 1538. |
 
 ## Guide
 Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`, `run_yaxunit_tests`, and `update_database`.
@@ -29,6 +31,28 @@ Run mode vs debug mode is chosen at launch time (the mode string), never a diffe
 - **name** (optional): exact name for the new config. If omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
 - **applicationId** (optional): the infobase/application ID from `get_applications`. If omitted the project's **default application** is resolved automatically. If the project has no applications the call is rejected with a hint to create an infobase first.
 
+## Automated testing
+
+Set `automatedTestingMode="TESTCLIENT"` to persist the platform's `/TESTCLIENT` mode.
+`automatedTestingPort=1540` sets the `-TPort` connection port (integer 1..65535);
+omitting it leaves the native attribute unset, so EDT uses **1538** for this new config.
+Mode values are case-insensitive and stored as `TESTCLIENT` / `TESTMANAGER`.
+
+`automatedTestingMode="TESTMANAGER"` persists test-manager mode, which has no port.
+`automatedTestingPort` is refused unless `automatedTestingMode="TESTCLIENT"`.
+The existing project/application requirements still apply; no config is saved when the
+project has no applications. Web-client test mode is unverified because
+no automated-testing web-client ID is stamped.
+
+```json
+{"projectName":"MyProject","name":"My test client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540}
+```
+
+Then call `launch({launchConfigurationName:"My test client", startupOption:"RunTests"})`
+to combine the saved testing mode with a per-launch `/C` startup command. This tool
+does not set `startupOption`. A launch can switch the saved mode or override its port,
+but cannot clear it. To clear a saved mode, delete and recreate the configuration without automated-testing parameters.
+
 ## Why applicationId is required (internal)
 
 The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
@@ -36,6 +60,8 @@ The tool always writes a real `applicationId` so `list_configurations` shows it 
 ## Result
 
 JSON with `action='created'`, `name`, `project`, `clientType`, `applicationId`, `type` (the launch type id), and a `message` with next-step hints.
+When requested, `automatedTestingMode` confirms the normalized mode saved in the configuration;
+`automatedTestingPort` confirms an explicit saved port and is absent when omitted.
 
 ## Cleanup
 

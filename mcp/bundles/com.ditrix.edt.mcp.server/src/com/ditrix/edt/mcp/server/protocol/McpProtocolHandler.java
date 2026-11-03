@@ -90,6 +90,8 @@ public class McpProtocolHandler
 
     private final McpToolRegistry toolRegistry;
 
+    private final GuidedWorkflows guidedWorkflows;
+
     /**
      * Capabilities the last {@code initialize} declared, kept for callers that have no session
      * of their own — the in-process bridge, and any caller of the session-less
@@ -113,7 +115,14 @@ public class McpProtocolHandler
      */
     public McpProtocolHandler()
     {
+        this("true".equalsIgnoreCase(System.getenv("EDT_MCP_GUIDED_WORKFLOWS")) //$NON-NLS-1$ //$NON-NLS-2$
+            ? new GuidedWorkflows(McpToolRegistry.getInstance()) : null);
+    }
+
+    McpProtocolHandler(GuidedWorkflows guidedWorkflows)
+    {
         this.toolRegistry = McpToolRegistry.getInstance();
+        this.guidedWorkflows = guidedWorkflows;
     }
 
     /**
@@ -358,6 +367,25 @@ public class McpProtocolHandler
             if (McpConstants.METHOD_TOOLS_CALL.equals(method))
             {
                 return handleToolCall(request, requestId, capabilities);
+            }
+
+            if ("resources/templates/list".equals(method) && guidedWorkflows == null) //$NON-NLS-1$
+            {
+                JsonObject result = new JsonObject();
+                result.add("resourceTemplates", new JsonArray()); //$NON-NLS-1$
+                return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
+            }
+
+            if (guidedWorkflows != null && guidedWorkflows.handles(request))
+            {
+                try
+                {
+                    return GsonProvider.toJson(JsonRpcResponse.success(requestId, guidedWorkflows.handle(request)));
+                }
+                catch (GuidedWorkflows.RequestError e)
+                {
+                    return buildErrorResponse(e.code(), e.getMessage(), requestId);
+                }
             }
 
             // Check for resources/list method (serves the per-tool guide:// docs)
@@ -1095,6 +1123,10 @@ public class McpProtocolHandler
             McpConstants.PLUGIN_VERSION,
             McpConstants.AUTHOR
         );
+        if (guidedWorkflows != null)
+        {
+            result.getCapabilities().enableGuidedWorkflows(version);
+        }
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
     }
 
@@ -1432,34 +1464,7 @@ public class McpProtocolHandler
      */
     private boolean isJsonErrorPayload(String result)
     {
-        if (result == null)
-        {
-            return false;
-        }
-
-        try
-        {
-            JsonElement element = JsonParser.parseString(result);
-            if (!element.isJsonObject())
-            {
-                return false;
-            }
-
-            // An error is detected ONLY by an explicit success==false boolean (the
-            // canonical ToolResult.error payload is {"success":false,"error":...}).
-            // Deliberately NOT flagged on mere "error" key presence: a SUCCESSFUL
-            // JSON result that happens to carry an "error" field (e.g. a diagnostics
-            // list) must stay isError:false, otherwise every future field name would
-            // be latently coupled to the error-detection contract.
-            com.google.gson.JsonObject obj = element.getAsJsonObject();
-            return obj.has(KEY_SUCCESS) && obj.get(KEY_SUCCESS).isJsonPrimitive()
-                && obj.get(KEY_SUCCESS).getAsJsonPrimitive().isBoolean()
-                && !obj.get(KEY_SUCCESS).getAsBoolean();
-        }
-        catch (Exception e)
-        {
-            return false;
-        }
+        return ToolResult.isErrorPayload(result);
     }
     
     /**

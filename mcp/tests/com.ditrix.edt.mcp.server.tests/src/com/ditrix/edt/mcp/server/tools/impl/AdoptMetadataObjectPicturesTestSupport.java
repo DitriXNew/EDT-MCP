@@ -14,6 +14,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -26,8 +27,11 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.resources.IWorkspaceRunnable;
 import org.eclipse.core.runtime.Plugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
@@ -39,7 +43,12 @@ import org.osgi.framework.ServiceReference;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.core.IBmEngine;
+import com._1c.g5.v8.bm.core.event.BmEvent;
+import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmGlobalEditingContext;
+import com._1c.g5.v8.bm.integration.event.IBmSyncEventListener;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
@@ -59,6 +68,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
@@ -102,6 +112,12 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
     protected WriteScope scope;
     protected String rawResponse;
     protected TestTool tool;
+    protected final Map<Long, IBmObject> committedObjects = new LinkedHashMap<>();
+    protected final List<IBmSyncEventListener> listeners = new ArrayList<>();
+    protected final List<IBmObject> associated = new ArrayList<>();
+    protected boolean writing;
+    protected boolean workspaceRule;
+    protected boolean emitCommitEvent = true;
 
     @Before
     public void setUp() throws Exception
@@ -129,14 +145,63 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         when(models.getModel(baseProject)).thenReturn(baseModel);
         when(models.getModel(extensionProject)).thenReturn(extensionModel);
         when(baseTx.getObjectById(anyLong())).thenAnswer(inv -> baseReadRoot);
-        when(extensionTx.getObjectById(anyLong())).thenAnswer(inv -> extensionReadRoot);
+        when(extensionTx.getObjectById(anyLong())).thenAnswer(inv ->
+            committedObjects.containsKey(inv.getArgument(0))
+                ? committedObjects.get(inv.getArgument(0)) : extensionReadRoot);
         when(baseModel.executeReadonlyTask(any())).thenAnswer(inv ->
             ((IBmTask<?>)inv.getArgument(0)).execute(baseTx, null));
         when(extensionModel.executeReadonlyTask(any())).thenAnswer(inv ->
             ((IBmTask<?>)inv.getArgument(0)).execute(extensionTx, null));
 
         Configuration extConfig = mock(Configuration.class, withSettings().extraInterfaces(IBmObject.class));
+        when(extConfig.eClass()).thenReturn(MdClassPackage.Literals.CONFIGURATION);
         when(((IBmObject)extConfig).bmGetFqn()).thenReturn("Configuration"); //$NON-NLS-1$
+        when(extensionTx.getTopObjectByFqn("Configuration")).thenReturn((IBmObject)extConfig); //$NON-NLS-1$
+        IBmEngine engine = mock(IBmEngine.class);
+        when(extensionModel.getEngine()).thenReturn(engine);
+        when(target.getAdapter(IBmModel.class)).thenReturn(extensionModel);
+        when(engine.getCurrentTransaction()).thenAnswer(inv -> writing ? extensionTx : null);
+        IBmGlobalEditingContext global = mock(IBmGlobalEditingContext.class);
+        when(extensionModel.getGlobalContext()).thenReturn(global);
+        doAnswer(inv -> listeners.add(inv.getArgument(0))).when(extensionModel).addSyncEventListener(any());
+        doAnswer(inv -> listeners.remove(inv.getArgument(0))).when(extensionModel).removeSyncEventListener(any());
+        when(global.execute(any())).thenAnswer(inv -> {
+            assertTrue("workspace rule must precede the BM write", workspaceRule); //$NON-NLS-1$
+            writing = true;
+            associated.clear();
+            IBmTask<?> task = inv.getArgument(0);
+            Object result;
+            try
+            {
+                result = task.execute(extensionTx, null);
+            }
+            finally
+            {
+                writing = false;
+            }
+            BmAssociationEvent additions = new BmAssociationEvent(associated, List.of(), List.of(), Map.of());
+            BmEvent event = new BmEvent(1L, task.getId(), null, null, additions, null, null);
+            for (IBmSyncEventListener listener : emitCommitEvent ? List.copyOf(listeners) : List.<IBmSyncEventListener>of())
+            {
+                listener.handleSyncEvent(event);
+            }
+            return result;
+        });
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(baseProject.getWorkspace()).thenReturn(workspace);
+        doAnswer(inv -> {
+            assertFalse(writing);
+            workspaceRule = true;
+            try
+            {
+                ((IWorkspaceRunnable)inv.getArgument(0)).run(null);
+            }
+            finally
+            {
+                workspaceRule = false;
+            }
+            return null;
+        }).when(workspace).run(any(IWorkspaceRunnable.class), any(), eq(IWorkspace.AVOID_UPDATE), any());
         IConfigurationProvider configurations = mock(IConfigurationProvider.class);
         when(configurations.getConfiguration(extensionProject)).thenReturn(extConfig);
         when(activator.getConfigurationProvider()).thenReturn(configurations);
@@ -151,6 +216,7 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         when(adopter.adoptAndAttach(any(EObject.class), eq(target), any())).thenAnswer(inv ->
             adoptSource(inv.getArgument(0)));
         when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            assertTrue("native list adopter must join master's BM write", writing); //$NON-NLS-1$
             List<EObject> sources = inv.getArgument(0);
             batches.add(List.copyOf(sources));
             List<EObject> result = new ArrayList<>();
@@ -250,12 +316,22 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
 
     protected JsonObject run(String fqn) throws Exception
     {
+        return run(fqn, true);
+    }
+
+    protected JsonObject run(String fqn, Boolean includePictures) throws Exception
+    {
         scope = new WriteScope();
         String[] response = {null};
         WriteScope.runWithScope(scope, () -> {
             try
             {
-                response[0] = tool.executeOnUiThread(Map.of("projectName", "Base", "fqn", fqn)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Map<String, String> params = new LinkedHashMap<>(Map.of("projectName", "Base", "fqn", fqn)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                if (includePictures != null)
+                {
+                    params.put("includeReferencedPictures", includePictures.toString()); //$NON-NLS-1$
+                }
+                response[0] = tool.executeOnUiThread(params);
             }
             catch (Exception e)
             {
@@ -355,6 +431,12 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
             ? exportedPicture(MetadataNodeResolver.addressOf((MdObject)source))
             : exportedCopy("Catalog.Goods"); //$NON-NLS-1$
         copies.put(source, copy);
+        IBmObject bm = (IBmObject)copy;
+        long id = committedObjects.size() + 1000L;
+        when(bm.bmGetId()).thenReturn(id);
+        when(bm.bmIsTop()).thenReturn(true);
+        committedObjects.put(id, bm);
+        associated.add(bm);
         return copy;
     }
 }

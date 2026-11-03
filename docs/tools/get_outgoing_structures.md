@@ -1,6 +1,6 @@
 # get_outgoing_structures
 
-For each outgoing qualified call in a BSL module (or one method), report the top-level literal keys of the Structure passed as its first argument (local .Insert keys plus a one-level same-module seed/template helper). Best-effort, literal keys only. Full parameters and examples: call get_tool_guide('get_outgoing_structures').
+Discover the fields passed to outgoing or qualified BSL method calls. BEST-EFFORT and incomplete by design: only top-level LITERAL keys of the first argument, found by a flow-insensitive scan - computed keys, constructor-supplied keys and deeper helper chains are missed, so absence is not proof. Parameters and examples: get_tool_guide('get_outgoing_structures').
 
 ## Parameters
 | Parameter | Required | Type | Description |

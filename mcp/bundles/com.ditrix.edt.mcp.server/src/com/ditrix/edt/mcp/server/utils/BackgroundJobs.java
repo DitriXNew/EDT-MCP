@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.ditrix.edt.mcp.server.Activator;
+
 /**
  * Small bounded registry for long-running MCP work whose result is polled by id.
  * <p>
@@ -572,6 +574,7 @@ public final class BackgroundJobs implements AutoCloseable
     private final Object jobsLock = new Object();
     private final Map<String, JobRecord> jobs = new LinkedHashMap<>();
     private final int maxStoredJobs;
+    private final int workerThreads;
     private final ExecutorService workers;
     private final ScheduledExecutorService deadlines;
     private final ExecutorService cancellationHandlers;
@@ -601,6 +604,7 @@ public final class BackgroundJobs implements AutoCloseable
             throw new IllegalArgumentException("BackgroundJobs limits must be positive"); //$NON-NLS-1$
         }
         this.maxStoredJobs = maxStoredJobs;
+        this.workerThreads = workerThreads;
         this.committedCancellationHandlerTimeoutMs = committedCancellationHandlerTimeoutMs;
         workers = Executors.newFixedThreadPool(workerThreads,
             new NamedDaemonThreadFactory("EDT-MCP background-job-worker-")); //$NON-NLS-1$
@@ -610,6 +614,18 @@ public final class BackgroundJobs implements AutoCloseable
         // expires must not occupy the only cancellation thread and wedge every unrelated job.
         cancellationHandlers = Executors.newCachedThreadPool(
             new NamedDaemonThreadFactory("EDT-MCP background-job-cancellation-")); //$NON-NLS-1$
+    }
+
+    /**
+     * The fixed number of worker threads. A caller that must not queue behind other tools' jobs
+     * passes it as {@code maxRunning}: while fewer jobs than workers are admitted, a free worker
+     * picks the new job up at once, so its deadline never runs down in the queue.
+     *
+     * @return the worker thread count this registry was created with
+     */
+    public int getWorkerThreads()
+    {
+        return workerThreads;
     }
 
     /** @return bundle-wide registry, recreated lazily after bundle restart */
@@ -1008,6 +1024,12 @@ public final class BackgroundJobs implements AutoCloseable
         }
     }
 
+    /**
+     * Publishes a failure for any Throwable raised by the work, including after commit.
+     * Errors are logged and rethrown after recording the failure; existing terminal and
+     * cancellation decisions remain authoritative.
+     * This rule must migrate to the MCP Tasks store when #338 lands.
+     */
     private static void runWork(JobRecord record, long timeoutMs, JobWork work)
     {
         if (!record.isRunning())
@@ -1051,9 +1073,11 @@ public final class BackgroundJobs implements AutoCloseable
         {
             record.fail(failureMessage(e));
         }
-        catch (LinkageError e)
+        catch (Error e) // NOSONAR fail the record before logging and rethrowing the Error
         {
             record.fail(failureMessage(e));
+            Activator.logError("Background job " + record.id + " failed with an Error", e); //$NON-NLS-1$ //$NON-NLS-2$
+            throw e;
         }
     }
 

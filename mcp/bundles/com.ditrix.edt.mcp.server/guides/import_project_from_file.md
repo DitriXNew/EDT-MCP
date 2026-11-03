@@ -16,7 +16,7 @@ Creates a brand-new EDT project from a 1C binary file. EDT cannot read these fil
 ## Parameter details
 
 - **filePath** (required): absolute path of the file on the machine EDT runs on. The kind is taken from the extension (case-insensitive) and then checked against what the platform actually dumped: a `.cf` that holds an extension, or a `.cfe` that holds a configuration, is refused before any project is created. So is an `.epf`/`.erf` named `Configuration`: its dump's root file would be `Configuration.xml`, which EDT imports as a configuration; import a copy under another name.
-- **projectName** (required): name of the new project. It must be a legal Eclipse project name, no workspace project may have it, and no folder of that name may exist in the workspace directory.
+- **projectName** (required): name of the new project. It must be a legal Eclipse project name, no workspace project may have it (nor one whose name differs from it only by letter case on a case-insensitive file system), and no folder of that name may exist in the workspace directory.
 - **baseProjectName**: an open CONFIGURATION project (not an extension, not an external-objects project). The extension or external objects are linked to it and get its runtime version; the platform used for the conversion is picked to fit it.
 - **platformVersion**: a version (`8.3.24.1691`) or mask (`8.3.24`) of an installed platform to convert with. Omitted, EDT picks the best installed platform (one compatible with the base project when there is one).
 - **waitSeconds**: how long this call waits for the job, 0 to 45, default 30.

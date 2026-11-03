@@ -177,3 +177,30 @@ def test_nonexistent_module_path_errors_with_format_hint():
                          suggests=["CommonModules"],
                          ctx="non-existent module path names the value and the format")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="read_module_source", kind="read")
+def test_english_object_name_resolves_in_upper_and_lower_case():
+    """#550: both cases must read the existing Error module's source."""
+    for name in ("ERROR", "error"):
+        result = call("read_module_source", {
+            "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % name,
+        })
+        assert_ok(result, "read English object name in another case")
+        assert_contains(result.text, "module: CommonModules/Error/Module.bsl", "echo the canonical resource path")
+        assert_contains(result.text, "```bsl\nError\n```", "the real file's source must be returned")
+    assert_no_diff("case-insensitive reads must leave the fixture unchanged")
+
+
+@e2e_test(tool="read_module_source", kind="read")
+def test_russian_object_name_resolves_in_upper_and_lower_case():
+    """The programmatic Cyrillic Name is case-insensitive, independently of synonyms."""
+    for name in ("ВЫЧИСЛЕНИЕ", "вычисление"):
+        result = call("read_module_source", {
+            "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % name,
+        })
+        assert_ok(result, "read Russian object name in another case")
+        assert_contains(result.text, "module: CommonModules/Вычисление/Module.bsl", "echo the canonical Cyrillic path")
+        assert_contains(result.text, "Функция Маркер() Экспорт", "the real Russian module must be read")
+        assert_contains(result.text, "Возврат 1;", "the real method body must be read")
+    assert_no_diff("case-insensitive Russian reads must leave the fixture unchanged")

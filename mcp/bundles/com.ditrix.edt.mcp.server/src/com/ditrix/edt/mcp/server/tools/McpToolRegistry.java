@@ -7,7 +7,7 @@
 package com.ditrix.edt.mcp.server.tools;
 
 import java.util.Collection;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -132,13 +132,15 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
     }
 
     /**
-     * Returns all registered tools (regardless of enablement state).
+     * Returns all registered tools (regardless of enablement state), sorted by name.
      *
-     * @return collection of all tools
+     * @return an unmodifiable snapshot of all tools in ascending name order
      */
     public Collection<IMcpTool> getAllTools()
     {
-        return Collections.unmodifiableCollection(tools.get().values());
+        return tools.get().values().stream()
+            .sorted(Comparator.comparing(IMcpTool::getName))
+            .collect(Collectors.toUnmodifiableList());
     }
 
     /**
@@ -146,16 +148,16 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      * This is the method used by the MCP protocol handler to determine
      * which tools are exposed to clients.
      *
-     * @return collection of enabled tools
+     * @return an unmodifiable snapshot of enabled tools in ascending name order
      */
     public Collection<IMcpTool> getEnabledTools()
     {
         Set<String> disabled = ToolSettingsService.getInstance().getDisabledTools();
         if (disabled.isEmpty())
         {
-            return Collections.unmodifiableCollection(tools.get().values());
+            return getAllTools();
         }
-        return tools.get().values().stream()
+        return getAllTools().stream()
             .filter(tool -> !disabled.contains(tool.getName()))
             .collect(Collectors.toUnmodifiableList());
     }
@@ -171,7 +173,7 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      * never affects callability: a hidden tool is still registered and can be called
      * by name (the protocol handler gates calls on {@link #isToolEnabled} only).
      *
-     * @return the visible tools
+     * @return an unmodifiable snapshot of visible tools in ascending name order
      */
     public Collection<IMcpTool> getVisibleTools()
     {

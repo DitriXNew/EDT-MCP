@@ -1,6 +1,6 @@
 # wait_for_break
 
-Wait for a debug suspend event (e.g. breakpoint hit) on the given application. Returns the suspended thread/frame snapshot, or {hit:false} on timeout. applicationId accepts ANY id form for the session: the real id, 'attach:<name>', 'launch:<name>' (EDT-UI-started session), or 'ServerApplication.<app>' (server-side suspend from debug_yaxunit_tests). If omitted and exactly one EDT debug session is active, that session is used. Does NOT terminate the launch on timeout — call again to keep waiting.
+Wait until a running 1C debug session reaches a breakpoint or other suspend event. Parameters and examples: get_tool_guide('wait_for_break').
 
 ## Parameters
 | Parameter | Required | Type | Description |

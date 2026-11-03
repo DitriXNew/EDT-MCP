@@ -15,6 +15,10 @@
         "fqn": {
           "type": "string"
         },
+        "includeReferencedPictures": {
+          "description": "Adopt referenced CommonPicture dependencies; forms only, default false",
+          "type": "boolean"
+        },
         "projectName": {
           "description": "The BASE configuration EDT project that owns the object (NOT the extension) (required)",
           "type": "string"
@@ -32,8 +36,69 @@
         "action": {
           "type": "string"
         },
+        "cascadeAttribution": {
+          "enum": [
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        "cascadedCount": {
+          "type": "integer"
+        },
+        "cascadedObjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dependencies": {
+          "properties": {
+            "commonPictures": {
+              "properties": {
+                "adopted": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "alreadyPresent": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "found": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "unresolved": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "found",
+                "adopted",
+                "alreadyPresent",
+                "unresolved"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "commonPictures"
+          ],
+          "type": "object"
+        },
         "extensionProject": {
           "type": "string"
+        },
+        "formAdopted": {
+          "type": "boolean"
         },
         "fqn": {
           "type": "string"
@@ -49,6 +114,9 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "warning": {
+          "type": "string"
         },
         "writtenProjects": {
           "items": {
@@ -199,6 +267,157 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Read, replace or remove a BusinessProcess route map. Call action='get' before replacing; replace discards all existing items, preserving point identity only for same-named points. Replacing a non-empty map and removing an existing map require destructive consent. Full parameters and examples: call get_tool_guide('business_process_route_map').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "Operation; replace needs points and connections, even when empty.",
+          "enum": [
+            "get",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "connections": {
+          "description": "Replacement connections: {from,to,name?,title?,fromPort?,toPort?,branch?}; Condition sources require branch='true' or 'false'.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "points": {
+          "description": "Replacement points: {name,type,title?,x?,y?,width?,height?,taskDescription?,group?}; omitted sizes use platform defaults.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "business_process_route_map",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "connections": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "defaults": {
+          "type": "object"
+        },
+        "error": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "points": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "routeMapExists": {
+          "type": "boolean"
+        },
+        "routeMapFqn": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT confirm to see the owning tool, state and progress, then again with confirm=true to cancel. Cancellation is not guaranteed - a committed job whose owner declares no destructive stop stays in flight. Parameters and examples: get_tool_guide('cancel_job').",
     "inputSchema": {
       "properties": {
@@ -241,8 +460,20 @@
     "name": "clean_project",
     "outputSchema": {
       "properties": {
+        "dependentsStillBuilding": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "message": {
           "type": "string"
+        },
+        "notRestarted": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "projects": {
           "items": {
@@ -252,6 +483,15 @@
         },
         "projectsCleaned": {
           "type": "integer"
+        },
+        "recovered": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "restartFailure": {
+          "type": "string"
         },
         "success": {
           "type": "boolean"
@@ -524,6 +764,16 @@
         "applicationId": {
           "type": "string"
         },
+        "automatedTestingMode": {
+          "enum": [
+            "TESTCLIENT",
+            "TESTMANAGER"
+          ],
+          "type": "string"
+        },
+        "automatedTestingPort": {
+          "type": "integer"
+        },
         "clientType": {
           "enum": [
             "thin",
@@ -552,6 +802,16 @@
         },
         "applicationId": {
           "type": "string"
+        },
+        "automatedTestingMode": {
+          "enum": [
+            "TESTCLIENT",
+            "TESTMANAGER"
+          ],
+          "type": "string"
+        },
+        "automatedTestingPort": {
+          "type": "integer"
         },
         "clientType": {
           "type": "string"
@@ -609,6 +869,16 @@
         },
         "expectedNotExists": {
           "type": "boolean"
+        },
+        "formType": {
+          "enum": [
+            "OBJECT",
+            "LIST",
+            "CHOICE",
+            "RECORD",
+            "RECORD_SET"
+          ],
+          "type": "string"
         },
         "fqn": {
           "type": "string"
@@ -749,6 +1019,9 @@
           "type": "boolean"
         },
         "synonym": {
+          "type": "string"
+        },
+        "tablePath": {
           "type": "string"
         },
         "targetNamespace": {
@@ -1354,9 +1627,24 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling, but never vendor support: a delete touching an object whose support rule forbids changes is refused. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: nothing else blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a button's command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling, but never vendor support: a delete touching an object whose support rule forbids changes is refused. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: nothing else blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a button's command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Use operations for atomic deletes of members of one form; preview the complete batch before confirming. Parameters and examples: get_tool_guide('delete_metadata').",
     "inputSchema": {
+      "oneOf": [
+        {
+          "required": [
+            "fqn"
+          ]
+        },
+        {
+          "required": [
+            "operations"
+          ]
+        }
+      ],
       "properties": {
+        "atomic": {
+          "type": "boolean"
+        },
         "confirm": {
           "type": "boolean"
         },
@@ -1366,6 +1654,30 @@
         "fqn": {
           "type": "string"
         },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "delete"
+                ],
+                "type": "string"
+              },
+              "fqn": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "fqn"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        },
         "projectName": {
           "type": "string"
         },
@@ -1374,8 +1686,7 @@
         }
       },
       "required": [
-        "projectName",
-        "fqn"
+        "projectName"
       ],
       "type": "object"
     },
@@ -1394,6 +1705,15 @@
         "affectedReferencesCount": {
           "type": "integer"
         },
+        "applied": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "atomic": {
+          "type": "boolean"
+        },
         "blocking": {
           "type": "boolean"
         },
@@ -1404,6 +1724,21 @@
           "type": "array"
         },
         "blockingReferencesCount": {
+          "type": "integer"
+        },
+        "committed": {
+          "type": "boolean"
+        },
+        "errors": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "exportSubmitted": {
+          "type": "boolean"
+        },
+        "failedOperationIndex": {
           "type": "integer"
         },
         "forced": {
@@ -1418,11 +1753,36 @@
           },
           "type": "array"
         },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
+        },
         "message": {
           "type": "string"
         },
         "persisted": {
           "type": "boolean"
+        },
+        "persistenceState": {
+          "type": "string"
         },
         "platformProhibitions": {
           "items": {
@@ -1433,6 +1793,12 @@
         "platformProhibitionsCount": {
           "type": "integer"
         },
+        "possibleApplied": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "refactoringTitle": {
           "type": "string"
         },
@@ -1440,6 +1806,18 @@
           "type": "string"
         },
         "registeringFile": {
+          "type": "string"
+        },
+        "remainingState": {
+          "type": "string"
+        },
+        "rollbackPerformed": {
+          "type": "boolean"
+        },
+        "rollbackState": {
+          "type": "string"
+        },
+        "safeRetry": {
           "type": "string"
         },
         "success": {
@@ -1498,6 +1876,9 @@
           "type": "string"
         },
         "project": {
+          "type": "string"
+        },
+        "state": {
           "type": "string"
         },
         "success": {
@@ -2185,7 +2566,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back BLANK rather than failing, so an empty snapshot means the flag is missing, not that the form has no elements. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
+    "description": "Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
@@ -2221,7 +2602,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back BLANK instead of failing, so an empty screenshot means the flag is missing, not that the call was wrong. Parameters and examples: get_tool_guide('get_form_screenshot').",
+    "description": "Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show a grey rectangle instead of the form for the whole session (EDT behaviour); changing the flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
@@ -3022,9 +3403,22 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Retrieve detailed instructions for an MCP tool. Parameters and examples: get_tool_guide('get_tool_guide').",
+    "description": "Retrieve detailed instructions for an MCP tool. mode=summary lists sections; section=<heading|#anchor>; query=<text>.",
     "inputSchema": {
       "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "summary"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string"
+        },
         "toolName": {
           "type": "string"
         }
@@ -3143,10 +3537,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create an EDT project from exported 1C configuration XML files. Parameters and examples: get_tool_guide('import_configuration_from_xml').",
+    "description": "Create an EDT project from exported 1C configuration XML files. Use platformVersion for the new project's runtime, derived from the dump by default (xmlVersion is a deprecated alias; conflicting values are refused). projectNature checks the dump kind and refuses mismatches. For extensions, pass baseProjectName; omit it for main configurations; optional for external objects. With a base, omit platformVersion and xmlVersion: the runtime is inherited. Parameters and examples: get_tool_guide('import_configuration_from_xml').",
     "inputSchema": {
       "properties": {
+        "baseProjectName": {
+          "type": "string"
+        },
         "importPath": {
+          "type": "string"
+        },
+        "platformVersion": {
           "type": "string"
         },
         "projectName": {
@@ -3335,6 +3735,16 @@
         "applicationId": {
           "type": "string"
         },
+        "automatedTestingMode": {
+          "enum": [
+            "TESTCLIENT",
+            "TESTMANAGER"
+          ],
+          "type": "string"
+        },
+        "automatedTestingPort": {
+          "type": "integer"
+        },
         "externalInfobaseChanges": {
           "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
@@ -3389,6 +3799,16 @@
         },
         "attach": {
           "type": "boolean"
+        },
+        "automatedTestingMode": {
+          "enum": [
+            "TESTCLIENT",
+            "TESTMANAGER"
+          ],
+          "type": "string"
+        },
+        "automatedTestingPort": {
+          "type": "integer"
         },
         "configurationType": {
           "type": "string"
@@ -3807,7 +4227,7 @@
           "type": "object"
         },
         "template": {
-          "description": "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? (rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is 900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' [{row, height}] column / row sizes. An omitted formatting key leaves that property UNSET (the cell inherits it). For textOrientation / autoIndent / autoMarkIncomplete / autoWidthCalculation / widthWeightFactor an explicit 0 / false overrides that inheritance and null counts as omitted; bold:false alone and wrap:false are the same as omitting them. Setting a cell overwrites that (row, col); the rest of the content is kept. Valid only for the matching template type; cannot be combined with 'properties' / 'content' / a Role payload.",
+          "description": "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; only replace creates a missing file. Replacing an existing file requires expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? (rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is 900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' [{row, height}] column / row sizes. An omitted formatting key leaves that property UNSET (the cell inherits it). For textOrientation / autoIndent / autoMarkIncomplete / autoWidthCalculation / widthWeightFactor an explicit 0 / false overrides that inheritance and null counts as omitted; bold:false alone and wrap:false are the same as omitting them. Setting a cell overwrites that (row, col); the rest of the content is kept. Valid only for the matching template type; cannot be combined with 'properties' / 'content' / a Role payload.",
           "type": "object"
         },
         "templates": {
@@ -3936,6 +4356,110 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "List or change EDT validation checks; switch, create, copy or delete check-settings profiles. Writes ask for consent; profile deletion is destructive. Parameters: get_tool_guide('project_checks').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "set",
+            "profiles",
+            "switch",
+            "createProfile",
+            "copyProfile",
+            "deleteProfile"
+          ],
+          "type": "string"
+        },
+        "changes": {
+          "type": "string"
+        },
+        "checkIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "from": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "onlyCustomized": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "project_checks",
+    "outputSchema": {
+      "properties": {
+        "activeProfile": {
+          "type": "string"
+        },
+        "after": {},
+        "before": {},
+        "changed": {},
+        "checks": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "deletedCustomizedChecks": {
+          "type": "integer"
+        },
+        "deletedProfile": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "project": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "idempotentHint": true,
       "openWorldHint": false,
       "readOnlyHint": true
@@ -4047,7 +4571,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference the refactoring cannot resolve (a dynamically built name) is left pointing at the old name. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. Parameters and examples: get_tool_guide('rename_metadata_object').",
+    "description": "Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference the refactoring cannot resolve (a dynamically built name) is left pointing at the old name. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. A long preview continues as a background job - poll get_job_status. Parameters and examples: get_tool_guide('rename_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -4072,8 +4596,20 @@
         "projectName": {
           "type": "string"
         },
+        "textOccurrences": {
+          "description": "include (default) keeps EDT's whole-word text matches enabled; exclude disables module-file text leaves in both preview and confirm. Use the same value for both calls so contentHash matches.",
+          "enum": [
+            "include",
+            "exclude"
+          ],
+          "type": "string"
+        },
         "timeout": {
-          "description": "How long to wait for the cascade itself, in seconds (default 420, clamped to 60..3600). On expiry the call fails with a timeout error naming the stage it reached instead of waiting forever; EDT may still finish the rename afterwards, so verify the model. Does not cover the pre-flight index drain (a separate 60s bound).",
+          "description": "Bounds the server-side computation, not the HTTP call (default 420, clamped to 60..3600 seconds); it cannot keep the call alive. waitSeconds bounds the preview call. A preview timeout produces a FAILED job naming the stage. Confirm stays synchronous and EDT may still finish the rename after its timeout; verify the model. The pre-flight index drain has a separate 60s bound inside the preview job or before confirm.",
+          "type": "integer"
+        },
+        "waitSeconds": {
+          "description": "Preview only: how long this call waits before returning a jobId (default 45, accepts 0..45; 0 returns immediately). Poll get_job_status for the preview and contentHash. Refused with confirm=true; confirm runs synchronously under timeout.",
           "type": "integer"
         }
       },
@@ -4433,6 +4969,54 @@
       "type": "object"
     },
     "name": "search_in_code",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool_guide('search_in_dcs').",
+    "inputSchema": {
+      "properties": {
+        "caseSensitive": {
+          "type": "boolean"
+        },
+        "contextLines": {
+          "type": "integer"
+        },
+        "fileMask": {
+          "type": "string"
+        },
+        "isRegex": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "outputMode": {
+          "enum": [
+            "full",
+            "count",
+            "files"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "search_in_dcs",
     "outputSchema": null
   },
   {

@@ -11,8 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.LongFunction;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -27,6 +27,8 @@ import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.swt.widgets.Shell;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.Acquisition;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchLock;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -124,6 +126,12 @@ public final class StandaloneServerStateRecovery
 
     /** How often the settle wait re-reads the server state. */
     private static final long SETTLE_POLL_MS = 250L;
+
+    private static final long STOP_SHELL_TIMEOUT_MS = 250L;
+
+    /** Test seam for a UI thread that never answers the bounded shell probe. */
+    static volatile LongFunction<LaunchLifecycleUtils.ShellProbe> stopShellProbe =
+        LaunchLifecycleUtils::grabActiveShellWithin;
 
     /**
      * A start we cannot observe arms global dialog guards until the cleanup cap, so it is worth
@@ -650,9 +658,10 @@ public final class StandaloneServerStateRecovery
         }
         long deadline = recoveryDeadline(timeoutMs);
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, timeoutMs, null))
+        Acquisition acquisition = guard.lock.tryAcquire(timeoutMs, null);
+        if (!acquisition.acquired())
         {
-            return Recovery.failedInFlight(recoveryLockFailure());
+            return Recovery.guardNotAcquired(acquisition);
         }
         try
         {
@@ -740,9 +749,11 @@ public final class StandaloneServerStateRecovery
             return Recovery.failed("the stale-server target is incomplete"); //$NON-NLS-1$
         }
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor))
+        Acquisition acquisition = guard.lock.tryAcquire(
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor);
+        if (!acquisition.acquired())
         {
-            return Recovery.failedInFlight(recoveryLockFailure());
+            return Recovery.guardNotAcquired(acquisition);
         }
         try
         {
@@ -867,37 +878,6 @@ public final class StandaloneServerStateRecovery
         }
     }
 
-    /** Acquires one recovery lock without allowing platform work to block the caller forever. */
-    private static boolean tryRecoveryLock(RecoveryGuard guard, long timeoutMs,
-        IProgressMonitor monitor)
-    {
-        long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
-        long deadline = System.nanoTime() + remainingNanos;
-        do
-        {
-            if (monitor != null && monitor.isCanceled())
-            {
-                return false;
-            }
-            long waitNanos = Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(100L));
-            try
-            {
-                if (guard.lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
-                {
-                    return true;
-                }
-            }
-            catch (InterruptedException e)
-            {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            remainingNanos = deadline - System.nanoTime();
-        }
-        while (remainingNanos > 0L);
-        return false;
-    }
-
     /** Monotonic deadline shared by the guarded steps of one recovery operation. */
     private static long recoveryDeadline(long timeoutMs)
     {
@@ -911,14 +891,25 @@ public final class StandaloneServerStateRecovery
         return remainingNanos <= 0L ? 0L : TimeUnit.NANOSECONDS.toMillis(remainingNanos);
     }
 
-    /** Shared diagnosis for a recovery guard that could not be acquired by its deadline. */
-    private static String recoveryLockFailure()
+    /** Names the actual acquisition failure before any guarded ownership check could run. */
+    private static String recoveryLockFailure(Acquisition acquisition)
     {
-        return "its recovery guard did not become available before the deadline, so the server's " //$NON-NLS-1$
-            + "ownership could not be confirmed"; //$NON-NLS-1$
+        return switch (acquisition)
+        {
+            case CONTENDED -> "its recovery guard did not become available before the deadline, " //$NON-NLS-1$
+                + "so the server's ownership could not be confirmed"; //$NON-NLS-1$
+            case INTERRUPTED -> "the wait for its recovery guard was interrupted, " //$NON-NLS-1$
+                + "so ownership was not checked under the guard"; //$NON-NLS-1$
+            case CANCELLED -> "acquiring its recovery guard was cancelled, " //$NON-NLS-1$
+                + "so ownership was not checked under the guard"; //$NON-NLS-1$
+            case ACQUIRED -> throw new IllegalArgumentException("The recovery guard was acquired"); //$NON-NLS-1$
+        };
     }
 
-    /** Claims an ordinary start before it leaves the caller's bounded preparation phase. */
+    /**
+     * Claims an ordinary start before it leaves the caller's bounded preparation phase.
+     * @throws ApplicationException when lock acquisition fails, with its actual reason
+     */
     public static StartClaim claimStartWithinBound(IProject project, String applicationId,
         IProgressMonitor monitor)
     {
@@ -935,9 +926,12 @@ public final class StandaloneServerStateRecovery
             return null;
         }
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, lockTimeoutMs, monitor))
+        Acquisition acquisition = guard.lock.tryAcquire(lockTimeoutMs, monitor);
+        if (!acquisition.acquired())
         {
-            return null;
+            throw new ApplicationException("The standalone server '" + applicationId //$NON-NLS-1$
+                + "' could not be claimed: " + recoveryLockFailure(acquisition) //$NON-NLS-1$
+                + ". Check debug_status before retrying launch."); //$NON-NLS-1$
         }
         try
         {
@@ -965,7 +959,7 @@ public final class StandaloneServerStateRecovery
     static void holdRecoveryLockForTest(IProject project, String applicationId, Runnable action)
     {
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, 1_000L, null))
+        if (!guard.lock.tryAcquire(1_000L, null).acquired())
         {
             throw new IllegalStateException("The test recovery lock could not be acquired"); //$NON-NLS-1$
         }
@@ -1091,17 +1085,24 @@ public final class StandaloneServerStateRecovery
         IApplication application, String applicationId, long timeoutMs,
         BoundedJob.DeferredCleanup ownership)
     {
+        Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
+            + applicationId);
+        return BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
+            timeoutMs, monitor -> manager.cleanup(application, stopContext(timeoutMs), monitor),
+            ownership == null ? null : ownership::jobFinished);
+    }
+
+    /** EDT's server cleanup does not read the context; a shell is optional. */
+    private static ExecutionContext stopContext(long timeoutMs)
+    {
         ExecutionContext context = new ExecutionContext();
-        Shell shell = LaunchLifecycleUtils.grabActiveShell();
+        Shell shell = stopShellProbe.apply(Math.min(STOP_SHELL_TIMEOUT_MS,
+            Math.max(0L, timeoutMs))).shell();
         if (shell != null)
         {
             context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
         }
-        Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
-            + applicationId);
-        return BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
-            timeoutMs, monitor -> manager.cleanup(application, context, monitor),
-            ownership == null ? null : ownership::jobFinished);
+        return context;
     }
 
     /** Turns one bounded stop outcome into the recovery contract its callers act on. */
@@ -1145,12 +1146,7 @@ public final class StandaloneServerStateRecovery
         IApplication application, String applicationId, IProgressMonitor monitor,
         Runnable stopCompleted)
     {
-        ExecutionContext context = new ExecutionContext();
-        Shell shell = LaunchLifecycleUtils.grabActiveShell();
-        if (shell != null)
-        {
-            context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
-        }
+        ExecutionContext context = stopContext(STOP_SHELL_TIMEOUT_MS);
         Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
             + applicationId);
         try
@@ -1518,10 +1514,11 @@ public final class StandaloneServerStateRecovery
     {
         long deadline = recoveryDeadline(timeoutMs);
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, timeoutMs, null))
+        Acquisition acquisition = guard.lock.tryAcquire(timeoutMs, null);
+        if (!acquisition.acquired())
         {
             return RestorationStartOutcome.skipped(
-                "was not restored because " + recoveryLockFailure() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                "was not restored because " + recoveryLockFailure(acquisition) + "."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         try
         {
@@ -1713,7 +1710,7 @@ public final class StandaloneServerStateRecovery
      */
     private static final class RecoveryGuard
     {
-        private final ReentrantLock lock = new ReentrantLock();
+        private final LaunchLock lock = new LaunchLock();
         private final AtomicReference<StartClaim> startClaim = new AtomicReference<>();
         private final AtomicReference<StopInFlight> stopInFlight = new AtomicReference<>();
     }
@@ -2012,9 +2009,8 @@ public final class StandaloneServerStateRecovery
      *     it is then resolved from {@code applicationId})
      * @param applicationId the application id; anything but a standalone-server id
      *     ({@code ServerApplication.<name>}) is a no-op
-     * @throws ApplicationException when a stop of that server did not finish - this call's own,
-     *     or one an earlier operation dispatched and the guard still owns. Either may still be
-     *     running, so the operation must not start the server now
+     * @throws ApplicationException when recovery ownership could not be checked, or a stop of
+     *     that server did not finish and may still be running
      */
     public static void ensureStartable(IProject project, IApplication application,
         String applicationId)
@@ -2295,6 +2291,12 @@ public final class StandaloneServerStateRecovery
         {
             return true;
         }
+        if (recovery.guardFailure != null)
+        {
+            throw new ApplicationException("Recovery did not stop the standalone server of application '" //$NON-NLS-1$
+                + applicationId + "': " + recovery.detail() //$NON-NLS-1$
+                + ". Check debug_status and the Servers view in EDT before retrying."); //$NON-NLS-1$
+        }
         if (recovery.stopStillInFlight())
         {
             // The stop was neither completed nor abandoned: BoundedJob cancels the job but cannot
@@ -2461,12 +2463,26 @@ public final class StandaloneServerStateRecovery
         private final boolean recovered;
         private final String detail;
         private final boolean stopStillInFlight;
+        private final Acquisition guardFailure;
 
         private Recovery(boolean recovered, String detail, boolean stopStillInFlight)
+        {
+            this(recovered, detail, stopStillInFlight, null);
+        }
+
+        private Recovery(boolean recovered, String detail, boolean stopStillInFlight,
+            Acquisition guardFailure)
         {
             this.recovered = recovered;
             this.detail = detail;
             this.stopStillInFlight = stopStillInFlight;
+            this.guardFailure = guardFailure;
+        }
+
+        /** No stop was dispatched and ownership could not be checked under the guard. */
+        static Recovery guardNotAcquired(Acquisition acquisition)
+        {
+            return new Recovery(false, recoveryLockFailure(acquisition), false, acquisition);
         }
 
         /**

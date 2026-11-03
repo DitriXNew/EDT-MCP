@@ -1,6 +1,6 @@
 # get_form_screenshot
 
-Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the form automatically or omit it to shoot the active editor. Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the image is blank (missing flag, not a bad call). Full parameters and examples: call get_tool_guide('get_form_screenshot').
+Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show a grey rectangle instead of the form for the whole session (EDT behaviour); changing the flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -11,15 +11,17 @@ Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the f
 | refresh | — | boolean | Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false) |
 
 ## Guide
-Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders (the same visual EDT shows in the form designer). The response type is IMAGE - the tool returns the PNG, not text.
+Captures a **PNG screenshot** of a form's WYSIWYG editor as rendered by EDT. The response type is IMAGE - the tool returns the PNG, not text.
 
 ## When to use
 - See what a form looks like rendered, verify a layout/visibility change visually, or attach a before/after image.
 - If you need element positions/sizes as DATA (bounds, types, properties) rather than a picture, use `get_form_layout_snapshot` instead.
 - To inspect the declarative form definition, read the `.form` model; this tool is only the rendered bitmap.
 
-## Required JVM flag (read this first)
-EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.ini` `-vmargs` section. Without it the offscreen layout handler is never constructed and the screenshot comes back **blank/empty**. A blank image almost always means the flag is missing - it is NOT a bad call or a code bug, so do not retry or reshape the arguments to "fix" it; add the flag and relaunch EDT.
+## Buffered rendering (read this first)
+**ATTENTION:** `get_form_screenshot` is disabled by default. Enable it in **Window > Preferences > MCP Server > Tools**. On Windows it works only when EDT starts with `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`. On Windows, with this flag, EDT's own form designer shows a **grey rectangle instead of the form** for the **whole session**. This is EDT behaviour. Changing the flag requires an **EDT restart**; use it only for screenshot sessions. Linux and macOS already buffer native rendering. `get_form_layout_snapshot` does not need the flag.
+
+On Windows, EDT concatenates `<java.io.tmpdir>dtgraphics-form.bin` without inserting a separator. If screenshots fail, check the EDT log for `AccessDeniedException` on that file: change `-Djava.io.tmpdir=C:\edt_tmp` to `-Djava.io.tmpdir=C:\edt_tmp\` and restart EDT. Buffered rendering can also distort the designer on a scaled display.
 
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
@@ -40,7 +42,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 - Force refresh first: `{projectName: "MyProj", formPath: "CommonForm.MyForm", refresh: true}`.
 
 ## Notes & gotchas
-- Blank image => the `-DnativeFormBufferedLayoutRender=true` flag is missing (see above), not a failure of this call.
+- Blank or gray image: check both the Windows launch flag and the buffer path (see above).
 - `formPath` without `projectName` is rejected before any rendering.
 - After opening a form the tool lets the UI settle briefly; if the page is still loading you may get "Form editor opened but WYSIWYG page is not available" - retry.
 - Needs a live workbench Display and runs on the UI thread; not available headless.

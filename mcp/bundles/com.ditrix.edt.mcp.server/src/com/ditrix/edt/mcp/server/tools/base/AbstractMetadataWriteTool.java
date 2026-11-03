@@ -222,6 +222,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     @Override
     public final String execute(Map<String, String> params)
     {
+        String validationError = validateRequest(params);
+        if (validationError != null)
+        {
+            return validationError;
+        }
         String preUiError = beforeUiThreadOrError(params);
         if (preUiError != null)
         {
@@ -394,6 +399,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return false;
     }
 
+    /** Allows a tool with multiple request modes to opt into the shared marker report per call. */
+    protected boolean reportsWrittenObjectMarkers(Map<String, String> params)
+    {
+        return reportsWrittenObjectMarkers();
+    }
+
     /** @return the validation budget of the marker report; overridden only by tests */
     protected long markerDeadlineMs()
     {
@@ -415,7 +426,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     private String attachWrittenObjectMarkers(Map<String, String> params, WriteScope.Verdict verdict,
         WriteScope scope, String result)
     {
-        if (!reportsWrittenObjectMarkers())
+        if (!reportsWrittenObjectMarkers(params))
         {
             return result;
         }
@@ -697,6 +708,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return null;
     }
 
+    /** Returns a ready error JSON for input refused before project access, or null. */
+    protected String validateRequest(Map<String, String> params)
+    {
+        return null;
+    }
+
     /**
      * Performs the tool logic. Always invoked on the SWT UI thread, so model
      * mutations are safe here. Any thrown exception is logged and converted to a
@@ -831,9 +848,15 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
     private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)
     {
+        return resolveProjectRoot(projectName,
+            ResourcesPlugin.getWorkspace().getRoot().getProject(projectName), allowNoConfiguration);
+    }
+
+    /** The same write gate with an already-resolved project, for lifecycle snapshot tests. */
+    ProjectContext resolveProjectRoot(String projectName, IProject project, boolean allowNoConfiguration)
+    {
         ProjectContext ctx = new ProjectContext();
 
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
             // FQN: this class has its own nested ProjectContext, so the shared resolver's
@@ -870,7 +893,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             ctx.error = ToolResult.error(
                 com.ditrix.edt.mcp.server.utils.ProjectContext.noConfigurationMessage(
-                    projectName, scope.isExternalObjects())).toJson();
+                    projectName, project, scope))
+                    .toJson();
             return ctx;
         }
 

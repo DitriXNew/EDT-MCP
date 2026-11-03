@@ -1,6 +1,6 @@
 # get_platform_documentation
 
-Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. A SYSTEM ENUMERATION (e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. A metadata TYPE SET (CatalogObject, CatalogRef, DocumentObject, EnumRef, ...) renders the API every catalog / document / register object shares. For a TYPE, detailed output also carries the descriptions from the platform's own documentation. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').
+Look up a built-in 1C type or global function in the platform documentation. Returns headers and member names by default - pass responseFormat='detailed' for signatures, parameters and return types. Parameters and examples: get_tool_guide('get_platform_documentation').
 
 ## Parameters
 | Parameter | Required | Type | Description |

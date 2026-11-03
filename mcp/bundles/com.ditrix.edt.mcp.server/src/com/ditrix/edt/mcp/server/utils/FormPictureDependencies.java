@@ -14,7 +14,6 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 
-import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.mcore.McorePackage;
@@ -56,9 +55,9 @@ public final class FormPictureDependencies
         {
             return collect((EObject)null);
         }
-        URI uri = source.eIsProxy() ? ((InternalEObject)source).eProxyURI() : null;
-        long id = uri == null && source instanceof IBmObject ? ((IBmObject)source).bmGetId() : 0L;
         return BmTransactions.read(model, "adopt_metadata_object: read form pictures", (tx, monitor) -> { //$NON-NLS-1$
+            URI uri = source.eIsProxy() ? ((InternalEObject)source).eProxyURI() : null;
+            long id = uri == null && source instanceof IBmObject ? ((IBmObject)source).bmGetId() : 0L;
             EObject inTx = uri != null ? (EObject)tx.getObjectByUri(uri) : (EObject)tx.getObjectById(id);
             if (inTx == null || inTx.eIsProxy())
             {
@@ -92,7 +91,7 @@ public final class FormPictureDependencies
     {
         collectPictures(mdForm, found, unresolved);
         // BasicForm.form is external content: a metadata-only walk does not reliably load it.
-        EObject content = FormElementWriter.getEditableForm(mdForm);
+        EObject content = ((BasicForm)mdForm).getForm();
         if (content != null)
         {
             if (content.eIsProxy())
@@ -127,6 +126,8 @@ public final class FormPictureDependencies
             return;
         }
         EObject picture = (EObject)raw;
+        URI rawUri = picture.eIsProxy() ? ((InternalEObject)picture).eProxyURI() : null;
+        String rawFqn = PictureValueBuilder.commonPictureFqn(rawUri);
         try
         {
             Object resolved = ref.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, true);
@@ -135,7 +136,7 @@ public final class FormPictureDependencies
                 picture = (EObject)resolved;
                 if (!picture.eIsProxy())
                 {
-                    String fqn = MetadataNodeResolver.resolvableAddressOf((CommonPicture)picture);
+                    String fqn = PictureValueBuilder.commonPictureFqn((CommonPicture)picture);
                     if (fqn != null)
                     {
                         found.add(fqn);
@@ -143,7 +144,7 @@ public final class FormPictureDependencies
                     }
                 }
             }
-            else if (!(picture instanceof CommonPicture))
+            else if (!(picture instanceof CommonPicture) && rawFqn == null)
             {
                 // Standard/extended platform pictures do not belong to the configuration and
                 // may intentionally remain proxies. Only CommonPicture dependencies are adopted.
@@ -154,24 +155,17 @@ public final class FormPictureDependencies
         {
             // A CommonPicture may still be identified by its BM URI. A platform picture is
             // outside the dependency set even when its catalogue is unavailable.
-            if (!(picture instanceof CommonPicture))
+            if (!(picture instanceof CommonPicture) && rawFqn == null)
             {
                 return;
             }
         }
-        URI proxyUri = picture.eIsProxy() ? ((InternalEObject)picture).eProxyURI() : null;
-        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri)
-            && proxyUri.path() != null && !proxyUri.path().isEmpty())
+        URI proxyUri = picture.eIsProxy() ? ((InternalEObject)picture).eProxyURI() : rawUri;
+        String fqn = PictureValueBuilder.commonPictureFqn(proxyUri);
+        if (fqn != null)
         {
-            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
-            if (fqn != null && fqn.startsWith(PictureValueBuilder.COMMON_PREFIX)
-                && fqn.length() > PictureValueBuilder.COMMON_PREFIX.length())
-            {
-                // Cross-project references in reloaded extension forms may remain unresolved here.
-                // The caller still resolves this canonical address in the base scope before any write.
-                found.add(fqn);
-                return;
-            }
+            found.add(fqn);
+            return;
         }
         unresolved.add(picture.eIsProxy() ? String.valueOf(((InternalEObject)picture).eProxyURI())
             : "CommonPicture with no programmatic Name"); //$NON-NLS-1$

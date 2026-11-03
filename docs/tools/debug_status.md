@@ -1,6 +1,6 @@
 # debug_status
 
-Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether the target is currently suspended, thread count, and the line of the top suspended frame. Also reports debugServerTargets: 1C debug-server sessions (server-side suspends, EDT-UI-started 'Debug As') addressable as 'ServerApplication.<app>'. Optionally filter by applicationId.
+Check which EDT debug sessions are running or paused. Parameters and examples: get_tool_guide('debug_status').
 
 ## Parameters
 | Parameter | Required | Type | Description |

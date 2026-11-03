@@ -31,6 +31,7 @@ import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.PictureRef;
+import com._1c.g5.v8.dt.mcore.Picture;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -40,9 +41,136 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Gate-review regressions; all dispatch cases can run against the unchanged round-one tool. */
+/** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testGenericUnresolvedPictureUsesItsStoredCommonPictureBmAddress() throws Exception
+    {
+        Picture proxy = mock(Picture.class, withSettings().extraInterfaces(InternalEObject.class));
+        when(proxy.eIsProxy()).thenReturn(true);
+        when(((InternalEObject)proxy).eProxyURI()).thenReturn(
+            BmUriUtil.createTopBmObjectUri("Base", "CommonPicture.Logo")); //$NON-NLS-1$ //$NON-NLS-2$
+        PictureRef reference = mock(PictureRef.class, withSettings().extraInterfaces(InternalEObject.class));
+        when(reference.eClass()).thenReturn(McorePackage.Literals.PICTURE_REF);
+        when(reference.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, false)).thenReturn(proxy);
+        when(reference.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, true)).thenReturn(proxy);
+        form.setCreateButtonsGroupPicture(reference);
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertNames(result, "found", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOmittedAndFalseFlagNeverReadEvenBrokenFormContent() throws Exception
+    {
+        Form proxy = FORM.createForm();
+        ((InternalEObject)proxy).eSetProxyURI(URI.createURI("missing:/form")); //$NON-NLS-1$
+        mdForm.setForm(proxy);
+        JsonObject first = run(FORM_FQN, null);
+        assertTrue(first.toString(), first.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(first.has("dependencies")); //$NON-NLS-1$
+        assertEquals(List.of(mdForm), adoptedSources);
+        JsonObject again = run(FORM_FQN, false);
+        assertEquals("alreadyAdopted", again.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(again.has("dependencies")); //$NON-NLS-1$
+        verify(baseModel, never()).executeReadonlyTask(any());
+        assertTrue(scope.statedNothingQueued());
+    }
+
+    @Test
+    public void testOptInRefusesNonFormObjectAndMemberBeforeModelAccess() throws Exception
+    {
+        for (String fqn : List.of("Catalog.Goods", "CommonPicture.Logo", "Catalog.Goods.Attribute.Weight")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            JsonObject result = run(fqn);
+            assertRefusal(result, fqn, "CommonForm.Name"); //$NON-NLS-1$
+        }
+        verify(baseModel, never()).executeReadonlyTask(any());
+        verify(extensionModel, never()).executeReadonlyTask(any());
+    }
+
+    @Test
+    public void testFormWithoutPicturesReturnsFourEmptyArrays() throws Exception
+    {
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(List.of(mdForm), adoptedSources);
+        for (String key : List.of("found", "adopted", "alreadyPresent", "unresolved")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertNames(result, key);
+        }
+    }
+
+    @Test
+    public void testPlatformCascadePictureCountsAsAdoptedAndIsExported() throws Exception
+    {
+        form.getItems().add(field("First", logo)); //$NON-NLS-1$
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            EObject formCopy = adoptSource(mdForm);
+            adoptSource(logo); // EDT may adopt a dependency before its explicit batch input.
+            return List.of(formCopy);
+        });
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNames(result, "alreadyPresent"); //$NON-NLS-1$
+        verify(models).forceExport(dtExtension, List.of("Catalog.Goods", "CommonPicture.Logo", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testUnknownCascadeDoesNotPretendANewPictureWasAlreadyPresent() throws Exception
+    {
+        form.getItems().add(field("First", logo)); //$NON-NLS-1$
+        emitCommitEvent = false;
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            EObject formCopy = adoptSource(mdForm);
+            adoptSource(logo);
+            return List.of(formCopy);
+        });
+        JsonObject result = run(FORM_FQN);
+        assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertNames(result, "alreadyPresent"); //$NON-NLS-1$
+        assertNames(result, "unresolved", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("unavailable", result.get("cascadeAttribution").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(models).forceExport(dtExtension, List.of("Catalog.Goods", "CommonPicture.Logo", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testExportFailureKeepsTheObservedDependencyOutcome() throws Exception
+    {
+        form.getItems().add(field("First", logo)); //$NON-NLS-1$
+        when(models.forceExport(eq(dtExtension), anyList())).thenThrow(new IllegalStateException("Disk export failed")); //$NON-NLS-1$
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("persisted").getAsBoolean()); //$NON-NLS-1$
+        assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNames(result, "unresolved"); //$NON-NLS-1$
+        assertTrue(scope.hasRecordedWrite());
+    }
+
+    @Test
+    public void testFailureReportsAndExportsObservablePartialAdoptions() throws Exception
+    {
+        CommonPicture other = picture("Other"); //$NON-NLS-1$
+        form.getItems().add(field("First", logo)); //$NON-NLS-1$
+        form.getItems().add(field("Second", other)); //$NON-NLS-1$
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            adoptSource(mdForm);
+            adoptSource(logo);
+            throw new IllegalStateException("Late platform failure"); //$NON-NLS-1$
+        });
+        JsonObject result = run(FORM_FQN);
+        assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("formAdopted").getAsBoolean()); //$NON-NLS-1$
+        assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNames(result, "unresolved", "CommonPicture.Other"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("persisted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(scope.statedNothingQueued());
+        verify(models).forceExport(dtExtension, List.of("Catalog.Goods", "CommonPicture.Logo", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     @Test
     public void testCatalogAdoptionIgnoresAllOwnedFormsAndKeepsMasterResult() throws Exception
     {
@@ -55,13 +183,14 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         goods.getForms().add(unreadable);
         baseReadRoot = goods;
 
-        run("Catalog.Goods"); //$NON-NLS-1$
+        run("Catalog.Goods", null); //$NON-NLS-1$
         assertEquals(AdoptMetadataObjectTool.adoptedResult(
             AdoptMetadataObjectTool.AdoptionSource.resolve(MetadataScope.ofConfiguration(config), "Catalog.Goods"), //$NON-NLS-1$
-            "tests", true, null), rawResponse); //$NON-NLS-1$
+            "tests", true, AdoptMetadataObjectTool.mappingNote("tests", extensionModel, copies.get(goods),
+                null, false, false)), rawResponse); //$NON-NLS-1$
         assertEquals(List.of(goods), adoptedSources);
         verify(baseModel, never()).executeReadonlyTask(any());
-        verify(adopter, never()).adoptAndAttach(anyList(), eq(target), any());
+        verify(adopter).adoptAndAttach(anyList(), eq(target), any());
     }
 
     @Test
@@ -79,7 +208,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         config.getCommonModules().add(module);
         copies.put(module, exportedCopy("CommonModule.Calc")); //$NON-NLS-1$
 
-        run("CommonModule.Calc"); //$NON-NLS-1$
+        run("CommonModule.Calc", false); //$NON-NLS-1$
         assertEquals(AdoptMetadataObjectTool.alreadyAdoptedResult(
             AdoptMetadataObjectTool.AdoptionSource.resolve(MetadataScope.ofConfiguration(config), "CommonModule.Calc"), //$NON-NLS-1$
             "tests", null), rawResponse); //$NON-NLS-1$
@@ -97,7 +226,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         goods.getAttributes().add(weight);
         form.getItems().add(field("Unused", logo)); //$NON-NLS-1$
 
-        JsonObject result = run("Catalog.Goods.Attribute.Weight"); //$NON-NLS-1$
+        JsonObject result = run("Catalog.Goods.Attribute.Weight", null); //$NON-NLS-1$
         assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertFalse(result.has("dependencies")); //$NON-NLS-1$
         assertEquals(List.of(weight), adoptedSources);
@@ -121,7 +250,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     }
 
     @Test
-    public void testBatchFailureRollsBackFormAndEveryPictureAndQueuesNothing() throws Exception
+    public void testBatchFailureReportsUnknownScopeWithoutPromisingRollback() throws Exception
     {
         CommonPicture other = picture("Other"); //$NON-NLS-1$
         form.getItems().add(field("First", logo)); //$NON-NLS-1$
@@ -136,9 +265,10 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         assertNames(result, "adopted"); //$NON-NLS-1$
         assertTrue(adoptedSources.isEmpty());
         assertFalse(scope.hasRecordedWrite());
-        assertTrue(scope.statedNothingQueued());
-        assertTrue(result.get("error").getAsString().contains("rolled back")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(result.get("error").getAsString().contains("Completed adoptions")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(scope.statedNothingQueued());
+        assertTrue(result.get("error").getAsString().contains("Inspect the extension")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.get("error").getAsString().contains("rolled back"));
+        assertNames(result, "unresolved", "CommonPicture.Logo", "CommonPicture.Other"); //$NON-NLS-1$ //$NON-NLS-2$
         verify(models, never()).forceExport(any(), anyList());
     }
 
@@ -148,12 +278,10 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         CommonPicture other = picture("Other"); //$NON-NLS-1$
         form.getItems().add(field("First", logo)); //$NON-NLS-1$
         form.getItems().add(field("Second", other)); //$NON-NLS-1$
-        EObject otherCopy = exportedPicture("CommonPicture.Other"); //$NON-NLS-1$
         when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
-            copies.put(mdForm, exportedCopy("Catalog.Goods")); //$NON-NLS-1$
-            copies.put(logo, exportedPicture("CommonPicture.Logo")); //$NON-NLS-1$
-            copies.put(other, otherCopy);
-            return List.of(otherCopy);
+            copies.put(mdForm, exportedCopy("Catalog.Goods"));
+            copies.put(logo, exportedPicture("CommonPicture.Logo"));
+            return List.of(adoptSource(other));
         });
 
         JsonObject result = run(FORM_FQN);
@@ -201,26 +329,26 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     }
 
     @Test
-    public void testUnreadableAdoptedFormKeepsMasterSuccessAndReportsDependency() throws Exception
+    public void testUnreadableAdoptedFormRefusesAndReportsDependency() throws Exception
     {
         when(adopter.isAdopted(mdForm, target)).thenReturn(true);
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertTrue(result.toString(), result.getAsJsonObject("dependencies") //$NON-NLS-1$
             .getAsJsonObject("commonPictures").getAsJsonArray("unresolved").size() > 0); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testUnreadableAdoptedCopyInTransactionKeepsSuccess() throws Exception
+    public void testUnreadableAdoptedCopyInTransactionRefuses() throws Exception
     {
         copies.put(mdForm, MD.createCatalogForm());
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertTrue(result.toString().contains("Form content:")); //$NON-NLS-1$
     }
 
     @Test
-    public void testProxiedAdoptedContentKeepsSuccessAndReportsUri() throws Exception
+    public void testProxiedAdoptedContentRefusesAndReportsUri() throws Exception
     {
         CatalogForm copy = MD.createCatalogForm();
         Form proxy = FORM.createForm();
@@ -229,12 +357,12 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         copies.put(mdForm, copy);
         extensionReadRoot = copy;
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertNames(result, "unresolved", "Form content: missing:/extension/Form.form"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testUnresolvedAdoptedPictureKeepsSuccessAndReportsUri() throws Exception
+    public void testUnresolvedAdoptedPictureRefusesAndReportsUri() throws Exception
     {
         CommonPicture proxy = MD.createCommonPicture();
         ((InternalEObject)proxy).eSetProxyURI(URI.createURI("missing:/CommonPicture.Unknown")); //$NON-NLS-1$
@@ -243,12 +371,12 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         extensionReadRoot = mdForm;
 
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertNames(result, "unresolved", "missing:/CommonPicture.Unknown"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testMissingBasePictureOnReadoptionKeepsSuccessAndReportsName() throws Exception
+    public void testMissingBasePictureOnReadoptionRefusesAndReportsName() throws Exception
     {
         CommonPicture missing = MD.createCommonPicture();
         missing.setName("Missing"); //$NON-NLS-1$
@@ -257,12 +385,12 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         extensionReadRoot = mdForm;
 
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertNames(result, "unresolved", "CommonPicture.Missing"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testNonAdoptablePictureOnReadoptionKeepsSuccess() throws Exception
+    public void testNonAdoptablePictureOnReadoptionRefuses() throws Exception
     {
         form.getItems().add(field("Broken", logo)); //$NON-NLS-1$
         copies.put(mdForm, mdForm);
@@ -270,7 +398,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         when(adopter.isAdoptable(logo)).thenReturn(false);
 
         JsonObject result = run(FORM_FQN);
-        assertBenignReadoption(result);
+        assertIncompleteReadoption(result);
         assertNames(result, "unresolved", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -301,17 +429,11 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         }
     }
 
-    private void assertBenignReadoption(JsonObject result) throws Exception
+    private void assertIncompleteReadoption(JsonObject result) throws Exception
     {
-        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertEquals("alreadyAdopted", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        String mappingNote = AdoptMetadataObjectTool.mappingNote("tests", extensionModel, copies.get(mdForm), //$NON-NLS-1$
-            null, null, true);
-        JsonObject master = JsonParser.parseString(AdoptMetadataObjectTool.alreadyAdoptedResult(
-            AdoptMetadataObjectTool.AdoptionSource.resolve(MetadataScope.ofConfiguration(config), FORM_FQN),
-            "tests", mappingNote)).getAsJsonObject(); //$NON-NLS-1$
-        assertEquals(master.get("message"), result.get("message")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNames(result, "adopted"); //$NON-NLS-1$
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertTrue(result.get("error").getAsString().contains("retry"));
+        assertNames(result, "adopted");
         assertTrue(scope.statedNothingQueued());
         assertTrue(adoptedSources.isEmpty());
         verify(models, never()).forceExport(any(), anyList());

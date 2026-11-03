@@ -732,7 +732,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .put(McpKeys.APPLICATION_ID, applicationId)
             .put(KEY_APPLICATION_NAME, displayName)
             .put(KEY_USER, storedUser)
-            .put(KEY_ACCESS, accessKind.getName())
+            .put(KEY_ACCESS, accessKind.name())
             .put(KEY_PASSWORD_SET, passwordSet)
             .put("storedFor", storedFor(storeResult)) //$NON-NLS-1$
             .put("verification", verificationName(storeResult)) //$NON-NLS-1$

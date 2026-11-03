@@ -842,6 +842,18 @@ public final class DcsWriter
             : ValueBuildResult.failure(value.error);
     }
 
+    /** Restates a schema default/available value through the same declared-value writer. */
+    static String declaredValueRefusal(TypeDescription declared, Value stored,
+        DcsPresentationParser.LanguageContext languages)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return DcsSettingsWriter.untypedValueRefusal(stored, raw -> {
+            ValueBuildResult built = declaredValue(raw, declared, dryRun, "value"); //$NON-NLS-1$
+            return built.error == null ? DcsSettingsWriter.ValueResult.success(built.value)
+                : DcsSettingsWriter.ValueResult.failure(built.error);
+        });
+    }
+
     private static Value expectedValue(TypeDescription declared, JsonElement raw)
     {
         String kind = raw != null && raw.isJsonObject()

@@ -38,8 +38,9 @@ import com.ditrix.edt.mcp.server.Activator;
  *
  * <p>Drives the selective recompute in
  * {@link LaunchLifecycleUtils#recomputeAndSettleIfDirty}: only projects whose
- * workspace content actually changed need a forced {@code recomputeAll()}; the
- * rest still get the cheap {@link BuildUtils#waitForDerivedData} pass to guard
+ * workspace content actually changed need fresh preparation. Only dirty extensions
+ * need a forced {@code recomputeAll()}; configurations drain EDT's incremental queue
+ * via {@link BuildUtils#awaitDerivedData} to guard
  * against any background-derived-data work already in flight.
  *
  * <h3>Two signals, one of which outlives the plugin</h3>
@@ -287,9 +288,10 @@ public final class PreLaunchChangeTracker
         Map<String, Long> generations = new HashMap<>();
         Map<String, String> fingerprints = new HashMap<>();
         Set<String> dirtyNames = new HashSet<>();
+        Set<String> synchronizedSources = new HashSet<>();
         if (projects == null)
         {
-            return new PrepareSnapshot(generations, fingerprints, dirtyNames);
+            return new PrepareSnapshot(generations, fingerprints, dirtyNames, synchronizedSources);
         }
         for (IProject project : projects)
         {
@@ -301,6 +303,10 @@ public final class PreLaunchChangeTracker
             ensureTreeReflectsDisk(project);
             Evaluation evaluation = evaluate(project);
             fingerprints.put(name, evaluation.fingerprint);
+            if (DISK_SYNCED.contains(name) && evaluation.fingerprint != null)
+            {
+                synchronizedSources.add(name);
+            }
             if (evaluation.dirty)
             {
                 dirtyNames.add(name);
@@ -311,7 +317,7 @@ public final class PreLaunchChangeTracker
                 generations.put(name, generation != null ? generation : -1L);
             }
         }
-        return new PrepareSnapshot(generations, fingerprints, dirtyNames);
+        return new PrepareSnapshot(generations, fingerprints, dirtyNames, synchronizedSources);
     }
 
     /**
@@ -400,13 +406,21 @@ public final class PreLaunchChangeTracker
         private final Map<String, Long> generations;
         private final Map<String, String> fingerprints;
         private final Set<String> dirtyNames;
+        private final Set<String> synchronizedSources;
 
         PrepareSnapshot(Map<String, Long> generations, Map<String, String> fingerprints,
-                Set<String> dirtyNames)
+                Set<String> dirtyNames, Set<String> synchronizedSources)
         {
             this.generations = Collections.unmodifiableMap(generations);
             this.fingerprints = Collections.unmodifiableMap(fingerprints);
             this.dirtyNames = Collections.unmodifiableSet(dirtyNames);
+            this.synchronizedSources = Collections.unmodifiableSet(synchronizedSources);
+        }
+
+        /** @return whether disk refresh and source fingerprinting succeeded before preparation */
+        public boolean hasSynchronizedSources(IProject project)
+        {
+            return project != null && synchronizedSources.contains(project.getName());
         }
 
         /**

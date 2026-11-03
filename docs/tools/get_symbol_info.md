@@ -1,6 +1,6 @@
 # get_symbol_info
 
-Get type/hover info about a symbol at a position in a BSL module. Returns inferred types, signatures, and documentation.
+Inspect the type and documentation of a BSL symbol at its source location. Parameters and examples: get_tool_guide('get_symbol_info').
 
 ## Parameters
 | Parameter | Required | Type | Description |

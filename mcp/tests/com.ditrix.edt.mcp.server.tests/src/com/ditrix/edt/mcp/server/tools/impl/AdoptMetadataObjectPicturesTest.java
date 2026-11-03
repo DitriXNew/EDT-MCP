@@ -34,7 +34,6 @@ import com._1c.g5.v8.dt.form.model.FormGroup;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.Picture;
 import com._1c.g5.v8.dt.mcore.PictureRef;
-import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
@@ -59,7 +58,7 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
         assertNames(result, "found", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNames(result, "adopted", "CommonPicture.Logo"); //$NON-NLS-1$ //$NON-NLS-2$
         verify(models).forceExport(dtExtension,
-            List.of("Catalog.Goods", "Configuration", "CommonPicture.Logo")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            List.of("Catalog.Goods", "CommonPicture.Logo", "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(List.of("tests"), scope.writtenProjects()); //$NON-NLS-1$
         assertTrue(scope.exportedTopObjects("tests").contains("CommonPicture.Logo")); //$NON-NLS-1$ //$NON-NLS-2$
         verify(baseModel, never()).execute(any());
@@ -279,12 +278,17 @@ public class AdoptMetadataObjectPicturesTest extends AdoptMetadataObjectPictures
     }
 
     @Test
-    public void testOutputSchemaAndDescriptionDeclareAutomaticDependencies()
+    public void testSchemaDeclaresOptInDependencies()
     {
-        assertTrue(new AdoptMetadataObjectTool().getDescription().contains("referenced form common pictures")); //$NON-NLS-1$
         JsonObject schema = JsonParser.parseString(new AdoptMetadataObjectTool().getOutputSchema()).getAsJsonObject();
         assertTrue(schema.getAsJsonObject("properties").has("dependencies")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(new AdoptMetadataObjectTool().getInputSchema().contains("includeReferencedPictures")); //$NON-NLS-1$
+        assertTrue(new AdoptMetadataObjectTool().getInputSchema().contains("includeReferencedPictures")); //$NON-NLS-1$
+        JsonObject input = com.ditrix.edt.mcp.server.protocol.InputSchemaCompactor.compact(
+            AdoptMetadataObjectTool.NAME, JsonParser.parseString(new AdoptMetadataObjectTool().getInputSchema()))
+            .getAsJsonObject();
+        String description = input.getAsJsonObject("properties").getAsJsonObject("includeReferencedPictures") //$NON-NLS-1$ //$NON-NLS-2$
+            .get("description").getAsString(); //$NON-NLS-1$
+        assertTrue(description, description.contains("forms only, default false")); //$NON-NLS-1$
     }
 
 }

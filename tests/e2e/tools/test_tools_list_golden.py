@@ -46,6 +46,9 @@ def _canonical_tools_list():
     """
     raw = _post("tools/list", {})
     tools = (raw.get("result", {}) or {}).get("tools", []) or []
+    names = [t["name"] for t in tools]
+    if names != sorted(names):
+        _fail("tools/list must return tools in ascending name order (received: %s)" % names)
     entries = [{
         "name": t.get("name"),
         "description": t.get("description", ""),

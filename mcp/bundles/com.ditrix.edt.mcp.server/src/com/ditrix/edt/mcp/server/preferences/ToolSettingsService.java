@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.jface.preference.IPreferenceStore;
@@ -21,8 +22,8 @@ import com.ditrix.edt.mcp.server.SseStreamRegistry;
 
 /**
  * Service managing tool enablement state.
- * Reads and writes disabled tool names to the preference store.
- * Thread-safe: the disabled set is parsed on each access from the volatile preference store.
+ * Keeps stored preferences separate from the effective launch-preset view used for tool enablement.
+ * Thread-safe: the launch selection is resolved once and published through an immutable volatile holder.
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
@@ -82,6 +83,22 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> READ_ONLY_V12_ADDITIONS = Set.of(
         "export_configuration_to_file"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V14_ADDITIONS = Set.of(
+        "switch_git_branch", //$NON-NLS-1$
+        "create_git_branch", //$NON-NLS-1$
+        "set_branch_infobase", //$NON-NLS-1$
+        "create_project", //$NON-NLS-1$
+        "resync_to_disk", //$NON-NLS-1$
+        "clean_project"); //$NON-NLS-1$
+
+    private static final Set<String> STORED_PROFILE_V15_ADDITIONS = Set.of(
+        "get_form_screenshot"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V16_ADDITIONS = Set.of(
+        "business_process_route_map"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V17_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -94,7 +111,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(9, READ_ONLY_V9_ADDITIONS),
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
-        Map.entry(12, READ_ONLY_V12_ADDITIONS));
+        Map.entry(12, READ_ONLY_V12_ADDITIONS),
+        Map.entry(14, READ_ONLY_V14_ADDITIONS),
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS),
+        Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -108,9 +129,15 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(9, READ_ONLY_V9_ADDITIONS),
         Map.entry(10, NO_DEBUG_V10_ADDITIONS),
         Map.entry(11, READ_ONLY_V11_ADDITIONS),
-        Map.entry(12, READ_ONLY_V12_ADDITIONS));
+        Map.entry(12, READ_ONLY_V12_ADDITIONS),
+        Map.entry(14, READ_ONLY_V14_ADDITIONS),
+        Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
+        Map.entry(16, READ_ONLY_V16_ADDITIONS),
+        Map.entry(17, READ_ONLY_V17_ADDITIONS));
 
     /*
+     * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
+     * storedPreset(store).isReadOnly() / isNoDebug(), never a recognition shape.
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
      * Never derive them from the live preset, which has grown over time. A shape is only ever
      * extended after checking that every supported historical store still contains the new name.
@@ -190,6 +217,18 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 
+    static final String ENV_TOOL_PRESET = "EDT_MCP_TOOL_PRESET"; //$NON-NLS-1$
+
+    /** Package-visible environment seam; tests never change the process environment. */
+    Function<String, String> environment = System::getenv;
+
+    /** Null until first use; a holder with a null preset records a resolved stored-selection launch. */
+    private volatile SessionPreset sessionPreset;
+
+    private record SessionPreset(ToolPreset preset)
+    {
+    }
+
     private ToolSettingsService()
     {
         // Singleton
@@ -204,11 +243,81 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Returns the set of disabled tool names from preferences, falling back to the SHIPPED defaults
-     * when no store is available - never to "nothing is disabled", which would enable a default-off
-     * tool.
+     * Returns the active predefined launch preset from {@code EDT_MCP_TOOL_PRESET}, or null
+     * when the stored selection applies. IDs are case-insensitive and trimmed.
+     * An unset or blank value, or {@code custom}, uses the stored selection. Explicit {@code custom}
+     * logs once at INFO; unknown IDs log once at WARNING with only the predefined override IDs.
+     * Resolves once on first use, including bridge calls and manual starts without earlyStartup.
+     * The immutable holder publishes the complete decision atomically, including blank/invalid values.
+     */
+    public ToolPreset getSessionPreset()
+    {
+        SessionPreset resolved = sessionPreset;
+        if (resolved == null)
+        {
+            synchronized (this)
+            {
+                resolved = sessionPreset;
+                if (resolved == null)
+                {
+                    ToolPreset preset = resolveSessionPreset(environment.apply(ENV_TOOL_PRESET));
+                    resolved = new SessionPreset(preset);
+                    sessionPreset = resolved;
+                }
+            }
+        }
+        return resolved.preset();
+    }
+
+    private ToolPreset resolveSessionPreset(String value)
+    {
+        if (value == null || value.isBlank())
+        {
+            return null;
+        }
+        String id = value.trim();
+        for (ToolPreset preset : ToolPreset.values())
+        {
+            if (preset.getId().equalsIgnoreCase(id))
+            {
+                if (preset == ToolPreset.CUSTOM)
+                {
+                    Activator.logInfo("EDT_MCP_TOOL_PRESET=custom uses the stored tool selection; " //$NON-NLS-1$
+                        + "no launch override."); //$NON-NLS-1$
+                    return null;
+                }
+                return preset;
+            }
+        }
+        String validIds = Arrays.stream(ToolPreset.values())
+            .filter(preset -> preset != ToolPreset.CUSTOM)
+            .map(ToolPreset::getId).collect(Collectors.joining(", ")); //$NON-NLS-1$
+        Activator.logWarning("Invalid EDT_MCP_TOOL_PRESET value: " + value //$NON-NLS-1$
+            + ". Valid preset ids: " + validIds //$NON-NLS-1$
+            + ". Unset or custom uses the stored tool selection. Ignoring launch override."); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Returns the effective disabled set for registry reads and call enablement.
+     * A predefined launch preset bypasses the store and its migrations.
      */
     public Set<String> getDisabledTools()
+    {
+        ToolPreset preset = getSessionPreset();
+        if (preset != null)
+        {
+            return preset.getDisabledTools();
+        }
+        return getStoredDisabledTools();
+    }
+
+    /**
+     * Returns the persisted selection after its normal lazy migrations, ignoring the launch preset.
+     * Preference editors and read-modify-write operations must use this view.
+     * Falls back to the shipped defaults when no store is available.
+     */
+    public Set<String> getStoredDisabledTools()
     {
         IPreferenceStore store = getStore();
         if (store == null)
@@ -266,6 +375,30 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * intentionally have enabled. Because the recognized shapes are nested, it tests the most
      * restrictive shape first; otherwise a broader match would add only part of the tools owed to
      * an Analysis Only store.
+     *
+     * <p>
+     * Version 13 records provenance once, AFTER the frozen v1-v12 steps and the v5 rename,
+     * by containment of the bare historical shapes, most restrictive first. Later additions and
+     * stale names do not date a profile. Default-valued stores keep no ID. Existing IDs are never
+     * overwritten; a missing ID on a store already at version 13 is custom without another guess.
+     * <p>
+     * Version 14 uses the recorded read-only promise to disable the six workspace/git writers
+     * missed by earlier presets. It runs after the v13 stamp so a legacy store receives both in
+     * one pass. Owner edits and provenance are retained; post-v13 stores without an ID are custom.
+     * The disabled set is written once, after both steps; later reads never reapply v14.
+     * <p>
+     * Version 15 follows version 1: every explicit list gains {@code get_form_screenshot}.
+     * Buffered screenshots require a launch flag that affects the human designer for the
+     * whole session, so upgrades require a fresh opt-in. The v15 stamp lets a later deliberate
+     * re-enable survive every subsequent read. It runs after v14 in the same single set write.
+     * <p>
+     * Version 17 adds project_checks to recorded read-only profiles.
+     * <p>
+     * Keep v1-v14 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
+     * {@link ToolPreset#isReadOnly()} / {@link ToolPreset#isNoDebug()} promises, independent of owner
+     * edits. Universal default-off additions (like v1 and v3) still apply to every explicit list.
+     * Keep each historical threshold: versions 6 and 7 were originally described as the same
+     * version, but reusing 6 would skip a migration on stores that had already recorded it.
      *
      * @param store the preference store to migrate (never {@code null} here)
      */
@@ -364,6 +497,29 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // export_configuration_to_file is new and drives the Designer against an infobase.
                 changed |= migrateConfigurationFileExportIntoReadOnlyPresets(disabled);
             }
+            if (storedVersion < 13 && !store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID))
+            {
+                // Resolve once toward the historical preset's promise, after the launch rename.
+                // Stale names and missing later additions cannot defeat the frozen shapes.
+                store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID,
+                    recognizeStoredPreset(disabled).getId());
+            }
+            if (storedVersion < 14)
+            {
+                changed |= migrateMutatingToolsIntoReadOnlyPresets(store, disabled);
+            }
+            if (storedVersion < 15)
+            {
+                changed |= disabled.addAll(STORED_PROFILE_V15_ADDITIONS);
+            }
+            if (storedVersion < 16)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V16_ADDITIONS);
+            }
+            if (storedVersion < 17)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V17_ADDITIONS);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -371,6 +527,55 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         }
         store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
             PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+    }
+
+    /** Adds the v14 writers only for a recorded read-only preset, irrespective of owner edits. */
+    private static boolean migrateMutatingToolsIntoReadOnlyPresets(IPreferenceStore store,
+        Set<String> disabled)
+    {
+        return storedPreset(store).isReadOnly() ? disabled.addAll(READ_ONLY_V14_ADDITIONS) : false;
+    }
+
+    /** One-shot v13 backfill; later preset migrations must use recorded provenance instead. */
+    private static ToolPreset recognizeStoredPreset(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE))
+        {
+            return ToolPreset.ANALYSIS_ONLY;
+        }
+        if (disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        {
+            return ToolPreset.CODE_REVIEW;
+        }
+        if (disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return ToolPreset.DEVELOPMENT;
+        }
+        return ToolPreset.CUSTOM;
+    }
+
+    /** Reads provenance for future preset-owed steps without inferring anything from the set. */
+    static ToolPreset storedPreset(IPreferenceStore store)
+    {
+        return ToolPreset.fromId(store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+    }
+
+    /** Returns the recorded preset ID, independent of the launch preset. */
+    public String getPresetId()
+    {
+        return getStoredPresetId();
+    }
+
+    /** Returns stored provenance after its normal lazy migrations, or custom without a store. */
+    public String getStoredPresetId()
+    {
+        IPreferenceStore store = getStore();
+        if (store == null)
+        {
+            return ToolPreset.CUSTOM.getId();
+        }
+        ensureMigrated(store);
+        return storedPreset(store).getId();
     }
 
     /**
@@ -389,9 +594,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * metadata-MUTATING tool quietly live in a no-write profile is the exact hazard this migration
      * exists to prevent.
      * <p>
-     * Deliberately NOT done by loosening {@code matchPreset} itself: that method also decides which
-     * preset the preferences Tools tab shows as active ({@code ToolsTab}), where superset matching
-     * would make a hand-tuned CUSTOM selection claim to be "Code Review".
+     * Historical containment is separate from {@link ToolPreset#matchPreset}'s exact comparison.
+     * The Tools tab displays the recorded choice and keeps it through subsequent owner edits.
      * <p>
      * Stale/unknown names left in the stored list cannot defeat the check, which asks only whether
      * the frozen historical shape is present.
@@ -569,16 +773,30 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * Saves the set of disabled tool names to preferences and, when the set actually changed,
      * tells connected clients that {@code tools/list} changed with it.
      *
+     * Owner edits preserve preset provenance, whether the disabled set changes or not.
+     *
      * @param disabledTools the tool names to disable
      */
     public void setDisabledTools(Set<String> disabledTools)
+    {
+        setDisabledTools(disabledTools, null);
+    }
+
+    /**
+     * Saves an explicit preset choice alongside its snapshot and any owner edits.
+     * The choice is independent of the live preset's current disabled set.
+     *
+     * @param disabledTools the tool names to disable
+     * @param preset the selected or retained preset, or null to keep stored provenance
+     */
+    public void setDisabledTools(Set<String> disabledTools, ToolPreset preset)
     {
         IPreferenceStore store = getStore();
         if (store == null)
         {
             return;
         }
-        applyDisabledTools(store, disabledTools);
+        applyDisabledTools(store, disabledTools, preset);
     }
 
     /**
@@ -595,8 +813,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * <p>
      * Only a real change notifies: Apply with nothing edited must not wake every client. The
      * comparison is on the parsed SETS, so a reordered or differently-spaced stored value reads as
-     * unchanged. Under progressive disclosure a disabled tool may already be hidden by its toolset,
-     * which makes the notification redundant rather than wrong - over-notifying costs one
+     * unchanged, preserving the original stored bytes. Under progressive disclosure a disabled tool
+     * may already be hidden by its toolset, which makes the notification redundant rather than wrong - over-notifying costs one
      * {@code tools/list}, under-notifying is the bug.
      * </p>
      *
@@ -606,14 +824,28 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
     {
+        return applyDisabledTools(store, disabledTools, null);
+    }
+
+    private boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools, ToolPreset preset)
+    {
         String value = serializeDisabledTools(disabledTools);
+        Set<String> selection = parseDisabledTools(value);
         boolean changed;
         // Only the compare-and-write is locked; the notification wait below runs outside it.
         synchronized (this)
         {
+            ensureMigrated(store);
             changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
-                .equals(parseDisabledTools(value));
-            store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+                .equals(selection);
+            if (preset != null)
+            {
+                store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset.getId());
+            }
+            if (changed)
+            {
+                store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+            }
         }
         if (changed)
         {
@@ -663,7 +895,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     public void setToolEnabled(String toolName, boolean enabled)
     {
-        Set<String> disabled = new HashSet<>(getDisabledTools());
+        Set<String> disabled = new HashSet<>(getStoredDisabledTools());
         if (enabled)
         {
             disabled.remove(toolName);
@@ -722,7 +954,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     public void setGroupEnabled(ToolGroup group, boolean enabled)
     {
-        Set<String> disabled = new HashSet<>(getDisabledTools());
+        Set<String> disabled = new HashSet<>(getStoredDisabledTools());
         if (enabled)
         {
             disabled.removeAll(group.getToolNames());
@@ -742,7 +974,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Set<String> disabledTools = preset.getDisabledTools();
         if (disabledTools != null)
         {
-            setDisabledTools(disabledTools);
+            setDisabledTools(disabledTools, preset);
+        }
+        else
+        {
+            setDisabledTools(getStoredDisabledTools(), ToolPreset.CUSTOM);
         }
     }
 

@@ -477,11 +477,24 @@ public final class RoleRightsOrphans
      *
      * @return {@code ABSENT} when a segment of a walkable address is missing, {@code PRESENT} when
      *         every segment exists, {@code UNDETERMINED} when a segment cannot be judged (an unknown
-     *         type or kind, a case-only match, a malformed address)
+     *         type or kind, a case-only match, an unresolved element in a walked list, a malformed
+     *         address)
      */
     static Verdict judgeAddress(IBmTransaction tx, String address)
     {
         String[] parts = address.split("\\."); //$NON-NLS-1$
+        if (parts.length > 0
+            && "ExternalDataSource".equals(MetadataTypeUtils.toEnglishSingular(parts[0]))) //$NON-NLS-1$
+        {
+            parts = address.split("\\.", -1); //$NON-NLS-1$
+            for (String part : parts)
+            {
+                if (part.isEmpty() || !part.equals(part.trim()))
+                {
+                    return Verdict.UNDETERMINED;
+                }
+            }
+        }
         if (!MetadataNodeResolver.isValidArity(parts.length))
         {
             return Verdict.UNDETERMINED;
@@ -504,17 +517,23 @@ public final class RoleRightsOrphans
         MdObject current = (MdObject)top;
         for (int i = 2; i + 1 < parts.length; i += 2)
         {
-            String featureName = MetadataNodeResolver.featureNameForKind(parts[i]);
-            EStructuralFeature feature = featureName != null ? current.eClass().getEStructuralFeature(featureName)
-                : null;
+            EStructuralFeature feature = MetadataNodeResolver.childFeature(current.eClass(), parts[i]);
             if (feature == null || !feature.isMany())
             {
                 return Verdict.UNDETERMINED;
             }
             MdObject child = null;
             boolean caseOnly = false;
+            // An unresolved element has no readable name, so it may be the one addressed: the level
+            // cannot be proven absent.
+            boolean unresolved = false;
             for (Object element : (List<?>)current.eGet(feature))
             {
+                if (element instanceof EObject && ((EObject)element).eIsProxy())
+                {
+                    unresolved = true;
+                    continue;
+                }
                 if (element instanceof MdObject)
                 {
                     String name = ((MdObject)element).getName();
@@ -528,7 +547,7 @@ public final class RoleRightsOrphans
             }
             if (child == null)
             {
-                return caseOnly ? Verdict.UNDETERMINED : Verdict.ABSENT;
+                return caseOnly || unresolved ? Verdict.UNDETERMINED : Verdict.ABSENT;
             }
             current = child;
         }

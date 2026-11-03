@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 
@@ -98,7 +99,16 @@ public class SymbolInfoService
         IProject project = ctx.project();
 
         // Build the full path: project/src/filePath
-        IFile file = BslModuleUtils.resolveModuleFile(project, filePath);
+        IFile file;
+        try
+        {
+            file = BslModuleUtils.resolveModuleFile(project, filePath);
+        }
+        catch (RuntimeException e)
+        {
+            Refusals.log("Failed to resolve module", e); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson();
+        }
 
         if (!file.exists())
         {
@@ -929,6 +939,13 @@ public class SymbolInfoService
         }
         catch (Exception e)
         {
+            String refusal = Refusals.messageOf(e);
+            if (refusal != null)
+            {
+                Refusals.log("EMF fallback refused", e); //$NON-NLS-1$
+                // The public boundary converts internal Error sentinels to ToolResult.error.
+                return "Error: " + refusal; //$NON-NLS-1$
+            }
             Activator.logWarning("EMF fallback failed: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }

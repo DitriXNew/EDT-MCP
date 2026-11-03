@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
@@ -18,6 +20,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Tool to find all references to a metadata object.
@@ -27,6 +31,52 @@ import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 public class FindReferencesTool implements IMcpTool
 {
     public static final String NAME = "find_references"; //$NON-NLS-1$
+
+    /** Fixed, shared budget for the pure-query search-scope settle before entering the UI thread. */
+    static final long SEARCH_SCOPE_SETTLE_TIMEOUT_MS = 10_000L;
+
+    /** The bounded pre-scan readiness wait; production is {@link ProjectStateChecker#awaitSearchScopeReady}. */
+    interface SearchScopeSettler
+    {
+        /**
+         * @return the last snapshot the wait saw; the scan ignores it and captures its own fresh one,
+         *     the value exists so the production wiring is observable
+         */
+        SearchDependenciesResult settle(String projectName, long budgetMs);
+    }
+
+    private final SearchScopeSettler searchScopeSettler;
+    private final Consumer<Runnable> uiRunner;
+    /** Whether the calling thread is the SWT UI thread; there the settle must not sleep. */
+    private final BooleanSupplier onUiThread;
+
+    public FindReferencesTool()
+    {
+        this(ProjectStateChecker::awaitSearchScopeReady, runnable -> {
+            Display display = PlatformUI.getWorkbench().getDisplay();
+            display.syncExec(runnable);
+        }, () -> Display.getCurrent() != null);
+    }
+
+    FindReferencesTool(SearchScopeSettler searchScopeSettler, Consumer<Runnable> uiRunner,
+        BooleanSupplier onUiThread)
+    {
+        this.searchScopeSettler = searchScopeSettler;
+        this.uiRunner = uiRunner;
+        this.onUiThread = onUiThread;
+    }
+
+    /** Package-visible so a headless test can prove what the public constructor wired. */
+    BooleanSupplier onUiThread()
+    {
+        return onUiThread;
+    }
+
+    /** Package-visible so a headless test can prove what the public constructor wired. */
+    SearchScopeSettler searchScopeSettler()
+    {
+        return searchScopeSettler;
+    }
 
     /** Input param: FQN of the metadata object to find references to. */
     private static final String KEY_OBJECT_FQN = "objectFqn"; //$NON-NLS-1$
@@ -100,12 +150,20 @@ public class FindReferencesTool implements IMcpTool
         // replacing the inline Double.parseDouble. Default 100, upper clamp 500 preserved.
         int limit = Math.min(JsonUtils.extractIntArgument(params, "limit", 100), 500); //$NON-NLS-1$
 
+        // EDT can need the UI thread while settling, so the wait runs only off it. The in-process
+        // bridge dispatches on its caller's thread, which can be the UI thread: sleeping there would
+        // freeze EDT and stall the very derived-data work being awaited. The scan captures its own
+        // fresh snapshot either way, so a skipped wait still reports the adopted copies it missed.
+        if (!onUiThread.getAsBoolean())
+        {
+            searchScopeSettler.settle(projectName, SEARCH_SCOPE_SETTLE_TIMEOUT_MS);
+        }
+
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();
         final int maxResults = limit;
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        uiRunner.accept(() -> {
             try
             {
                 String result = new MetadataReferenceService().findReferences(projectName, objectFqn, maxResults);

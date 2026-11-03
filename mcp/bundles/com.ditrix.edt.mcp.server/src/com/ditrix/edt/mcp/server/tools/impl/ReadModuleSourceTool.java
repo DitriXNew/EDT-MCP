@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Tool to read BSL module source code (whole file or line range).
@@ -126,17 +127,20 @@ public class ReadModuleSourceTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        // Get file
-        IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
-        if (!file.exists())
-        {
-            return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
-                   ". Use format like 'CommonModules/ModuleName/Module.bsl' or " + //$NON-NLS-1$
-                   "'Documents/DocName/ObjectModule.bsl'").toJson(); //$NON-NLS-1$
-        }
-
         try
         {
+            // Get file
+            IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
+            if (!file.exists())
+            {
+                return ToolResult.error("File not found: src/" + modulePath + //$NON-NLS-1$
+                       ". Use format like 'CommonModules/ModuleName/Module.bsl' or " + //$NON-NLS-1$
+                       "'Documents/DocName/ObjectModule.bsl'").toJson(); //$NON-NLS-1$
+            }
+
+            // Canonicalize the display path; retain the selector for the model footer.
+            String canonicalModulePath = BslModuleUtils.sourceRelativePath(file);
+
             // Read file content with UTF-8 BOM detection
             List<String> allLines = BslModuleUtils.readFileLines(file);
 
@@ -152,7 +156,7 @@ public class ReadModuleSourceTool implements IMcpTool
             // Handle empty file
             if (totalLines == 0)
             {
-                return formatOutput(projectName, modulePath, allLines, 0, 0, 0, false, contentHash);
+                return formatOutput(projectName, canonicalModulePath, allLines, 0, 0, 0, false, contentHash);
             }
 
             // Determine range
@@ -178,7 +182,7 @@ public class ReadModuleSourceTool implements IMcpTool
                 truncated = true;
             }
 
-            String output = formatOutput(projectName, modulePath, allLines, from, to, totalLines, truncated, contentHash);
+            String output = formatOutput(projectName, canonicalModulePath, allLines, from, to, totalLines, truncated, contentHash);
 
             // Extension interception (module-level, best-effort): if this module is
             // adopted/intercepted across the base<->extension boundary, append the
@@ -190,6 +194,11 @@ public class ReadModuleSourceTool implements IMcpTool
         }
         catch (Exception e)
         {
+            String refusal = Refusals.messageOf(e);
+            if (refusal != null)
+            {
+                return ToolResult.error(refusal).toJson();
+            }
             return ToolResult.error("Error reading file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
     }
@@ -263,7 +272,7 @@ public class ReadModuleSourceTool implements IMcpTool
      * simply omitted, leaving the code read unaffected.
      *
      * @param project the project handle
-     * @param modulePath the module path from src/
+     * @param modulePath the original module selector (source-relative or absolute)
      * @return the markdown footer, or {@code null} when there is none / on failure
      */
     private static String interceptionFooterOnUi(IProject project, String modulePath)

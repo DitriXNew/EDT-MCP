@@ -1,6 +1,6 @@
 # get_variables
 
-Read variables from a stack frame of a suspended debug thread. Pass frameRef from wait_for_break (preferred) or threadId+frameIndex. Use expandPath to drill into nested structures (dot-separated).
+Inspect runtime variables in a paused debug frame. Parameters and examples: get_tool_guide('get_variables').
 
 ## Parameters
 | Parameter | Required | Type | Description |

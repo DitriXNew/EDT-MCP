@@ -1,6 +1,6 @@
 # get_applications
 
-Get list of applications (infobases) for a project. Returns application ID, name, type, and update state. Application ID is required for update_database and launch tools.
+Discover infobases connected to an EDT project. Parameters and examples: get_tool_guide('get_applications').
 
 ## Parameters
 | Parameter | Required | Type | Description |

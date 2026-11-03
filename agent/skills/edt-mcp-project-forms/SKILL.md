@@ -37,7 +37,8 @@ cannot represent the change, and the user explicitly authorizes the risk.
    ensure every visible `List.Field` path resolves afterward.
 5. Use `get_form_layout_snapshot` when layout structure matters and
    `get_form_screenshot` only when rendered appearance is acceptance evidence.
-   When taking a post-change screenshot, use `refresh=true`. Blank output most
+   `get_form_screenshot` is disabled by default; if it is not in `tools/list`,
+   report visual evidence as unavailable. When taking a post-change screenshot, use `refresh=true`. Blank output most
    likely means EDT lacks `-DnativeFormBufferedLayoutRender=true`; report visual
    evidence as unavailable rather than treating the change as failed.
 6. Run targeted validation and an authorized runtime UI scenario only when

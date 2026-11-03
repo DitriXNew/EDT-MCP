@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -43,6 +45,11 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceI
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroupOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroupOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
@@ -93,6 +100,10 @@ import com._1c.g5.v8.dt.dcs.parameters.output.DcsTableOutputParameters;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
+import com._1c.g5.v8.dt.mcore.Color;
+import com._1c.g5.v8.dt.mcore.AutoColor;
+import com._1c.g5.v8.dt.mcore.ColorDef;
+import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
@@ -103,10 +114,20 @@ import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.mcore.StructureProperty;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDate;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDateValue;
+import com._1c.g5.v8.dt.mcore.StandardBeginningDateVariant;
+import com._1c.g5.v8.dt.mcore.StandardPeriod;
+import com._1c.g5.v8.dt.mcore.StandardPeriodValue;
+import com._1c.g5.v8.dt.mcore.StandardPeriodVariant;
+import com._1c.g5.v8.dt.mcore.TypedValueList;
+import com._1c.g5.v8.dt.mcore.TypedValueListItem;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 /**
  * The single typed authoring implementation for {@link DataCompositionSettings}. Schema default
@@ -127,6 +148,9 @@ public final class DcsSettingsWriter
     private static final ThreadLocal<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
         new ThreadLocal<>();
     private static final ThreadLocal<AppearanceCatalogue> APPEARANCE_CATALOGUE = new ThreadLocal<>();
+    /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
+    private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
+        ThreadLocal.withInitial(ParseScratch::new);
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
@@ -149,6 +173,16 @@ public final class DcsSettingsWriter
 
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
     private static final String KEY_KIND = "kind"; //$NON-NLS-1$
+    private static final String KIND_STANDARD_PERIOD = "standardPeriod"; //$NON-NLS-1$
+    private static final String KIND_STANDARD_BEGINNING_DATE = "standardBeginningDate"; //$NON-NLS-1$
+    private static final String KIND_VALUE_LIST = "valueList"; //$NON-NLS-1$
+    private static final String KEY_VARIANT = "variant"; //$NON-NLS-1$
+    private static final String KEY_START_DATE = "startDate"; //$NON-NLS-1$
+    private static final String KEY_END_DATE = "endDate"; //$NON-NLS-1$
+    private static final String KEY_DATE = "date"; //$NON-NLS-1$
+    private static final String KEY_LAST_ID = "lastId"; //$NON-NLS-1$
+    private static final String KEY_CHECK_STATE = "checkState"; //$NON-NLS-1$
+    private static final String KEY_VALUES = "values"; //$NON-NLS-1$
     private static final String KEY_NAME = "name"; //$NON-NLS-1$
     private static final String KEY_USE = "use"; //$NON-NLS-1$
     private static final String KEY_FIELD = "field"; //$NON-NLS-1$
@@ -304,7 +338,7 @@ public final class DcsSettingsWriter
                 JsonObject settingsBody = object(body, "defaultSettings", "schema settings body"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (settingsBody == null)
                 {
-                    return SchemaResult.failure(objectError);
+                    return SchemaResult.failure(parseScratch().objectError);
                 }
                 SettingsResult planned = planSettings(defaultSettings, Collections.emptyList(), action,
                     TYPE_USER_SETTINGS, settingsBody, languages, version);
@@ -320,7 +354,7 @@ public final class DcsSettingsWriter
                 JsonArray array = array(body, "variants", "schema settings body"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (array == null)
                 {
-                    return SchemaResult.failure(arrayError);
+                    return SchemaResult.failure(parseScratch().arrayError);
                 }
                 String duplicate = variantBodyKeyError(array);
                 if (duplicate != null)
@@ -332,7 +366,7 @@ public final class DcsSettingsWriter
                     JsonObject variantBody = arrayObject(array, i, "variants"); //$NON-NLS-1$
                     if (variantBody == null)
                     {
-                        return SchemaResult.failure(arrayObjectError);
+                        return SchemaResult.failure(parseScratch().arrayObjectError);
                     }
                     String error = applyVariant(variants, null, action, variantBody, languages, version,
                         "body.variants[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -532,7 +566,7 @@ public final class DcsSettingsWriter
                 return SettingsResult.success(copy(current), false);
             }
             JsonObject settingsBody = object(body, "listSettings", "dynamic-list settings body"); //$NON-NLS-1$ //$NON-NLS-2$
-            return settingsBody == null ? SettingsResult.failure(objectError)
+            return settingsBody == null ? SettingsResult.failure(parseScratch().objectError)
                 : dynamicListResult(current, planSettings(current, Collections.emptyList(), action,
                     TYPE_USER_SETTINGS, settingsBody, languages, version, address,
                     dynamicListSettingsRootAddress(address)), address);
@@ -834,9 +868,9 @@ public final class DcsSettingsWriter
         for (int i = 0; i < variants.size(); i++)
         {
             JsonObject body = arrayObject(variants, i, "variants"); //$NON-NLS-1$
-            if (body == null) return arrayObjectError;
+            if (body == null) return parseScratch().arrayObjectError;
             String name = optionalString(body, KEY_NAME, "body.variants[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             if (name != null && !name.isEmpty() && !names.add(name))
             {
                 return "The body names variant natural key '" + name //$NON-NLS-1$
@@ -844,6 +878,43 @@ public final class DcsSettingsWriter
             }
         }
         return null;
+    }
+
+    /**
+     * Resolves a variant replacement through applyVariant's own name parser and
+     * exact natural-key lookup. Invalid or ambiguous requests are left to the planner to report.
+     */
+    public static synchronized String variantReplacementName(DataCompositionSchema schema,
+        DcsAddress address, JsonObject body)
+    {
+        if (body == null) return null;
+        String pointerName = address.segments().size() == 2 ? address.segments().get(1) : null;
+        VariantName parsed = variantName(pointerName, body, "body"); //$NON-NLS-1$
+        if (parsed.error() != null) return null;
+        return findVariants(schema.getSettingsVariants(), parsed.name()).size() == 1
+            ? parsed.name() : null;
+    }
+
+    private record VariantName(String name, String error) { }
+
+    /** Shared by the planner and the guard, including the exact-pointer natural-key semantics. */
+    private static VariantName variantName(String pointerName, JsonObject body, String path)
+    {
+        String bodyName = optionalString(body, KEY_NAME, path);
+        if (parseScratch().stringError != null) return new VariantName(null, parseScratch().stringError);
+        if (pointerName != null && bodyName != null && !pointerName.equals(bodyName))
+        {
+            return new VariantName(null,
+                "Variant body name '" + bodyName + "' does not match address name '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + pointerName + "'. Make 'name' match the pointer, or omit it."); //$NON-NLS-1$
+        }
+        String name = pointerName != null ? pointerName : bodyName;
+        if (name == null || name.isEmpty())
+        {
+            return new VariantName(null, "Variant body at '" + path //$NON-NLS-1$
+                + "' needs a non-empty 'name'. Add its natural key and retry."); //$NON-NLS-1$
+        }
+        return new VariantName(name, null);
     }
 
     private static String applyVariant(List<SettingsVariant> variants, String pointerName, String action,
@@ -854,22 +925,9 @@ public final class DcsSettingsWriter
         {
             return members;
         }
-        String bodyName = optionalString(body, KEY_NAME, path);
-        if (stringError != null)
-        {
-            return stringError;
-        }
-        if (pointerName != null && bodyName != null && !pointerName.equals(bodyName))
-        {
-            return "Variant body name '" + bodyName + "' does not match address name '" //$NON-NLS-1$ //$NON-NLS-2$
-                + pointerName + "'. Make 'name' match the pointer, or omit it."; //$NON-NLS-1$
-        }
-        String name = pointerName != null ? pointerName : bodyName;
-        if (name == null || name.isEmpty())
-        {
-            return "Variant body at '" + path //$NON-NLS-1$
-                + "' needs a non-empty 'name'. Add its natural key and retry."; //$NON-NLS-1$
-        }
+        VariantName parsedName = variantName(pointerName, body, path);
+        if (parsedName.error() != null) return parsedName.error();
+        String name = parsedName.name();
         List<Integer> matches = findVariants(variants, name);
         if (matches.size() > 1)
         {
@@ -913,7 +971,7 @@ public final class DcsSettingsWriter
             JsonObject settingsBody = object(body, "settings", path); //$NON-NLS-1$
             if (settingsBody == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             SettingsResult settings = planSettings(variant.getSettings(), Collections.emptyList(),
                 action, TYPE_USER_SETTINGS, settingsBody, languages, version);
@@ -997,7 +1055,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -1015,7 +1073,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
@@ -1037,7 +1095,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1058,7 +1116,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getOrder(), path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1079,7 +1137,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getConditionalAppearance(),
                 path + ".conditionalAppearance"); //$NON-NLS-1$
@@ -1102,7 +1160,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "dataParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getDataParameters(),
                 path + ".dataParameters"); //$NON-NLS-1$
@@ -1125,7 +1183,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getOutputParameters(),
                 path + ".outputParameters"); //$NON-NLS-1$
@@ -1148,7 +1206,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "userFields", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, settings.getUserFields(),
                 path + ".userFields"); //$NON-NLS-1$
@@ -1172,7 +1230,7 @@ public final class DcsSettingsWriter
             JsonObject properties = object(body, KEY_ADDITIONAL_PROPERTIES, path);
             if (properties == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String error = applyAdditionalProperties(settings, properties, action,
                 path + "." + KEY_ADDITIONAL_PROPERTIES); //$NON-NLS-1$
@@ -1278,7 +1336,7 @@ public final class DcsSettingsWriter
                     return members;
                 }
                 JsonArray array = array(body, KEY_ITEMS, where);
-                return array == null ? arrayError
+                return array == null ? parseScratch().arrayError
                     : appendGroupings(items, array, action, languages, version, where);
             }
             return appendGrouping(items, body, action, languages, version, where);
@@ -1308,9 +1366,9 @@ public final class DcsSettingsWriter
                     + "chart address returned by get."; //$NON-NLS-1$
             }
             String kind = optionalString(body, KEY_KIND, where + "/" + selector); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             if (kind == null)
             {
@@ -1437,7 +1495,7 @@ public final class DcsSettingsWriter
             JsonObject body = arrayObject(array, i, where);
             if (body == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendGrouping(items, body, action, languages, version,
                 where + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1458,9 +1516,9 @@ public final class DcsSettingsWriter
                 + "'. Copy the grouping address from get; use upsert to append a new grouping."; //$NON-NLS-1$
         }
         String kind = optionalString(body, KEY_KIND, where);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         AxisItemKind axisKind = AxisItemKind.ofToken(kind);
         if (axisKind != null)
@@ -1509,9 +1567,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             for (StructureItem sibling : siblings)
             {
@@ -1529,14 +1587,14 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             group.setUse(use.booleanValue());
         }
         if (body.has(KEY_ID))
         {
             String id = optionalString(body, KEY_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             group.setId(id);
         }
         if (body.has(KEY_GROUP_STATE))
@@ -1556,7 +1614,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getGroupFields(),
                 path + ".groupFields"); //$NON-NLS-1$
@@ -1578,7 +1636,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
@@ -1600,7 +1658,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1621,7 +1679,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getOrder(), path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1642,7 +1700,7 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
             if (value == null)
             {
-                return objectError;
+                return parseScratch().objectError;
             }
             String missing = missingHolderUpdate(action, group.getOutputParameters(),
                 path + ".outputParameters"); //$NON-NLS-1$
@@ -1666,7 +1724,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -1798,9 +1856,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             for (StructureItem sibling : siblings)
             {
@@ -1819,14 +1877,14 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             setFeature(item, KEY_USE, use);
         }
         if (body.has(KEY_ID))
         {
             String id = optionalString(body, KEY_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             if (item instanceof DataCompositionTable) ((DataCompositionTable)item).setId(id);
             else ((DataCompositionChart)item).setId(id);
         }
@@ -1855,7 +1913,7 @@ public final class DcsSettingsWriter
         if (body.has("selection")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(owner, "selection"), //$NON-NLS-1$
                 path + ".selection"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1867,7 +1925,7 @@ public final class DcsSettingsWriter
         if (body.has("conditionalAppearance")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action,
                 (EObject)feature(owner, "conditionalAppearance"), //$NON-NLS-1$
                 path + ".conditionalAppearance"); //$NON-NLS-1$
@@ -1882,7 +1940,7 @@ public final class DcsSettingsWriter
         if (body.has("outputParameters")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(owner, "outputParameters"), //$NON-NLS-1$
                 path + ".outputParameters"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -1964,7 +2022,7 @@ public final class DcsSettingsWriter
         JsonArray array = array(body, member, path);
         if (array == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action))
         {
@@ -1982,12 +2040,12 @@ public final class DcsSettingsWriter
             String members = checkMembers(body, where, KEY_ITEMS);
             if (members != null) return members;
             JsonArray array = array(body, KEY_ITEMS, where);
-            if (array == null) return arrayError;
+            if (array == null) return parseScratch().arrayError;
             if (ACTION_REPLACE.equals(action)) groups.clear();
             return appendAxisGroups(kind, groups, array, action, languages, version, where);
         }
         int selected = index(path.get(0), groups.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         EObject group = groups.get(selected);
         String at = where + "/" + path.get(0); //$NON-NLS-1$
         if (path.size() == 1)
@@ -2032,7 +2090,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject item = arrayObject(array, i, where);
-            if (item == null) return arrayObjectError;
+            if (item == null) return parseScratch().arrayObjectError;
             EObject group = kind.createGroup();
             String error = applyAxisGroup(kind, group, item, action, languages, version,
                 where + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2053,13 +2111,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_NAME))
         {
             String name = requiredString(body, KEY_NAME, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             setFeature(group, KEY_NAME, name);
         }
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             setFeature(group, KEY_USE, use);
         }
         if (body.has(KEY_GROUP_STATE))
@@ -2075,7 +2133,7 @@ public final class DcsSettingsWriter
         if (body.has("groupFields")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "groupFields"), //$NON-NLS-1$
                 path + ".groupFields"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2087,7 +2145,7 @@ public final class DcsSettingsWriter
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "filter"), //$NON-NLS-1$
                 path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2099,7 +2157,7 @@ public final class DcsSettingsWriter
         if (body.has("order")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, (EObject)feature(group, "order"), //$NON-NLS-1$
                 path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -2114,7 +2172,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_ITEMS))
         {
             JsonArray array = array(body, KEY_ITEMS, path);
-            if (array == null) return arrayError;
+            if (array == null) return parseScratch().arrayError;
             EList<EObject> items = axisGroups(group, KEY_ITEMS);
             if (fresh) items.clear();
             return appendAxisGroups(kind, items, array, action, languages, version, path + ".items"); //$NON-NLS-1$
@@ -2146,9 +2204,9 @@ public final class DcsSettingsWriter
         else if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int index = index(path.get(1), fields.getItems().size(), where + "/groupFields/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             GroupItem item = fields.getItems().get(index);
             if (!(item instanceof DataCompositionGroupField))
@@ -2193,14 +2251,14 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         for (int i = 0; i < items.size(); i++)
         {
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendGroupField(fields.getItems(), item, action,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2249,7 +2307,7 @@ public final class DcsSettingsWriter
             Boolean value = bool(body, KEY_USE, path);
             if (value == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             field.setUse(value.booleanValue());
         }
@@ -2301,16 +2359,9 @@ public final class DcsSettingsWriter
             return null;
         }
         JsonElement raw = body.get(member);
-        Value bound = null;
-        if (!raw.isJsonNull())
-        {
-            ValueResult value = value(raw, path + "." + member); //$NON-NLS-1$
-            if (value.error != null)
-            {
-                return value.error;
-            }
-            bound = value.value instanceof NullValue ? null : value.value;
-        }
+        ValueResult parsed = periodBoundValue(raw, path + "." + member); //$NON-NLS-1$
+        if (parsed.error != null) return parsed.error;
+        Value bound = parsed.value;
         if (bound == null)
         {
             field.eUnset(feature);
@@ -2320,6 +2371,14 @@ public final class DcsSettingsWriter
             field.eSet(feature, bound);
         }
         return null;
+    }
+
+    /** Shared by the period-bound assignment and its replace dry run, including the clear form. */
+    private static ValueResult periodBoundValue(JsonElement raw, String path)
+    {
+        if (raw.isJsonNull()) return ValueResult.success(null);
+        ValueResult built = value(raw, path);
+        return built.error == null && built.value instanceof NullValue ? ValueResult.success(null) : built;
     }
 
     // ---- selection --------------------------------------------------------------------------
@@ -2379,9 +2438,9 @@ public final class DcsSettingsWriter
             return appendSelected(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         SelectedItem item = items.get(selected);
         if (path.size() == 2)
@@ -2396,7 +2455,7 @@ public final class DcsSettingsWriter
                 SelectedItem fresh = newSelectedItem(body, at);
                 if (fresh == null)
                 {
-                    return selectedKindError;
+                    return parseScratch().selectedKindError;
                 }
                 String rebuilt = applySelectedItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
@@ -2435,7 +2494,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) selection.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -2443,7 +2502,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendSelected(selection.getItems(), item, action, languages,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2463,7 +2522,7 @@ public final class DcsSettingsWriter
         SelectedItem item = newSelectedItem(body, path);
         if (item == null)
         {
-            return selectedKindError;
+            return parseScratch().selectedKindError;
         }
         String error = applySelectedItem(item, body, action, languages, path);
         if (error == null)
@@ -2475,16 +2534,16 @@ public final class DcsSettingsWriter
 
     /**
      * A fresh selection item of the kind the body names, or {@code null} with
-     * {@link #selectedKindError} set. Shared by append and by an authoritative replace so both
+     * {@link #parseScratch().selectedKindError} set. Shared by append and by an authoritative replace so both
      * build the same shapes from the same kind vocabulary.
      */
     private static SelectedItem newSelectedItem(JsonObject body, String path)
     {
-        selectedKindError = null;
+        parseScratch().selectedKindError = null;
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            selectedKindError = stringError;
+            parseScratch().selectedKindError = parseScratch().stringError;
             return null;
         }
         if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
@@ -2499,7 +2558,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionSelectedField();
         }
-        selectedKindError = "Selection kind '" + kind //$NON-NLS-1$
+        parseScratch().selectedKindError = "Selection kind '" + kind //$NON-NLS-1$
             + "' is invalid. Use one of: field, group, auto."; //$NON-NLS-1$
         return null;
     }
@@ -2524,7 +2583,7 @@ public final class DcsSettingsWriter
                 Boolean use = bool(body, KEY_USE, path);
                 if (use == null)
                 {
-                    return booleanError;
+                    return parseScratch().booleanError;
                 }
                 ((DataCompositionAutoSelectedField)item).setUse(use.booleanValue());
             }
@@ -2584,7 +2643,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             if (group)
             {
@@ -2629,14 +2688,14 @@ public final class DcsSettingsWriter
                 JsonArray items = array(body, KEY_ITEMS, path);
                 if (items == null)
                 {
-                    return arrayError;
+                    return parseScratch().arrayError;
                 }
                 for (int i = 0; i < items.size(); i++)
                 {
                     JsonObject child = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
                     if (child == null)
                     {
-                        return arrayObjectError;
+                        return parseScratch().arrayObjectError;
                     }
                     String error = appendSelected(selectedGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2705,9 +2764,9 @@ public final class DcsSettingsWriter
             return appendFilter(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         FilterItem item = items.get(selected);
         if (path.size() == 2)
@@ -2718,14 +2777,14 @@ public final class DcsSettingsWriter
                 // Rebuilt, not patched: otherwise comparisonType, right, use and a group's nested
                 // items survive a replace that never mentioned them.
                 String kind = optionalString(body, KEY_KIND, at);
-                if (stringError != null)
+                if (parseScratch().stringError != null)
                 {
-                    return stringError;
+                    return parseScratch().stringError;
                 }
                 FilterItem fresh = newFilterItem(kind, at);
                 if (fresh == null)
                 {
-                    return filterKindError;
+                    return parseScratch().filterKindError;
                 }
                 String rebuilt = applyFilterItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
@@ -2764,7 +2823,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) filter.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -2772,7 +2831,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendFilter(filter.getItems(), item, action, languages,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2790,14 +2849,14 @@ public final class DcsSettingsWriter
         String updateError = updateAppendError(action, "filter item", path); //$NON-NLS-1$
         if (updateError != null) return updateError;
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         FilterItem item = newFilterItem(kind, path);
         if (item == null)
         {
-            return filterKindError;
+            return parseScratch().filterKindError;
         }
         String error = applyFilterItem(item, body, action, languages, path);
         if (error == null)
@@ -2808,12 +2867,12 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh filter item of the named kind, or {@code null} with {@link #filterKindError} set.
+     * A fresh filter item of the named kind, or {@code null} with {@link #parseScratch().filterKindError} set.
      * Shared by append and by an authoritative replace so both build the same shapes.
      */
     private static FilterItem newFilterItem(String kind, String path)
     {
-        filterKindError = null;
+        parseScratch().filterKindError = null;
         if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return DcsFactory.eINSTANCE.createDataCompositionFilterItemGroup();
@@ -2822,7 +2881,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionFilterItem();
         }
-        filterKindError = "Filter kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().filterKindError = "Filter kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use one of: item, group."; //$NON-NLS-1$
         return null;
     }
@@ -2852,7 +2911,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             if (group)
             {
@@ -2886,14 +2945,14 @@ public final class DcsSettingsWriter
                 JsonArray children = array(body, KEY_ITEMS, path);
                 if (children == null)
                 {
-                    return arrayError;
+                    return parseScratch().arrayError;
                 }
                 for (int i = 0; i < children.size(); i++)
                 {
                     JsonObject child = arrayObject(children, i, path + ".items"); //$NON-NLS-1$
                     if (child == null)
                     {
-                        return arrayObjectError;
+                        return parseScratch().arrayObjectError;
                     }
                     String error = appendFilter(filterGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2930,7 +2989,7 @@ public final class DcsSettingsWriter
             JsonArray right = array(body, "right", path); //$NON-NLS-1$
             if (right == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             List<Value> values = new ArrayList<>();
             for (int i = 0; i < right.size(); i++)
@@ -3001,9 +3060,9 @@ public final class DcsSettingsWriter
             return "Order item address at '" + where + "' has extra segments. Copy it from get."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null)
+        if (parseScratch().indexError != null)
         {
-            return indexError;
+            return parseScratch().indexError;
         }
         String at = where + "/items/" + path.get(1); //$NON-NLS-1$
         if (ACTION_REPLACE.equals(action))
@@ -3012,14 +3071,14 @@ public final class DcsSettingsWriter
             // that never named them, and replacing an auto item with a normal one must actually
             // change the item's CLASS rather than patch the old instance.
             String kind = optionalString(body, KEY_KIND, at);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             OrderItem fresh = newOrderItem(kind, at);
             if (fresh == null)
             {
-                return orderKindError;
+                return parseScratch().orderKindError;
             }
             String rebuilt = applyOrderItem(fresh, body, at);
             if (rebuilt != null)
@@ -3049,7 +3108,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_REPLACE.equals(action)) order.getItems().clear();
         for (int i = 0; i < items.size(); i++)
@@ -3057,7 +3116,7 @@ public final class DcsSettingsWriter
             JsonObject item = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (item == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             String error = appendOrder(order.getItems(), item, action,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3077,14 +3136,14 @@ public final class DcsSettingsWriter
                 + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
         }
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         OrderItem item = newOrderItem(kind, path);
         if (item == null)
         {
-            return orderKindError;
+            return parseScratch().orderKindError;
         }
         String error = applyOrderItem(item, body, path);
         if (error == null)
@@ -3095,12 +3154,12 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh order item of the named kind, or {@code null} with {@link #orderKindError} set.
+     * A fresh order item of the named kind, or {@code null} with {@link #parseScratch().orderKindError} set.
      * Shared by append and by an authoritative replace so both build the same shapes.
      */
     private static OrderItem newOrderItem(String kind, String path)
     {
-        orderKindError = null;
+        parseScratch().orderKindError = null;
         if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return DcsFactory.eINSTANCE.createDataCompositionAutoOrderItem();
@@ -3109,7 +3168,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionOrderItem();
         }
-        orderKindError = "Order kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().orderKindError = "Order kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use one of: item, auto."; //$NON-NLS-1$
         return null;
     }
@@ -3133,7 +3192,7 @@ public final class DcsSettingsWriter
                 Boolean use = bool(body, KEY_USE, path);
                 if (use == null)
                 {
-                    return booleanError;
+                    return parseScratch().booleanError;
                 }
                 ((DataCompositionAutoOrderItem)item).setUse(use.booleanValue());
             }
@@ -3175,7 +3234,7 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             order.setUse(use.booleanValue());
         }
@@ -3229,9 +3288,9 @@ public final class DcsSettingsWriter
         if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             DataCompositionConditionalAppearanceItem item = holder.getItems().get(selected);
             if (path.size() == 2)
@@ -3310,7 +3369,7 @@ public final class DcsSettingsWriter
             JsonArray items = array(body, KEY_ITEMS, path);
             if (items == null)
             {
-                return arrayError;
+                return parseScratch().arrayError;
             }
             if (ACTION_REPLACE.equals(action))
             {
@@ -3326,7 +3385,7 @@ public final class DcsSettingsWriter
                 JsonObject itemBody = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
                 if (itemBody == null)
                 {
-                    return arrayObjectError;
+                    return parseScratch().arrayObjectError;
                 }
                 DataCompositionConditionalAppearanceItem item =
                     DcsFactory.eINSTANCE.createDataCompositionConditionalAppearanceItem();
@@ -3355,13 +3414,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             item.setUse(use.booleanValue());
         }
         if (body.has("selection")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, item.getSelection(),
                 path + ".selection"); //$NON-NLS-1$
             if (missing != null) return missing;
@@ -3375,7 +3434,7 @@ public final class DcsSettingsWriter
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, item.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
             DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null : copy(item.getFilter());
@@ -3387,7 +3446,7 @@ public final class DcsSettingsWriter
         if (body.has("appearance")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "appearance", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             DataCompositionAppearance current = ACTION_REPLACE.equals(action)
                 ? null : item.getAppearance();
             AppearanceResult appearance = appearance(value, current, languages, version,
@@ -3426,7 +3485,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) fields.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -3436,7 +3495,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             DataCompositionAppearanceField field = DcsFactory.eINSTANCE.createDataCompositionAppearanceField();
             String error = applyAppearanceField(field, itemBody,
                 path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3456,7 +3515,7 @@ public final class DcsSettingsWriter
                 + "' or '" + holderPath + "/items/<index>'. Copy the canonical address from get."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         int selected = index(path.get(1), fields.getItems().size(), holderPath + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         DataCompositionAppearanceField field = fields.getItems().get(selected);
         if (ACTION_REPLACE.equals(action))
         {
@@ -3474,7 +3533,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             field.setUse(use.booleanValue());
         }
         if (body.has(KEY_FIELD))
@@ -3572,7 +3631,7 @@ public final class DcsSettingsWriter
         }
         JsonObject supplied = raw.getAsJsonObject();
         Boolean use = bool(supplied, KEY_USE, path);
-        if (use == null) return AppearanceParameterSpec.failure(booleanError);
+        if (use == null) return AppearanceParameterSpec.failure(parseScratch().booleanError);
         JsonObject value = supplied.deepCopy();
         value.remove(KEY_USE);
         if (value.size() == 0)
@@ -3629,6 +3688,13 @@ public final class DcsSettingsWriter
                 if (supplied.error != null) return supplied;
                 return typedValueMismatch(expected, supplied.value, path);
             }
+            if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().size() == 0)
+            {
+                // {} is the empty localized text: what EDT stores for a cleared Title, Format or
+                // Text (<dcscor:value xsi:type="v8:LocalStringType"/>) and how a read restates it.
+                return ValueResult.success(
+                    com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString());
+            }
             JsonElement localized = raw;
             if (raw != null && raw.isJsonPrimitive()
                 && raw.getAsJsonPrimitive().isString())
@@ -3644,7 +3710,8 @@ public final class DcsSettingsWriter
             if (parsed.plan() == null)
             {
                 return ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
-                    + "' must be a string or a non-empty {languageCode:text} object."); //$NON-NLS-1$
+                    + "' must be a string, a {languageCode:text} object, or {} for an " //$NON-NLS-1$
+                    + "empty localized text."); //$NON-NLS-1$
             }
             LocalString value = DcsPresentationParser.build(parsed.plan()).getLocalValue();
             return value == null ? ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
@@ -3664,6 +3731,13 @@ public final class DcsSettingsWriter
                 return ValueResult.failure("Parameter at '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
                     + (expected instanceof ColorValue ? "a color" : "a font") //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Pass the matching {color:...} or {font:...} object."); //$NON-NLS-1$
+            }
+            if (built.value instanceof ColorValue && ((ColorValue)built.value).getValue() instanceof AutoColor)
+            {
+                // In a DCS value the automatic color is a ColorValue with no color: EDT's XML reader
+                // turns "auto" into exactly that, while its color writer saves an AutoColor - a
+                // ColorDef - as "#000000", so keeping the AutoColor would store black.
+                ((ColorValue)built.value).setValue(null);
             }
             return ValueResult.success(built.value);
         }
@@ -3697,6 +3771,430 @@ public final class DcsSettingsWriter
         return value;
     }
 
+    /** {@link #typedValueRefusal(Value, Value, DcsPresentationParser.LanguageContext)} with no language context. */
+    static String typedValueRefusal(Value declared, Value stored)
+    {
+        return typedValueRefusal(declared, stored, null);
+    }
+
+    /**
+     * The replace guard's question, put to the typed writer itself: is there a body that
+     * typedParameterValue accepts and that rebuilds exactly the stored value? The stored value is
+     * projected to the body forms the writer reads and run through the writer in a dry run, with the
+     * same declared type and the same languages; the rebuilt value must then equal the stored one.
+     * So every content rule the writer applies - a declared language, the RGB range, a non-empty
+     * name or expression - is the guard's rule too, and a member no body can carry refuses instead of
+     * being dropped.
+     *
+     * <p>Two value forms keep their own rules: a font is judged by
+     * {@link StyleValueBuilder#fontRefusal}, and a color reference by the name it writes - see
+     * {@link #colorReferenceRefusal}.</p>
+     */
+    static String typedValueRefusal(Value declared, Value stored,
+        DcsPresentationParser.LanguageContext languages)
+    {
+        return typedValueRefusal(declared, stored, languages, null);
+    }
+
+    /**
+     * {@link #typedValueRefusal(Value, Value, DcsPresentationParser.LanguageContext)} run with the
+     * mutation's named-color resolver, so a stored color reference is restated the way the writer
+     * would build it.
+     */
+    static String typedValueRefusal(Value declared, Value stored,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return parameterValueRefusal(declared, stored, namedColors,
+            body -> typedParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+    }
+
+    /** The same projection and equality check, through the output parameter's actual writer. */
+    static String outputValueRefusal(DcsAvailableParameter declared, Value stored,
+        DcsPresentationParser.LanguageContext languages, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return parameterValueRefusal(declared.defValue(), stored, namedColors,
+            body -> outputParameterValue(body, declared, dryRun, STORED_VALUE_PATH));
+    }
+
+    /** Holder-specific writers share the stored-value projection and losslessness checks. */
+    private static String parameterValueRefusal(Value declared, Value stored,
+        StyleValueBuilder.NamedColorResolver namedColors,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
+        if (stored == null) return "the stored value is null"; //$NON-NLS-1$
+        if (!hasExpectedType(declared, stored)) return typedValueTypeRefusal(declared, stored);
+        if (declared instanceof FontValue)
+        {
+            return StyleValueBuilder.fontRefusal(((FontValue)stored).getValue());
+        }
+        if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof ColorRef)
+        {
+            return colorReferenceRefusal((ColorRef)((ColorValue)stored).getValue(), namedColors,
+                writer);
+        }
+        if (stored instanceof ColorValue && ((ColorValue)stored).getValue() instanceof AutoColor)
+        {
+            return "an AutoColor is saved as #000000; restate it as {color:{red:0,green:0,blue:0}} " //$NON-NLS-1$
+                + "or use action=update"; //$NON-NLS-1$
+        }
+        List<JsonElement> bodies = typedBodies(stored);
+        if (bodies.isEmpty())
+        {
+            return stored instanceof ColorValue
+                ? "the color writer needs auto, a ColorDef or a ColorRef with a referent" //$NON-NLS-1$
+                : untypedProjection(stored).refusal();
+        }
+        return withNamedColors(namedColors, () -> rebuildRefusal(stored, bodies, writer));
+    }
+
+    /**
+     * The untyped writer's own verdict on a stored value: value() - the parser every untyped
+     * ValueSpec slot uses - must rebuild it exactly from its {kind, value} form.
+     */
+    static String untypedValueRefusal(Value stored)
+    {
+        return untypedValueRefusal(stored, raw -> value(raw, STORED_VALUE_PATH));
+    }
+
+    /** The same inverse projection, judged by the exact slot writer including storage rules. */
+    static String untypedValueRefusal(Value stored,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
+        if (stored == null) return "the stored value is null"; //$NON-NLS-1$
+        UntypedProjection projected = untypedProjection(stored);
+        if (projected.body() == null) return projected.refusal();
+        return rebuildRefusal(stored, List.of(projected.body()), writer);
+    }
+
+    static String fieldValueRefusal(Value stored)
+    {
+        return untypedValueRefusal(stored, raw -> {
+            FieldResult built = fieldValue(raw, STORED_VALUE_PATH);
+            return built.error == null ? ValueResult.success(built.value) : ValueResult.failure(built.error);
+        });
+    }
+
+    static String periodBoundRefusal(Value stored)
+    {
+        return untypedValueRefusal(stored, raw -> periodBoundValue(raw, STORED_VALUE_PATH));
+    }
+
+    /** Presentations use parse/build, whose empty form clears instead of storing a LocalString. */
+    static String presentationValueRefusal(LocalString stored, DcsPresentationParser.LanguageContext languages)
+    {
+        DcsPresentationParser.LanguageContext dryRun = languages == null ? null : languages.dryRun();
+        return rebuildRefusal(stored, typedBodies(stored), raw -> {
+            DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(raw, dryRun, STORED_VALUE_PATH);
+            if (!parsed.isSuccess()) return ValueResult.failure(parsed.error());
+            Presentation built = DcsPresentationParser.build(parsed.plan());
+            return ValueResult.success(built == null ? null : built.getLocalValue());
+        });
+    }
+
+    /** Where a dry-run error says the projected body came from. */
+    private static final String STORED_VALUE_PATH = "value"; //$NON-NLS-1$
+
+    /**
+     * A stored color reference is restated by its name: the reference to {@code Web.Red} is written
+     * by {@code {color:{web:'Red'}}}, to a configuration or platform style color by
+     * {@code {color:{style:'<Name>'}}}, to a palette color by {@code {color:{palette:'<Name>'}}}. The
+     * body runs through the writer with the mutation's named-color resolver, and the rebuilt
+     * reference must name the same target. Names are compared, not objects: EDT's Template.dcs
+     * writer stores a color reference as its name, and the same platform color reaches the model as
+     * a catalogue proxy, a proxy with a bare-name URI or a resolved object depending on how it was
+     * loaded - one stored value under three object identities.
+     */
+    private static String colorReferenceRefusal(ColorRef stored,
+        StyleValueBuilder.NamedColorResolver namedColors,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
+        String name = AppearanceValueBuilder.colorReferenceName(stored);
+        if (name == null)
+        {
+            return "the color reference names no target; the color writer restates a reference only " //$NON-NLS-1$
+                + "by its <Source>.<Name>"; //$NON-NLS-1$
+        }
+        int dot = name.indexOf('.');
+        String member = StyleValueBuilder.namedColorMember(name.substring(0, dot));
+        if (member == null)
+        {
+            return "the color reference names '" + name + "', and no color body names a " //$NON-NLS-1$ //$NON-NLS-2$
+                + name.substring(0, dot) + " color"; //$NON-NLS-1$
+        }
+        JsonObject named = new JsonObject();
+        named.addProperty(member, name.substring(dot + 1));
+        JsonObject body = new JsonObject();
+        body.add("color", named); //$NON-NLS-1$
+        ValueResult rebuilt = withNamedColors(namedColors, () -> writer.apply(body));
+        if (rebuilt.error != null) return "the writer refuses its body: " + rebuilt.error; //$NON-NLS-1$
+        Color color = rebuilt.value instanceof ColorValue ? ((ColorValue)rebuilt.value).getValue() : null;
+        String restated = color instanceof ColorRef
+            ? AppearanceValueBuilder.colorReferenceName((ColorRef)color) : null;
+        return name.equals(restated) ? null : "the writer would rebuild it as " //$NON-NLS-1$
+            + (restated == null ? "another color" : restated) + ", not " + name; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Passes when one projected body rebuilds an equal value; otherwise names the first failure. */
+    private static String rebuildRefusal(Value stored, List<JsonElement> bodies,
+        java.util.function.Function<JsonElement, ValueResult> writer)
+    {
+        String refusal = null;
+        for (JsonElement body : bodies)
+        {
+            ValueResult rebuilt = writer.apply(body);
+            if (rebuilt.error == null && EcoreUtil.equals(rebuilt.value, stored)) return null;
+            if (refusal == null)
+            {
+                refusal = rebuilt.error != null ? "the writer refuses its body: " + rebuilt.error //$NON-NLS-1$
+                    : "the writer would rebuild it as a different " + stored.eClass().getName() //$NON-NLS-1$
+                        + ": a member no body can carry differs"; //$NON-NLS-1$
+            }
+        }
+        return refusal;
+    }
+
+    /**
+     * The body forms typedParameterValue reads, projected from a stored value: a localized text as
+     * its {languageCode:text} object (and, with one language, also as a plain string), an enum as its
+     * literal, an automatic or RGB color as its color object, and anything else as its untyped
+     * ValueSpec. An empty localized text projects to {}, and a color value with no color - EDT's
+     * automatic color - to {color:'auto'}. Members are carried as they are, null included, so the
+     * writer judges them.
+     */
+    private static List<JsonElement> typedBodies(Value stored)
+    {
+        List<JsonElement> bodies = new ArrayList<>();
+        if (stored instanceof LocalString)
+        {
+            JsonObject localized = new JsonObject();
+            for (Map.Entry<String, String> entry : ((LocalString)stored).getContent())
+            {
+                localized.add(entry.getKey(), nullableText(entry.getValue()));
+            }
+            bodies.add(localized);
+            if (((LocalString)stored).getContent().size() == 1)
+            {
+                bodies.add(nullableText(((LocalString)stored).getContent().get(0).getValue()));
+            }
+            return bodies;
+        }
+        if (stored instanceof EnumValue)
+        {
+            Enumerator literal = ((EnumValue)stored).getValue();
+            bodies.add(literal == null ? JsonNull.INSTANCE : new JsonPrimitive(literal.getLiteral()));
+            return bodies;
+        }
+        if (stored instanceof ColorValue)
+        {
+            Color color = ((ColorValue)stored).getValue();
+            JsonObject style = new JsonObject();
+            if (color == null || color instanceof AutoColor)
+            {
+                // The writer rebuilds 'auto' as a color value with no color, so a stored AutoColor
+                // (which EDT saves as black) differs and refuses.
+                style.addProperty("color", "auto"); //$NON-NLS-1$ //$NON-NLS-2$
+                bodies.add(style);
+            }
+            else if (color instanceof ColorDef)
+            {
+                JsonObject rgb = new JsonObject();
+                rgb.addProperty("red", ((ColorDef)color).getRed()); //$NON-NLS-1$
+                rgb.addProperty("green", ((ColorDef)color).getGreen()); //$NON-NLS-1$
+                rgb.addProperty("blue", ((ColorDef)color).getBlue()); //$NON-NLS-1$
+                style.add("color", rgb); //$NON-NLS-1$
+                bodies.add(style);
+            }
+            return bodies;
+        }
+        JsonElement untyped = untypedProjection(stored).body();
+        if (untyped != null) bodies.add(untyped);
+        return bodies;
+    }
+
+    /**
+     * A stored value projected to the {kind, value} body value() reads, or the reason it has none: a
+     * kind value() does not build, or a member its body does not carry.
+     */
+    private record UntypedProjection(JsonElement body, String refusal)
+    {
+        static UntypedProjection of(JsonElement body)
+        {
+            return new UntypedProjection(body, null);
+        }
+
+        static UntypedProjection refused(String refusal)
+        {
+            return new UntypedProjection(null, refusal);
+        }
+    }
+
+    /**
+     * The {kind, value} form value() reads, projected from a stored value. A standard period or
+     * beginning date carries its variant and the dates it has, a value list its last id and every
+     * item's id, value, presentation and check state - so the round trip is exact - and each nested
+     * item value projects the same way.
+     */
+    private static UntypedProjection untypedProjection(Value stored)
+    {
+        String kind;
+        JsonElement payload;
+        if (stored instanceof StandardPeriodValue)
+        {
+            StandardPeriod period = ((StandardPeriodValue)stored).getValue();
+            if (period == null)
+            {
+                return UntypedProjection.refused("the StandardPeriodValue holds no period; a " //$NON-NLS-1$
+                    + "standardPeriod body always writes one"); //$NON-NLS-1$
+            }
+            JsonObject object = new JsonObject();
+            object.addProperty(KEY_VARIANT, period.getVariant().getLiteral());
+            if (period.getStartDate() != null) object.addProperty(KEY_START_DATE, period.getStartDate().toString());
+            if (period.getEndDate() != null) object.addProperty(KEY_END_DATE, period.getEndDate().toString());
+            kind = KIND_STANDARD_PERIOD;
+            payload = object;
+        }
+        else if (stored instanceof StandardBeginningDateValue)
+        {
+            StandardBeginningDate beginning = ((StandardBeginningDateValue)stored).getValue();
+            if (beginning == null)
+            {
+                return UntypedProjection.refused("the StandardBeginningDateValue holds no date; a " //$NON-NLS-1$
+                    + "standardBeginningDate body always writes one"); //$NON-NLS-1$
+            }
+            JsonObject object = new JsonObject();
+            object.addProperty(KEY_VARIANT, beginning.getVariant().getLiteral());
+            if (beginning.getDate() != null) object.addProperty(KEY_DATE, beginning.getDate().toString());
+            kind = KIND_STANDARD_BEGINNING_DATE;
+            payload = object;
+        }
+        else if (stored instanceof TypedValueList)
+        {
+            UntypedProjection list = valueListProjection((TypedValueList)stored);
+            if (list.body() == null) return list;
+            kind = KIND_VALUE_LIST;
+            payload = list.body();
+        }
+        else if (stored instanceof DataCompositionField)
+        {
+            kind = "field"; //$NON-NLS-1$
+            payload = nullableText(((DataCompositionField)stored).getValue());
+        }
+        else if (stored instanceof DataCompositionParameter)
+        {
+            kind = "parameter"; //$NON-NLS-1$
+            payload = nullableText(((DataCompositionParameter)stored).getValue());
+        }
+        else if (stored instanceof com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue)
+        {
+            com._1c.g5.v8.dt.dcs.model.core.DesignTimeValue design =
+                ((com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue)stored).getValue();
+            kind = "expression"; //$NON-NLS-1$
+            payload = design == null ? JsonNull.INSTANCE : nullableText(design.getValue());
+        }
+        else if (stored instanceof StringValue)
+        {
+            kind = "string"; //$NON-NLS-1$
+            payload = nullableText(((StringValue)stored).getValue());
+        }
+        else if (stored instanceof NumberValue)
+        {
+            java.math.BigDecimal number = ((NumberValue)stored).getValue();
+            kind = "number"; //$NON-NLS-1$
+            payload = number == null ? JsonNull.INSTANCE : new JsonPrimitive(number);
+        }
+        else if (stored instanceof BooleanValue)
+        {
+            kind = "boolean"; //$NON-NLS-1$
+            payload = new JsonPrimitive(((BooleanValue)stored).isValue());
+        }
+        else if (stored instanceof DateValue)
+        {
+            com._1c.g5.v8.dt.mcore.util.Date date = ((DateValue)stored).getValue();
+            kind = "date"; //$NON-NLS-1$
+            payload = date == null ? JsonNull.INSTANCE : new JsonPrimitive(date.toString());
+        }
+        else if (stored instanceof NullValue)
+        {
+            kind = "null"; //$NON-NLS-1$
+            payload = null;
+        }
+        else
+        {
+            return UntypedProjection.refused(stored.eClass().getName()
+                + " is not an untyped ValueSpec kind"); //$NON-NLS-1$
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty(KEY_KIND, kind);
+        if (payload != null) body.add("value", payload); //$NON-NLS-1$
+        return UntypedProjection.of(body);
+    }
+
+    /**
+     * The 'value' object of a valueList body for a stored list, or the member it cannot carry: a
+     * non-empty value type, available values, an item picture or format presentation, or an item
+     * value with no body of its own.
+     */
+    private static UntypedProjection valueListProjection(TypedValueList list)
+    {
+        if (list.getValueType() == null
+            || !EcoreUtil.equals(list.getValueType(), McoreFactory.eINSTANCE.createTypeDescription()))
+        {
+            return UntypedProjection.refused("the value list has a value type; a valueList body writes " //$NON-NLS-1$
+                + "the empty value type the DCS designer stores"); //$NON-NLS-1$
+        }
+        if (list.getAvailableValues() != null)
+        {
+            return UntypedProjection.refused("the value list has available values; a valueList body " //$NON-NLS-1$
+                + "does not carry them"); //$NON-NLS-1$
+        }
+        JsonArray items = new JsonArray();
+        for (int i = 0; i < list.getItems().size(); i++)
+        {
+            TypedValueListItem item = list.getItems().get(i);
+            if (item.getPicture() != null)
+            {
+                return UntypedProjection.refused("value-list item #" + i //$NON-NLS-1$
+                    + " has a picture; a valueList body does not carry item pictures"); //$NON-NLS-1$
+            }
+            if (item.isFormatPresentationSpecified() || item.getFormatPresentation() != null)
+            {
+                return UntypedProjection.refused("value-list item #" + i //$NON-NLS-1$
+                    + " has a format presentation; a valueList body does not carry it"); //$NON-NLS-1$
+            }
+            JsonObject entry = new JsonObject();
+            entry.addProperty(KEY_ID, item.getId());
+            if (item.getValue() != null)
+            {
+                UntypedProjection nested = untypedProjection(item.getValue());
+                if (nested.body() == null)
+                {
+                    return UntypedProjection.refused("value-list item #" + i + ": " + nested.refusal()); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                entry.add("value", nested.body()); //$NON-NLS-1$
+            }
+            if (item.getPresentation() != null) entry.addProperty(KEY_PRESENTATION, item.getPresentation());
+            if (item.getCheckState() != 0) entry.addProperty(KEY_CHECK_STATE, item.getCheckState());
+            items.add(entry);
+        }
+        JsonObject object = new JsonObject();
+        object.addProperty(KEY_LAST_ID, list.getLastId());
+        if (!items.isEmpty()) object.add(KEY_ITEMS, items);
+        return UntypedProjection.of(object);
+    }
+
+    private static JsonElement nullableText(String text)
+    {
+        return text == null ? JsonNull.INSTANCE : new JsonPrimitive(text);
+    }
+
+    private static String typedValueTypeRefusal(Value declared, Value stored)
+    {
+        return "declared " + declared.eClass().getName() + ", stored " //$NON-NLS-1$ //$NON-NLS-2$
+            + stored.eClass().getName() + "; the typed writer requires the declared value type"; //$NON-NLS-1$
+    }
+
     /** Shared schema/settings seam for a ValueSpec constrained by a declared platform value type. */
     static ValueResult buildTypedParameterValue(JsonElement raw, Value expected,
         DcsPresentationParser.LanguageContext languages, String path)
@@ -3708,6 +4206,21 @@ public final class DcsSettingsWriter
     static ValueResult buildValue(JsonElement raw, String path)
     {
         return value(raw, path);
+    }
+
+    /** A parameter-specific storage constraint, applied before any value is attached to the model. */
+    private static ValueResult outputParameterValue(JsonElement raw, DcsAvailableParameter declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        ValueResult built = typedParameterValue(raw, declared.defValue(), languages, path);
+        if (built.error == null && "ChartType.ScaleColor".equals(declared.key(0)) //$NON-NLS-1$
+            && built.value instanceof ColorValue && ((ColorValue)built.value).getValue() == null)
+        {
+            return ValueResult.failure("Output parameter 'ChartType.ScaleColor' at '" + path //$NON-NLS-1$
+                + "' cannot store {color:'auto'}: EDT cannot reload that value. Pass an explicit " //$NON-NLS-1$
+                + "RGB color such as {color:{red:0,green:0,blue:0}}, or omit this parameter."); //$NON-NLS-1$
+        }
+        return built;
     }
 
     /** The two accepted enum wire forms: a bare string, or the ordinary string ValueSpec. */
@@ -3779,7 +4292,7 @@ public final class DcsSettingsWriter
         }
     }
 
-    enum AppearanceCatalogue
+    public enum AppearanceCatalogue
     {
         SCHEMA,
         FORM,
@@ -3851,6 +4364,18 @@ public final class DcsSettingsWriter
         CHART,
         CHART_GROUP;
 
+        /** The holder-to-writer mapping used by the replace guard. */
+        static OutputParameterCatalogue forHolder(ParameterValues holder)
+        {
+            if (holder instanceof DataCompositionOutputParameterValues) return SETTINGS;
+            if (holder instanceof DataCompositionGroupOutputParameterValues) return GROUP;
+            if (holder instanceof DataCompositionTableOutputParameterValues) return TABLE;
+            if (holder instanceof DataCompositionTableGroupOutputParameterValues) return TABLE_GROUP;
+            if (holder instanceof DataCompositionChartOutputParameterValues) return CHART;
+            if (holder instanceof DataCompositionChartGroupOutputParameterValues) return CHART_GROUP;
+            return null;
+        }
+
         DcsParameterValuesBase create(Version version, String language) throws DcsPathException
         {
             switch (this)
@@ -3863,6 +4388,25 @@ public final class DcsSettingsWriter
                 default: return new DcsChartGroupOutputParameters(version, language);
             }
         }
+    }
+
+    /** Captures the same project version, language and sources as the typed writers. */
+    public static DcsWriterCatalogues catalogues(Version version,
+        DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance)
+    {
+        return catalogues(version, languages, appearance, null);
+    }
+
+    /** {@link #catalogues(Version, DcsPresentationParser.LanguageContext, AppearanceCatalogue)} with the writers' named colors. */
+    public static DcsWriterCatalogues catalogues(Version version,
+        DcsPresentationParser.LanguageContext languages, AppearanceCatalogue appearance,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        return new DcsWriterCatalogues(platformVersion(version), appearance,
+            languages == null ? "en" : languages.resolvedCode(), languages, namedColors, //$NON-NLS-1$
+            (kind, platform, language) -> kind instanceof OutputParameterCatalogue
+                ? outputParameters((OutputParameterCatalogue)kind, platform, language)
+                : appearanceParameters((AppearanceCatalogue)kind, platform, language));
     }
 
     static DcsAvailableParameterCollection outputParameters(OutputParameterCatalogue catalogue,
@@ -3916,9 +4460,9 @@ public final class DcsSettingsWriter
         if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-            if (indexError != null)
+            if (parseScratch().indexError != null)
             {
-                return indexError;
+                return parseScratch().indexError;
             }
             DataCompositionParameterValue item = holder.getItems().get(selected);
             if (!(item instanceof SettingsParameterValue))
@@ -3927,7 +4471,8 @@ public final class DcsSettingsWriter
                     + item.eClass().getName() + ", not SettingsParameterValue. Choose an address from get."; //$NON-NLS-1$
             }
             String at = where + "/items/" + path.get(1); //$NON-NLS-1$
-            boolean needsTypedDefinition = body.has("parameter") || body.has("value"); //$NON-NLS-1$ //$NON-NLS-2$
+            boolean needsTypedDefinition = body.has("parameter") || body.has("value") //$NON-NLS-1$ //$NON-NLS-2$
+                || body.has(KEY_VALUES);
             AvailableParametersResult typed = needsTypedDefinition
                 ? availableOutputParameters(catalogue, version, languages, at)
                 : AvailableParametersResult.success(null);
@@ -3969,7 +4514,7 @@ public final class DcsSettingsWriter
         JsonArray items = array(body, KEY_ITEMS, path);
         if (items == null)
         {
-            return arrayError;
+            return parseScratch().arrayError;
         }
         if (ACTION_UPDATE.equals(action) && !items.isEmpty())
         {
@@ -3986,7 +4531,7 @@ public final class DcsSettingsWriter
             JsonObject bodyItem = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
             if (bodyItem == null)
             {
-                return arrayObjectError;
+                return parseScratch().arrayObjectError;
             }
             SettingsParameterValue item = DcsFactory.eINSTANCE.createSettingsParameterValue();
             String error = applyParameterItem(item, bodyItem, languages, typed.parameters,
@@ -4023,7 +4568,7 @@ public final class DcsSettingsWriter
         else if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), "userFields/items"); //$NON-NLS-1$
-            if (indexError != null) return indexError;
+            if (parseScratch().indexError != null) return parseScratch().indexError;
             String at = "userFields/items/" + path.get(1); //$NON-NLS-1$
             UserField field = holder.getItems().get(selected);
             if (path.size() == 2 && ACTION_REPLACE.equals(action))
@@ -4035,7 +4580,7 @@ public final class DcsSettingsWriter
                 UserField fresh = newUserField(body, at);
                 if (fresh == null)
                 {
-                    return userFieldKindError;
+                    return parseScratch().userFieldKindError;
                 }
                 // A rebuilt field starts empty, so an omitted dataPath would silently produce a
                 // user field with no data path at all rather than keeping the old one. Replace is
@@ -4100,7 +4645,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -4110,9 +4655,9 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             String kind = requiredString(itemBody, KEY_KIND, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             UserField item;
             if ("expression".equalsIgnoreCase(kind)) //$NON-NLS-1$
             {
@@ -4136,17 +4681,17 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * A fresh user field of the kind the body names, or {@code null} with {@link #userFieldKindError}
+     * A fresh user field of the kind the body names, or {@code null} with {@link #parseScratch().userFieldKindError}
      * set. Shared by append and by an authoritative replace so both build the same shapes from the
      * same kind vocabulary.
      */
     private static UserField newUserField(JsonObject body, String path)
     {
-        userFieldKindError = null;
+        parseScratch().userFieldKindError = null;
         String kind = requiredString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            userFieldKindError = stringError;
+            parseScratch().userFieldKindError = parseScratch().stringError;
             return null;
         }
         if ("expression".equalsIgnoreCase(kind)) //$NON-NLS-1$
@@ -4157,7 +4702,7 @@ public final class DcsSettingsWriter
         {
             return DcsFactory.eINSTANCE.createDataCompositionUserFieldCase();
         }
-        userFieldKindError = "User-field kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+        parseScratch().userFieldKindError = "User-field kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
             + "' is invalid. Use kind='expression' or kind='case'."; //$NON-NLS-1$
         return null;
     }
@@ -4183,13 +4728,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             field.setUse(use.booleanValue());
         }
         if (body.has("dataPath")) //$NON-NLS-1$
         {
             String value = requiredString(body, "dataPath", path); //$NON-NLS-1$
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             field.setDataPath(value);
         }
         if (body.has(KEY_TITLE))
@@ -4207,7 +4752,7 @@ public final class DcsSettingsWriter
             {
                 if (!body.has(member)) continue;
                 String value = optionalString(body, member, path);
-                if (stringError != null) return stringError;
+                if (parseScratch().stringError != null) return parseScratch().stringError;
                 if ("detailExpression".equals(member)) expression.setDetailExpression(value); //$NON-NLS-1$
                 else if ("detailExpressionPresentation".equals(member)) //$NON-NLS-1$
                     expression.setDetailExpressionPresentation(value);
@@ -4218,7 +4763,7 @@ public final class DcsSettingsWriter
         else if (body.has("variants")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "variants", path); //$NON-NLS-1$
-            if (value == null) return objectError;
+            if (value == null) return parseScratch().objectError;
             DataCompositionUserFieldCase caseField = (DataCompositionUserFieldCase)field;
             String missing = missingHolderUpdate(action, caseField.getVariants(),
                 path + ".variants"); //$NON-NLS-1$
@@ -4241,7 +4786,7 @@ public final class DcsSettingsWriter
         if (members != null) return members;
         if (!body.has(KEY_ITEMS)) return null;
         JsonArray array = array(body, KEY_ITEMS, path);
-        if (array == null) return arrayError;
+        if (array == null) return parseScratch().arrayError;
         if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
@@ -4251,7 +4796,7 @@ public final class DcsSettingsWriter
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
-            if (itemBody == null) return arrayObjectError;
+            if (itemBody == null) return parseScratch().arrayObjectError;
             DataCompositionUserFieldsVariant variant =
                 DcsFactory.eINSTANCE.createDataCompositionUserFieldsVariant();
             String error = applyUserFieldVariant(variant, itemBody, action, languages,
@@ -4276,7 +4821,7 @@ public final class DcsSettingsWriter
                 + "' must continue with items/<index>. Copy the canonical address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         DataCompositionUserFieldsVariant variant = holder.getItems().get(selected);
         String at = where + "/items/" + path.get(1); //$NON-NLS-1$
         if (path.size() == 2)
@@ -4319,13 +4864,13 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
-            if (use == null) return booleanError;
+            if (use == null) return parseScratch().booleanError;
             variant.setUse(use.booleanValue());
         }
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject filterBody = object(body, "filter", path); //$NON-NLS-1$
-            if (filterBody == null) return objectError;
+            if (filterBody == null) return parseScratch().objectError;
             String missing = missingHolderUpdate(action, variant.getFilter(), path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
             DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null
@@ -4355,12 +4900,18 @@ public final class DcsSettingsWriter
         DcsPresentationParser.LanguageContext languages,
         DcsAvailableParameterCollection available, Version version, String path)
     {
-        String members = checkMembers(body, path, "parameter", "value", KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
+        String members = checkMembers(body, path, "parameter", "value", KEY_VALUES, KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION);
         if (members != null)
         {
             return members;
         }
+        if (available == null && body.has("value") && body.has(KEY_VALUES)) //$NON-NLS-1$
+        {
+            return "Parameter item at '" + path + "' takes 'value' or 'values', not both. Pass one " //$NON-NLS-1$ //$NON-NLS-2$
+                + "value in 'value', or every value of the item in 'values'."; //$NON-NLS-1$
+        }
+        boolean writesValues = body.has("value") || body.has(KEY_VALUES); //$NON-NLS-1$
         DcsAvailableParameter declared = null;
         if (body.has("parameter")) //$NON-NLS-1$
         {
@@ -4388,7 +4939,7 @@ public final class DcsSettingsWriter
             }
             item.setParameter((DataCompositionParameter)parameter.value);
         }
-        else if (available != null && body.has("value")) //$NON-NLS-1$
+        else if (available != null && writesValues)
         {
             String name = item.getParameter() == null ? null : item.getParameter().getValue();
             if (name == null || name.isEmpty())
@@ -4404,11 +4955,17 @@ public final class DcsSettingsWriter
             }
             item.getParameter().setValue(parameterName(declared, languages));
         }
+        if (declared != null && body.has(KEY_VALUES))
+        {
+            return "Output parameter '" + declared.key(0) + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + ".values' accepts one typed 'value', not a 'values' array. Pass it in 'value'; " //$NON-NLS-1$
+                + "only data parameters accept 'values'."; //$NON-NLS-1$
+        }
         if (body.has("value")) //$NON-NLS-1$
         {
             ValueResult mapped = available == null
                 ? value(body.get("value"), path + ".value") //$NON-NLS-1$ //$NON-NLS-2$
-                : typedParameterValue(body.get("value"), declared.defValue(), languages, //$NON-NLS-1$
+                : outputParameterValue(body.get("value"), declared, languages, //$NON-NLS-1$
                     path + ".value"); //$NON-NLS-1$
             if (mapped.error != null)
             {
@@ -4416,6 +4973,16 @@ public final class DcsSettingsWriter
             }
             item.getValues().clear();
             item.getValues().add(mapped.value);
+        }
+        else if (body.has(KEY_VALUES))
+        {
+            ValuesResult mapped = parameterValues(body, path);
+            if (mapped.error != null)
+            {
+                return mapped.error;
+            }
+            item.getValues().clear();
+            item.getValues().addAll(mapped.values);
         }
         else if (declared != null && !item.getValues().isEmpty()
             && !hasExpectedType(declared.defValue(), item.getValues().get(0)))
@@ -4428,12 +4995,38 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null)
             {
-                return booleanError;
+                return parseScratch().booleanError;
             }
             item.setUse(use.booleanValue());
         }
         String scaffold = applyParameterScaffold(item, body, languages, path);
         return scaffold;
+    }
+
+    /** Every data-parameter value is built by its own untyped ValueSpec writer. */
+    private static ValuesResult parameterValues(JsonObject body, String path)
+    {
+        JsonArray raw = array(body, KEY_VALUES, path);
+        if (raw == null)
+        {
+            return new ValuesResult(null, parseScratch().arrayError);
+        }
+        List<Value> values = new ArrayList<>();
+        for (int i = 0; i < raw.size(); i++)
+        {
+            String at = path + ".values[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            ValueResult mapped = value(raw.get(i), at);
+            if (mapped.error != null)
+            {
+                return new ValuesResult(null, mapped.error);
+            }
+            values.add(mapped.value);
+        }
+        return new ValuesResult(values, null);
+    }
+
+    private record ValuesResult(List<Value> values, String error)
+    {
     }
 
     /** Headless unit seam: production obtains this same collection from the holder catalogue. */
@@ -4463,9 +5056,9 @@ public final class DcsSettingsWriter
         if (body.has("itemsUserSettingID")) //$NON-NLS-1$
         {
             String value = optionalString(body, "itemsUserSettingID", path); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             settings.setItemsUserSettingID(value);
         }
@@ -4499,9 +5092,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             id = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
         }
         Presentation presentation = null;
@@ -4568,9 +5161,9 @@ public final class DcsSettingsWriter
         if (body.has("itemsUserSettingID")) //$NON-NLS-1$
         {
             String value = optionalString(body, "itemsUserSettingID", path); //$NON-NLS-1$
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             group.setItemsUserSettingID(value);
         }
@@ -4603,9 +5196,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             group.setUserSettingID(value);
         }
@@ -4647,7 +5240,7 @@ public final class DcsSettingsWriter
             if (body.has(idMember))
             {
                 String value = optionalString(body, idMember, path);
-                if (stringError != null) return stringError;
+                if (parseScratch().stringError != null) return parseScratch().stringError;
                 setFeature(target, idMember, value);
             }
             String presentationMember = prefix.isEmpty() ? KEY_USER_SETTING_PRESENTATION
@@ -4677,7 +5270,7 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null) return stringError;
+            if (parseScratch().stringError != null) return parseScratch().stringError;
             item.setUserSettingID(value);
         }
         if (body.has(KEY_USER_SETTING_PRESENTATION))
@@ -4708,9 +5301,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             id = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
         }
         Presentation userPresentation = null;
@@ -4783,9 +5376,9 @@ public final class DcsSettingsWriter
         if (body.has(KEY_USER_SETTING_ID))
         {
             String value = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null)
+            if (parseScratch().stringError != null)
             {
-                return stringError;
+                return parseScratch().stringError;
             }
             item.setUserSettingID(value);
         }
@@ -4833,9 +5426,9 @@ public final class DcsSettingsWriter
             return ValueResult.failure(members);
         }
         String kind = requiredString(object, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return ValueResult.failure(stringError);
+            return ValueResult.failure(parseScratch().stringError);
         }
         JsonElement raw = object.get("value"); //$NON-NLS-1$
         try
@@ -4846,19 +5439,19 @@ public final class DcsSettingsWriter
                     DataCompositionField field = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                         .createDataCompositionField();
                     field.setValue(requiredPrimitiveString(raw, path));
-                    return primitiveStringError == null ? ValueResult.success(field)
-                        : ValueResult.failure(primitiveStringError);
+                    return parseScratch().primitiveStringError == null ? ValueResult.success(field)
+                        : ValueResult.failure(parseScratch().primitiveStringError);
                 case "parameter": //$NON-NLS-1$
                     DataCompositionParameter parameter = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                         .createDataCompositionParameter();
                     parameter.setValue(requiredPrimitiveString(raw, path));
-                    return primitiveStringError == null ? ValueResult.success(parameter)
-                        : ValueResult.failure(primitiveStringError);
+                    return parseScratch().primitiveStringError == null ? ValueResult.success(parameter)
+                        : ValueResult.failure(parseScratch().primitiveStringError);
                 case "expression": //$NON-NLS-1$
                     String expression = requiredPrimitiveString(raw, path);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     com._1c.g5.v8.dt.dcs.model.core.DesignTimeValue design =
                         com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDesignTimeValue();
@@ -4869,9 +5462,9 @@ public final class DcsSettingsWriter
                     return ValueResult.success(designValue);
                 case "string": //$NON-NLS-1$
                     String string = primitiveString(raw, path, true);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     StringValue stringValue = McoreFactory.eINSTANCE.createStringValue();
                     stringValue.setValue(string);
@@ -4882,9 +5475,7 @@ public final class DcsSettingsWriter
                         return ValueResult.failure("Number ValueSpec at '" + path //$NON-NLS-1$
                             + "' needs a JSON number in 'value'."); //$NON-NLS-1$
                     }
-                    NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
-                    number.setValue(raw.getAsBigDecimal());
-                    return ValueResult.success(number);
+                    return numberValue(raw, path);
                 case "boolean": //$NON-NLS-1$
                     if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isBoolean())
                     {
@@ -4896,9 +5487,9 @@ public final class DcsSettingsWriter
                     return ValueResult.success(bool);
                 case "date": //$NON-NLS-1$
                     String date = requiredPrimitiveString(raw, path);
-                    if (primitiveStringError != null)
+                    if (parseScratch().primitiveStringError != null)
                     {
-                        return ValueResult.failure(primitiveStringError);
+                        return ValueResult.failure(parseScratch().primitiveStringError);
                     }
                     DateValue dateValue = McoreFactory.eINSTANCE.createDateValue();
                     dateValue.setValue(com._1c.g5.v8.dt.mcore.util.Date.fromString(date));
@@ -4911,10 +5502,16 @@ public final class DcsSettingsWriter
                     }
                     NullValue nullValue = McoreFactory.eINSTANCE.createNullValue();
                     return ValueResult.success(nullValue);
+                case KIND_STANDARD_PERIOD:
+                    return standardPeriodValue(raw, path);
+                case KIND_STANDARD_BEGINNING_DATE:
+                    return standardBeginningDateValue(raw, path);
+                case KIND_VALUE_LIST:
+                    return valueListValue(raw, path);
                 default:
                     return ValueResult.failure("ValueSpec kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                         + "' is invalid. Use one of: field, parameter, expression, string, number, " //$NON-NLS-1$
-                        + "boolean, date, null."); //$NON-NLS-1$
+                        + "boolean, date, null, standardPeriod, standardBeginningDate, valueList."); //$NON-NLS-1$
             }
         }
         catch (IllegalArgumentException e)
@@ -4924,13 +5521,277 @@ public final class DcsSettingsWriter
         }
     }
 
+    /**
+     * All JSON number write paths meet here. Like JsonUtils.parseExactDecimalLong, use exact
+     * decimal arithmetic to remove an integral transport Double's fraction; retain real fractions
+     * verbatim within the platform's Number limits. Check integer digits, fractional scale and
+     * significant precision before expansion or model construction. Number qualifiers require
+     * scale <= precision, so MAX_NUMBER_PRECISION also bounds the fractional scale.
+     */
+    private static ValueResult numberValue(JsonElement raw, String path)
+    {
+        BigDecimal decimal;
+        try
+        {
+            decimal = raw.getAsBigDecimal();
+        }
+        catch (NumberFormatException e)
+        {
+            // Newer Gson versions also reject extreme scales during parsing. Keep that rejection
+            // on the numeric error path, rather than the generic Date ValueSpec catch.
+            return numberValueFailure(raw, path);
+        }
+        // Zero has no significant exponent: discard even an extreme scale without expanding it.
+        if (decimal.signum() == 0)
+        {
+            decimal = BigDecimal.ZERO;
+        }
+        long integerDigits = (long)decimal.precision() - decimal.scale();
+        if (integerDigits > MetadataTypeBuilder.MAX_NUMBER_PRECISION
+            || decimal.scale() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
+        {
+            return numberValueFailure(raw, path);
+        }
+        BigDecimal significant = decimal.stripTrailingZeros();
+        if (significant.precision() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
+        {
+            return numberValueFailure(raw, path);
+        }
+        // Inspect integrality without growing a power of ten for a tiny fractional exponent.
+        if (decimal.scale() <= 0 || significant.scale() <= 0)
+        {
+            decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
+        }
+        NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
+        number.setValue(decimal);
+        return ValueResult.success(number);
+    }
+
+    private static ValueResult numberValueFailure(JsonElement raw, String path)
+    {
+        return ValueResult.failure("Number ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "' cannot be stored as a 1C Number. Pass a finite JSON number with at most " //$NON-NLS-1$
+            + MetadataTypeBuilder.MAX_NUMBER_PRECISION
+            + " integer digits, " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
+            + " fractional digits and " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
+            + " significant digits."); //$NON-NLS-1$
+    }
+
+    /**
+     * {@code {kind:'standardPeriod', value:{variant?, startDate?, endDate?}}}: the platform's
+     * StandardPeriod as EDT stores it - a variant (Custom when omitted, the model default) and the
+     * optional custom start and end dates, each a platform date literal.
+     */
+    private static ValueResult standardPeriodValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Standard-period ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {variant?, startDate?, endDate?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_VARIANT, KEY_START_DATE, KEY_END_DATE);
+        if (members != null) return ValueResult.failure(members);
+        EnumResult<StandardPeriodVariant> variant = variant(body, at, StandardPeriodVariant.values(),
+            StandardPeriodVariant.CUSTOM);
+        if (variant.error != null) return ValueResult.failure(variant.error);
+        DateResult start = optionalDate(body, KEY_START_DATE, at);
+        if (start.error != null) return ValueResult.failure(start.error);
+        DateResult end = optionalDate(body, KEY_END_DATE, at);
+        if (end.error != null) return ValueResult.failure(end.error);
+        StandardPeriod period = McoreFactory.eINSTANCE.createStandardPeriod();
+        period.setVariant(variant.value);
+        if (start.value != null) period.setStartDate(start.value);
+        if (end.value != null) period.setEndDate(end.value);
+        StandardPeriodValue value = McoreFactory.eINSTANCE.createStandardPeriodValue();
+        value.setValue(period);
+        return ValueResult.success(value);
+    }
+
+    /**
+     * {@code {kind:'standardBeginningDate', value:{variant?, date?}}}: the platform's
+     * StandardBeginningDate - a variant (Custom when omitted) and the optional custom date.
+     */
+    private static ValueResult standardBeginningDateValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Standard-beginning-date ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {variant?, date?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_VARIANT, KEY_DATE);
+        if (members != null) return ValueResult.failure(members);
+        EnumResult<StandardBeginningDateVariant> variant = variant(body, at,
+            StandardBeginningDateVariant.values(), StandardBeginningDateVariant.CUSTOM);
+        if (variant.error != null) return ValueResult.failure(variant.error);
+        DateResult date = optionalDate(body, KEY_DATE, at);
+        if (date.error != null) return ValueResult.failure(date.error);
+        StandardBeginningDate beginning = McoreFactory.eINSTANCE.createStandardBeginningDate();
+        beginning.setVariant(variant.value);
+        if (date.value != null) beginning.setDate(date.value);
+        StandardBeginningDateValue value = McoreFactory.eINSTANCE.createStandardBeginningDateValue();
+        value.setValue(beginning);
+        return ValueResult.success(value);
+    }
+
+    /**
+     * {@code {kind:'valueList', value:{items?:[{value?, presentation?, checkState?, id?}], lastId?}}}:
+     * the platform ValueList EDT stores in a filter's right side or a parameter value, with an empty
+     * value type, as the DCS designer writes it. Each item's value is itself a ValueSpec. An item
+     * without 'id' takes one more than the highest id before it (the first takes 1); 'lastId'
+     * defaults to the highest item id, or -1 for an empty list, which is what the designer stores.
+     * Item pictures, format presentations, a non-empty value type and available values are not
+     * carried.
+     */
+    private static ValueResult valueListValue(JsonElement raw, String path)
+    {
+        String at = path + ".value"; //$NON-NLS-1$
+        if (raw == null || !raw.isJsonObject())
+        {
+            return ValueResult.failure("Value-list ValueSpec at '" + path //$NON-NLS-1$
+                + "' needs an object in 'value': {items?:[{value?, presentation?, checkState?, id?}], " //$NON-NLS-1$
+                + "lastId?}."); //$NON-NLS-1$
+        }
+        JsonObject body = raw.getAsJsonObject();
+        String members = checkMembers(body, at, KEY_ITEMS, KEY_LAST_ID);
+        if (members != null) return ValueResult.failure(members);
+        TypedValueList list = McoreFactory.eINSTANCE.createTypedValueList();
+        list.setValueType(McoreFactory.eINSTANCE.createTypeDescription());
+        Integer highest = null;
+        if (body.has(KEY_ITEMS) && !body.get(KEY_ITEMS).isJsonNull())
+        {
+            JsonArray items = array(body, KEY_ITEMS, at);
+            if (items == null) return ValueResult.failure(parseScratch().arrayError);
+            for (int i = 0; i < items.size(); i++)
+            {
+                String itemPath = at + ".items[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+                JsonObject itemBody = arrayObject(items, i, at + ".items"); //$NON-NLS-1$
+                if (itemBody == null) return ValueResult.failure(parseScratch().arrayObjectError);
+                String itemMembers = checkMembers(itemBody, itemPath, "value", KEY_PRESENTATION, //$NON-NLS-1$
+                    KEY_CHECK_STATE, KEY_ID);
+                if (itemMembers != null) return ValueResult.failure(itemMembers);
+                TypedValueListItem item = McoreFactory.eINSTANCE.createTypedValueListItem();
+                JsonElement itemValue = itemBody.get("value"); //$NON-NLS-1$
+                if (itemValue != null && !itemValue.isJsonNull())
+                {
+                    ValueResult built = value(itemValue, itemPath + ".value"); //$NON-NLS-1$
+                    if (built.error != null) return built;
+                    item.setValue(built.value);
+                }
+                JsonElement presentation = itemBody.get(KEY_PRESENTATION);
+                if (presentation != null && !presentation.isJsonNull())
+                {
+                    if (!presentation.isJsonPrimitive() || !presentation.getAsJsonPrimitive().isString())
+                    {
+                        return ValueResult.failure("Member '" + itemPath //$NON-NLS-1$
+                            + ".presentation' must be a string: a value-list item's presentation is plain " //$NON-NLS-1$
+                            + "text, not a localized map."); //$NON-NLS-1$
+                    }
+                    item.setPresentation(presentation.getAsString());
+                }
+                IntResult checkState = optionalInt(itemBody, KEY_CHECK_STATE, itemPath);
+                if (checkState.error != null) return ValueResult.failure(checkState.error);
+                if (checkState.value != null) item.setCheckState(checkState.value.intValue());
+                IntResult id = optionalInt(itemBody, KEY_ID, itemPath);
+                if (id.error != null) return ValueResult.failure(id.error);
+                if (id.value == null) id = nextItemId(highest, itemPath);
+                if (id.error != null) return ValueResult.failure(id.error);
+                int itemId = id.value.intValue();
+                item.setId(itemId);
+                highest = highest == null ? itemId : Math.max(highest.intValue(), itemId);
+                list.getItems().add(item);
+            }
+        }
+        IntResult lastId = optionalInt(body, KEY_LAST_ID, at);
+        if (lastId.error != null) return ValueResult.failure(lastId.error);
+        list.setLastId(lastId.value != null ? lastId.value.intValue()
+            : highest == null ? -1 : highest.intValue());
+        return ValueResult.success(list);
+    }
+
+    /** Share the checked successor for automatically assigned item IDs; explicit IDs bypass it. */
+    private static IntResult nextItemId(Integer highest, String path)
+    {
+        if (highest != null && highest.intValue() == Integer.MAX_VALUE)
+        {
+            return new IntResult(null, "Cannot auto-assign an item id at '" + path //$NON-NLS-1$
+                + "': the previous maximum is " + Integer.MAX_VALUE //$NON-NLS-1$
+                + ". Supply explicit ids for the remaining items."); //$NON-NLS-1$
+        }
+        return new IntResult(Integer.valueOf(highest == null ? 1 : highest.intValue() + 1), null);
+    }
+
+    /** A platform-enum member of a standard period or beginning date; omitted or null means the model default. */
+    private static <T extends Enum<T> & Enumerator> EnumResult<T> variant(JsonObject body, String path,
+        T[] values, T fallback)
+    {
+        if (!body.has(KEY_VARIANT) || body.get(KEY_VARIANT).isJsonNull())
+        {
+            return EnumResult.success(fallback);
+        }
+        return enumValue(body, KEY_VARIANT, path, values);
+    }
+
+    /** An optional platform date literal member; omitted or null leaves the date unset. */
+    private static DateResult optionalDate(JsonObject body, String member, String path)
+    {
+        JsonElement raw = body.get(member);
+        if (raw == null || raw.isJsonNull()) return new DateResult(null, null);
+        if (!raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isString())
+        {
+            return new DateResult(null, "Member '" + path + "." + member //$NON-NLS-1$ //$NON-NLS-2$
+                + "' must be a platform date literal string such as '2026-01-31T23:59:59'."); //$NON-NLS-1$
+        }
+        try
+        {
+            return new DateResult(com._1c.g5.v8.dt.mcore.util.Date.fromString(raw.getAsString()), null);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return new DateResult(null, "Member '" + path + "." + member + "' value '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + raw.getAsString() + "' is not a platform date. Pass whole seconds without a zone, " //$NON-NLS-1$
+                + "e.g. '2026-01-31T23:59:59'."); //$NON-NLS-1$
+        }
+    }
+
+    /** An optional whole-number member that fits an int; omitted or null is absent. */
+    private static IntResult optionalInt(JsonObject body, String member, String path)
+    {
+        JsonElement raw = body.get(member);
+        if (raw == null || raw.isJsonNull()) return new IntResult(null, null);
+        if (raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isNumber())
+        {
+            try
+            {
+                return new IntResult(Integer.valueOf(raw.getAsBigDecimal().intValueExact()), null);
+            }
+            catch (ArithmeticException e)
+            {
+                // Falls through to the refusal: a fraction or a value outside int.
+            }
+        }
+        return new IntResult(null, "Member '" + path + "." + member //$NON-NLS-1$ //$NON-NLS-2$
+            + "' must be a whole number."); //$NON-NLS-1$
+    }
+
+    private record DateResult(com._1c.g5.v8.dt.mcore.util.Date value, String error)
+    {
+    }
+
+    private record IntResult(Integer value, String error)
+    {
+    }
+
     private static <T extends Enum<T> & Enumerator> EnumResult<T> enumValue(JsonObject body,
         String member, String path, T[] values)
     {
         String raw = optionalString(body, member, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return EnumResult.failure(stringError);
+            return EnumResult.failure(parseScratch().stringError);
         }
         for (T value : values)
         {
@@ -5027,27 +5888,35 @@ public final class DcsSettingsWriter
 
     // ---- JSON helpers -----------------------------------------------------------------------
 
-    private static String objectError;
-    private static String arrayError;
-    private static String arrayObjectError;
-    private static String selectedKindError;
-    private static String userFieldKindError;
-    private static String filterKindError;
-    private static String orderKindError;
-    private static String stringError;
-    private static String booleanError;
-    private static String indexError;
-    private static String primitiveStringError;
+    private static ParseScratch parseScratch()
+    {
+        return PARSE_SCRATCH.get();
+    }
+
+    private static final class ParseScratch
+    {
+        private String objectError;
+        private String arrayError;
+        private String arrayObjectError;
+        private String selectedKindError;
+        private String userFieldKindError;
+        private String filterKindError;
+        private String orderKindError;
+        private String stringError;
+        private String booleanError;
+        private String indexError;
+        private String primitiveStringError;
+    }
 
     private static JsonObject object(JsonObject body, String member, String path)
     {
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonObject())
         {
-            objectError = "Member '" + path + "." + member + "' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().objectError = "Member '" + path + "." + member + "' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        objectError = null;
+        parseScratch().objectError = null;
         return value.getAsJsonObject();
     }
 
@@ -5056,10 +5925,10 @@ public final class DcsSettingsWriter
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonArray())
         {
-            arrayError = "Member '" + path + "." + member + "' must be a JSON array."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().arrayError = "Member '" + path + "." + member + "' must be a JSON array."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        arrayError = null;
+        parseScratch().arrayError = null;
         return value.getAsJsonArray();
     }
 
@@ -5068,10 +5937,10 @@ public final class DcsSettingsWriter
         JsonElement value = array.get(index);
         if (value == null || !value.isJsonObject())
         {
-            arrayObjectError = "Entry '" + path + "[" + index + "]' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().arrayObjectError = "Entry '" + path + "[" + index + "]' must be a JSON object."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        arrayObjectError = null;
+        parseScratch().arrayObjectError = null;
         return value.getAsJsonObject();
     }
 
@@ -5079,25 +5948,25 @@ public final class DcsSettingsWriter
     {
         if (!body.has(member) || body.get(member).isJsonNull())
         {
-            stringError = null;
+            parseScratch().stringError = null;
             return null;
         }
         JsonElement value = body.get(member);
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
         {
-            stringError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().stringError = "Member '" + path + "." + member + "' must be a string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        stringError = null;
+        parseScratch().stringError = null;
         return value.getAsString();
     }
 
     private static String requiredString(JsonObject body, String member, String path)
     {
         String result = optionalString(body, member, path);
-        if (stringError == null && (result == null || result.isEmpty()))
+        if (parseScratch().stringError == null && (result == null || result.isEmpty()))
         {
-            stringError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().stringError = "Member '" + path + "." + member + "' must be a non-empty string."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         return result;
     }
@@ -5112,12 +5981,12 @@ public final class DcsSettingsWriter
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
             || !allowEmpty && value.getAsString().isEmpty())
         {
-            primitiveStringError = "ValueSpec at '" + path //$NON-NLS-1$
+            parseScratch().primitiveStringError = "ValueSpec at '" + path //$NON-NLS-1$
                 + (allowEmpty ? "' needs a string in 'value'." //$NON-NLS-1$
                     : "' needs a non-empty string in 'value'."); //$NON-NLS-1$
             return null;
         }
-        primitiveStringError = null;
+        parseScratch().primitiveStringError = null;
         return value.getAsString();
     }
 
@@ -5126,10 +5995,10 @@ public final class DcsSettingsWriter
         JsonElement value = body.get(member);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
         {
-            booleanError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().booleanError = "Member '" + path + "." + member + "' must be true or false."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-        booleanError = null;
+        parseScratch().booleanError = null;
         return Boolean.valueOf(value.getAsBoolean());
     }
 
@@ -5137,19 +6006,19 @@ public final class DcsSettingsWriter
     {
         if (!DcsAddress.isZeroBasedIndex(raw))
         {
-            indexError = "Index '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            parseScratch().indexError = "Index '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                 + "' is invalid. Pass a zero-based integer copied from dcs action='get'."; //$NON-NLS-1$
             return -1;
         }
         int value = Integer.parseInt(raw);
         if (value >= size)
         {
-            indexError = "Index '" + raw + "' at '" + path + "' is out of range; existing indices: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            parseScratch().indexError = "Index '" + raw + "' at '" + path + "' is out of range; existing indices: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + (size == 0 ? "(none)" : "0.." + (size - 1)) //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Re-run dcs action='get' and copy the new address."; //$NON-NLS-1$
             return -1;
         }
-        indexError = null;
+        parseScratch().indexError = null;
         return value;
     }
 
@@ -5174,9 +6043,9 @@ public final class DcsSettingsWriter
             return null;
         }
         String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        if (parseScratch().stringError != null)
         {
-            return stringError;
+            return parseScratch().stringError;
         }
         return expected.equalsIgnoreCase(kind) ? null
             : "Item kind '" + kind + "' at '" + path + "' collides with existing subtype '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -5407,7 +6276,7 @@ public final class DcsSettingsWriter
                 + "'. Copy the exact node address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(0), items.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 1)
         {
             items.remove(selected);
@@ -5500,7 +6369,7 @@ public final class DcsSettingsWriter
         if (path.isEmpty()) return "action='remove' needs one " + kind.token //$NON-NLS-1$
             + "-axis group index after '" + where + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(0), groups.size(), where);
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 1)
         {
             groups.remove(selected);
@@ -5561,7 +6430,7 @@ public final class DcsSettingsWriter
                 + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
         }
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             holder.getItems().remove(selected);
@@ -5594,7 +6463,7 @@ public final class DcsSettingsWriter
                 + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
         }
         int variantIndex = index(tail.get(1), variants.getItems().size(), variantsWhere + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (tail.size() == 2)
         {
             variants.getItems().remove(variantIndex);
@@ -5637,7 +6506,7 @@ public final class DcsSettingsWriter
             return "Selection removal at '" + where //$NON-NLS-1$
                 + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             items.remove(selected);
@@ -5663,7 +6532,7 @@ public final class DcsSettingsWriter
             return "Conditional-appearance removal at '" + where //$NON-NLS-1$
                 + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
         int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             holder.getItems().remove(selected);
@@ -5693,7 +6562,7 @@ public final class DcsSettingsWriter
         if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
             return "Filter removal at '" + where + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         if (path.size() == 2)
         {
             items.remove(selected);
@@ -5715,7 +6584,7 @@ public final class DcsSettingsWriter
         if (path.size() != 2 || !KEY_ITEMS.equals(path.get(0)))
             return "Removal at '" + where + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
-        if (indexError != null) return indexError;
+        if (parseScratch().indexError != null) return parseScratch().indexError;
         items.remove(selected);
         return null;
     }

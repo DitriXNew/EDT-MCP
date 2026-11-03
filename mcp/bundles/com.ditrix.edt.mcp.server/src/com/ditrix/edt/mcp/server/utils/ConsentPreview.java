@@ -76,6 +76,18 @@ public final class ConsentPreview
         return new ConsentPreview(title, subtitle, totalCount, topNames, false);
     }
 
+    /**
+     * Discloses the editor side effect of {@link BmTransactions#writeInGlobalContext}.
+     *
+     * @param resource the kind of resource being deleted, such as "form" or "route map"
+     * @return a sentence, with its leading space, for the destructive consent subtitle
+     */
+    public static String globalContextEditorNotice(String resource)
+    {
+        return " An open editor of this " + resource + " with unsaved changes has them all saved with the "
+            + "delete, not only its changes to this " + resource + ", and loses its undo history.";
+    }
+
     private ConsentPreview(String title, String subtitle, int totalCount, List<String> topNames,
         boolean namesLoggable)
     {

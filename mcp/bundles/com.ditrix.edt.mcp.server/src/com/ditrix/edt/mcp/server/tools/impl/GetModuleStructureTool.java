@@ -43,6 +43,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
  * Tool to get the structure of a BSL module: methods, signatures, regions, export flags.
@@ -138,6 +139,12 @@ public class GetModuleStructureTool implements IMcpTool
             }
             catch (Exception e)
             {
+                String refusal = Refusals.messageOf(e);
+                if (refusal != null)
+                {
+                    resultRef.set(ToolResult.error(refusal).toJson());
+                    return;
+                }
                 Activator.logError("Error getting module structure via EMF", e); //$NON-NLS-1$
                 resultRef.set(null); // Signal to try fallback
             }

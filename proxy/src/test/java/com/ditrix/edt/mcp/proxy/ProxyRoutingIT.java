@@ -590,15 +590,25 @@ public class ProxyRoutingIT
          */
         ProxyFixture(int scanFrom, int scanTo)
         {
+            this(scanFrom, scanTo, 3600);
+        }
+
+        ProxyFixture(int scanFrom, int scanTo, int refreshSeconds)
+        {
             config = ProxyConfig.parse(new String[] {
                 "--port", "0", //$NON-NLS-1$ //$NON-NLS-2$
                 "--scan", scanFrom + "-" + scanTo, //$NON-NLS-1$ //$NON-NLS-2$
-                "--refresh", "3600", //$NON-NLS-1$ //$NON-NLS-2$
+                "--refresh", Integer.toString(refreshSeconds), //$NON-NLS-1$
                 "--timeout", "15" }, //$NON-NLS-1$ //$NON-NLS-2$
                 Map.of());
             registry = new BackendRegistry(config);
             handler = new McpProxyHandler(config, registry, new SessionManager());
             server = new ProxyServer(config, registry, handler);
+        }
+
+        void startPeriodicRefresh(java.util.concurrent.ScheduledExecutorService scheduler)
+        {
+            registry.startPeriodicRefresh(scheduler);
         }
 
         /**

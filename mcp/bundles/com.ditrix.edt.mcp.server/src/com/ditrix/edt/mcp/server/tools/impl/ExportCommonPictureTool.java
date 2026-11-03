@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonPictureContentReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonArray;
@@ -135,6 +136,11 @@ public class ExportCommonPictureTool implements IMcpTool
 
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, KEY_FQN);
+        String memberRefusal = ReferencedTopObjects.memberOperationRefusal(NAME, fqn);
+        if (memberRefusal != null)
+        {
+            return ToolResult.error(memberRefusal).toJson();
+        }
         String variant = JsonUtils.extractStringArgument(params, KEY_VARIANT);
 
         // The model access already happens inside BmTransactions.read (a read-only BM task, which

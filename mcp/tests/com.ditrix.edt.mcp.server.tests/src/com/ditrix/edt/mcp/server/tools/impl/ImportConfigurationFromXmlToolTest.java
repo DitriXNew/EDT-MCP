@@ -1650,8 +1650,8 @@ public class ImportConfigurationFromXmlToolTest
         }
 
         @Override
-        public void runImport(Object api, Path importPath, String projectName, String projectNature,
-            String xmlVersion)
+        public void runImport(Object api, Path importPath, String projectName, String platformVersion,
+            String baseProjectName)
         {
             // No import: the tests are about what happens AFTER one returns.
         }
@@ -1670,8 +1670,8 @@ public class ImportConfigurationFromXmlToolTest
         }
 
         @Override
-        public void runImport(Object api, Path importPath, String projectName, String projectNature,
-            String xmlVersion) throws InterruptedException
+        public void runImport(Object api, Path importPath, String projectName, String platformVersion,
+            String baseProjectName) throws InterruptedException
         {
             entered.countDown();
             assertTrue("the blocked import must be released by the test", //$NON-NLS-1$

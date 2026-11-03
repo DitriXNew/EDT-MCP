@@ -35,8 +35,9 @@ external translation provider). Source:
   dictionary/provider the LanguageTool API throws and the tool reports
   `Translate configuration failed: <message>`.
 - The project must resolve as an EDT project (`IDtProjectManager.getDtProject`
-  non-null) and pass `ProjectStateChecker.checkReadyOrError` (not building / not
-  available).
+  non-null) and pass `ProjectStateChecker.buildingErrorOrNull` (derived data not
+  building; a registered EDT context that is still starting is judged by its
+  derived data, so it is refused only while that reads building).
 - **Mutation safety.** Only ever run against **`TestConfiguration`** (repo path
   `TestConfiguration/src`), never against `IRP` or a real config. Mutate
   *through MCP* so the in-memory model and disk stay in sync, then revert (see
@@ -134,8 +135,10 @@ per-object count of what changed, so verify the actual effect with
   - missing/empty `targetLanguages` → `targetLanguages is required (e.g. ["en"])`
   - unknown project → `Project not found: <name>`; closed project →
     `Project is closed: <name>`; not building-ready →
-    `ProjectStateChecker.checkReadyOrError(...)` message; non-EDT project →
-    `Not an EDT project: <name>`
+    `ProjectStateChecker.buildingErrorOrNull(...)` message; non-EDT project →
+    `Not an EDT project: <name>`. An EDT-nature project whose context is unstarted
+    gets the shared context recovery sentence appended; a plain project keeps
+    the bare text.
   - **LanguageTool absent** → `LanguageTool ISynchronizeProjectApi is not
     available. Install LanguageTool in EDT.` (this is the most common
     "why did it fail" — the plugin simply isn't installed in the harness).

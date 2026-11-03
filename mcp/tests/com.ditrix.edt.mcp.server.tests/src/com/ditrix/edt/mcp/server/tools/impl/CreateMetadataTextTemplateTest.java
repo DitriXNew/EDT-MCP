@@ -145,7 +145,12 @@ public class CreateMetadataTextTemplateTest
         write.setAccessible(true);
         JsonObject spec = new JsonObject();
         if (required) { spec.add("cells", new com.google.gson.JsonArray()); }
-        else { spec.addProperty("text", "new text"); }
+        else
+        {
+            spec.addProperty("mode", "replace");
+            spec.addProperty("text", "new text");
+            spec.addProperty("overwrite", true);
+        }
         Field plugin = Activator.class.getDeclaredField("plugin");
         plugin.setAccessible(true);
         Object previous = plugin.get(null);

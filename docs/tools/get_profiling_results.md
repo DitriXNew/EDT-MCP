@@ -1,6 +1,6 @@
 # get_profiling_results
 
-Get profiling (performance measurement) results after a debug session: per-module, per-line call count, timing and percentage. Returns only the MOST RECENT measurement session (historical sessions are not returned). Also reports whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. Full parameters and examples: call get_tool_guide('get_profiling_results').
+Identify performance hotspots in executed BSL code. Returns the MOST RECENT measurement session GLOBALLY - applicationId only changes the reported active-state flag, so the results may belong to a different application than the one asked about. Parameters and examples: get_tool_guide('get_profiling_results').
 
 ## Parameters
 | Parameter | Required | Type | Description |

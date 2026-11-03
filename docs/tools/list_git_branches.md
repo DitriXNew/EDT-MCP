@@ -1,6 +1,6 @@
 # list_git_branches
 
-List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branch context is bound to (best-effort). Precedes switch_git_branch. Full parameters and examples: call get_tool_guide('list_git_branches').
+Inspect available Git branches and their EDT infobase bindings. Parameters and examples: get_tool_guide('list_git_branches').
 
 ## Parameters
 | Parameter | Required | Type | Description |

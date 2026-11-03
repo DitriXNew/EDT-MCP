@@ -19,10 +19,9 @@ Stable, code-anchored expectations (from the real impl, verified against source)
   - totalTools / enabledTools are positive ints (registry is populated)
   - formRenderFlags carries BOTH named JVM-flag keys, each with the render mode
     sampled at plugin activation (the diagnostic for a blank form screenshot).
-    Deliberately not called "effective": EDT binds buffered render once, when
-    HippoLayoutService initialises its static singleton, and nothing can report
-    which side of that moment a runtime force landed on without initialising the
-    class and thereby deciding it.
+    EDT binds the modes and its offscreen handler once at class initialization.
+    atStartup records the mode at MCP activation; optional requested is the raw
+    current system property. Changing the launch configuration requires an EDT restart.
 
 NEGATIVE MATRIX — why it is minimal (documented, not fudged):
   The tool has NO parameters: no required param to omit, no enum to violate, no

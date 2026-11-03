@@ -1,6 +1,6 @@
 # get_job_status
 
-Poll any background job by the jobId returned from its owning tool. Returns the current state, progress journal, and terminal result; optionally waits for a transport-safe interval. Full parameters and examples: call get_tool_guide('get_job_status').
+Poll any background job by the jobId its owning tool returned: state, progress journal and terminal result. Parameters and examples: get_tool_guide('get_job_status').
 
 ## Parameters
 | Parameter | Required | Type | Description |

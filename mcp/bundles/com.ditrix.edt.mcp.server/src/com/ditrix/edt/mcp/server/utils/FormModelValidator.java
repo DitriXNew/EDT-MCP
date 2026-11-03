@@ -325,8 +325,8 @@ public final class FormModelValidator
             judgeColumns(attribute, "Attribute." + nameOf(attribute) + ".Column", findings); //$NON-NLS-1$ //$NON-NLS-2$
             for (EObject group : additionalColumnGroups(attribute))
             {
-                // NOT the Column address: resolveFormMember reaches only the attribute's own
-                // columns, so reusing it would point at an unrelated same-named direct column.
+                // Keep the diagnostic label: additional columns have a separate table-path
+                // namespace, addressed as Attribute.A.Column.Table.Name by resolveFormMember.
                 judgeColumns(group, "Attribute." + nameOf(attribute) + ".AdditionalColumn", //$NON-NLS-1$ //$NON-NLS-2$
                     findings);
             }

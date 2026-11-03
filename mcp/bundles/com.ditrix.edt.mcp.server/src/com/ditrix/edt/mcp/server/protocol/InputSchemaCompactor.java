@@ -160,6 +160,9 @@ public final class InputSchemaCompactor
         // action=get + type=schema + a bare root. Without this one clause a schema-valid
         // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.
         keep.put("dcs", asSet("format")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Cross-field requirements are absent from the shape: replace needs both arrays,
+        // even when empty, and a Condition source requires an explicit branch.
+        keep.put("business_process_route_map", asSet("action", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database
@@ -300,8 +303,9 @@ public final class InputSchemaCompactor
         // Two similarly named projects with opposite roles: projectName is the BASE
         // configuration (NOT the extension), extensionProjectName picks the destination and
         // is mandatory once several extensions exist. Stripped, the natural reading is wrong.
+        // The picture option's form-only scope and opt-in default also require its prose.
         keep.put("adopt_metadata_object", //$NON-NLS-1$
-            asSet(McpKeys.PROJECT_NAME, "extensionProjectName")); //$NON-NLS-1$
+            asSet(McpKeys.PROJECT_NAME, "extensionProjectName", "includeReferencedPictures")); //$NON-NLS-1$ //$NON-NLS-2$
         // fillUpType is a bare string whose legal values live only here, and FROM_PROVIDER
         // makes providerId mandatory - a conditional the schema states nowhere.
         keep.put("generate_translation_strings", //$NON-NLS-1$
@@ -330,7 +334,7 @@ public final class InputSchemaCompactor
         // cannot be preempted and MAY STILL COMPLETE afterwards. Without this a caller reads
         // "failed" and retries - or starts editing - while the first rename is still mutating.
         keep.put("rename_metadata_object", //$NON-NLS-1$
-            asSet("expectedHash", "timeout")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            asSet("expectedHash", "timeout", "waitSeconds", "textOccurrences")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // An OPTIONAL parameter whose omission widens the blast radius to the whole
         // workspace: without projectName, clean_project rebuilds EVERY EDT project and
         // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to

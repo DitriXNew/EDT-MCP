@@ -37,10 +37,9 @@ git revert is needed.
   - **Java render mode** — native render disabled. Then the layout/view projections are populated
     and per-element `bounds` appear. To get rich per-element bounds, run EDT with
     `-DnativeFormLayoutRender=false` in `1cedt.ini` `-vmargs`.
-  - NOTE: unlike `get_form_screenshot`, this tool does **not** call
-    `EditorScreenshotHelper.ensureBufferedNativeRenderMode()` — the `nativeFormBufferedLayoutRender`
-    buffered-screenshot flag is a separate concern and does not change whether per-element bounds
-    are computed. Do not confuse the two flags.
+  - Both form tools only read EDT's render modes. The `nativeFormBufferedLayoutRender`
+    buffered-screenshot launch flag is a separate concern and does not change whether per-element
+    bounds are computed. Changing a launch flag requires an EDT restart. Do not confuse the two flags.
 - Does NOT mutate — no `git checkout`/`git clean` revert needed.
 
 **Call (documented from source — NOT live-called; UI-thread / heavy / render-mode-dependent).**

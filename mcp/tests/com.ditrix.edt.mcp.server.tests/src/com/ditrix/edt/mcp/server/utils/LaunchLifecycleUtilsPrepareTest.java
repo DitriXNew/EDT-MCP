@@ -10,17 +10,22 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -37,6 +42,14 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com._1c.g5.v8.derived.IDerivedDataManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProject;
+import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
@@ -59,9 +72,33 @@ public class LaunchLifecycleUtilsPrepareTest
     private static final String PROJECT_NAME = "MyProject";
     private static final String RUNTIME_APP_ID = "real-app-uuid";
 
+    private Field plugin;
+    private Object previousPlugin;
+    private Activator activator;
+    private IDerivedDataManager derivedData;
+    private IDtProject dtProject;
+    private IV8ProjectManager v8Projects;
+
     @Before
-    public void shrinkTimings()
+    public void shrinkTimings() throws Exception
     {
+        plugin = Activator.class.getDeclaredField("plugin");
+        plugin.setAccessible(true);
+        previousPlugin = plugin.get(null);
+        activator = mock(Activator.class);
+        plugin.set(null, activator);
+        IDtProjectManager projects = mock(IDtProjectManager.class);
+        IDerivedDataManagerProvider provider = mock(IDerivedDataManagerProvider.class);
+        dtProject = mock(IDtProject.class);
+        derivedData = mock(IDerivedDataManager.class);
+        v8Projects = mock(IV8ProjectManager.class);
+        when(activator.getDtProjectManager()).thenReturn(projects);
+        when(activator.getDerivedDataManagerProvider()).thenReturn(provider);
+        when(activator.getV8ProjectManager()).thenReturn(v8Projects);
+        when(v8Projects.getProject(dtProject)).thenReturn(mock(IConfigurationProject.class));
+        when(projects.getDtProject(any(IProject.class))).thenReturn(dtProject);
+        when(provider.get(dtProject)).thenReturn(derivedData);
+        when(derivedData.waitAllComputations(anyLong())).thenReturn(true);
         // The up-to-date app manager reads UPDATED; without shrinking, the new
         // settle-before-decide window (default 5s) would make each terminate test
         // sleep needlessly. 20ms settle keeps these terminate-phase tests fast.
@@ -70,11 +107,14 @@ public class LaunchLifecycleUtilsPrepareTest
         // the production bindings and an empty dirty map, so a verdict left behind by another
         // class cannot decide this class's phases.
         PreLaunchChangeTracker.resetForTest();
+        PreLaunchChangeTracker.setDiskSyncForTest(project -> true);
+        PreLaunchChangeTracker.setFingerprinterForTest(project -> "initial");
     }
 
     @After
-    public void restoreTimings()
+    public void restoreTimings() throws Exception
     {
+        plugin.set(null, previousPlugin);
         LaunchLifecycleUtils.resetSyncTimingsForTest();
         // The change gate is static state shared with every other test in the JVM: restore the
         // production fingerprinter/store/disk-sync and drop the dirty map, or a scope this class
@@ -417,7 +457,7 @@ public class LaunchLifecycleUtilsPrepareTest
         assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
         assertEquals("every stage must be published, in the order it runs",
             Arrays.asList(LaunchLifecycleUtils.PHASE_TERMINATE,
-                LaunchLifecycleUtils.PHASE_CHECK_CHANGES, LaunchLifecycleUtils.PHASE_RECOMPUTE,
+                LaunchLifecycleUtils.PHASE_CHECK_CHANGES, LaunchLifecycleUtils.PHASE_SETTLE,
                 LaunchLifecycleUtils.PHASE_DB_UPDATE),
             stages);
         assertEquals("the db-update label must be published BEFORE the update runs, not after it "
@@ -482,9 +522,9 @@ public class LaunchLifecycleUtilsPrepareTest
             ExternalInfobaseChangesPolicy.DEFAULT, stages::add);
 
         assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
-        assertEquals("a changed scope must still reach the recompute, and only after the gate",
+        assertEquals("a changed configuration drains the platform's incremental contexts after the gate",
             Arrays.asList(LaunchLifecycleUtils.PHASE_TERMINATE,
-                LaunchLifecycleUtils.PHASE_CHECK_CHANGES, LaunchLifecycleUtils.PHASE_RECOMPUTE,
+                LaunchLifecycleUtils.PHASE_CHECK_CHANGES, LaunchLifecycleUtils.PHASE_SETTLE,
                 LaunchLifecycleUtils.PHASE_DB_UPDATE),
             stages);
         assertEquals("while the gate is still deciding, the phase must name the gate - a caller "
@@ -533,5 +573,213 @@ public class LaunchLifecycleUtilsPrepareTest
 
         assertTrue("a caller without a phase sink must still succeed: " + result.getError(),
             result.isOk());
+    }
+
+    @Test
+    public void testOneChangedModuleOnlyDrainsExistingContexts() throws Exception
+    {
+        wireGate("after-module-edit", "before-module-edit", new ArrayList<>(), new AtomicReference<>());
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        PreLaunchResult result = prepare(applications);
+
+        assertTrue(result.getError(), result.isOk());
+        verify(derivedData).waitAllComputations(anyLong());
+        // EDT already queued the changed module: no recompute/update call may expand that scope.
+        verifyNoMoreInteractions(derivedData);
+        verify(applications, never()).update(any(), any(), any(), any());
+    }
+
+    @Test
+    public void testDirtyExtensionStillRecomputesBeforeDraining() throws Exception
+    {
+        wireGate("edited-extension", "old-extension", new ArrayList<>(), new AtomicReference<>());
+        when(v8Projects.getProject(dtProject)).thenReturn(mock(IExtensionProject.class));
+        List<String> phases = new ArrayList<>();
+        LaunchLifecycleUtils.recomputeAndSettleIfDirty(Arrays.asList(mockOpenProject()), phases::add);
+
+        org.mockito.InOrder order = inOrder(derivedData);
+        order.verify(derivedData).recomputeAll();
+        order.verify(derivedData).waitAllComputations(anyLong());
+        order.verifyNoMoreInteractions();
+        assertEquals(Arrays.asList(LaunchLifecycleUtils.PHASE_RECOMPUTE,
+            LaunchLifecycleUtils.PHASE_SETTLE), phases);
+    }
+
+    @Test
+    public void testUnchangedExtensionSkipsRecompute() throws Exception
+    {
+        wireGate("same", "same", new ArrayList<>(), new AtomicReference<>());
+        when(v8Projects.getProject(dtProject)).thenReturn(mock(IExtensionProject.class));
+
+        assertTrue(prepare(mockUpToDateAppManager()).isOk());
+
+        verify(derivedData).waitAllComputations(anyLong());
+        verifyNoMoreInteractions(derivedData);
+    }
+
+    @Test
+    public void testTimedOutDerivedDataBlocksUpdateAndDoesNotCertifyContent() throws Exception
+    {
+        wireGate("edited", "old", new ArrayList<>(), new AtomicReference<>());
+        RecordingFingerprintStore prepared = new RecordingFingerprintStore();
+        PreLaunchChangeTracker.setStoreForTest(prepared);
+        when(derivedData.waitAllComputations(anyLong())).thenReturn(false);
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        PreLaunchResult result = prepare(applications);
+
+        assertFalse(result.isOk());
+        assertTrue(result.getError().contains(PROJECT_NAME));
+        assertTrue(result.getError().contains("Wait for EDT"));
+        verify(applications, never()).getApplication(any(), anyString());
+        assertEquals("a timed-out preparation must not save a prepared marker", 0, prepared.saves);
+    }
+
+    @Test
+    public void testInterruptedDerivedDataBlocksUpdateAndRestoresInterrupt() throws Exception
+    {
+        when(derivedData.waitAllComputations(anyLong())).thenThrow(new InterruptedException());
+        IApplicationManager applications = mockUpToDateAppManager();
+        try
+        {
+            assertFalse(prepare(applications).isOk());
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(applications, never()).getApplication(any(), anyString());
+        }
+        finally
+        {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    public void testMissingDerivedDataServiceBlocksUpdate() throws Exception
+    {
+        when(activator.getDerivedDataManagerProvider()).thenReturn(null);
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        assertFalse(prepare(applications).isOk());
+
+        verify(applications, never()).getApplication(any(), anyString());
+    }
+
+    @Test
+    public void testExtensionRecomputeFailureBlocksUpdate() throws Exception
+    {
+        wireGate("edited", "old", new ArrayList<>(), new AtomicReference<>());
+        when(v8Projects.getProject(dtProject)).thenReturn(mock(IExtensionProject.class));
+        doThrow(new IllegalStateException("recompute unavailable")).when(derivedData).recomputeAll();
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        assertFalse(prepare(applications).isOk());
+
+        verify(applications, never()).getApplication(any(), anyString());
+    }
+
+    @Test
+    public void testUnknownProjectKindCannotBypassExtensionFreshness() throws Exception
+    {
+        when(v8Projects.getProject(dtProject)).thenReturn(null);
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        assertFalse(prepare(applications).isOk());
+
+        verify(applications, never()).getApplication(any(), anyString());
+        verifyNoMoreInteractions(derivedData);
+    }
+
+    @Test
+    public void testSuccessfulDrainAndUpdateCertifiesTheSnapshot() throws Exception
+    {
+        wireGate("edited", "old", new ArrayList<>(), new AtomicReference<>());
+        RecordingFingerprintStore prepared = new RecordingFingerprintStore();
+        PreLaunchChangeTracker.setStoreForTest(prepared);
+
+        assertTrue(prepare(mockUpToDateAppManager()).isOk());
+
+        assertEquals(1, prepared.saves);
+        assertEquals("edited", prepared.fingerprint);
+    }
+
+    @Test
+    public void testFailedDiskRefreshCannotPrepareTheOldModel() throws Exception
+    {
+        wireGate("same", "same", new ArrayList<>(), new AtomicReference<>());
+        PreLaunchChangeTracker.setDiskSyncForTest(project -> false);
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        assertFalse(prepare(applications).isOk());
+
+        verify(applications, never()).getApplication(any(), anyString());
+        verifyNoMoreInteractions(derivedData);
+    }
+
+    @Test
+    public void testUnreadableSourcesCannotPrepareTheOldModel() throws Exception
+    {
+        wireGate(null, "old", new ArrayList<>(), new AtomicReference<>());
+        IApplicationManager applications = mockUpToDateAppManager();
+
+        assertFalse(prepare(applications).isOk());
+
+        verify(applications, never()).getApplication(any(), anyString());
+        verifyNoMoreInteractions(derivedData);
+    }
+
+    @Test
+    public void testMixedScopeRecomputesOnlyTheChangedExtension() throws Exception
+    {
+        wireGate("edited", "old", new ArrayList<>(), new AtomicReference<>());
+        IProject configuration = mockOpenProject();
+        IProject extension = mockOpenProject();
+        when(extension.getName()).thenReturn("Tests");
+        IDtProject extensionDtProject = mock(IDtProject.class);
+        IDerivedDataManager extensionData = mock(IDerivedDataManager.class);
+        when(activator.getDtProjectManager().getDtProject(extension)).thenReturn(extensionDtProject);
+        when(activator.getDerivedDataManagerProvider().get(extensionDtProject)).thenReturn(extensionData);
+        when(v8Projects.getProject(extensionDtProject)).thenReturn(mock(IExtensionProject.class));
+        when(extensionData.waitAllComputations(anyLong())).thenReturn(true);
+
+        LaunchLifecycleUtils.recomputeAndSettleIfDirty(Arrays.asList(configuration, extension));
+
+        org.mockito.InOrder order = inOrder(extensionData, derivedData);
+        order.verify(extensionData).recomputeAll();
+        order.verify(derivedData).waitAllComputations(anyLong());
+        order.verify(extensionData).waitAllComputations(anyLong());
+        order.verifyNoMoreInteractions();
+    }
+
+    private PreLaunchResult prepare(IApplicationManager applications)
+    {
+        ILaunchManager launches = mock(ILaunchManager.class);
+        when(launches.getLaunches()).thenReturn(new ILaunch[0]);
+        return LaunchLifecycleUtils.prepareForFreshLaunch(launches, mockOpenProject(),
+            RUNTIME_APP_ID, applications, 2, "configuration");
+    }
+
+    private static final class RecordingFingerprintStore implements PreLaunchChangeTracker.FingerprintStore
+    {
+        private String fingerprint = "old";
+        private int saves;
+
+        @Override
+        public String load(IProject project)
+        {
+            return fingerprint;
+        }
+
+        @Override
+        public void save(IProject project, String value)
+        {
+            fingerprint = value;
+            saves++;
+        }
+
+        @Override
+        public void clear(IProject project)
+        {
+            fingerprint = null;
+        }
     }
 }

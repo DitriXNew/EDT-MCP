@@ -45,6 +45,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -203,7 +204,7 @@ public class GetOutgoingStructuresTool implements IMcpTool
             }
             catch (Exception e)
             {
-                Activator.logError("Error collecting outgoing structures", e); //$NON-NLS-1$
+                Refusals.log("Error collecting outgoing structures", e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });

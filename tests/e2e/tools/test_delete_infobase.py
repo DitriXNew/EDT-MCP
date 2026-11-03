@@ -31,24 +31,33 @@ CI STRATEGY
 -----------
 The negative matrix and confirm-gate tests are CI-safe (no platform needed). The
 live happy-path (full create+delete round-trip) is covered by test_create_infobase.py
-and gated behind EDT_MCP_LIVE_INFOBASE=1.
+and gated behind EDT_MCP_LIVE_INFOBASE=1. The directory-warning probes below
+use the same gate because association can start a Designer session on their fake marker.
 
 NOTE: delete_infobase never writes TestConfiguration source files. All calls
 leave the project tree clean: assert_no_diff() on all paths.
 """
 
+import glob
 import os
+from pathlib import Path
+import re
+import shutil
+import tempfile
 
 from harness import (
     call,
+    calls_aborted,
     assert_error,
     assert_error_quality,
     assert_no_diff,
     assert_ok,
     e2e_test,
+    requires_live_infobase,
     E2ESkip,
     PROJECT,
     cleanup_cluster_registration_probe,
+    _workspace_dir,
 )
 
 NONEXISTENT_PROJECT = "NoSuchProject_di_zzz"
@@ -292,3 +301,118 @@ def test_preview_declares_why_the_database_files_would_be_kept():
             "a MEASURED co-owner must be named in the message: %r" % sc2.get("message")
 
     assert_no_diff("a preview must not touch the fixture")
+
+
+def _assert_directory_warning(workspace, directory, message_fragment, with_detail=False):
+    """The call logs synchronously; inspect current and rotated logs once, without polling."""
+    metadata = Path(workspace) / ".metadata"
+    paths = [metadata / ".log"] + [Path(path) for path in glob.glob(str(metadata / ".bak_*.log"))]
+    entries = []
+    for path in paths:
+        if path.is_file():
+            for entry in re.split(r"(?=^!ENTRY )", path.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE):
+                if ("!MESSAGE delete_infobase:" in entry and directory.name in entry
+                        and message_fragment in entry):
+                    entries.append(entry)
+    assert entries, "the server must log the directory outcome in this workspace: %s" % directory
+    for entry in entries:
+        assert entry.startswith("!ENTRY com.ditrix.edt.mcp.server 2 "), entry
+        assert "!STACK" not in entry, "a non-fatal directory outcome must carry no stack: %s" % entry
+        if with_detail:
+            message = entry.split("!MESSAGE ", 1)[1].splitlines()[0]
+            prefix = "delete it manually): "
+            assert prefix in message, "the warning must include failure detail: %s" % message
+            detail = message.split(prefix, 1)[1]
+            assert re.match(r"[A-Za-z_$][A-Za-z0-9_$]*Exception: \S", detail), \
+                "the warning must retain the exception type and message: %s" % message
+
+
+def _kept_directory_case(locked):
+    workspace = _workspace_dir()
+    if workspace is None:
+        raise E2ESkip("set EDT_MCP_EDT_WORKSPACE so the directory-warning test can read EDT's log")
+    directory = Path(tempfile.mkdtemp(prefix="edtmcp735_"))
+    marker = directory / "1Cv8.1CD"
+    sentinel = directory / "keep.txt"
+    contents = b"test-owned fake database marker; attended live probe only"
+    marker.write_bytes(contents)
+    sentinel.write_bytes(b"keep this unrelated file")
+    name = "McpDeleteWarning_" + directory.name
+    registration_id = None
+    deletion_finished = False
+    locked_file = None
+    try:
+        created = call("create_infobase", {"projectName": PROJECT, "mode": "register",
+                       "infobaseFile": str(directory), "infobaseName": name, "setDefault": False})
+        registration_id = (created.structured or {}).get("registrationId")
+        # Read the disk before another MCP round trip can mask an early return or unexpected write.
+        assert marker.read_bytes() == contents
+        assert_ok(created, "register only this test's file infobase")
+        assert created.structured["boundToProject"] is True, created.structured
+        application_id = created.structured["applicationId"]
+        assert registration_id, created.structured
+
+        if locked:
+            # Windows file handles deny delete sharing. Unix permits unlinking an open file, so
+            # the public test gates this case; the Java regression injects both failures on any OS.
+            locked_file = marker.open("rb")
+        else:
+            marker.unlink()
+        result = call("delete_infobase", {"projectName": PROJECT, "applicationId": application_id,
+                      "deleteRegistration": True, "deleteDatabaseFiles": True, "confirm": True})
+        deletion_finished = (not result.is_error
+                             and (result.structured or {}).get("action") == "deleted")
+        if locked:
+            assert marker.read_bytes() == contents, "the locked database must remain on disk"
+        else:
+            assert sentinel.read_bytes() == b"keep this unrelated file"
+            assert not marker.exists(), "refusal must not recreate the missing database marker"
+        assert_ok(result, "a kept directory must not fail the completed deregistration")
+        data = result.structured
+        assert data["action"] == "deleted", data
+        assert data["deleteRegistration"] is True, data
+        assert data["databaseFilesDeleted"] is False, data
+        assert data["databaseFilesKept"] == "deleteFailed", data
+        assert "were NOT deleted" in data["message"], data
+        assert "check/remove the directory manually." in data["message"], data
+        _assert_directory_warning(workspace, directory,
+                                  "could not delete the database directory" if locked
+                                  else "is not a 1C infobase directory", with_detail=locked)
+        applications = call("get_applications", {"projectName": PROJECT})
+        assert_ok(applications, "the application is removed even when its directory is kept")
+        assert not any(app.get("id") == application_id
+                       for app in applications.structured["applications"]), applications.structured
+    finally:
+        if locked_file is not None:
+            locked_file.close()
+        # A timed-out tool may still be deleting. Leave its files alone until the harness can stop.
+        if not calls_aborted():
+            applications = call("get_applications", {"projectName": PROJECT})
+            assert_ok(applications, "locate only this test's application for cleanup")
+            remaining = [app for app in applications.structured["applications"] if app.get("name") == name]
+            for app in remaining:
+                cleanup = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"],
+                               "deleteRegistration": True, "deleteDatabaseFiles": False, "confirm": True})
+                assert_ok(cleanup, "dissociate and deregister only this test's application")
+            if not remaining and registration_id and not deletion_finished:
+                cleanup = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name,
+                               "registrationId": registration_id, "deleteRegistration": True,
+                               "deleteDatabaseFiles": False, "confirm": True})
+                assert_ok(cleanup, "remove only the exact test-owned launcher registration")
+            if not calls_aborted():
+                shutil.rmtree(directory)
+    assert_no_diff("the warning round-trip must leave the committed source fixture unchanged")
+
+
+@e2e_test(tool="delete_infobase", kind="action")
+def test_directory_without_database_marker_is_kept_with_a_warning():
+    requires_live_infobase("delete_infobase missing-marker warning round-trip")
+    _kept_directory_case(locked=False)
+
+
+@e2e_test(tool="delete_infobase", kind="action")
+def test_locked_database_directory_is_kept_with_a_warning_without_stack():
+    requires_live_infobase("delete_infobase locked-directory warning round-trip")
+    if os.name != "nt":
+        raise E2ESkip("Windows delete-sharing semantics are required for the real locked-file probe")
+    _kept_directory_case(locked=True)

@@ -1,6 +1,6 @@
 # get_content_assist
 
-Get code-completion proposals at a 1-based line/column in a BSL module - the members, globals and variables valid at that caret (e.g. after a '.'). May return a 'not ready' error while the editor loads; just retry. Full parameters and examples: call get_tool_guide('get_content_assist').
+Find valid BSL completion suggestions at a source-code position. Parameters and examples: get_tool_guide('get_content_assist').
 
 ## Parameters
 | Parameter | Required | Type | Description |

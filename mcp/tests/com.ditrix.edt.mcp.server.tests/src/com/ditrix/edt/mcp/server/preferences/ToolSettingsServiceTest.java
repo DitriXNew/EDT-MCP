@@ -677,6 +677,7 @@ public class ToolSettingsServiceTest
         Set<String> expected = new HashSet<>(overlap);
         expected.remove("debug_launch"); //$NON-NLS-1$
         expected.add("launch"); //$NON-NLS-2$
+        expected.add("get_form_screenshot"); // The universal v15 opt-in migration.
         assertEquals(expected, disabledTools(store));
     }
 
@@ -945,6 +946,11 @@ public class ToolSettingsServiceTest
         // Only version-unique additions are checked; shared names need direct migration tests.
         beforeMigration.removeAll(uniqueAdditions);
         PreferenceStore store = storedDisabledTools(beforeMigration, version - 1);
+        if (version - 1 >= 13)
+        {
+            // Post-v13 stores carry provenance; later migrations must not guess from their shape.
+            store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset.getId());
+        }
 
         ToolSettingsService.ensureMigratedForTest(store);
 
@@ -1086,7 +1092,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of("git", "ask_workmate"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Set.of("git", "ask_workmate", "get_form_screenshot"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1303,7 +1309,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test
@@ -1396,7 +1402,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test
@@ -1458,7 +1464,7 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of(), disabledTools(store));
+        assertEquals(Set.of("get_form_screenshot"), disabledTools(store));
     }
 
     @Test
@@ -1502,7 +1508,8 @@ public class ToolSettingsServiceTest
         assertEquals("version 12 must restore the current disabled set for " + preset, //$NON-NLS-1$
             preset.getDisabledTools(), disabled);
         assertEquals(preset, ToolPreset.matchPreset(disabled));
-        assertEquals(12, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9RestoresCurrentPreset(ToolPreset preset)

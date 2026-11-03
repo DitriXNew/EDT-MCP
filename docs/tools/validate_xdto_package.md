@@ -1,6 +1,6 @@
 # validate_xdto_package
 
-Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and return a one-line verdict plus any problems found (e.g. a dangling reference to a deleted ObjectType). The verdict has THREE outcomes: valid, problems found, or - when NOTHING matched but a marker's location could not be resolved - undecided, which asks for revalidate_objects and another run rather than asserting validity. It reflects the LATEST validation state already computed by EDT (reads existing markers) rather than forcing a fresh compile; run revalidate_objects first if you need up-to-the-second results. Does not implement any XDTO-specific rule itself - it is a scoped view over get_project_errors. Full parameters and examples: call get_tool_guide('validate_xdto_package').
+Check an XDTO package for configuration validation problems. Reads the markers EDT computed EARLIER - it does not validate on demand, so a verdict right after an edit can be stale; run revalidate_objects first when you need it current. Parameters and examples: get_tool_guide('validate_xdto_package').
 
 ## Parameters
 | Parameter | Required | Type | Description |

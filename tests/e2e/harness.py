@@ -239,8 +239,20 @@ MODEL_SETTLE_ATTEMPTS = int(os.environ.get("E2E_MODEL_SETTLE_ATTEMPTS", "3"))
 # stabilizing the slower matrix legs without masking real results (a genuine success/error
 # returns unchanged on the next attempt). Override with E2E_BUILDING_RETRY_TIMEOUT.
 BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120"))
-# The server's derived-data "still building, retry" refusal, in any response channel.
+# The server's derived-data "still building, retry" refusal, in an error channel.
 _BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
+
+# Every transient building refusal call() received this run, as the server worded it. call()
+# retries them away, so without this record no test could ever look at their text (issue #769:
+# the wording leaked a JVM object identity for months while every refusal was silently retried).
+# Capped so a long run cannot grow it without bound; the first refusals are as good as any.
+_BUILDING_REFUSALS_SEEN = []
+_BUILDING_REFUSALS_CAP = 200
+
+
+def building_refusals_seen():
+    """The texts of the transient building refusals call() has received so far this run."""
+    return list(_BUILDING_REFUSALS_SEEN)
 
 # The longest ONE logical call() can take: the retry loop keeps re-issuing a building refusal for
 # BUILDING_RETRY_TIMEOUT, the attempt in flight when that elapses still gets its full CALL_TIMEOUT,
@@ -452,24 +464,31 @@ def _post(method, params):
             text = e.read().decode("utf-8", "replace")
         except (TimeoutError, socket.timeout) as body_timeout:
             # Headers arrived, the body did not - still a call we cannot account for.
-            _arm_timeout_latch()
-            raise E2ECallTimeout(_call_timeout_message(body_timeout))
+            _arm_timeout_latch(method, params)
+            raise _call_timeout_error(body_timeout, method, params)
     except urllib.error.URLError as e:
         # A socket read timeout arrives either bare or wrapped in URLError, depending on the
-        # Python build; only the timeout becomes E2ECallTimeout - a refused connection is a
-        # different failure and must keep its own traceback.
+        # Python build. Unclassified/writer timeouts become E2ECallTimeout; shared-table
+        # reads keep an ordinary TimeoutError so earlier completed writes can be cleaned up.
         if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
-            _arm_timeout_latch()
-            raise E2ECallTimeout(_call_timeout_message(e))
+            _arm_timeout_latch(method, params)
+            raise _call_timeout_error(e, method, params)
         raise
     except (TimeoutError, socket.timeout) as e:
-        _arm_timeout_latch()
-        raise E2ECallTimeout(_call_timeout_message(e))
+        _arm_timeout_latch(method, params)
+        raise _call_timeout_error(e, method, params)
     return _parse_response(text)
 
 
-def _arm_timeout_latch():
-    """Remember that a call was abandoned - see _TIMED_OUT."""
+def _is_read_only_model_request(method, params):
+    return (method == "tools/call" and isinstance(params, dict)
+            and _is_read_only_model_action(params.get("name"), params.get("arguments")))
+
+
+def _arm_timeout_latch(method=None, params=None):
+    """Read-only actions cannot leave an in-flight model mutation."""
+    if _is_read_only_model_request(method, params):
+        return
     abort_further_calls("an earlier call timed out and may still be running")
 
 
@@ -518,7 +537,16 @@ def abort_reason():
     return _ABORT_REASON
 
 
-def _call_timeout_message(cause):
+def _call_timeout_error(cause, method, params):
+    # The runner can still clean up earlier writes after a failed read.
+    error = TimeoutError if _is_read_only_model_request(method, params) else E2ECallTimeout
+    return error(_call_timeout_message(cause, method, params))
+
+
+def _call_timeout_message(cause, method=None, params=None):
+    if _is_read_only_model_request(method, params):
+        return ("no response in %gs (MCP_CALL_TIMEOUT). The read-only request may still be "
+                "running on the server. %s" % (CALL_TIMEOUT, cause))
     return ("no response in %gs (MCP_CALL_TIMEOUT). The server may still be RUNNING this call, "
             "so the model is not safe to read or even to reset - the run stops here. Check the "
             "EDT log for the matching 'Completed tools/call: ... in Nms' line to see whether it "
@@ -531,11 +559,11 @@ def _is_transient_building(result):
     and retry" refusal — surfaced in any channel (an isError text, or a structured
     success=false envelope). The call was refused with NO side effect, so re-issuing it is
     safe and correct (it is never an assertion target)."""
-    try:
-        blob = json.dumps(result.raw, ensure_ascii=False)
-    except (TypeError, ValueError):
-        blob = str(result.raw)
-    return bool(_BUILDING_REFUSAL_RE.search(blob))
+    structured_error = (isinstance(result.structured, dict)
+                        and result.structured.get("success") is False)
+    if not result.is_error and not structured_error:
+        return False
+    return bool(_BUILDING_REFUSAL_RE.search(result.error_text()))
 
 
 def call(tool, arguments):
@@ -569,16 +597,80 @@ def call(tool, arguments):
             # export lands on the restored tree and leaks into the next test. So arm the same latch
             # a timeout arms, which also freezes the fixtures, and let the run stop. Reading a write
             # back is what makes it safe to undo; nothing else does.
-            if tool in MODEL_MUTATION_TOOLS and not _TIMED_OUT:
+            if (tool in MODEL_MUTATION_TOOLS and not _is_read_only_model_action(tool, arguments)
+                    and not _TIMED_OUT):
                 abort_further_calls(
                     "a %s request died in flight, so the server may still be executing it" % tool)
             raise
         result = Result(raw)
-        if not _is_transient_building(result) or time.time() >= deadline:
+        building = _is_transient_building(result)
+        if building and len(_BUILDING_REFUSALS_SEEN) < _BUILDING_REFUSALS_CAP:
+            _BUILDING_REFUSALS_SEEN.append(result.error_text())
+        if not building or time.time() >= deadline:
             _record_outcome(tool, arguments, result.is_error, result.structured)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
+
+
+# ── Background-job answers: a long rename preview continues as a job (#803) ────────────
+PENDING_PREFIX = "**Pending:**"
+_JOB_ID_RE = re.compile(r"^\| jobId \| ([^|]+) \|\s*$", re.MULTILINE)
+_JOB_STATUS_RE = re.compile(r"^# Background job: (\S+)", re.MULTILINE)
+_JOB_RESULT_MARKER = "\n## Result\n\n"
+_JOB_ERROR_MARKER = "\n## Error\n\n"
+_JOB_POLL_WAIT_SECONDS = 45
+
+
+def _text_result(text, is_error=False):
+    """A Result carrying `text` as the tool's own answer, the shape a direct call would return."""
+    result = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        result["isError"] = True
+    return Result({"result": result})
+
+
+def follow_pending(result, ctx=""):
+    """Return what the call would have answered had it not continued as a background job.
+
+    A `**Pending:**` answer names a jobId; this polls get_job_status until the job is terminal
+    (bounded by MCP_CALL_TIMEOUT overall) and returns its Result as an ordinary success, or its
+    Error as an ordinary error. Any other answer - an inline preview, a confirm report, a refusal -
+    is returned unchanged, so a caller can route every call of a job-capable tool through here."""
+    if result.is_error or not result.text.startswith(PENDING_PREFIX):
+        return result
+    match = _JOB_ID_RE.search(result.text)
+    if not match:
+        _fail("%s: a Pending answer must name its jobId:\n%s" % (ctx or "follow_pending", result.text))
+    job_id = match.group(1).strip()
+    deadline = time.time() + CALL_TIMEOUT
+    while True:
+        remaining = deadline - time.time()
+        wait = int(max(0, min(_JOB_POLL_WAIT_SECONDS, remaining)))
+        status = call("get_job_status", {"jobId": job_id, "waitSeconds": wait})
+        assert_ok(status, "%s: poll background job %s" % (ctx or "follow_pending", job_id))
+        state = _JOB_STATUS_RE.search(status.text)
+        state = state.group(1) if state else ""
+        if state == "running":
+            if time.time() >= deadline:
+                _fail("%s: background job %s still running after %gs (MCP_CALL_TIMEOUT):\n%s"
+                      % (ctx or "follow_pending", job_id, CALL_TIMEOUT, status.text))
+            continue
+        if state == "done" and _JOB_RESULT_MARKER in status.text:
+            return _text_result(status.text.split(_JOB_RESULT_MARKER, 1)[1])
+        if state == "failed" and _JOB_ERROR_MARKER in status.text:
+            return _text_result(status.text.split(_JOB_ERROR_MARKER, 1)[1], is_error=True)
+        _fail("%s: background job %s ended without a Result or an Error:\n%s"
+              % (ctx or "follow_pending", job_id, status.text))
+
+
+def rename_call(arguments):
+    """call("rename_metadata_object", arguments), following a Pending preview to its Result.
+
+    A preview that outlives its waitSeconds answers Pending instead of inline; every e2e that reads
+    a preview's table goes through here so a slow runner turns into a longer wait, not a red test.
+    A confirm or a refusal is never Pending, so it comes back exactly as call() returned it."""
+    return follow_pending(call("rename_metadata_object", arguments), "rename_metadata_object")
 
 
 # ── Model-reset shortcut: don't pay for a reset when nothing was changed ──────────────
@@ -654,6 +746,8 @@ MODEL_MUTATION_TOOLS = frozenset({
     # failure carries mutationOutcomeUnknown:true. Both forfeit the shortcut without making an
     # ordinary negative test do so.
     "dcs",
+    # Like dcs, get only reads; replace/remove write after validation and consent.
+    "business_process_route_map",
     # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection.
     # Their entry points now mark an exception after invoke() as outcome-unknown, but source
     # scanning still cannot discover their membership; the ratchet pins their names explicitly.
@@ -672,6 +766,18 @@ NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
 })
 
 
+# Action-based writers share one exemption table. All other actions stay conservative.
+READ_ONLY_MODEL_ACTIONS = {
+    "dcs": frozenset({"get", "options"}),
+    "business_process_route_map": frozenset({"get"}),
+}
+
+
+def _is_read_only_model_action(tool, args):
+    return (isinstance(args, dict) and isinstance(args.get("action"), str)
+            and args["action"] in READ_ONLY_MODEL_ACTIONS.get(tool, ()))
+
+
 def _call_moves_the_fixture_model(tool, args, structured):
     """Did THIS call move the fixture's model? Asked per call, not per tool.
 
@@ -688,7 +794,7 @@ def _call_moves_the_fixture_model(tool, args, structured):
     is "preview" is a dry run by construction (rename/delete build the refactoring and report it
     without applying), so it cannot have moved anything.
     """
-    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS or _is_read_only_model_action(tool, args):
         return False
     if isinstance(structured, dict) and structured.get("action") == "preview":
         return False
@@ -806,6 +912,8 @@ def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
     _CALLED_TOOLS.add(tool)
+    if _is_read_only_model_action(tool, args):
+        return
     if _cascades_across_fixtures(tool, args):
         _UNRESOLVED_CASCADE_CALLS += 1
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
@@ -846,14 +954,16 @@ def _record_outcome(tool, args, is_error, structured):
         _UNRESOLVED_CASCADE_CALLS = max(0, _UNRESOLVED_CASCADE_CALLS - 1)
     if tool not in MODEL_MUTATION_TOOLS:
         return
-    if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
-        for project in _candidate_mutation_targets(tool, args):
-            remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
-            if remaining > 0:
-                _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
-            else:
-                _UNRESOLVED_MUTATION_PROJECTS.pop(project, None)
-    _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
+    if not _is_read_only_model_action(tool, args):
+        # Retire only an attempt this call actually recorded; a read cannot settle a writer.
+        if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+            for project in _candidate_mutation_targets(tool, args):
+                remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
+                if remaining > 0:
+                    _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
+                else:
+                    _UNRESOLVED_MUTATION_PROJECTS.pop(project, None)
+        _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
     mutation_committed = (isinstance(structured, dict)
                           and structured.get("mutationCommitted") is True)
     mutation_unknown = (isinstance(structured, dict)
@@ -862,12 +972,13 @@ def _record_outcome(tool, args, is_error, structured):
     call_moves_fixture = (mutation_evidenced
                           and _call_moves_the_fixture_model(tool, args, structured))
     if mutation_evidenced:
-        _MUTATION_CONFIRMED = True
+        if mutation_committed or mutation_unknown or not _is_read_only_model_action(tool, args):
+            _MUTATION_CONFIRMED = True
         if _cascades_across_fixtures(tool, args):
             _CASCADE_CONFIRMED_CALLED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
-        # stays conservative (any success forfeits it), while accusing a test of a mis-declared
-        # kind has to be right about THIS call actually having moved the fixture's model.
+        # stays conservative outside the shared read-only actions, while accusing a test of a
+        # mis-declared kind must be right about THIS call moving the fixture's model.
         if call_moves_fixture:
             _CONFIRMED_MUTATION_TOOLS.add(tool)
     # Keep the named targets correlated with THIS outcome. A success counts only when this call
@@ -1279,7 +1390,10 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     """True when every EDT project in the list_projects table reads 'ready'.
 
     Two kinds of row are skipped, because neither can ever become ready and neither can serve a
-    tool: one KNOWN to be non-EDT (`EDT Project` = No), and one that is CLOSED (`Open` = No).
+    tool: one KNOWN to be non-EDT (`EDT Project` = No and no V8 nature), and one that is
+    CLOSED (`Open` = No). External-object projects carry V8ExternalObjectsNature and must settle
+    even though list_projects labels them `EDT Project` = No. Legacy five-column tables have
+    no nature evidence and keep skipping No rows.
     A closed project reads 'not_available' forever - EDT is deliberately not building it, which
     is the entire point of closing a heavy configuration - so blocking on it aborts every local
     run on such a workspace before the first test starts. A test that actually targets a closed
@@ -1300,6 +1414,11 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     fill it with the blocking (project name, state) pairs from this same parse so timeout callers
     can report which project prevented progress without parsing the table again. Project names
     explicitly supplied in `ignore` are skipped before their state is checked.
+
+    Known limit of the nature evidence: ListProjectsTool renders only the FIRST THREE natures of a
+    project and summarises the rest as '...+N', so a V8 nature in fourth place or later is not seen
+    here and that `EDT Project` = No row falls back to being skipped. Harmless for the fixture (its
+    projects carry two natures), but a project with more natures needs `ignore` or a wider cell.
     """
     rows = []
     for line in list_projects_markdown.splitlines():
@@ -1322,7 +1441,10 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
             continue
         state, is_open = cells[1].strip().lower(), cells[3].strip().lower()
         edt_project = cells[4].strip().lower()
-        if edt_project == "no":
+        natures = cells[5] if len(cells) > 5 else ""
+        edt_nature = any(token.strip().startswith("V8") and token.strip().endswith("Nature")
+                         for token in natures.split(","))
+        if edt_project == "no" and not edt_nature:
             continue  # a KNOWN non-EDT project (the standalone server's "Servers" container)
         if is_open == "no":
             continue  # closed on purpose: it will never leave 'not_available' by itself
@@ -1359,9 +1481,10 @@ def _store_project_ready_progress(progress, changed, observed, polls, start,
 
 def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ignore_projects=()):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
-    'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
-    are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
-    permanently 'not_available' and would otherwise block every run on such a workspace.
+    'building' its derived data AND none is 'not_available' (mid (re)load). V8-natured projects,
+    including external-object projects labeled `EDT Project` = No, participate. Non-EDT projects
+    without a V8 nature are ignored (see _all_edt_projects_ready): a standalone server's "Servers"
+    container is permanently 'not_available' and would otherwise block every run on such a workspace.
 
     After a `-clean` relaunch the MCP port opens (wait_for_server) BEFORE EDT finishes
     indexing, so a cascade/mutation tool (rename / delete / create) run too early would
@@ -1450,6 +1573,23 @@ def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ig
     _store_project_ready_progress(
         progress, changed, observed, polls, start, last_list_projects)
     return False
+
+
+def wait_for_named_projects_ready(names, timeout=180, ctx=""):
+    """Poll list_projects(format=json) until every project in `names` reads 'ready'.
+
+    Returns the last {name: state} map so the caller asserts on it (and on what else it holds).
+    Unlike wait_for_project_ready this reads the JSON contract and requires every named project
+    to exist and read 'ready', regardless of its EDT flag, nature, or open state.
+    """
+    deadline = time.time() + timeout
+    while True:
+        listed = call("list_projects", {"format": "json"})
+        assert_ok(listed, "list_projects while waiting for %s" % (ctx or sorted(names)))
+        states = {row["name"]: row["state"] for row in listed.structured["projects"]}
+        if all(states.get(name) == "ready" for name in names) or time.time() > deadline:
+            return states
+        time.sleep(2)
 
 
 def settle_or_fail(what):
@@ -2663,21 +2803,16 @@ def native_form_layout_render_mode():
 
     formRenderFlags.nativeFormLayoutRender.atStartup is EDT's own
     NativeRenderService.isNativeRender() at plugin activation, so EDT's default (native
-    when the property is absent) is reported correctly, and forcedAtRuntime marks a
-    later change of the live mode. Tests branch on this instead of accepting whichever
-    outcome a form tool happens to return. Opening an editor and resolving a name need
-    no particular mode."""
-    state = _form_render_flag("nativeFormLayoutRender")
-    mode = state["atStartup"]
-    if state.get("forcedAtRuntime") is True:
-        mode = "off" if mode == "on" else "on"
-    return mode
+    when the property is absent) is reported correctly. Tests branch on this instead of
+    accepting whichever outcome a form tool happens to return. Opening an editor and
+    resolving a name need no particular mode."""
+    return _form_render_flag("nativeFormLayoutRender")["atStartup"]
 
 
 def buffered_form_render_at_startup():
     """-DnativeFormBufferedLayoutRender at plugin activation, 'on' or 'off'; fails the
     test when unreadable. Only the startup value counts: EDT builds its offscreen buffer
-    once, so a later runtime force does not give a native render an image. It governs
+    once, so changing the launch flag requires an EDT restart. It governs
     the IMAGE only - an editor opens and resolves names without it."""
     return _form_render_flag("nativeFormBufferedLayoutRender")["atStartup"]
 
@@ -2945,10 +3080,11 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
     return poll_disk_contains_all(rel_path, [substr], timeout=timeout, ctx=ctx)
 
 
-def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=None):
+def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=None, *, check=None):
     """Poll until ONE read of a named fixture file contains every substring in substrs, and return
     that read. Polling each needle separately proves each was present at SOME moment, not that one
-    snapshot of the file holds them all.
+    snapshot of the file holds them all. An optional check(text) must also accept that same read;
+    use it for structural comparisons that cannot be expressed as substring checks.
 
     rel_path is relative to the BASE project by default, or to the fixture path `fixture_rel` names
     (TESTS_PROJECT_REL for the extension, say) - one poll for every fixture, not a copy per root.
@@ -2965,7 +3101,7 @@ def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=No
         try:
             with open(full, encoding="utf-8", errors="replace") as f:
                 last = f.read()
-            if all(s in last for s in substrs):
+            if all(s in last for s in substrs) and (check is None or check(last)):
                 return last
         except FileNotFoundError:
             last = "(file does not exist yet)"
@@ -2973,6 +3109,8 @@ def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=No
             last = "(file could not be read yet: %s)" % e
         time.sleep(0.5)
     missing = [s for s in substrs if s not in last]
+    if check is not None and not missing:
+        _fail("expected %s to pass its content check [%s]; it holds:\n%s" % (shown, ctx, last[:700]))
     _fail("expected %s to contain %r [%s]; it holds:\n%s"
           % (shown, missing[0] if len(missing) == 1 else missing, ctx, last[:700]))
 

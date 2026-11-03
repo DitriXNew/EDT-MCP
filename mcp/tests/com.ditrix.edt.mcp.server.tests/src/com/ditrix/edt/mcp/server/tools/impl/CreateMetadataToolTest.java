@@ -84,6 +84,32 @@ import com.google.gson.JsonParser;
 public class CreateMetadataToolTest
 {
     @Test
+    public void testGenerateContentOnNonFormIsRefusedBeforeProjectResolution()
+    {
+        for (String fqn : Arrays.asList("Catalog.NewCatalog", "CommonForm.NewForm",
+            "Catalog.Catalog.Form.ItemForm.Table.List"))
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "Unused");
+            params.put("fqn", fqn);
+            params.put("generateContent", "true");
+            JsonObject result = JsonParser.parseString(new CreateMetadataTool().executeOnUiThread(params))
+                .getAsJsonObject();
+            assertFalse(result.get("success").getAsBoolean());
+            assertTrue(result.get("error").getAsString().contains(fqn));
+            assertTrue(result.get("error").getAsString().contains("Omit these options"));
+        }
+    }
+
+    @Test
+    public void testFormPurposeIsDeclaredInSchema()
+    {
+        JsonObject schema = JsonParser.parseString(new CreateMetadataTool().getInputSchema()).getAsJsonObject();
+        assertTrue(schema.getAsJsonObject("properties").has("formType"));
+        assertTrue(schema.toString().contains("RECORD_SET"));
+    }
+
+    @Test
     public void testNameConstant()
     {
         assertEquals("create_metadata", new CreateMetadataTool().getName()); //$NON-NLS-1$
@@ -157,7 +183,7 @@ public class CreateMetadataToolTest
         MdObject catalog = MdClassFactory.eINSTANCE.createCatalog();
         doReturn(catalog).when(factory).create(eClass, project);
 
-        MdObject created = CreateMetadataTool.newTopObject(factory, eClass, project);
+        MdObject created = CreateMetadataTool.newTopObject(factory, eClass, project, "Goods", null); //$NON-NLS-1$
 
         assertSame("the object the project-aware overload built must be returned", catalog, created); //$NON-NLS-1$
         verify(factory).create(eClass, project);

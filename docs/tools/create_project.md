@@ -1,6 +1,6 @@
 # create_project
 
-Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'externalObjects' (external data processors/reports). The name must not already exist as a project. standardChecks/commonChecks are applied only when com.e1c.v8codestyle is installed. Full parameters and examples: call get_tool_guide('create_project').
+Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -9,6 +9,8 @@ Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'con
 | name | yes | string | Name of the new Configuration object (required). For configuration/extension: the programmatic Configuration name. For externalObjects: used as the default project name (no Configuration object exists). Must be a valid 1C identifier: starts with a letter or underscore, then letters, digits and underscores only (Cyrillic allowed). Also used as the default EDT project name if projectName is not supplied. |
 | projectName | — | string | EDT workspace project name to create. Default: extension -> '<baseProjectName>.<name>'; configuration/externalObjects -> 'name'. |
 | version | — | string | Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: Version.LATEST when omitted. |
+| externalObject | — | string | Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian and is not normalized; Name is a programmatic identifier whose 'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; REJECTED for other project kinds. |
+| normalizeYo | — | boolean | Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root NAME (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized. |
 | baseProjectName | — | string | Name of the BASE configuration EDT project (required for extension; REJECTED for configuration and externalObjects). Must be an existing, open V8 configuration project. Use list_projects to find it. |
 | prefix | — | string | NamePrefix for the extension (extension only; REJECTED for other kinds). Default: empty string. The wizard generates a value like 'Ext1_'; pass an explicit value or omit for empty. |
 | purpose | — | string (one of: Customization, AddOn, Patch) | Extension purpose (extension only; REJECTED for other kinds). Default: Customization. Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix. |
@@ -35,8 +37,10 @@ a base project, or an external data processors/reports project.
   without modifying the base configuration. Its root is built the way EDT's own
   new-extension wizard builds it — see **Extension root** below.
 - **externalObjects** — create an external data processors/reports project. The project
-  will be empty and ready for adding external data processors or external reports via
-  `create_metadata`.
+  may be seeded with its root `ExternalDataProcessor` / `ExternalReport` in the same call,
+  after which its members are ready for authoring via `create_metadata`. Omit the root when
+  creating an empty project for a later `.epf` / `.erf` import. More roots are added to the
+  existing project with `create_metadata` (`fqn: 'ExternalDataProcessor.<Name>'`).
 
 The `name` must not already exist as a workspace project (the tool rejects duplicates).
 
@@ -86,6 +90,17 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 ### externalObjects kind
 
 - **version** (optional): platform version string. Default: `Version.LATEST`.
+- **externalObject** (optional): root object to seed, addressed as
+  `ExternalDataProcessor.<Name>` or `ExternalReport.<Name>`. The TYPE token is resolved by
+  the shared bilingual metadata resolver, so its registered Russian spellings work too, and
+  is never normalized. `<Name>` is the programmatic 1C identifier, not a synonym. A bare Name
+  is rejected rather than guessed. Omit this parameter to preserve an empty project for the
+  import workflow.
+- **normalizeYo** (optional, default `true`): normalize `ё`->`е` / `Ё`->`Е` in the seeded
+  root NAME before identifier validation. `ё` in a Name is flagged by the 1C standard
+  `mdo-ru-name-unallowed-letter`, so the default stores a compliant Name. Set `false` to keep
+  `ё` exactly as supplied. The result names rewritten fields under `normalized`; this never
+  changes the externalObject TYPE token.
 - **scriptVariant** (optional, `Russian` or `English`): applied post-create via
   `IExternalObjectProjectManager.setScriptVariant`. Non-fatal on failure (see
   `scriptVariantNote` in response).
@@ -170,6 +185,27 @@ External objects project:
 {"projectKind": "externalObjects", "name": "MyExternal"}
 ```
 
+External data processor project with its root object:
+
+```json
+{
+  "projectKind": "externalObjects",
+  "name": "MyExternal",
+  "externalObject": "ExternalDataProcessor.MyProcessor"
+}
+```
+
+To deliberately preserve `ё` in the root Name:
+
+```json
+{
+  "projectKind": "externalObjects",
+  "name": "MyExternal",
+  "externalObject": "ExternalReport.Всё",
+  "normalizeYo": false
+}
+```
+
 External objects with version:
 
 ```json
@@ -190,9 +226,22 @@ External objects with version:
 3. `write_module_source` — fill module BSL code.
 4. `update_database` — start the first infobase from the configuration.
 
+## Workflow (external object)
+
+1. `create_project` with `projectKind=externalObjects` and an `externalObject` FQN — create
+   the project and its root in one operation. Omit `externalObject` only when a later import
+   will supply the root.
+2. `create_metadata` — add attributes, tabular sections, forms, templates, and form content
+   below that root FQN.
+3. `write_module_source` — fill the root and form modules.
+4. `build_external_objects` — produce the `.epf` / `.erf` artifact.
+
 ## Response fields
 
 On success the response includes:
+- `action` — `created` after a completed create (and on the unchanged empty-project slow
+  path); `verificationRequired` when a seeded create, or an extension's create, exceeded the
+  wait window.
 - `project` — the workspace project name (the round-trip key for sibling tools).
 - `projectKind` — kind of project created.
 - `name` — the Configuration name (configuration and extension only; not reported by a slow
@@ -206,6 +255,12 @@ On success the response includes:
 - `scriptVariant` — script variant applied or inherited (not reported by a slow extension
   create).
 - `version` — platform version used for project creation.
+- `externalObject` — canonical FQN of the seeded root, including the stored (possibly
+  normalized) Name, when a root was requested.
+- `externalObjectConfirmed` — on the slow seeded-root path, whether that FQN was actually
+  observed through the same metadata scope used by `get_metadata_objects`.
+- `normalized` — fields rewritten by the default `ё`->`е` normalization; `name` here means
+  the seeded root Name.
 - `state` — `ready` when EDT reported the project's context started. For an extension,
   `ready` also means its root file was seen on disk with the extension block, the mapping
   flag and the name, name prefix, purpose and extension compatibility mode this call set (a
@@ -246,6 +301,15 @@ On success the response includes:
   after a few seconds (for an extension, `message` says what was not confirmed). Do not
   restart EDT or run `clean_project` on a new project in its first seconds: EDT saves its
   files asynchronously, and only an extension's `ready` confirms its root file is on disk.
+- **A slow seeded root is verified, not recreated.** If creation exceeds the wait window,
+  the tool makes a best-effort read through the metadata scope. An unresolvable root may
+  simply mean indexing is still running. The response always reports
+  `action=verificationRequired`, the requested canonical `externalObject`, and the observed
+  result as `state=rootConfirmed` / `state=rootUnconfirmed` plus
+  `externalObjectConfirmed=true` / `false`. Once indexing finishes, verify it with
+  `get_metadata_objects`. Do not repeat `create_project`: the existing project container will
+  make the duplicate-project guard refuse the retry, whether or not EDT eventually attaches
+  the root.
 - **A slow extension create writes nothing more.** If an extension's create exceeds the
   120 s wait window while its project already exists, EDT's create may still be running: the
   call asks it to stop, makes no further write to the project and answers
@@ -270,6 +334,8 @@ On success the response includes:
 - **externalObjects scriptVariant is post-create and non-fatal.** If `setScriptVariant`
   fails after lifecycle wait, the project is still created. Check `scriptVariantNote` in
   the response for details.
+- **Omitting externalObject is intentional.** It creates the same empty external-objects
+  project as before, ready for an import that supplies its root object.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

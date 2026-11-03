@@ -34,6 +34,8 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    assert_no_diff_rel,
+    PROJECT_REL,
     assert_tree_unchanged,
     assert_diff_contains,
     assert_disk_lacks,
@@ -41,6 +43,7 @@ from harness import (
     poll_disk_path_gone,
     poll_disk_lacks,
     poll_disk_contains,
+    poll_disk_contains_all,
     read_disk,
     tree_snapshot,
     settle_or_fail,
@@ -323,6 +326,126 @@ def test_preview_accepts_explicit_timeout_and_clamps_out_of_range_value():
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
+def _batch_operations(*members):
+    return [{"action": "delete", "fqn": "Catalog.Catalog.Form.ItemForm." + member}
+            for member in members]
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_preflight_reports_two_typos_with_zero_writes():
+    settle_or_fail("batch preflight")
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "operations": _batch_operations("Command.BatchTypoOne", "Command.BatchTypoTwo"),
+        "confirm": True, "atomic": True,
+    })
+    assert_error(r, "two independent missing batch targets")
+    data = r.structured
+    assert data["reason"] == "invalidBatch", data
+    assert [entry["operationIndex"] for entry in data["errors"]] == [0, 1], data
+    for entry, name in zip(data["errors"], ["BatchTypoOne", "BatchTypoTwo"]):
+        assert entry["reason"] == "invalidNow", entry
+        assert_error_quality(entry["error"], names=[name], suggests=["get_metadata_details"])
+    assert data["applied"] == [] and data["committed"] is False, data
+    assert data["persistenceState"] == "unchanged", data
+    assert "mutationCommitted" not in data and "mutationOutcomeUnknown" not in data, data
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_unknown_fields_refused_before_mutation():
+    operations = _batch_operations("Group.FormCommandBar", "Command.Anything")
+    operations[1]["unknownOperationField"] = True
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "operations": operations,
+        "unknownTopLevelField": True, "confirm": True,
+    })
+    assert_error(r, "unknown batch parameters")
+    data = r.structured
+    assert len(data["errors"]) == 2, data
+    errors = " ".join(entry["error"] for entry in data["errors"])
+    assert_error_quality(errors, names=["unknownTopLevelField", "unknownOperationField"],
+                         suggests=["Use only action and fqn"])
+    assert data["applied"] == [] and data["committed"] is False, data
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_rejects_unsupported_modes_and_create_modify_chain():
+    operations = _batch_operations("Command.A", "Command.A")
+    operations[0]["action"] = "create"
+    operations[1]["action"] = "modify"
+    r = call("delete_metadata", {"projectName": PROJECT, "operations": operations, "confirm": True})
+    assert_error(r, "unsupported dependency chain")
+    assert len(r.structured["errors"]) == 2, r.structured
+    assert r.structured["applied"] == [], r.structured
+    for entry in r.structured["errors"]:
+        assert entry["reason"] == "unsupportedBatch", entry
+        assert_error_quality(entry["error"], names=["action"], suggests=["create_metadata", "modify_metadata"])
+    for extra in ({"atomic": False}, {"force": True}, {"timeout": 600}, {"continueOnError": True},
+                  {"fqn": "Catalog.Catalog"}):
+        r = call("delete_metadata", {"projectName": PROJECT, "operations": _batch_operations("Command.A"),
+                                     "confirm": True, **extra})
+        assert_error(r, "unsupported batch mode %r" % extra)
+        assert r.structured["applied"] == [] and r.structured["committed"] is False, r.structured
+        assert r.structured["errors"], r.structured
+        errors = " ".join(entry["error"] for entry in r.structured["errors"])
+        assert_error_quality(errors, names=list(extra),
+                             suggests=["Omit" if "atomic" in extra or "force" in extra else "Pass operations"])
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_preview_then_confirm_deletes_group_and_commands_once():
+    members = ["Group.BatchGroup", "Command.BatchFirst", "Command.BatchSecond", "Command.BatchKeep"]
+    for member in members:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm." + member}), "seed " + member)
+        wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration.BatchChild",
+        "properties": [{"name": "parent", "value": "BatchGroup"}]}), "seed contained child")
+    settle_or_fail("batch delete")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchKeep", "BatchChild"]:
+        assert_contains(read_disk(_FORM), "<name>%s</name>" % name, "positive disk control " + name)
+    before = tree_snapshot()
+    operations = _batch_operations(*members[:3])
+    preview = call("delete_metadata", {"projectName": PROJECT, "operations": operations, "atomic": True})
+    assert_ok(preview, "batch preview")
+    assert preview.structured["action"] == "preview", preview.structured
+    assert preview.structured["applied"] == [] and preview.structured["committed"] is False, preview.structured
+    assert preview.structured["items"][0]["descendants"][0]["name"] == "BatchChild", preview.structured
+    assert_no_marker_fields(preview.structured, "batch preview")
+    assert_tree_unchanged(before, "batch preview must not mutate the seeded tree")
+    readback = call("get_metadata_details", {"projectName": PROJECT,
+                                             "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(readback, "preview model unchanged")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_contains(readback.text, name, "preview keeps " + name)
+    result = call("delete_metadata", {"projectName": PROJECT, "operations": operations,
+                                      "atomic": True, "confirm": True})
+    assert_ok(result, "confirmed single-form batch")
+    # Disk FIRST: the batch itself submits and awaits this form export.
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_disk_lacks(_FORM, "<name>%s</name>" % name, ctx="batch removes " + name)
+    assert_contains(read_disk(_FORM), "<name>BatchKeep</name>", "unselected command survives")
+    data = result.structured
+    assert data["action"] == "executed" and data["applied"] == [0, 1, 2], data
+    assert data["committed"] is True and data["rollbackPerformed"] is False, data
+    assert data["exportSubmitted"] is True, data
+    assert data["writtenProjects"] == [PROJECT], data
+    assert data["persistenceState"] == "exportDrainedBytesUnverified", data
+    assert isinstance(data["markersIncomplete"], bool), data
+    assert isinstance(data["markerCount"], int) and isinstance(data["markers"], list), data
+    assert "Do not repeat" in data["safeRetry"], data
+    readback = call("get_metadata_details", {"projectName": PROJECT,
+                                             "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(readback, "batch model read-back")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_not_contains(readback.text, name, "batch removed " + name)
+    assert_contains(readback.text, "BatchKeep", "unselected command survives in model")
 
 
 def _seed_form_attribute(attr):
@@ -1217,3 +1340,235 @@ def test_delete_success_carries_no_marker_fields():
     assert r.structured.get("action") == "executed", "must take the execute branch: %r" % (r.structured,)
     assert_no_marker_fields(r.structured, "a delete success reports no written-object markers")
     assert_not_contains(_list_commonmodules(), "| Calc ", "MODEL read-back: CommonModule.Calc is gone")
+
+
+# Nested subsystems (#734). The orchestrator owns fixture and model restoration.
+_SUBSYSTEM_PARENT_FQN = "Subsystem.Subsystem"
+_SUBSYSTEM_PARENT_MDO = "src/Subsystems/Subsystem/Subsystem.mdo"
+_SUBSYSTEM_CHILD_FQN = "Subsystem.Subsystem.Subsystem.E2EDelChild"
+_SUBSYSTEM_CHILD_MDO = "src/Subsystems/Subsystem/Subsystems/E2EDelChild/E2EDelChild.mdo"
+_CONFIGURATION_MDO = "src/Configuration/Configuration.mdo"
+
+
+def _seed_nested_delete_child():
+    seed = call("create_metadata", {"projectName": PROJECT, "fqn": _SUBSYSTEM_CHILD_FQN})
+    assert_ok(seed, "seed the nested subsystem under the fixture's Subsystem.Subsystem")
+    # The seed is setup, not the call under test: poll, as the nested-create e2e does, so a slow
+    # seed export fails here as a setup problem instead of looking like a delete defect.
+    parent_xml = poll_disk_contains_all(_SUBSYSTEM_PARENT_MDO, ["<subsystems>E2EDelChild</subsystems>"],
+                                        ctx="the parent must register the seeded child on disk")
+    child_xml = poll_disk_contains_all(_SUBSYSTEM_CHILD_MDO, ["<name>E2EDelChild</name>"],
+                                       ctx="the seeded child must have its own persisted top-object file")
+    settle_or_fail("the delete of the newly created nested subsystem")
+    return parent_xml, child_xml
+
+
+def _exercise_nested_subsystem_delete(address, preview_only=False, force=False):
+    settle_or_fail("the nested-subsystem delete round trip")
+    configuration_before = read_disk(_CONFIGURATION_MDO)
+    parent_before, child_before = _seed_nested_delete_child()
+    if preview_only:
+        before_preview = tree_snapshot()
+        preview = call("delete_metadata", {"projectName": PROJECT, "fqn": address})
+        # Preview reads once immediately too: no later model request can hide a write.
+        parent_after_preview = read_disk(_SUBSYSTEM_PARENT_MDO)
+        child_after_preview = read_disk(_SUBSYSTEM_CHILD_MDO)
+        assert_ok(preview, "preview deleting the addressed nested subsystem")
+        assert preview.structured.get("action") == "preview", preview.structured
+        assert preview.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, preview.structured
+        items = preview.structured.get("items") or []
+        assert any("E2EDelChild" in str(item.get("name")) for item in items), \
+            "preview must name the child it would remove: %r" % (items,)
+        assert parent_after_preview == parent_before, "preview must not alter the seeded parent"
+        assert child_after_preview == child_before, "preview must not alter the seeded child"
+        assert_tree_unchanged(before_preview, "the nested delete preview must write nothing")
+        assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                           "nested create and preview must leave Configuration.mdo unchanged")
+
+        model = call("list_subsystems", {"projectName": PROJECT})
+        assert_ok(model, "read back the unmodified subsystem tree after preview")
+        assert_contains(model.text, _SUBSYSTEM_CHILD_FQN, "preview must keep the child in the model")
+        return
+
+    result = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": address, "confirm": True, "force": force,
+    })
+    # The delete submits its PARENT's export. Assert that file immediately, before polling
+    # the child's removal or making a model call; those would give a broken barrier more time.
+    parent_after_delete = read_disk(_SUBSYSTEM_PARENT_MDO)
+    assert_ok(result, "confirm the nested-subsystem delete")
+    configuration_after_delete = read_disk(_CONFIGURATION_MDO)
+    assert_not_contains(parent_after_delete, "<subsystems>E2EDelChild</subsystems>",
+                        "the parent registration must already be removed on return")
+    assert_contains(parent_after_delete, "<name>Subsystem</name>", "the parent itself must survive")
+    assert configuration_after_delete == configuration_before, \
+        "a nested delete must leave Configuration.mdo unchanged"
+    assert result.structured.get("action") == "executed", result.structured
+    assert result.structured.get("fqn") == _SUBSYSTEM_CHILD_FQN, result.structured
+    assert result.structured.get("forced") is force, result.structured
+    # A completed generic delete omits persisted; only a partial result carries persisted=false.
+    assert "persisted" not in result.structured, result.structured
+    poll_disk_path_gone(_SUBSYSTEM_CHILD_MDO,
+                        ctx="EDT must remove the deleted child's separate top-object file")
+    assert_no_diff_rel(PROJECT_REL + "/" + _CONFIGURATION_MDO,
+                       "nested delete must not rewrite Configuration.mdo")
+    after = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(after, "read the subsystem tree after deleting the child")
+    assert_not_contains(after.text, "E2EDelChild", "the child must also be absent from the model")
+    assert_contains(after.text, _SUBSYSTEM_PARENT_FQN, "the parent must remain in the model")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_preview_writes_nothing():
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN, preview_only=True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_nested_subsystem_from_model_and_disk():
+    # This deliberately reaches confirm directly, so the OLD jar's confirmed-chain refusal is red
+    # in its own scenario instead of being hidden by the separate preview regression.
+    _exercise_nested_subsystem_delete(_SUBSYSTEM_CHILD_FQN)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_delete_with_russian_nonleading_token():
+    _exercise_nested_subsystem_delete(
+        "Subsystem.Subsystem.\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430.E2EDelChild",
+        force=True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_missing_nested_subsystem_explains_the_whole_chain():
+    address = "Subsystem.Subsystem.Subsystem.E2ENoSuchDeleteChild"
+    result = call("delete_metadata", {"projectName": PROJECT, "fqn": address, "confirm": True})
+    error = assert_error(result, "a missing nested subsystem must be refused")
+    assert_error_quality(error, names=[address], suggests=["list_subsystems"])
+    assert_contains(error, "Subsystem.<Parent>.Subsystem.<Child>", "the error must teach the chain grammar")
+    assert_not_contains(error, "Any node create_metadata can address", "remove the old false promise")
+    assert_no_diff("a missing nested-subsystem delete must write nothing")
+
+
+def _exercise_subsystem_parent_cascade(nested_parent):
+    settle_or_fail("the subsystem tree delete")
+    configuration_before = read_disk(_CONFIGURATION_MDO)
+    if nested_parent:
+        parent_fqn = _SUBSYSTEM_CHILD_FQN
+        parent_name = "E2EDelChild"
+        parent_folder = "src/Subsystems/Subsystem/Subsystems/E2EDelChild"
+        container_mdo = _SUBSYSTEM_PARENT_MDO
+        registration = "<subsystems>E2EDelChild</subsystems>"
+    else:
+        parent_fqn = "Subsystem.E2EDelParent"
+        parent_name = "E2EDelParent"
+        parent_folder = "src/Subsystems/E2EDelParent"
+        container_mdo = _CONFIGURATION_MDO
+        registration = "<subsystems>Subsystem.E2EDelParent</subsystems>"
+
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": parent_fqn}),
+              "seed the parent whose tree will be deleted")
+    poll_disk_contains(container_mdo, registration, ctx="the container must register the parent")
+    poll_disk_contains(parent_folder + "/" + parent_name + ".mdo", "<name>%s</name>" % parent_name,
+                       ctx="the seeded parent must be on disk")
+    settle_or_fail("seeding the subsystem descendants")
+    child_fqn = parent_fqn + ".Subsystem.E2EDelCascadeChild"
+    child_folder = parent_folder + "/Subsystems/E2EDelCascadeChild"
+    descendants = [
+        (child_fqn, child_folder, "E2EDelCascadeChild"),
+        (child_fqn + ".Subsystem.E2EDelCascadeGrandchild",
+         child_folder + "/Subsystems/E2EDelCascadeGrandchild", "E2EDelCascadeGrandchild"),
+        (parent_fqn + ".Subsystem.E2EDelCascadeSibling",
+         parent_folder + "/Subsystems/E2EDelCascadeSibling", "E2EDelCascadeSibling"),
+    ]
+    for fqn, folder, name in descendants:
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed a nested descendant for the cascade preview")
+        poll_disk_contains(folder + "/" + name + ".mdo", "<name>%s</name>" % name,
+                           ctx="every descendant must have its own persisted file")
+        settle_or_fail("the cascade preview after seeding " + fqn)
+
+    before_preview = tree_snapshot()
+    preview = call("delete_metadata", {"projectName": PROJECT, "fqn": parent_fqn})
+    assert_tree_unchanged(before_preview, "the parent preview must preserve the whole seeded tree")
+    assert_ok(preview, "preview deleting a subsystem and its descendants")
+    assert preview.structured.get("action") == "preview", preview.structured
+    for fqn, _, _ in descendants:
+        assert_contains(preview.structured.get("message", ""), fqn,
+                        "the preview message must disclose every nested descendant by chain FQN")
+    before = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(before, "read the tree preserved by the preview")
+    assert_contains(before.text, parent_fqn, "preview must preserve the parent in the model")
+    for fqn, _, _ in descendants:
+        assert_contains(before.text, fqn, "preview must preserve every descendant in the model")
+
+    result = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": parent_fqn, "confirm": True, "force": nested_parent,
+    })
+    # The registering file is read ONCE, immediately after the delete call, before any other MCP call.
+    container_after = read_disk(container_mdo)
+    assert_ok(result, "confirm the subsystem tree cascade")
+    assert_not_contains(container_after, registration, "the parent's registration must be gone on return")
+    assert result.structured.get("action") == "executed", result.structured
+    assert result.structured.get("forced") is nested_parent, result.structured
+    assert "persisted" not in result.structured, result.structured
+    if nested_parent:
+        assert read_disk(_CONFIGURATION_MDO) == configuration_before, \
+            "a nested parent cascade must leave Configuration.mdo unchanged"
+    poll_disk_path_gone(parent_folder, ctx="EDT must remove the deleted parent's folder")
+    for _, folder, _ in descendants:
+        poll_disk_path_gone(folder, ctx="EDT must remove every descendant folder")
+    after = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(after, "read the subsystem tree after the cascade")
+    assert_not_contains(after.text, parent_name, "the parent must be absent from the model")
+    for _, _, name in descendants:
+        assert_not_contains(after.text, name, "no descendant may survive under another parent or as an orphan")
+    assert_contains(after.text, _SUBSYSTEM_PARENT_FQN, "the fixture's top-level subsystem must survive")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_top_level_subsystem_preview_and_confirm_cascade_to_all_descendants():
+    _exercise_subsystem_parent_cascade(False)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_nested_subsystem_preview_and_force_confirm_cascade_to_all_descendants():
+    _exercise_subsystem_parent_cascade(True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_external_data_source_cube_members_825():
+    eds = "ExternalDataSource.E2E825Delete"
+    cube = eds + ".Cube.C"
+    table = cube + ".DimensionTable.DT"
+    field = table + ".Field.F"
+    dimension = cube + ".Dimension.D"
+    resource = cube + ".Resource.R"
+    base = "src/ExternalDataSources/E2E825Delete/Cubes/C/"
+    for fqn in [eds, cube, table, field, dimension, resource]:
+        assert wait_for_project_ready(), "indexing before create " + fqn
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    for fqn, path, needle in [
+        (field, base + "DimensionTables/DT/DT.mdo", "<name>F</name>"),
+        (dimension, base + "C.mdo", "<name>D</name>"),
+        (resource, base + "C.mdo", "<name>R</name>"),
+        (table, base + "C.mdo", "<dimensionTables>" + table + "</dimensionTables>"),
+    ]:
+        assert wait_for_project_ready(), "indexing before delete preview " + fqn
+        before = read_disk(path)
+        assert_contains(before, needle, "present before delete")
+        requested = fqn.replace(".DimensionTable.", ".ТаблицаИзмерения.").replace(".Field.", ".Поле.")
+        preview = call("delete_metadata", {"projectName": PROJECT, "fqn": requested})
+        assert_ok(preview, "preview " + fqn)
+        assert read_disk(path) == before, "preview must preserve the registering file"
+        present = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+        assert_ok(present)
+        assert_not_contains(present.text, "## Errors", "preview preserves the node")
+        assert wait_for_project_ready(), "indexing before delete confirm " + fqn
+        deleted = call("delete_metadata", {"projectName": PROJECT, "fqn": requested, "confirm": True})
+        assert_ok(deleted, "delete " + fqn)
+        assert deleted.structured.get("persisted") is not False, deleted.structured
+        assert_not_contains(read_disk(path), needle, "immediate registering-file export")
+        gone = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+        assert_ok(gone)
+        assert_contains(gone.text, "## Errors", "confirmed delete removes the addressed node")
+        assert_contains(gone.text, "not found", "the missing-node read must name its failure")
+    poll_disk_path_gone(base + "DimensionTables/DT")

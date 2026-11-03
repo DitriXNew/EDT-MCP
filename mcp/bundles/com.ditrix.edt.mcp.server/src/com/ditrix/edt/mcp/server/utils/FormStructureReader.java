@@ -48,6 +48,8 @@ public final class FormStructureReader
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
     /** The columns of a collection-typed form attribute (issue #295). */
     private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
+    /** The additional-column entries of an object attribute's tabular sections (issue #737). */
+    private static final String FEATURE_ADDITIONAL_COLUMNS = "additionalColumns"; //$NON-NLS-1$
     /** EReference name holding the {@code FormCommand}s on a {@code Form}. */
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
 
@@ -336,7 +338,8 @@ public final class FormStructureReader
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         renderItems(sb, formModel, language, limit);
         renderAttributes(sb, formModel, language, limit);
-        renderAttributeColumns(sb, formModel, language, limit);
+        renderAttributeColumns(sb, formModel, language, limit, false);
+        renderAttributeColumns(sb, formModel, language, limit, true);
         renderCommands(sb, formModel, language, limit);
         renderParameters(sb, formModel, limit);
         renderEventHandlers(sb, formModel, language, limit);
@@ -489,64 +492,96 @@ public final class FormStructureReader
      * Renders the {@code ## Attribute columns} table for every COLLECTION attribute (ValueTable /
      * ValueTree) that has columns - the only place a column is visible, since the attributes table shows
      * just the owner's own type. The section is OMITTED entirely when no attribute has columns, so a form
-     * without collections renders exactly as before. Issue #295.
+     * without collections renders exactly as before. Issue #295. With {@code additional} it renders the
+     * {@code ## Additional columns} table instead: the columns of each attribute's additional-column
+     * entries with their table path, under a row cap of its own (issue #737).
      *
      * @param sb the output buffer
      * @param formModel the form content model
      * @param language the language code for the title column
+     * @param limit the row cap of this table
+     * @param additional whether to render the additional columns rather than the direct ones
      */
     private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language,
-        int limit)
+        int limit, boolean additional)
     {
+        // A model without this containment cannot contribute a row. Avoid an otherwise
+        // unbounded second attribute pass on older/synthetic models that only have direct columns.
+        EStructuralFeature attributes = formModel == null ? null
+            : formModel.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES);
+        if (additional && (!(attributes instanceof EReference)
+            || ((EReference)attributes).getEReferenceType().getEStructuralFeature(FEATURE_ADDITIONAL_COLUMNS) == null))
+        {
+            return;
+        }
         // ONE pass, into a buffer of its own. Whether the section exists at all is a claim about
         // every attribute, so nothing can shorten the walk in the case where no attribute carries
         // a column; what used to be paid for regardless was a LIST of the ones that do, built in
         // full before the row cap could admit its first row. The cap now ends the pass, and the
         // only rows held are the ones it admitted.
         StringBuilder rows = new StringBuilder();
-        int shown = 0;
+        int[] shown = {0};
         boolean capped = false;
         for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
         {
-            if (attribute == null)
+            if (attribute != null && appendColumnRows(rows, attribute, additional, language, limit, shown))
             {
-                continue;
-            }
-            for (EObject column : getReferenceList(attribute, FEATURE_COLUMNS))
-            {
-                if (column == null)
-                {
-                    continue;
-                }
-                if (shown >= limit)
-                {
-                    capped = true;
-                    break;
-                }
-                rows.append(MarkdownUtils.tableRow(nameOf(attribute), nameOf(column),
-                    titleOf(column, language), valueTypeOf(column)));
-                shown++;
-            }
-            if (capped)
-            {
+                capped = true;
                 break;
             }
         }
-        if (shown == 0)
+        if (shown[0] == 0)
         {
             // No attribute carries a column, and that is the only thing this can mean: render
             // clamps the limit to at least 1, so a form that has a column always produces a row
             // before the cap can bite.
             return;
         }
-        sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        sb.append(additional ? "## Additional columns\n\n" : "## Attribute columns\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(additional
+            ? MarkdownUtils.tableHeader("Attribute", "Table path", "Name", "Synonym", "Type") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            : MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         sb.append(rows);
         if (capped)
         {
-            appendCapNote(sb, "attribute columns", limit); //$NON-NLS-1$
+            appendCapNote(sb, additional ? "additional columns" : "attribute columns", limit); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append('\n');
+    }
+
+    /**
+     * Appends the rows of one attribute's direct columns, or of every one of its additional-column
+     * entries, until the row cap is reached.
+     *
+     * @return whether the cap ended the pass (a further column existed but was not admitted)
+     */
+    private static boolean appendColumnRows(StringBuilder rows, EObject attribute, boolean additional,
+        String language, int limit, int[] shown)
+    {
+        List<EObject> containers = additional
+            ? getReferenceList(attribute, FEATURE_ADDITIONAL_COLUMNS) : Collections.singletonList(attribute);
+        for (EObject container : containers)
+        {
+            for (EObject column : getReferenceList(container, FEATURE_COLUMNS))
+            {
+                if (column == null)
+                {
+                    continue;
+                }
+                if (shown[0] >= limit)
+                {
+                    return true;
+                }
+                rows.append(additional
+                    ? MarkdownUtils.tableRow(nameOf(attribute),
+                        dataPathText(getSingleReference(container, "tablePath")), nameOf(column), //$NON-NLS-1$
+                        titleOf(column, language), valueTypeOf(column))
+                    : MarkdownUtils.tableRow(nameOf(attribute), nameOf(column),
+                        titleOf(column, language), valueTypeOf(column)));
+                shown[0]++;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1213,10 +1248,14 @@ public final class FormStructureReader
      *         {@code "."} (e.g. {@code Object.Description}), or {@code ""} when the item carries no
      *         data path or it has no segments
      */
-    @SuppressWarnings("unchecked")
     private static String dataPathOf(EObject item)
     {
-        EObject dataPath = getSingleReference(item, FEATURE_DATA_PATH);
+        return dataPathText(getSingleReference(item, FEATURE_DATA_PATH));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String dataPathText(EObject dataPath)
+    {
         if (dataPath == null)
         {
             return ""; //$NON-NLS-1$

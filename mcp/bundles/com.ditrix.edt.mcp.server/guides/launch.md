@@ -21,6 +21,31 @@ Use `mode="run"` for the same regular launch as EDT's green Run button. Omit `mo
 - **externalObjectProjectName** + **externalObjectName** (strings, always together) — run an external data processor / report on startup (the `/Execute` option). See ## Debugging an external data processor.
 - **restartIfRunning** (boolean, default false) — controls what happens when a matching CLIENT session is already running. Default (`false`): short-circuit with `alreadyRunning: true` and do NOT relaunch — call `terminate_launch` first if you truly need a fresh session. `true`: non-interactively terminate the existing CLIENT session, wait for it to die (clearing its registry entry), then relaunch — so the EDT launch delegate never raises its blocking 'Debug session already exists' modal. It only ever terminates a live client session, NEVER a debug server: a standalone-server debug session's live threads are typed SERVER (a debug-mode standalone server keeps a live «Сервер» thread), so it is never treated as the duplicate and is left running. Use `restartIfRunning=true` for unattended re-launches after a code change instead of a separate `terminate_launch` + `launch` round-trip.
 
+## Automated testing
+
+Set `automatedTestingMode="TESTCLIENT"` to start a runtime client with the platform's
+`/TESTCLIENT` option. `automatedTestingPort=1540` selects its `-TPort` connection port
+(integer 1..65535). If omitted, the working copy inherits the saved port; when no port
+is saved, EDT uses **1538**. The response echoes the normalized mode and effective port;
+if the saved port attribute cannot be read, the launch still succeeds and the port is absent.
+Mode values are accepted case-insensitively and stored as `TESTCLIENT` / `TESTMANAGER`.
+
+`automatedTestingMode="TESTMANAGER"` starts the platform's test-manager mode. It takes
+no port: `automatedTestingPort` is refused without `TESTCLIENT`. Attach and direct
+standalone-server configurations refuse both parameters because they start no client.
+These overrides affect this launch only; `create_launch_config` can save them instead.
+A launch can switch a saved mode or override its port, but cannot clear the saved mode.
+To clear it, delete and recreate the configuration without automated-testing parameters.
+
+Pair testing mode with `startupOption` when the test harness also needs a `/C` command:
+
+```json
+{"launchConfigurationName":"MyProject Thin Client","automatedTestingMode":"TESTCLIENT","automatedTestingPort":1540,"startupOption":"RunTests"}
+```
+
+Web-client test mode is unverified because
+no automated-testing web-client ID is stamped. Starting or driving tests requires an actual infobase.
+
 ## Debugging an external data processor
 
 `externalObjectProjectName` + `externalObjectName` name an external data processor or report to run

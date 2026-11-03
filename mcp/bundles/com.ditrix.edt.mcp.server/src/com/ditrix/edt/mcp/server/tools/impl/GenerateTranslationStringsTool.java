@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 
@@ -115,6 +116,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        return execute(params, ProjectContext::of);
+    }
+
+    /** The same execution path with project lookup supplied for lifecycle snapshot tests. */
+    String execute(Map<String, String> params, Function<String, ProjectContext> projectResolver)
+    {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> targetLanguages = JsonUtils.extractArrayArgument(params, TARGET_LANGUAGES);
         boolean collectInterface = JsonUtils.extractBooleanArgument(params, COLLECT_INTERFACE, true);
@@ -133,7 +140,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
         {
             // Resolve the configuration project and the LanguageTool API (no side
             // effects; same value/case errors as before).
-            Resolved resolved = resolveProjectAndApi(projectName);
+            Resolved resolved = resolveProjectAndApi(projectName, projectResolver);
             if (resolved.error != null)
             {
                 return resolved.error;
@@ -249,14 +256,15 @@ public class GenerateTranslationStringsTool implements IMcpTool
      *
      * @throws org.eclipse.core.runtime.CoreException from {@code IProject.hasNature}
      */
-    private static Resolved resolveProjectAndApi(String projectName) throws org.eclipse.core.runtime.CoreException
+    private static Resolved resolveProjectAndApi(String projectName,
+        Function<String, ProjectContext> projectResolver) throws org.eclipse.core.runtime.CoreException
     {
         // Resolve the IProject first so AI clients get the most specific
         // diagnostic ("Project not found" / "Project is closed") for bad
         // names. The readiness pre-check below refuses only the transient
         // BUILDING state and returns null for a missing/closed/unknown
         // project, so a bad name reaches these value-naming branches.
-        ProjectContext ctx = ProjectContext.of(projectName);
+        ProjectContext ctx = projectResolver.apply(projectName);
         if (!ctx.exists())
         {
             return Resolved.failed(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
@@ -269,7 +277,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
         // Refuse only the transient BUILDING state; a missing/closed project
         // falls through to the value-naming "Project not found" below.
-        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        String building = ProjectStateChecker.buildingErrorOrNull(project);
         if (building != null)
         {
             return Resolved.failed(ToolResult.error(building).toJson());
@@ -291,9 +299,9 @@ public class GenerateTranslationStringsTool implements IMcpTool
         IDtProject dtProject = dtProjectManager != null ? dtProjectManager.getDtProject(project) : null;
         if (dtProject == null)
         {
-            return Resolved.failed(ToolResult.error(
-                "EDT has not yet resolved an IDtProject for: " + projectName //$NON-NLS-1$
-              + ". The project may still be indexing — please retry.").toJson()); //$NON-NLS-1$
+            String refusal = "EDT has not yet resolved an IDtProject for: " + projectName; //$NON-NLS-1$
+            return Resolved.failed(ToolResult.error(ProjectStateChecker.withUnstartedContextReason(project,
+                refusal + ". The project may still be indexing — please retry.", refusal)).toJson()); //$NON-NLS-1$
         }
 
         Object api = Activator.getDefault().getGenerateTranslationStringsApi();

@@ -30,7 +30,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
    - EDT services: typed via `Activator.getDefault().getXxx()` (`getConfigurationProvider`, `getV8ProjectManager`, `getDtProjectManager`, `getBmModelManager`, `getMdRefactoringService`) or `ServiceAccess.get(IFoo.class)` for a wired service (binding `.toService()`) — and **add the package to MANIFEST Import-Package** (step 5).
    - **Errors ONLY via `ToolResult.error(msg).toJson()`** (no exceptions escaping the tool, no bare `"Error: …"`). Success — `ToolResult.success().put(k, v)….toJson()`. An error must be actionable (name the bad value + how to fix / sibling tool).
 
-4. **Registration** — in `tools/BuiltInToolRegistrar`: `import …impl.XxxTool;` + `registry.register(new XxxTool());` (next to siblings).
+4. **Registration** — in `tools/BuiltInToolRegistrar`: `import …impl.XxxTool;` + `registry.register(new XxxTool());` (next to siblings). Then place the tool in its **`ToolGroup`** (`preferences/ToolGroup.java`) and its toolset (`Toolsets.java`) — the preset and toolset ratchets fail for an ungrouped tool, and an ungrouped WRITER silently stays enabled in the read-only presets. A writer added to a group those presets disable also needs a registered preset migration (`ToolSettingsServiceTest` names it).
 
 5. **MANIFEST.MF Import-Package** — add each NEW imported `com._1c.g5.*` package (e.g. `com._1c.g5.v8.dt.md.extension.adopt`). A miss is a runtime `ClassNotFound`, not a compile error.
 
@@ -40,7 +40,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 8. **Golden** — a new tool changes `tools/list`; regenerate and commit: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, then `git add tests/e2e/tools_list.golden.json`.
 
-9. **README** — bump the tool COUNT (two places), add the tool to its group table, to the flat tool table, and to the detailed section (parameters must match the schema).
+9. **README + tool docs** — bump the tool COUNT (two places), add the tool to its group table, to the flat tool table, and to the detailed section (parameters must match the schema). Generate its `docs/tools/<name>.md` page and index entry (`edt-mcp-ready-to-deploy` step 6) — `ToolDocsRatchetTest` and `docs/validate_agent_skills.py` fail without them.
 
 10. **Full contour** (don't say "done" without it): `bash source/compile.sh` (compile + unit tests + every ratchet) → adversarial **Opus review** → redeploy to the dev EDT copy (`edt-redeploy.ps1`; the signal is the log line `MCP server UP on 8765`) → **live validation** against `:8765` → commit. A freshly deployed tool is NOT in this session's MCP deferred list — to check it live, call it through the e2e harness client (`python` → `harness.initialize(); harness.call("<name>", {...})`) or `Invoke-RestMethod`, not the tool's MCP wrapper. See `edt-mcp-build-test` and the dev-loop memory.
 

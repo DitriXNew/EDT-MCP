@@ -58,6 +58,11 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧭 **Command Interface** - Read and edit a subsystem section's (or the main section's) command interface: command visibility, common and per role, placement into panel groups, and order within a group
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
+Optional [guided workflows](docs/guided-workflows.md) expose project health through
+an MCP prompt, project problems and guides through resource templates, and argument
+completion. Enable with `EDT_MCP_GUIDED_WORKFLOWS=true` at EDT launch. Completion is
+for prompt/resource-template arguments; it does not autocomplete ordinary tool arguments.
+
 ## Installation
 
 ### From Update Site
@@ -96,17 +101,19 @@ As well, we can also manually check via **Help → About → Installation Detail
 
 ### Required JVM flag for form screenshots
 
-The `get_form_screenshot` and `get_form_layout_snapshot` tools need EDT to be launched with the following JVM flag:
+**ATTENTION:** `get_form_screenshot` is **disabled by default**. Enable it in
+**Window > Preferences > MCP Server > Tools**. On **Windows**, it works only when EDT starts
+with this option after `-vmargs` in `1cedt.ini`:
 
 ```
 -DnativeFormBufferedLayoutRender=true
 ```
 
-**Without it**, both tools return blank output (gray PNG / empty `elements` list).
+`get_form_layout_snapshot` does not need this flag. Linux and macOS already use buffered native rendering, so the flag changes nothing there.
 
-**Why:** EDT's `NativeRenderService` reads `nativeFormBufferedLayoutRender` once at class-load time. If it was unset at JVM startup, the singleton `HippoLayoutService` is constructed without its offscreen buffer handler, the C++ form renderer never writes captureable pixels back to Java, and the screenshot helper falls through to an SWT `Control.print()` of the native window — which on Windows produces a gray rectangle. Setting the flag at runtime via reflection does not help because the singleton has already been built.
+On Windows, with this flag, EDT's own form designer shows a **grey rectangle instead of the form** for the **whole session**. This is EDT behaviour. Changing the flag requires an **EDT restart**. EDT builds the buffer path as `<java.io.tmpdir>dtgraphics-form.bin`, without inserting a separator; if EDT cannot create that file, screenshots fail. Even with a usable buffer path, this mode can distort the designer on a scaled display: elements are drawn larger, and a click in the designer selects a different element in the element tree. Add the flag only while you need form screenshots, and remove it for everyday designer work.
 
-**How to add it (persistent, recommended):**
+**How to add it:**
 
 1. Close EDT.
 2. Open `1cedt.ini` (next to `1cedt.exe`, e.g. `C:\Program Files\1C\1CE\components\1c-edt-2025.2.6+4-x86_64\1cedt.ini`).
@@ -123,9 +130,7 @@ The `get_form_screenshot` and `get_form_layout_snapshot` tools need EDT to be la
 "<path-to-EDT>\1cedt.exe" -data "<workspace>" -vmargs -DnativeFormBufferedLayoutRender=true
 ```
 
-The same flag is also recommended for production EDT use — it enables the buffered native renderer that EDT itself benefits from.
-
-If your screenshots still come back blank after adding the flag, verify with `-vmargs` actually appears before it in `1cedt.ini` (Eclipse stops parsing `-vmargs` block once it hits a non-`-D` line) and that EDT was fully restarted.
+If a screenshot is blank or gray, check the EDT log for `AccessDeniedException` on `dtgraphics-form.bin`. A typical cause is `-Djava.io.tmpdir=C:\edt_tmp` without a trailing separator: EDT tries `C:\edt_tmpdtgraphics-form.bin`. Change the line to `-Djava.io.tmpdir=C:\edt_tmp\` and fully restart EDT. Also verify that `-vmargs` precedes the JVM options. If nothing helps, remove the buffered-render flag and restart EDT.
 
 ### Configuration
 
@@ -210,17 +215,20 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All tools are organized into 11 semantic groups:
+All **102 tools** are organized into 11 semantic groups; **99 are enabled by default**.
+`git`, `ask_workmate`, and `get_form_screenshot` are **disabled by default**. Enable
+them in **Window → Preferences → MCP Server → Tools**; `enable_toolset` only changes
+progressive-disclosure visibility and does not enable disabled tools:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
 | **Core / Project** | Essential server, project, configuration, history, and XML export/import tools | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_toolsets`, `enable_toolset`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `resync_to_disk`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `import_project_from_file`, `delete_project`, `create_project`, `get_event_log`, `get_mcp_history` |
-| **Errors & Problems** | Error reporting, validation, and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers`, `apply_quick_fix`, `validate_xdto_package` |
-| **Code Intelligence** | Content assist, documentation, metadata and common-picture browsing, and references | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references`, `list_common_pictures`, `export_common_picture` |
+| **Errors & Problems** | Error reporting, validation, check-settings profiles, and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers`, `apply_quick_fix`, `validate_xdto_package`, `project_checks` |
+| **Code Intelligence** | Content assist, documentation, metadata and common-picture browsing, and references | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references`, `list_common_pictures`, `export_common_picture`, `search_in_dcs` |
 | **Tags** | Metadata tag management | `get_tags`, `get_objects_by_tags` |
 | **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, background jobs, and Workmate | `get_applications`, `infobase_sessions`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `get_job_status`, `cancel_job`, `build_external_objects`, `set_infobase_credentials`, `export_configuration_to_file` |
 | **Debugging** | Breakpoints, stepping, variables, expression evaluation, and profiling | `set_breakpoint`, `set_error_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `debug_pause`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
-| **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query`, `validate_form_model` |
+| **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms (`get_form_screenshot` is disabled by default) | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query`, `validate_form_model` |
 | **Refactoring** | Metadata and DCS create, inspect, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `modify_metadata`, `adopt_metadata_object`, `dcs` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 | **Comparison** | Three-way configuration comparison: start one against two git revisions, expand a node, and read or author the merge-rules file | `compare_configurations`, `get_comparison_node`, `merge_rules` |
@@ -234,12 +242,31 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All tools enabled (default) |
-| **Analysis Only** | Read-only analysis — Core except `delete_project`, plus Errors, Code Intelligence, Tags |
+| **All Tools** | Explicitly enable every tool, including the three disabled by default |
+| **Analysis Only** | Read-only analysis — Core reads, comparison and git branch listing, Errors, Code Intelligence, Tags; `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, git branch changes, infobase binding and `project_checks` are off; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 
-Select a preset from the dropdown in the Tools tab. The preset auto-detects based on the current enabled/disabled state and shows "Custom" when the configuration doesn't match any built-in preset.
+Select a preset from the dropdown in the Tools tab. The dropdown shows the preset you last chose and keeps it when you tick or untick individual tools, so later preset-owed updates (for example a new mutating tool disabled in the read-only presets) still reach your edited profile. Choose "Custom", "Disable all" or "Restore Defaults" to opt out. Profiles saved by older versions are recognised once, on upgrade.
+
+For scripted launches, set **`EDT_MCP_TOOL_PRESET=<preset id>`** on the EDT process before
+startup: `all-tools`, `analysis-only`, `code-review`, or `development`. These predefined IDs are
+case-insensitive; surrounding whitespace is ignored. The value is resolved once, on first use,
+including in-process bridge calls and manual server starts when early
+startup is disabled. A predefined preset replaces the effective tool selection **for this
+session only**; stored Tools preferences are untouched by launch-preset resolution and registry
+reads, including their migration state. An unset variable, a blank value or `custom` uses the
+stored selection; explicit `custom` logs one INFO line explaining that there is no launch override.
+An unknown ID is ignored and logged once at WARNING, listing only the predefined override IDs
+and explaining that unset or `custom` uses the stored selection.
+
+The Tools tab always displays and edits the saved selection, and shows a read-only note when
+a launch preset is active. Opening the tab still runs normal stored-preference migrations;
+unchanged OK/Apply preserves the saved selection and preset ID. Deliberate edits are saved for
+a launch without the override, while the active session keeps its launch preset. Progressive
+disclosure still narrows the enabled preset's tools; set `EDT_MCP_PROGRESSIVE_DISCLOSURE=false`
+when checking its full `tools/list` catalogue. See
+[the preset wire checks](tests/TESTING.md#launch-preset-wire-checks) for the e2e launch recipe.
 
 ### Per-Tool Parameter Defaults
 
@@ -374,8 +401,8 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 ## 1C:Workmate in-process bridge
 
-When 1C:Workmate (`com.e1c.edt.ai*` 1.0.5 or 1.0.7) runs in the same EDT JVM,
-integration works in both directions. The two builds differ in the conversation
+The MCP-to-Workmate conversation adapter supports 1C:Workmate (`com.e1c.edt.ai*`
+1.0.5 or 1.0.7) in the same EDT JVM. The two builds differ in the conversation
 API — 1.0.5 wraps the project in `ProjectId`, 1.0.7 takes the Eclipse `IProject`
 and adds a progress-listener argument — and the adapter picks the layout by
 probing the installed classes, so no version has to be configured. One behaviour
@@ -460,25 +487,60 @@ therefore execute code but cannot obtain the one value executing code requires.
 
 EDT-MCP breaks that deadlock: shortly after startup it registers a JShell session
 under the constant id **`edt-mcp`** (retried in the background while Workmate comes
-up, and again if Workmate ever evicts it). Together with `jshell_edt_canonical_imports`
-— a fixed entry in Workmate's own scenario catalogue — both values JShell demands are
-constants, so a project's rules can name them literally and nothing has to be passed
-around at runtime:
+up, and again if Workmate ever evicts it). Call `JShell` directly with that session
+id and the following manual id:
 
 ```
+scope           = "eclipse"
 repl_session_id = "edt-mcp"
-manual_ids      = ["jshell_edt_canonical_imports"]
+manual_ids      = ["active_workbench"]
+request_description  = "Call EDT-MCP through its in-process bridge."
+response_description = "EDT-MCP tool response was printed."
 ```
+
+This chat-to-bridge setup was verified on **Workmate 1.0.8**, EDT 2026.2.1 on
+Windows 11, as reported in [#787](https://github.com/DitriXNew/EDT-MCP/issues/787).
+`active_workbench` is also registered by `EclipsePlatformBindingProvider.getManualEntries()`
+and used in the `JShell` example in the inspected Workmate **1.0.5 and 1.0.7** sources.
+The old `jshell_edt_canonical_imports` id belongs to the EDT metadata manual catalogue
+in the inspected **1.0.5** build; it is absent from the inspected **1.0.7** builds
+and was rejected on **1.0.8** in #787. Use `active_workbench` for this Eclipse bridge
+setup across these versions.
+
+`manual_ids` is validated against the installed build's live scenario catalogue;
+an unknown or blank id is rejected **before any Java code executes**. For another
+build, use `JShellManual` when available to obtain an exact `manual_id` from its
+catalogue. If the chat cannot access it, report the installed Workmate version and
+the exact error instead of guessing an id. The session id remains `edt-mcp`.
 
 [`tests/TestConfiguration/.workmate/WORKMATE.md`](tests/TestConfiguration/.workmate/WORKMATE.md)
 is a working example of such a rules file; copy it into `<project>/.workmate/` to give
-the chat the same access in your own configuration. Note that the chat cannot reach the
-HTTP endpoint at all — `java.net.URL`, `java.net.Socket` and `ProcessBuilder` are on
-Workmate's restricted-types list — so the in-process bridge is its only route.
+the chat the same access in your own configuration, replacing `TestConfiguration`
+with your EDT project name (`list_projects` lists valid names). **Start a new chat**
+after changing the rules so Workmate loads them. If `JShell` reports `Session not
+found`, the startup registration has not completed; report that error and retry
+after EDT-MCP and Workmate have started.
+
+For a request such as "show the last three commits through EDT-MCP", first enable
+**`git`** in **Window → Preferences → MCP Server → Tools → Git**. Both `git` and
+`ask_workmate` ship **disabled by default**, and **`enable_toolset` does not enable
+them**. The bridge obeys the same tool settings as HTTP MCP: a response such as
+`Tool 'git' is disabled by the user` means the bridge reached the dispatcher;
+ask the user to enable the tool in the Tools tab before retrying.
+
+The chat cannot reach the HTTP endpoint at all — `java.net.URL`, `java.net.Socket`
+and `ProcessBuilder` are on Workmate's restricted-types list — so the in-process
+bridge is its only route.
 
 ## Multi-EDT Proxy
 
 Running more than one EDT instance at once? [`edt-mcp-proxy`](proxy/) is a standalone router that exposes a single, stable MCP endpoint on `:8764` and forwards each call to the right EDT-MCP instance by `projectName`, discovering live instances in the background. It ships as `edt-mcp-proxy-<version>.jar` alongside the plugin archive in every [release](https://github.com/DitriXNew/EDT-MCP/releases). See [proxy/README.md](proxy/README.md) for setup, CLI options and configuration.
+
+For duplicate project names, the proxy reports `workspacePath` in `list_projects` and
+`router_status`; pass that exact value alongside `projectName` to select the intended
+workspace. Backend ports and starting the proxy still require the documented setup;
+automatic port fallback and automatic proxy startup are pending the migration and
+distribution decisions described in the proxy README.
 
 ## Available Tools
 
@@ -490,7 +552,7 @@ with `python docs/generate_tool_docs.py`.
 <!-- TOOLS-INDEX:START -->
 <!-- generated by docs/generate_tool_docs.py — do not edit by hand -->
 
-**99 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
+**102 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
 
 ### Core
 
@@ -504,7 +566,7 @@ with `python docs/generate_tool_docs.py`.
 | [`get_metadata_objects`](docs/tools/get_metadata_objects.md) | Discover metadata objects available in a 1C configuration. Parameters and examples: get_tool_guide('get_metadata_objects'). |
 | [`get_module_structure`](docs/tools/get_module_structure.md) | Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters and examples: get_tool_guide('get_module_structure'). |
 | [`get_server_status`](docs/tools/get_server_status.md) | Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status'). |
-| [`get_tool_guide`](docs/tools/get_tool_guide.md) | Retrieve detailed instructions for an MCP tool. Parameters and examples: get_tool_guide('get_tool_guide'). |
+| [`get_tool_guide`](docs/tools/get_tool_guide.md) | Retrieve detailed instructions for an MCP tool. mode=summary lists sections; section=<heading\|#anchor>; query=<text>. |
 | [`list_modules`](docs/tools/list_modules.md) | Discover BSL modules available in an EDT project. Parameters and examples: get_tool_guide('list_modules'). |
 | [`list_projects`](docs/tools/list_projects.md) | Discover projects available in the EDT workspace. Parameters and examples: get_tool_guide('list_projects'). |
 | [`list_toolsets`](docs/tools/list_toolsets.md) | Discover available groups of MCP tools and their visibility. Parameters and examples: get_tool_guide('list_toolsets'). |
@@ -518,11 +580,12 @@ with `python docs/generate_tool_docs.py`.
 | Tool | Description |
 |------|-------------|
 | [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Add a base-configuration object or member to an extension for customization. Parameters and examples: get_tool_guide('adopt_metadata_object'). |
+| [`business_process_route_map`](docs/tools/business_process_route_map.md) | Read, replace or remove a BusinessProcess route map. Call action='get' before replacing; replace discards all existing items, preserving point identity only… |
 | [`create_launch_config`](docs/tools/create_launch_config.md) | Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config'). |
 | [`create_metadata`](docs/tools/create_metadata.md) | Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata'). |
 | [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first;… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Paramete… |
-| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object acr… |
+| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object/member by FQN, or atomically delete members of one form with `operations`; preview before confirming. |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture'). |
 | [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties'). |
 | [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content'). |
@@ -531,6 +594,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_subsystems`](docs/tools/list_subsystems.md) | Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems'). |
 | [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems -… |
+| [`search_in_dcs`](docs/tools/search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool… |
 
 ### Code
 
@@ -598,8 +662,8 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back… |
-| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes… |
+| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot'). |
+| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which… *(not enabled by default)* |
 | [`get_template_screenshot`](docs/tools/get_template_screenshot.md) | Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot'). |
 | [`validate_form_model`](docs/tools/validate_form_model.md) | Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no proce… |
 
@@ -644,11 +708,12 @@ with `python docs/generate_tool_docs.py`.
 | [`get_mcp_history`](docs/tools/get_mcp_history.md) | Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. Parameters and examples: get_tool_guide('get_mcp_history'). |
 | [`get_platform_documentation`](docs/tools/get_platform_documentation.md) | Look up a built-in 1C type or global function in the platform documentation. Returns headers and member names by default - pass responseFormat='detailed' for… |
 | [`get_problem_summary`](docs/tools/get_problem_summary.md) | See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary'). |
-| [`get_project_errors`](docs/tools/get_project_errors.md) | Find detailed validation errors and warnings in an EDT project. Parameters and examples: get_tool_guide('get_project_errors'). |
-| [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Create an EDT project from exported 1C configuration XML files. Parameters and examples: get_tool_guide('import_configuration_from_xml'). |
+| [`get_project_errors`](docs/tools/get_project_errors.md) | Find validation errors and warnings; detailed output includes saved text ranges, and exact-address calls return structured problem rows. |
+| [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Create an EDT project from exported 1C configuration XML files. Use platformVersion for the new project's runtime, derived from the dump by default (xmlVersi… |
 | [`import_project_from_file`](docs/tools/import_project_from_file.md) | Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report)… |
 | [`infobase_sessions`](docs/tools/infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its… |
 | [`list_git_branches`](docs/tools/list_git_branches.md) | Inspect available Git branches and their EDT infobase bindings. Parameters and examples: get_tool_guide('list_git_branches'). |
+| [`project_checks`](docs/tools/project_checks.md) | List or change EDT validation checks; switch, create, copy or delete check-settings profiles. Writes ask for consent; profile deletion is destructive. Parame… |
 | [`resync_to_disk`](docs/tools/resync_to_disk.md) | Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling C… |
 | [`revalidate_objects`](docs/tools/revalidate_objects.md) | Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild… |
 | [`set_branch_infobase`](docs/tools/set_branch_infobase.md) | Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: get_tool_guide('set_branch_infobase'). |
@@ -757,10 +822,26 @@ is still RUNNING. A comparison nobody comes back to is reclaimed by an idle TTL 
 minutes as part of answering the next launch, so a forgotten one delays the next comparison
 rather than blocking it until EDT restarts.
 
+## Text templates
+
+Read a TextDocument template with `get_metadata_details` using
+`objectFqns:["DataProcessor.Invoices.Template.Contract"]` (or `CommonTemplate.Name`).
+The result includes exact text and a stable `contentHash`. Edit it through
+`modify_metadata.template`: `{oldText:"unique match", text:"replacement"}` performs
+one literal search replacement by default; `mode:"append"` adds exact text;
+`mode:"replace"` replaces all text and alone can create a missing Template.txt.
+Replacing an existing file requires `expectedHash`, `expectedSource`, or
+`overwrite:true`; supplied guards are always checked. Existing text-only payloads
+must add the explicit replacement mode and a guard or overwrite. EDT encoding,
+BOM and line endings are preserved, with vendor support enforced on the template.
+See the `modify_metadata` tool guide for the payload rules.
+
 ## XDTO Packages
 
 1C XDTO packages (`XDTOPackage`) can be authored end-to-end through MCP, down to their
 package-local structure, without hand-editing XML:
+
+- **`create_metadata`** generates owned list, choice, record, and record-set forms through EDT with `generateContent=true` and `formType`. Registers default to `LIST`; `setAsDefault` assigns the matching model slot. Unsupported generation requests return an actionable error.
 
 - **`create_metadata`** / **`modify_metadata`** / **`delete_metadata`** address XDTO
   package members by FQN, layered on top of the existing top-level `XDTOPackage.<Name>`
@@ -801,7 +882,7 @@ An action/confirmation/status result with **none** of these returns **Markdown**
 
 Which tool families stay JSON, and why:
 
-- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
+- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*. `delete_metadata` also accepts `operations: [{action: "delete", fqn: "..."}]` instead of `fqn` for 1..100 members of one form: preview, then `confirm:true`. Its batch mode uses one model transaction/export, aggregates preflight errors with zero applied writes, and preserves committed operation indexes on export refusals. `atomic` defaults to true; false is refused. Attributes/columns, multiple containers, create/modify actions, `force:true`, `timeout` and unknown fields are unsupported. Disk-export state and written-object markers remain separate from model atomicity. See the [batch contract](mcp/bundles/com.ditrix.edt.mcp.server/guides/delete_metadata.md#atomic-single-form-batch).
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
 - **`validate_query`** — returns the error **line/column** *(b)*;
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
@@ -809,7 +890,7 @@ Which tool families stay JSON, and why:
 
 Errors are reported the same way regardless of a tool's normal format — see the **Error contract** below.
 
-- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects` (which switches to JSON when called with `format='json'`), `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `debug_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `export_configuration_to_file`, `import_configuration_from_xml`, `import_project_from_file`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
+- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects` (which switches to JSON when called with `format='json'`), `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `search_in_dcs`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `debug_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `export_configuration_to_file`, `import_configuration_from_xml`, `import_project_from_file`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
 - **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `infobase_sessions`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `set_error_breakpoint`, `remove_breakpoint`, `step`, `resume`, `debug_pause`, `wait_for_break`, `launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, `dcs` when called with `format="xml"`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
@@ -877,7 +958,9 @@ The gated tools are `delete_metadata`, `rename_metadata_object`, `delete_project
 `delete_infobase`, `update_database`, `infobase_sessions`, `evaluate_expression` (arbitrary BSL in the running 1C app —
 its effect cannot be classified from the call, so it always asks), `git` **for its write-capable
 subcommands**, `dcs` **only for a destructive retype**, `modify_metadata` **only when it changes
-an object's or attribute's data type** (a benign property edit is never gated), and `merge_rules`
+an object's or attribute's data type** (a benign property edit is never gated), `project_checks`
+**for `set`/`switch` that change something and for `createProfile`/`copyProfile`/`deleteProfile`**
+(`deleteProfile` is destructive; `list`/`profiles` and no-ops never ask), and `merge_rules`
 **only when a `write` replaces the file `basedOn` names** (a write to a path that holds no file is
 never gated).
 
@@ -1281,7 +1364,7 @@ bash source/compile.sh
 - A full first build pulls the EDT 2026.2 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2025-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
 - `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed older EDT instead, which is what keeps the single-build claim honest: the manifest cannot express "references no API that only the newest release has", but a compile against the older one proves it. Run it when the target platform or a call into an EDT API changes. It needs a **local** EDT installation, because 1C publishes only the current service release of each major online and deletes the previous one. Two installations are worth keeping:
   - **2026.1** — the oldest supported major: `bash source/verify-oldest-platform.sh <2026.1-install-dir>` (the defaults).
-  - **2026.2.0** — the previous service release of the current major: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.1 and 2026.2.0's jars are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
+  - **2026.2.0** — the previous service release of the current major: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.2 and the jars of 2026.2.0 and 2026.2.1 are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 

@@ -58,11 +58,15 @@ inputs:
   platform-support-iu:
     description: >
       EDT platform-support feature to also install (match the test config compat
-      mode). Leave EMPTY to install only the core EDT feature — protocol-only
+      mode). Leave EMPTY to skip platform support — protocol-only
       conformance needs no config support, and dropping it avoids version-specific
       install failures across an EDT matrix.
     required: false
     default: ""
+  bp-scheme-iu:
+    description: "GraphicalScheme feature registering the route-map exporter and importer"
+    required: false
+    default: "com._1c.g5.v8.dt.bp.scheme.feature.feature.group"
 
 runs:
   using: composite
@@ -110,13 +114,14 @@ runs:
         # build / Eclipse archive / platform-support IU ⇒ a different key ⇒ a fresh install.
         # EVERY repository handed to the director below belongs here: one that changes without
         # changing the key restores a base assembled from the OLD repo and skips the reinstall.
-        H=$(printf '%s|%s|%s|%s|%s|%s|%s' \
+        H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s' \
               "${{ inputs.eclipse-archive }}" \
               "${{ inputs.edt-p2 }}" \
               "${{ inputs.eclipse-p2 }}" \
               "${{ inputs.orbit-p2 }}" \
               "${{ inputs.orbit-simrel-p2 }}" \
               "${{ inputs.platform-support-iu }}" \
+              "${{ inputs.bp-scheme-iu }}" \
               "$EDT_BUILD" | sha256sum | cut -c1-16)
         echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
 
@@ -143,12 +148,15 @@ runs:
       run: |
         set -uxo pipefail
         ECLIPSE="$RUNNER_TEMP/edt/eclipse"
-        # Install ONLY the EDT feature (+ optionally a platform-support feature) into the
+        # Install the EDT and GraphicalScheme features (+ optional platform support) into the
         # downloaded Eclipse. The MCP plugin is NOT installed here — it is overlaid in the
         # next step so this cached base stays plugin-free (and thus reusable across commits).
         IUS="com._1c.g5.v8.dt.feature.feature.group"
         if [ -n "${{ inputs.platform-support-iu }}" ]; then
           IUS="$IUS,${{ inputs.platform-support-iu }}"
+        fi
+        if [ -n "${{ inputs.bp-scheme-iu }}" ]; then
+          IUS="$IUS,${{ inputs.bp-scheme-iu }}"
         fi
         # edt.1c.ru intermittently 404s individual artifacts under the burst download of the
         # whole EDT feature (rate-limiting; the files DO exist). A failed director transaction
