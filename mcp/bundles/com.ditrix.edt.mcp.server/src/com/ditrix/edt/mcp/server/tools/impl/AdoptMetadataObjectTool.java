@@ -44,6 +44,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.AdoptedFormLookup;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
@@ -470,6 +471,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 changed = true;
+                if (candidate == source.object)
+                {
+                    adopted = write.copy;
+                }
                 dirty.addAll(write.changes.dirty);
                 cascaded.addAll(write.changes.cascaded);
                 if (write.changes.warning != null)
@@ -494,7 +499,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     unresolved.add(picture.getKey());
                 }
             }
-            adopted = adoptedCopy(adopter, source.object, target);
+            if (adopted == null)
+            {
+                adopted = adoptedCopy(adopter, source.object, target);
+            }
             if (!changed)
             {
                 WriteScope.recordNothingQueued();
@@ -1125,8 +1133,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             if (copy instanceof IBmObject && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID
                 && source instanceof MdObject)
             {
-                // A member's returned allocation can remain detached; EDT locates the attached member separately.
-                EObject located = adopter.getAdopted(source, target);
+                // The stored owner's member is available before EDT's global lookup indexes it.
+                EObject located = source instanceof BasicForm
+                    ? AdoptedFormLookup.find(tx, (BasicForm)source) : null;
+                if (located == null)
+                {
+                    located = adopter.getAdopted(source, target);
+                }
                 if (located != null && located.eIsProxy())
                 {
                     located = (EObject)tx.getObjectByUri(((InternalEObject)located).eProxyURI());

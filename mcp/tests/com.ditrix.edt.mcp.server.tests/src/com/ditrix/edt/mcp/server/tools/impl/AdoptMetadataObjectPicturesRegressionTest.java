@@ -23,6 +23,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.List;
+import java.util.UUID;
 import java.lang.reflect.Field;
 
 import org.eclipse.core.runtime.Platform;
@@ -51,6 +52,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.google.gson.JsonObject;
@@ -59,6 +61,74 @@ import com.google.gson.JsonParser;
 /** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testAttachedFormInExistingOwnerSucceedsWhenNativeLookupLags() throws Exception
+    {
+        assertExistingOwnerFormWithoutIndex(false);
+    }
+
+    @Test
+    public void testNameMappedRussianFormInExistingOwnerDoesNotNeedAnIndexedLookup() throws Exception
+    {
+        assertExistingOwnerFormWithoutIndex(true);
+    }
+
+    private void assertExistingOwnerFormWithoutIndex(boolean nameMapped) throws Exception
+    {
+        if (nameMapped)
+        {
+            goods.setName("\u0422\u043e\u0432\u0430\u0440\u044b");
+            mdForm.setName("\u0424\u043e\u0440\u043c\u0430");
+        }
+        mdForm.setUuid(UUID.randomUUID());
+        String ownerFqn = "Catalog." + goods.getName();
+        Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
+        when(((IBmObject)owner).bmIsTop()).thenReturn(true);
+        when(((IBmObject)owner).bmGetTopObject()).thenReturn((IBmObject)owner);
+        when(((IBmObject)owner).bmGetFqn()).thenReturn(ownerFqn);
+        when(extensionTx.getTopObjectByFqn(ownerFqn)).thenReturn((IBmObject)owner);
+        BasicEList<CatalogForm> forms = new BasicEList<>();
+        when(owner.eGet(MdClassPackage.Literals.CATALOG__FORMS)).thenReturn(forms);
+        when(adopter.getAdopted(mdForm, target)).thenReturn(null); // The global scope has not caught up.
+        CatalogForm attached = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(attached.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
+        when(attached.getName()).thenReturn(mdForm.getName());
+        when(attached.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        when(attached.getExtendedConfigurationObject()).thenReturn(nameMapped ? null : mdForm.getUuid());
+        when(((IBmObject)attached).bmGetId()).thenReturn(2002L);
+        when(((IBmObject)attached).bmGetTopObject()).thenReturn((IBmObject)owner);
+        committedObjects.put(2001L, (IBmObject)owner);
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            assertTrue(writing);
+            assertEquals(0, commits);
+            forms.add(attached);
+            committedObjects.put(2002L, (IBmObject)attached);
+            associated.add((IBmObject)attached);
+            copies.put(mdForm, attached);
+            return List.of(MD.createCatalogForm()); // Native member insertion may return its detached allocation.
+        });
+        JsonObject result = run(ownerFqn + ".Form." + mdForm.getName());
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("adopted", result.get("action").getAsString());
+        assertTrue(result.get("persisted").getAsBoolean());
+        assertEquals(1, commits);
+        verify(adopter, never()).getAdopted(mdForm, target);
+        verify(extensionTx, never()).getObjectById(IBmObject.BM_NULL_ID);
+        verify(models).forceExport(dtExtension, List.of(ownerFqn, "Configuration"));
+    }
+
+    @Test
+    public void testSuccessfulFormWriteDoesNotDependOnPostCommitIndexedLookup() throws Exception
+    {
+        when(adopter.getAdopted(mdForm, target)).thenReturn(null);
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        verify(adopter, never()).getAdopted(mdForm, target);
+    }
+
     @Test
     public void testDetachedFormUsesNativeLookupWhenItsOwnerIsAdoptedInTheSameWrite() throws Exception
     {

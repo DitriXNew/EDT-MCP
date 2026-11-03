@@ -634,6 +634,7 @@ def test_readopting_form_repairs_deleted_extension_picture():
             "projectName": PROJECT, "fqn": form_fqn, "extensionProjectName": TESTS_PROJECT, "includeReferencedPictures": True,
         })
         assert_ok(first, "adopt the form and picture before removing the picture copy")
+        assert _structured(first, "first adoption into an existing owner").get("action") == "adopted", first.text
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, picture_disk), "<name>%s</name>" % name,
                         "positive control: the extension picture must exist before deletion")
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk), picture_fqn,
@@ -765,6 +766,9 @@ def test_adopting_standard_picture_only_form_has_no_common_dependencies():
         assert_contains(form_xml, "<headerPicture", "the adopted form must preserve its PictureRef")
         assert_contains(form_xml, "Change", "the adopted form must preserve its standard picture")
         pictures = _picture_dependencies(adopted, "standard-picture dependencies")
+        payload = _structured(adopted, "first standard-picture form adoption into an existing owner")
+        assert payload.get("action") == "adopted", payload
+        assert payload.get("writtenProjects") == [TESTS_PROJECT], payload
         assert pictures == {"found": [], "adopted": [], "alreadyPresent": [], "unresolved": []}, pictures
         details = call("get_metadata_details", {
             "projectName": TESTS_PROJECT, "objectFqns": [form_fqn + ".Field.Code"], "assignable": True,
