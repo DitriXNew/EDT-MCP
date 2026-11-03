@@ -29,8 +29,6 @@ import com.ditrix.edt.mcp.server.bridge.BridgeActivity;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
@@ -2089,25 +2087,12 @@ public class WorkmateGateway
         }
     }
 
-    /**
-     * Returns the running workbench's display, or {@code null} when there is none.
-     * <p>
-     * Deliberately not {@code Display.getDefault()}: that CREATES a display when none exists,
-     * and on a background worker during shutdown the created one has no event loop, so anything
-     * posted to it waits forever.
-     *
-     * @return a live workbench display, or {@code null}
-     */
-    private static Display workbenchDisplay()
+    /** Keeps Workmate's shutdown refusal for any workbench-probe failure. */
+    private static BoundedUiCall.UiExecutor workbenchExecutor()
     {
         try
         {
-            if (!PlatformUI.isWorkbenchRunning())
-            {
-                return null;
-            }
-            Display display = PlatformUI.getWorkbench().getDisplay();
-            return display == null || display.isDisposed() ? null : display;
+            return BoundedUiCall.workbenchExecutorOrNull();
         }
         catch (RuntimeException e)
         {
@@ -2310,8 +2295,8 @@ public class WorkmateGateway
             // worker, and getDefault() CREATES a display when none exists. During shutdown that
             // would build a fresh display on the worker thread with no event loop behind it, so
             // the asyncExec below would never run and the hand-off would hang until its timeout.
-            Display display = workbenchDisplay();
-            if (display == null)
+            BoundedUiCall.UiExecutor executor = workbenchExecutor();
+            if (executor == null)
             {
                 throw GatewayException.notReady("the EDT workbench UI is gone (EDT is closing " //$NON-NLS-1$
                     + "or running headless), so the chat view cannot be opened"); //$NON-NLS-1$
@@ -2326,7 +2311,7 @@ public class WorkmateGateway
             // read "not abandoned", this thread can then time out, and the question is
             // asked anyway, after the caller was told it failed and possibly retried.
             AtomicBoolean claimed = new AtomicBoolean(false);
-            display.asyncExec(() -> {
+            BoundedUiCall.submit(executor::asyncExec, () -> {
                 if (!claimed.compareAndSet(false, true))
                 {
                     return;
@@ -2349,14 +2334,11 @@ public class WorkmateGateway
                 {
                     failure.set(e);
                 }
-                finally
-                {
-                    delivered.countDown();
-                }
-            });
+            }, delivered);
             try
             {
-                if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                if (!BoundedUiCall.awaitInterruptibly(delivered,
+                    TimeUnit.SECONDS.toMillis(CHAT_HANDOFF_TIMEOUT_SECONDS))
                     && claimed.compareAndSet(false, true))
                 {
                     throw GatewayException.timedOut();

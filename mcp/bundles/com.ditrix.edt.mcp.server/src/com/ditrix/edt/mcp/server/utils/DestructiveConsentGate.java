@@ -920,7 +920,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
          */
         boolean await(long timeoutSeconds) throws InterruptedException
         {
-            return latch.await(timeoutSeconds, TimeUnit.SECONDS);
+            return BoundedUiCall.awaitInterruptibly(latch, TimeUnit.SECONDS.toMillis(timeoutSeconds));
         }
     }
 }

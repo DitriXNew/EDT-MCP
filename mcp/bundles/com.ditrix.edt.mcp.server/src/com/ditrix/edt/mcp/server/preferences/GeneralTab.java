@@ -58,6 +58,7 @@ public class GeneralTab
     private Button allowRemoteCheck;
     private Text authTokenText;
     private Button plainTextCheck;
+    private Button allowUiNavigationCheck;
     private Button enhanceNavigatorCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
@@ -132,6 +133,14 @@ public class GeneralTab
         GridData autoStartGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         autoStartGd.horizontalSpan = 3;
         autoStartCheck.setLayoutData(autoStartGd);
+
+        allowUiNavigationCheck = new Button(composite, SWT.CHECK);
+        allowUiNavigationCheck.setText(Messages.GeneralTab_AllowUiNavigation);
+        allowUiNavigationCheck.setToolTipText(Messages.GeneralTab_AllowUiNavigation_Tooltip);
+        allowUiNavigationCheck.setSelection(store.getBoolean(PreferenceConstants.PREF_ALLOW_UI_NAVIGATION));
+        GridData navigationGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        navigationGd.horizontalSpan = 3;
+        allowUiNavigationCheck.setLayoutData(navigationGd);
 
         // Allow remote (non-loopback) access — security
         allowRemoteCheck = new Button(composite, SWT.CHECK);
@@ -685,6 +694,7 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_AUTO_START, autoStartCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
+        store.setValue(PreferenceConstants.PREF_ALLOW_UI_NAVIGATION, allowUiNavigationCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
         // Stored the way it is compared. Surrounding whitespace cannot travel in an HTTP header
         // - the authorizer only ever sees the trimmed credential - so keeping it here would save
@@ -727,6 +737,7 @@ public class GeneralTab
         autoStartCheck.setSelection(PreferenceConstants.DEFAULT_AUTO_START);
         checksFolderText.setText(PreferenceConstants.DEFAULT_CHECKS_FOLDER);
         plainTextCheck.setSelection(PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
+        allowUiNavigationCheck.setSelection(PreferenceConstants.DEFAULT_ALLOW_UI_NAVIGATION);
         allowRemoteCheck.setSelection(PreferenceConstants.DEFAULT_ALLOW_REMOTE_ACCESS);
         authTokenText.setText(PreferenceConstants.DEFAULT_AUTH_TOKEN);
         enhanceNavigatorCheck.setSelection(PreferenceConstants.DEFAULT_ENHANCE_NAVIGATOR);

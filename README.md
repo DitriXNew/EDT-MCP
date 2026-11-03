@@ -210,7 +210,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All **102 tools** are organized into 11 semantic groups; **99 are enabled by default**.
+All **103 tools** are organized into 11 semantic groups; **100 are enabled by default**.
 `git`, `ask_workmate`, and `get_form_screenshot` require explicit opt-in:
 
 | Group | Description | Tools |
@@ -221,13 +221,19 @@ All **102 tools** are organized into 11 semantic groups; **99 are enabled by def
 | **Tags** | Metadata tag management | `get_tags`, `get_objects_by_tags` |
 | **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, background jobs, and Workmate | `get_applications`, `infobase_sessions`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `get_job_status`, `cancel_job`, `build_external_objects`, `set_infobase_credentials`, `export_configuration_to_file` |
 | **Debugging** | Breakpoints, stepping, variables, expression evaluation, and profiling | `set_breakpoint`, `set_error_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `debug_pause`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
-| **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms (`get_form_screenshot` is disabled by default) | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query`, `validate_form_model` |
+| **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms (`get_form_screenshot` is disabled by default) | `open_editor`, `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query`, `validate_form_model` |
 | **Refactoring** | Metadata and DCS create, inspect, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `modify_metadata`, `adopt_metadata_object`, `dcs` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 | **Comparison** | Three-way configuration comparison: start one against two git revisions, expand a node, and read or author the merge-rules file | `compare_configurations`, `get_comparison_node`, `merge_rules` |
 | **Git** | Git operations: the `git` command tool (disabled by default), branch listing/switching, and the branch-to-infobase binding | `git`, `list_git_branches`, `switch_git_branch`, `create_git_branch`, `set_branch_infobase` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
+
+`open_editor` additionally requires **Allow UI navigation** in **MCP Server > General**
+(off by default). It opens metadata objects, members and managed forms by `fqn`, or BSL modules
+by `modulePath` with an optional `line` or `methodName`. Pass `projectName` and exactly one target.
+Calls require an EDT workbench and wait at most 5 seconds for its UI thread; timed-out queued
+requests are cancelled. See the [open_editor guide](mcp/bundles/com.ditrix.edt.mcp.server/guides/open_editor.md).
 
 ### Presets
 

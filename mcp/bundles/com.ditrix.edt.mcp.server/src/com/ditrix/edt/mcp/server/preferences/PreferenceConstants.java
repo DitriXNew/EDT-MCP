@@ -13,6 +13,10 @@ import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleCodec;
  */
 public final class PreferenceConstants
 {
+    /** Explicit opt-in for MCP calls that open editors in the EDT workbench. */
+    public static final String PREF_ALLOW_UI_NAVIGATION = "mcpAllowUiNavigation";
+    public static final boolean DEFAULT_ALLOW_UI_NAVIGATION = false;
+
     /** MCP server port */
     public static final String PREF_PORT = "mcpServerPort"; //$NON-NLS-1$
     
