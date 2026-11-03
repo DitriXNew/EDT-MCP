@@ -58,6 +58,7 @@ from harness import (
     PROJECT,
     cleanup_cluster_registration_probe,
     _workspace_dir,
+    snapshot_application_bindings,
 )
 
 NONEXISTENT_PROJECT = "NoSuchProject_di_zzz"
@@ -190,11 +191,13 @@ def test_nonexistent_project_errors_with_hint():
 def test_nonexistent_application_id_errors_with_hint():
     """A real project but a non-existent applicationId -> 'Application not found' with
     a get_applications hint. Exercises the application-resolution chain."""
+    before = snapshot_application_bindings(PROJECT)
     r = call("delete_infobase",
              {"projectName": PROJECT, "applicationId": NONEXISTENT_APP_ID, "confirm": True})
     err = assert_error(r, "nonexistent applicationId")
     assert_error_quality(err, names=[NONEXISTENT_APP_ID], suggests=["get_applications"],
                          ctx="nonexistent applicationId is named with get_applications hint")
+    assert snapshot_application_bindings(PROJECT) == before, "refused deletion changed application bindings"
     assert_no_diff("a rejected call must not touch the fixture")
 
 

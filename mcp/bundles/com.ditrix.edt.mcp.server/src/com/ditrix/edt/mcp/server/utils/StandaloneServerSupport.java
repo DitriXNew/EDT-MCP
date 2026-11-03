@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
@@ -200,27 +201,40 @@ public final class StandaloneServerSupport
 
     /**
      * Acquires the {@code IStandaloneServerService} from the OSGi registry BY CLASS NAME (reflectively).
-     * Mirrors {@code CreateInfobaseTool.acquireStandaloneServerService()} so the delete path has no
-     * compile/bundle dependency on the standalone-server feature. Returns {@code null} when the bundle or
+     * Shared by creation and lifecycle tools without a compile/bundle dependency on the feature.
+     * Returns {@code null} when the bundle or
      * service is unavailable (the caller then fails gracefully with an actionable error).
      *
      * @return the service object (call it reflectively), or {@code null} when unavailable
      */
     public static Object acquireService()
     {
+        return acquireService("standalone-server", //$NON-NLS-1$
+            "standalone-server: could not start the standalone-server bundle"); //$NON-NLS-1$
+    }
+
+    /** Acquires the same service while retaining the caller's diagnostic prefix and startup message. */
+    public static Object acquireService(String diagnosticPrefix, String startupFailureMessage)
+    {
+        return acquireService(diagnosticPrefix, startupFailureMessage, Platform::getBundle);
+    }
+
+    static Object acquireService(String diagnosticPrefix, String startupFailureMessage,
+            Function<String, Bundle> bundleLookup)
+    {
         try
         {
-            Bundle bundle = Platform.getBundle(WST_CORE_BUNDLE_ID);
+            Bundle bundle = bundleLookup.apply(WST_CORE_BUNDLE_ID);
             if (bundle == null)
             {
-                Activator.logError("standalone-server: bundle '" + WST_CORE_BUNDLE_ID //$NON-NLS-1$
+                Activator.logError(diagnosticPrefix + ": bundle '" + WST_CORE_BUNDLE_ID //$NON-NLS-1$
                     + "' not found — the EDT standalone-server feature is not installed", null); //$NON-NLS-1$
                 return null;
             }
             BundleContext context = bundle.getBundleContext();
             if (context == null)
             {
-                context = startAndGetContext(bundle);
+                context = startAndGetContext(bundle, startupFailureMessage);
             }
             if (context == null)
             {
@@ -231,7 +245,7 @@ public final class StandaloneServerSupport
         }
         catch (Throwable t)
         {
-            Activator.logError("standalone-server: could not acquire the standalone-server service", t); //$NON-NLS-1$
+            Activator.logError(diagnosticPrefix + ": could not acquire the standalone-server service", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -244,7 +258,7 @@ public final class StandaloneServerSupport
      * @param bundle the standalone-server bundle whose context was not yet available
      * @return the bundle context after the start attempt, or {@code null} when it is still unavailable
      */
-    private static BundleContext startAndGetContext(Bundle bundle)
+    private static BundleContext startAndGetContext(Bundle bundle, String failureMessage)
     {
         try
         {
@@ -253,8 +267,7 @@ public final class StandaloneServerSupport
         }
         catch (Exception startEx)
         {
-            Activator.logError("standalone-server: could not start the standalone-server bundle", //$NON-NLS-1$
-                startEx);
+            Activator.logError(failureMessage, startEx);
             return null;
         }
     }
@@ -1004,7 +1017,7 @@ public final class StandaloneServerSupport
     }
 
     /** First public method on {@code cls} (incl. inherited) with the given name and parameter count. */
-    private static Method findMethod(Class<?> cls, String name, int paramCount)
+    public static Method findMethod(Class<?> cls, String name, int paramCount)
     {
         for (Method m : cls.getMethods())
         {

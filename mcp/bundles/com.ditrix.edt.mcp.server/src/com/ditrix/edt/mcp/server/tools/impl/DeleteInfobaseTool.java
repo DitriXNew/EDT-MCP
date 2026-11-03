@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseRegistration;
+import com.ditrix.edt.mcp.server.utils.InfobaseBindings;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -334,6 +335,21 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     String deleteInfobase(DeleteContext context, String projectName, String applicationId,
+            String infobaseName, String registrationId, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, boolean confirm,
+            Supplier<InfobaseAssociationContext> currentContext)
+    {
+        return captureBindings(context.appManager).run(() -> deleteWithBindings(context, projectName,
+            applicationId, infobaseName, registrationId, deleteRegistration, deleteDatabaseFiles, confirm,
+            currentContext), projectName, false, true);
+    }
+
+    InfobaseBindings captureBindings(IApplicationManager manager)
+    {
+        return InfobaseBindings.capture(manager);
+    }
+
+    private String deleteWithBindings(DeleteContext context, String projectName, String applicationId,
             String infobaseName, String registrationId, boolean deleteRegistration,
             boolean deleteDatabaseFiles, boolean confirm,
             Supplier<InfobaseAssociationContext> currentContext)
@@ -664,7 +680,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * @param subtitle a human-readable description of what will be removed
      * @return the decline/timeout error JSON on a non-ALLOW verdict, or {@code null} on ALLOW
      */
-    private static String checkDestructiveConsent(String targetName, String subtitle)
+    String checkDestructiveConsent(String targetName, String subtitle)
     {
         ConsentPreview preview = new ConsentPreview("Delete infobase", subtitle, 1, //$NON-NLS-1$
             java.util.Collections.singletonList(targetName));

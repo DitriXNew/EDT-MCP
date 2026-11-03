@@ -51,6 +51,49 @@ import com.google.gson.JsonParser;
 public class DeleteInfobaseToolTest
 {
     @Test
+    public void deletingNonDefaultInfobasePreservesOtherBindingsOrReportsFailure() throws Exception
+    {
+        for (boolean failRestore : new boolean[] {false, true})
+        {
+            var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            state.failDefault = failRestore;
+            var app = mock(IInfobaseApplication.class);
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("temporary");
+            when(app.getInfobase()).thenReturn(ref);
+            when(app.getId()).thenReturn("non-default");
+            when(app.getName()).thenReturn("temporary");
+            when(state.manager.getApplication(state.project, "non-default")).thenReturn(Optional.of(app));
+            var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+            var context = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/bindings");
+            org.mockito.Mockito.doAnswer(call -> { state.reset(); return null; })
+                .when(associations).dissociate(state.project, ref, context);
+            var tool = new DeleteInfobaseTool()
+            {
+                @Override
+                String checkDestructiveConsent(String targetName, String subtitle)
+                {
+                    return null;
+                }
+
+                @Override
+                com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(IApplicationManager manager)
+                {
+                    return state.snapshot();
+                }
+            };
+            var result = JsonParser.parseString(tool.deleteInfobase(
+                DeleteInfobaseTool.DeleteContext.of(state.project, state.manager, associations, null),
+                "project", "non-default", null, null, false, false, true, () -> context)).getAsJsonObject();
+            assertEquals(result.toString(), !failRestore, result.get("success").getAsBoolean());
+            assertEquals(failRestore ? null : "prior", state.defaultId.get());
+            assertEquals("prior", state.launchId.get());
+            assertEquals(failRestore ? 1 : 0, result.getAsJsonArray("unrestoredBindings").size());
+            assertEquals("non-default", result.get("applicationId").getAsString());
+            org.mockito.Mockito.verify(associations).dissociate(state.project, ref, context);
+        }
+    }
+
+    @Test
     public void unavailableAssociationContextDoesNotBlockStandaloneDispatch() throws Exception
     {
         for (boolean standalone : new boolean[] {false, true})

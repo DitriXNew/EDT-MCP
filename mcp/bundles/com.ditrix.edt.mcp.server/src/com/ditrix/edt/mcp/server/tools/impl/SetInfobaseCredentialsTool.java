@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.InfobaseBindings;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
@@ -524,6 +525,28 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
         final IProject project = mr.project();
         final IApplicationManager appManager = mr.manager();
+        return storeWithBindings(project, appManager, projectName, applicationId, user, password,
+            access, clientConfigName, clientConfig, derivedApplicationId);
+    }
+
+    InfobaseBindings captureBindings(IApplicationManager manager)
+    {
+        return InfobaseBindings.capture(manager);
+    }
+
+    String storeWithBindings(IProject project, IApplicationManager appManager, String projectName,
+            String applicationId, String user, String password, String access, String clientConfigName,
+            ILaunchConfiguration clientConfig, boolean derivedApplicationId)
+    {
+        return captureBindings(appManager).run(() -> storeResolved(project, appManager, projectName,
+            applicationId, user, password, access, clientConfigName, clientConfig, derivedApplicationId),
+            projectName, false, false);
+    }
+
+    String storeResolved(IProject project, IApplicationManager appManager, String projectName,
+            String applicationId, String user, String password, String access, String clientConfigName,
+            ILaunchConfiguration clientConfig, boolean derivedApplicationId)
+    {
         final String finalProjectName = projectName;
         final String finalApplicationId = applicationId;
         final String finalUser = user;
@@ -561,7 +584,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
                 InfobaseAccess accessKind = InfobaseAccessSupport.parseAccess(finalAccess);
                 StoreResult storeResult =
-                    InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword,
+                    storeCredentials(application, finalUser, finalPassword,
                         accessKind, writeCommitted, writeAllowed);
                 if (storeResult.error() != null)
                 {
@@ -611,6 +634,12 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 }
             });
         return finishBoundedStore(storeRun, projectName, applicationId);
+    }
+
+    StoreResult storeCredentials(IApplication application, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted, CredentialWriteControl writeAllowed)
+    {
+        return InfobaseAccessSupport.storeCredentials(application, user, password, access, writeCommitted, writeAllowed);
     }
 
     /** Maps the shared bounded-store snapshot after its write permission has closed. */
