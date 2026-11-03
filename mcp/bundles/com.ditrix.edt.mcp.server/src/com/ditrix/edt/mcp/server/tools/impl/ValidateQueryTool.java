@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
 
+import org.eclipse.core.resources.IProject;
+
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -27,6 +29,17 @@ public class ValidateQueryTool implements IMcpTool
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String DCS_MODE = "dcsMode"; //$NON-NLS-1$
+    private final QueryValidationService validator;
+
+    public ValidateQueryTool()
+    {
+        this(new QueryValidationService());
+    }
+
+    ValidateQueryTool(QueryValidationService validator)
+    {
+        this.validator = validator;
+    }
 
     @Override
     public String getName()
@@ -66,6 +79,7 @@ public class ValidateQueryTool implements IMcpTool
             .objectArrayProperty("unresolvedSources", "Unresolved source names and reasons")
             .objectArrayProperty("sources", "Native source resolution and bilingual available fields")
             .booleanProperty(DCS_MODE, "Whether DCS validation mode was used") //$NON-NLS-1$
+            .stringProperty("validationScope", "Project and metadata scope used for validation") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("errorCount", "Number of ERROR-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("warningCount", "Number of WARNING-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("infoCount", "Number of INFO-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
@@ -104,7 +118,12 @@ public class ValidateQueryTool implements IMcpTool
             return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
 
-        return new QueryValidationService().validate(ctx.project(), queryText, dcsMode).toJson();
+        return doValidateQuery(ctx.project(), queryText, dcsMode);
+    }
+
+    String doValidateQuery(IProject project, String queryText, boolean dcsMode)
+    {
+        return validator.validate(project, queryText, dcsMode).toJson();
     }
     
 }

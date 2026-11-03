@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.transport;
 
 import com.ditrix.edt.mcp.server.ActiveToolCall;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.history.McpCallHistory;
+import com.ditrix.edt.mcp.server.history.McpCallHistory.CallCapture;
 import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
@@ -76,7 +78,9 @@ public class InterruptibleToolExecutor
         String toolName = request != null && request.getToolName() != null ? request.getToolName() : "unknown"; //$NON-NLS-1$
 
         // Create and register active tool call
-        ActiveToolCall activeCall = new ActiveToolCall(exchange, toolName, requestId);
+        CallCapture capture = McpCallHistory.getInstance().beginCall(
+            request != null ? request.getMethod() : null, toolName, requestBody, startNanos);
+        ActiveToolCall activeCall = new ActiveToolCall(exchange, toolName, requestId, capture);
         server.setActiveToolCall(activeCall);
 
         // Use a container to hold the result from the background thread
@@ -89,7 +93,8 @@ public class InterruptibleToolExecutor
             try
             {
                 resultContainer[0] =
-                    protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities);
+                    protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities,
+                        capture::completed);
             }
             catch (Exception e)
             {
@@ -131,7 +136,8 @@ public class InterruptibleToolExecutor
                 catch (InterruptedException e)
                 {
                     Thread.currentThread().interrupt();
-                    break;
+                    server.clearActiveToolCall();
+                    return null;
                 }
             }
         }
@@ -140,7 +146,7 @@ public class InterruptibleToolExecutor
         server.clearActiveToolCall();
 
         // Check if response was already sent while we were waiting
-        if (activeCall.hasResponded())
+        if (!activeCall.selectNormalResponse(resultContainer[0]))
         {
             return null;
         }

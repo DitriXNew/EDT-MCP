@@ -99,7 +99,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final Set<String> READ_ONLY_V17_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_V18_ADDITIONS = Set.of("clone_metadata_object");
+    private static final Set<String> READ_ONLY_V18_ADDITIONS = Set.of("infobase_extensions"); //$NON-NLS-1$
+
+    private static final Set<String> ANALYSIS_ONLY_V19_ADDITIONS = Set.of("open_editor"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V20_ADDITIONS = Set.of("clone_metadata_object"); //$NON-NLS-1$
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -118,7 +122,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
         Map.entry(16, READ_ONLY_V16_ADDITIONS),
         Map.entry(17, READ_ONLY_V17_ADDITIONS),
-        Map.entry(18, READ_ONLY_V18_ADDITIONS));
+        Map.entry(18, READ_ONLY_V18_ADDITIONS),
+        Map.entry(19, ANALYSIS_ONLY_V19_ADDITIONS),
+        Map.entry(20, READ_ONLY_V20_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -137,7 +143,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
         Map.entry(16, READ_ONLY_V16_ADDITIONS),
         Map.entry(17, READ_ONLY_V17_ADDITIONS),
-        Map.entry(18, READ_ONLY_V18_ADDITIONS));
+        Map.entry(18, READ_ONLY_V18_ADDITIONS),
+        Map.entry(20, READ_ONLY_V20_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -397,6 +404,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * re-enable survive every subsequent read. It runs after v14 in the same single set write.
      * <p>
      * Version 17 adds project_checks to recorded read-only profiles.
+     * Version 18 adds infobase_extensions after it joined the Applications group.
+     * <p>
+     * Version 19 adds open_editor to recorded Analysis Only profiles.
+     * <p>
+     * Version 20 adds clone_metadata_object to recorded read-only profiles.
      * <p>
      * Keep v1-v14 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
      * {@link ToolPreset#isReadOnly()} / {@link ToolPreset#isNoDebug()} promises, independent of owner
@@ -527,6 +539,15 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 18)
             {
                 changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V18_ADDITIONS);
+            }
+            if (storedVersion < 19)
+            {
+                changed |= storedPreset(store) == ToolPreset.ANALYSIS_ONLY
+                    && disabled.addAll(ANALYSIS_ONLY_V19_ADDITIONS);
+            }
+            if (storedVersion < 20)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V20_ADDITIONS);
             }
             if (changed)
             {

@@ -12,6 +12,8 @@ History is an in-memory **ring buffer** (bounded; default 500 exchanges), config
 
 The row **key** for a record is the tool name for a `tools/call` exchange, otherwise the JSON-RPC method itself (`tools/list`, `initialize`, `notifications/initialized`, `ping`, …) — so a non-tool method such as `tools/list` (a real context-eater) gets its own key rather than being lumped together. This is the same keying the statistics use.
 
+An interrupted call creates exactly one row when its signal response is sent: `interrupted: true`, `status: "error"`, and the delivered signal in `responseJson`. The row exists even while background work is still running. When that work finishes, the same row gains `backgroundOutcome: {status: "success" | "error", message: "..."}` with a short completion summary. Its original response, duration, and statistics stay unchanged. Background completion never adds a row or restores an evicted/cleared one. Ordinary calls have `interrupted: false` and no `backgroundOutcome`. The optional append-only file log keeps the original response row; completion metadata is updated in the in-memory ring.
+
 ## Filters (all optional, combined with AND)
 - `tool` — case-insensitive **substring** of the call key (the tool name / method). Omit to match every call.
 - `status` — `all` (default), `error` (only failed calls), or `ok` (only successful calls). The error/OK classification is structural (a JSON-RPC top-level `error`, or a tool result with `isError:true` / `success:false`) — the same classifier the statistics use, never a substring heuristic. An out-of-set value is rejected with an actionable error.

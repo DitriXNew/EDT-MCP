@@ -747,6 +747,64 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion19DisablesNavigationForStoredAnalysisOnlyAndPreservesOwnerEdits()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("owner_disabled", "write_module_source"), 18);
+        store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, ToolPreset.ANALYSIS_ONLY.getId());
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("owner_disabled", "write_module_source", "open_editor", "clone_metadata_object"), disabledTools(store));
+        assertEquals(ToolPreset.ANALYSIS_ONLY.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testLaterMigrationsLeaveNavigationOptInsAndOtherProvenanceAlone()
+    {
+        for (String presetId : new String[] {null, ToolPreset.CUSTOM.getId(), ToolPreset.CODE_REVIEW.getId(),
+            ToolPreset.DEVELOPMENT.getId(), ToolPreset.ALL_TOOLS.getId()})
+        {
+            PreferenceStore store = storedDisabledTools(Set.of("owner_disabled"), 18);
+            if (presetId != null)
+            {
+                store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, presetId);
+            }
+
+            ToolSettingsService.ensureMigratedForTest(store);
+
+            Set<String> expected = ToolPreset.CODE_REVIEW.getId().equals(presetId)
+                ? Set.of("owner_disabled", "clone_metadata_object") : Set.of("owner_disabled");
+            assertEquals("Profile " + presetId, expected, disabledTools(store));
+            assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+                store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+            assertEquals(presetId == null ? "" : presetId,
+                store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+        }
+    }
+
+    @Test
+    public void testVersion19DoesNotDisableNavigationAgainAfterDeliberateReenable()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("owner_disabled"), 18);
+        store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, ToolPreset.ANALYSIS_ONLY.getId());
+        ToolSettingsService.ensureMigratedForTest(store);
+        assertTrue(disabledTools(store).contains("open_editor"));
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(Set.of("owner_disabled")));
+        int[] writes = {0};
+        store.addPropertyChangeListener(event -> writes[0]++);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("owner_disabled"), disabledTools(store));
+        assertEquals(0, writes[0]);
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
     public void testBehavioralRatchetChecksOnlyNamesUniqueToOneMigration()
     {
         Map<Integer, Set<String>> migrations = Map.of(

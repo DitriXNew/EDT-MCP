@@ -936,19 +936,17 @@ public class WriteModuleSourceTool implements IMcpTool
                 + "callers of a Function consume its return value; declare the same kind in " //$NON-NLS-1$
                 + "source, or change the kind deliberately with delete plus insert."); //$NON-NLS-1$
         }
-        List<String> result = new ArrayList<>(originalLines);
+        List<String> result;
         if (MODE_REPLACE_METHOD.equals(mode))
         {
+            result = new ArrayList<>(originalLines);
             result.subList(target.startLine, target.endLine + 1).clear();
-            result.addAll(target.startLine, sourceLines);
-        }
-        else if (MODE_INSERT_BEFORE.equals(mode))
-        {
             result.addAll(target.startLine, sourceLines);
         }
         else
         {
-            result.addAll(target.endLine + 1, sourceLines);
+            int insertionLine = MODE_INSERT_BEFORE.equals(mode) ? target.startLine : target.endLine + 1;
+            result = BslModuleUtils.insertMethodLines(originalLines, insertionLine, sourceLines);
         }
         return new MethodEditResult(null, result);
     }

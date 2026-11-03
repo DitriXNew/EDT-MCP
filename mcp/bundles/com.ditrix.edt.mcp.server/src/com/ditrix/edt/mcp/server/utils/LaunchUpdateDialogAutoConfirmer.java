@@ -15,8 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -1387,26 +1385,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     static boolean runBounded(Consumer<Runnable> submit, Runnable work, long timeoutMs)
     {
-        CountDownLatch done = new CountDownLatch(1);
-        submit.accept(() -> {
-            try
-            {
-                work.run();
-            }
-            finally
-            {
-                done.countDown();
-            }
-        });
-        try
-        {
-            return done.await(timeoutMs, TimeUnit.MILLISECONDS);
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return false;
-        }
+        return BoundedUiCall.run(submit, work, timeoutMs);
     }
 
     /**
@@ -1435,28 +1414,17 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static boolean reconcileOnUiThread(Display display, long timeoutMs)
     {
-        if (display.isDisposed())
+        BoundedUiCall.Dispatch dispatched = BoundedUiCall.dispatch(BoundedUiCall.executorOrNull(display),
+            () -> reconcileFilter(display), timeoutMs, BoundedUiCall.UiThreadPolicy.RUN_INLINE);
+        if (dispatched.outcome() == BoundedUiCall.Outcome.SUBMISSION_FAILED)
         {
-            return true;
+            if (dispatched.failure() instanceof SWTException)
+            {
+                return true;
+            }
+            throw dispatched.failure();
         }
-        if (display.getThread() == Thread.currentThread())
-        {
-            // Already on the UI thread: handing the work to asyncExec and then waiting for it
-            // would block the very thread that has to run it.
-            reconcileFilter(display);
-            return true;
-        }
-        try
-        {
-            // A late run after this timeout is harmless: reconcileFilter re-reads the arm state
-            // under LOCK, so it sees whatever the caller left behind rather than a stale decision.
-            return runBounded(display::asyncExec, () -> reconcileFilter(display), timeoutMs);
-        }
-        catch (SWTException e)
-        {
-            // ERROR_DEVICE_DISPOSED race on shutdown - nothing to (un)install.
-            return true;
-        }
+        return dispatched.outcome() != BoundedUiCall.Outcome.TIMED_OUT;
     }
 
     /**

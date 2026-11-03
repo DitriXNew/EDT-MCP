@@ -7,6 +7,7 @@ package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.*;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -19,7 +20,7 @@ public class ProjectChecksVersion17Test
     @Test
     public void version17IsRegisteredWithoutTakingTheVersion16Step()
     {
-        assertEquals(18, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertEquals(20, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
         for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
         {
@@ -49,7 +50,7 @@ public class ProjectChecksVersion17Test
             PreferenceStore store = stored(id, 14);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = id.equals("analysis-only")
-                ? Set.of("owner_disabled", "get_form_screenshot", "business_process_route_map", "project_checks", "clone_metadata_object")
+                ? Set.of("owner_disabled", "get_form_screenshot", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "open_editor")
                 : Set.of("owner_disabled", "get_form_screenshot");
             assertEquals(expected, disabled(store));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
@@ -63,9 +64,13 @@ public class ProjectChecksVersion17Test
         {
             PreferenceStore store = stored(id, version);
             ToolSettingsService.ensureMigratedForTest(store);
-            Set<String> expected = version < 16
-                ? Set.of("owner_disabled", "business_process_route_map", "project_checks", "clone_metadata_object")
-                : Set.of("owner_disabled", "project_checks", "clone_metadata_object");
+            Set<String> expected = new HashSet<>(version < 16
+                ? Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object")
+                : Set.of("owner_disabled", "project_checks", "infobase_extensions", "clone_metadata_object"));
+            if (id.equals("analysis-only"))
+            {
+                expected.add("open_editor");
+            }
             assertEquals(expected, disabled(store));
             assertEquals(id, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,

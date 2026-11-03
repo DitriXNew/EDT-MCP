@@ -8,13 +8,19 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IResource;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.AdoptedModuleState;
@@ -1031,7 +1037,7 @@ public class WriteModuleSourceToolTest
 
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue(joined.startsWith("Procedure Added()\nEndProcedure\n" + //$NON-NLS-1$
+        assertTrue(joined.startsWith("Procedure Added()\nEndProcedure\n\n" + //$NON-NLS-1$
             "// target documentation\n&AtClient\nProcedure Target()")); //$NON-NLS-1$
         assertTrue("the annotation must remain adjacent to its declaration", //$NON-NLS-1$
             joined.contains("&AtClient\nProcedure Target()")); //$NON-NLS-1$
@@ -1049,7 +1055,7 @@ public class WriteModuleSourceToolTest
 
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue(joined.contains("Procedure Added()\nEndProcedure\n// line one\n// line two\n" + //$NON-NLS-1$
+        assertTrue(joined.contains("Procedure Added()\nEndProcedure\n\n// line one\n// line two\n" + //$NON-NLS-1$
             "Procedure Target()")); //$NON-NLS-1$
     }
 
@@ -1065,8 +1071,144 @@ public class WriteModuleSourceToolTest
 
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue(joined.contains("EndProcedureResult = 1;\nStillInside = 2;\nEndProcedure\n" + //$NON-NLS-1$
-            "Function Added()\nReturn 1;\nEndFunction\nProcedure Tail()")); //$NON-NLS-1$
+        assertTrue(joined.contains("EndProcedureResult = 1;\nStillInside = 2;\nEndProcedure\n\n" + //$NON-NLS-1$
+            "Function Added()\nReturn 1;\nEndFunction\n\nProcedure Tail()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertBeforeNormalizesBothJunctions()
+    {
+        assertInsertionJunctions("insertBefore"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertAfterNormalizesBothJunctions()
+    {
+        assertInsertionJunctions("insertAfter"); //$NON-NLS-1$
+    }
+
+    private static void assertInsertionJunctions(String mode)
+    {
+        String left = "Procedure First()\nEndProcedure\n"; //$NON-NLS-1$
+        String right = "// target documentation\n&AtClient\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        String added = "// added documentation\nProcedure Added()\n\tValue = 1;  \n\nEndProcedure\n"; //$NON-NLS-1$
+        String[] padding = { "", "\n", " \t\n\n\t\n" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String anchor = "insertBefore".equals(mode) ? "Target" : "First"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String existing : padding)
+        {
+            for (String leading : padding)
+            {
+                for (String trailing : padding)
+                {
+                    assertMethodEditLines(left + "\n" + added + "\n" + right, //$NON-NLS-1$ //$NON-NLS-2$
+                        lines(left + existing + right), mode, anchor, leading + added + trailing);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testInsertAtModuleEdgesHasNoOuterBlankLines()
+    {
+        String target = "// target documentation\n&AtClient\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        String added = "// added documentation\nProcedure Added()\nEndProcedure\n"; //$NON-NLS-1$
+        for (String padding : new String[] { "", "\n", " \t\n\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertMethodEditLines(added + "\n" + target, lines(padding + target), //$NON-NLS-1$
+                "insertBefore", "Target", "\n\n" + added + "\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            assertMethodEditLines(target + "\n" + added, lines(target + padding), //$NON-NLS-1$
+                "insertAfter", "Target", "\n\n" + added + "\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+    }
+
+    @Test
+    public void testInsertBesideFirstAndLastMethodPreservesPreprocessorAndComments()
+    {
+        String head = "// module header\n#Region Methods\n#If Client Then\n"; //$NON-NLS-1$
+        String target = "// target documentation\n&AtClient\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        String tail = "#EndIf\n#EndRegion\n// module footer\n"; //$NON-NLS-1$
+        String added = "// added documentation\n&AtClient\nProcedure Added()\nEndProcedure\n"; //$NON-NLS-1$
+        for (String padding : new String[] { "", "\n", "\n\n\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertMethodEditLines(head + "\n" + added + "\n" + target + padding + tail, //$NON-NLS-1$ //$NON-NLS-2$
+                lines(head + padding + target + padding + tail),
+                "insertBefore", "Target", added); //$NON-NLS-1$ //$NON-NLS-2$
+            assertMethodEditLines(head + padding + target + "\n" + added + "\n" + tail, //$NON-NLS-1$ //$NON-NLS-2$
+                lines(head + padding + target + padding + tail),
+                "insertAfter", "Target", added); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testInsertPreservesBlankLinesOutsideJunctions()
+    {
+        String prefix = "\n\n#Region Methods\n\n\nProcedure First()\n\tValue = 1;  \n\nEndProcedure\n"; //$NON-NLS-1$
+        String suffix = "// target documentation\nProcedure Target()\n\nEndProcedure\n\n\n#EndRegion\n\n"; //$NON-NLS-1$
+        String added = "Procedure Added()\n\t// body comment  \n\n\nEndProcedure\n"; //$NON-NLS-1$
+        for (String mode : new String[] { "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertMethodEditLines(prefix + "\n" + added + "\n" + suffix, //$NON-NLS-1$ //$NON-NLS-2$
+                lines(prefix + "\n\n" + suffix), mode, //$NON-NLS-1$
+                "insertBefore".equals(mode) ? "Target" : "First", added); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
+    @Test
+    public void testReplaceMethodDoesNotNormalizeBoundaryBlankLines()
+    {
+        String prefix = "Procedure First()\nEndProcedure\n \t\n\n"; //$NON-NLS-1$
+        String suffix = "\n\n\t\nProcedure Last()\nEndProcedure\n"; //$NON-NLS-1$
+        String replacement = "\n\n// replacement documentation\nProcedure Target()\n\nEndProcedure\n\n\n"; //$NON-NLS-1$
+        assertMethodEditLines(prefix + replacement + suffix,
+            lines(prefix + "Procedure Target()\nEndProcedure\n" + suffix), //$NON-NLS-1$
+            "replaceMethod", "Target", replacement); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInsertAcceptsLfAndCrlfAtBothJunctions() throws Exception
+    {
+        String original = "Procedure First()\nEndProcedure\n\n\n// target documentation\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        String added = "Procedure Added()\n\nEndProcedure\n"; //$NON-NLS-1$
+        String expected = "Procedure First()\nEndProcedure\n\n" + added //$NON-NLS-1$
+            + "\n// target documentation\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        for (String moduleDelimiter : new String[] { "\n", "\r\n" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            for (String sourceDelimiter : new String[] { "\n", "\r\n" }) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                for (String mode : new String[] { "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$
+                {
+                    List<String> current = WriteModuleSourceTool.splitSourceLines(
+                        original.replace("\n", moduleDelimiter)); //$NON-NLS-1$
+                    List<String> result = assertMethodEditLines(expected, current, mode,
+                        "insertBefore".equals(mode) ? "Target" : "First", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        ("\n" + added + "\n\n").replace("\n", sourceDelimiter)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    String detected = WriteModuleSourceTool.detectDominantDelimiter(
+                        original.replace("\n", moduleDelimiter)); //$NON-NLS-1$
+                    IFile file = Mockito.mock(IFile.class);
+                    java.lang.reflect.Method writer = WriteModuleSourceTool.class.getDeclaredMethod(
+                        "writeFile", IFile.class, List.class, boolean.class, boolean.class, String.class); //$NON-NLS-1$
+                    writer.setAccessible(true);
+                    writer.invoke(new WriteModuleSourceTool(), file, result, false, true, detected);
+                    ArgumentCaptor<InputStream> written = ArgumentCaptor.forClass(InputStream.class);
+                    Mockito.verify(file).setContents(written.capture(),
+                        Mockito.eq(IResource.FORCE | IResource.KEEP_HISTORY), Mockito.isNull());
+                    assertEquals(expected.replace("\n", moduleDelimiter), //$NON-NLS-1$
+                        new String(written.getValue().readAllBytes(), StandardCharsets.UTF_8));
+                }
+            }
+        }
+    }
+
+    private static List<String> assertMethodEditLines(String expected, List<String> current,
+        String mode, String anchor, String source)
+    {
+        List<String> unchanged = new ArrayList<>(current);
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(current, mode, anchor, source);
+        assertNull(result.error, result.error);
+        assertEquals(mode + " must not mutate the input", unchanged, current); //$NON-NLS-1$
+        assertEquals(mode, lines(expected), result.newLines);
+        return result.newLines;
     }
 
     @Test
@@ -1166,7 +1308,7 @@ public class WriteModuleSourceToolTest
 
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n&AtClient")); //$NON-NLS-1$
+        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n\n&AtClient")); //$NON-NLS-1$
         assertFalse("the inserted method must not capture Target's execution-context directive", //$NON-NLS-1$
             joined.contains("&AtClient\n\nProcedure Added()")); //$NON-NLS-1$
     }
@@ -1181,7 +1323,7 @@ public class WriteModuleSourceToolTest
 
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n&AtClient")); //$NON-NLS-1$
+        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n\n&AtClient")); //$NON-NLS-1$
     }
 
     /**
@@ -2307,8 +2449,9 @@ public class WriteModuleSourceToolTest
                 "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
         assertNull(result.error);
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue("the insert must land above BOTH annotations: " + joined, //$NON-NLS-1$
-            joined.startsWith("Procedure Added()\nEndProcedure\n&AtServer")); //$NON-NLS-1$
+        assertEquals("the insert must land above BOTH annotations", //$NON-NLS-1$
+            "Procedure Added()\nEndProcedure\n\n&AtServer\n\n&Around(\"Original\")\n\n" //$NON-NLS-1$
+                + "Procedure Target()\nEndProcedure", joined); //$NON-NLS-1$
     }
 
     /**

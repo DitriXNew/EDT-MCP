@@ -153,7 +153,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "delete_project", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
-        "infobase_sessions", //$NON-NLS-1$
+        "infobase_sessions",
+        "infobase_extensions", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
         "business_process_route_map", //$NON-NLS-1$
@@ -921,7 +922,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
          */
         boolean await(long timeoutSeconds) throws InterruptedException
         {
-            return latch.await(timeoutSeconds, TimeUnit.SECONDS);
+            return BoundedUiCall.awaitInterruptibly(latch, TimeUnit.SECONDS.toMillis(timeoutSeconds));
         }
     }
 }

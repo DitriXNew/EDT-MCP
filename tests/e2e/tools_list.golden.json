@@ -1753,6 +1753,10 @@
         "confirm": {
           "type": "boolean"
         },
+        "expectedHash": {
+          "description": "Optional form-attribute/column scope guard: pass the preview's contentHash on confirm=true; a changed scope refuses without writing. Omit to use the current scope. Ignored for other targets.",
+          "type": "string"
+        },
         "force": {
           "type": "boolean"
         },
@@ -1833,6 +1837,9 @@
         },
         "committed": {
           "type": "boolean"
+        },
+        "contentHash": {
+          "type": "string"
         },
         "errors": {
           "items": {
@@ -3714,6 +3721,134 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "List installed infobase extensions and install, update or uninstall .cfe files. DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true and expectedHash from the preview's contentHash; writes require user consent; update verification requires a changed expectedVersion. Full parameters and examples: call get_tool_guide('infobase_extensions').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "install",
+            "update",
+            "uninstall"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "cfePath": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "boolean"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "expectedVersion": {
+          "type": "string"
+        },
+        "extensionName": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "protectionFromDangerousActions": {
+          "type": "boolean"
+        },
+        "safeMode": {
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "projectName",
+        "applicationId"
+      ],
+      "type": "object"
+    },
+    "name": "infobase_extensions",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actualState": {
+          "type": "object"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "extensionInstalled": {
+          "type": "boolean"
+        },
+        "extensionName": {
+          "type": "string"
+        },
+        "extensions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "requestedProtectionFromDangerousActions": {
+          "type": "boolean"
+        },
+        "requestedSafeMode": {
+          "type": "boolean"
+        },
+        "requiresConfirmation": {
+          "type": "boolean"
+        },
+        "stateBefore": {
+          "type": "object"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "verification": {
+          "type": "string"
+        },
+        "verificationReason": {
+          "type": "string"
+        },
+        "verificationScope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its exact full UUID can target it. Full parameters and examples: call get_tool_guide('infobase_sessions').",
     "inputSchema": {
       "properties": {
@@ -4332,7 +4467,7 @@
           "type": "object"
         },
         "template": {
-          "description": "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; only replace creates a missing file. Replacing an existing file requires expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? (rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is 900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' [{row, height}] column / row sizes. An omitted formatting key leaves that property UNSET (the cell inherits it). For textOrientation / autoIndent / autoMarkIncomplete / autoWidthCalculation / widthWeightFactor an explicit 0 / false overrides that inheritance and null counts as omitted; bold:false alone and wrap:false are the same as omitting them. Setting a cell overwrites that (row, col); the rest of the content is kept. Valid only for the matching template type; cannot be combined with 'properties' / 'content' / a Role payload.",
+          "description": "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; only replace creates a missing file. Replacing an existing file requires expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), replace?, text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? (rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is 900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' [{row, height}] column / row sizes. Cells MERGE: omitted properties keep their values; replace:true resets omitted cell content and formatting. Non-empty text/parameter clears the other; an empty string clears the named content. bold:false disables bold; wrap:false unsets placement (inherit). Null counts as omitted; 0/false on numeric/boolean format keys overrides inheritance. Other cells, merges and areas are kept. Valid only for the matching template type; cannot be combined with 'properties' / 'content' / a Role payload.",
           "type": "object"
         },
         "templates": {
@@ -4458,6 +4593,41 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examples: get_tool_guide('open_editor').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "methodName": {
+          "type": "string"
+        },
+        "modulePath": {
+          "description": "Path from src/, e.g. CommonModules/MyModule/Module.bsl; pass exactly one of modulePath or fqn.",
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "open_editor",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -6022,6 +6192,9 @@
         },
         "validationComplete": {
           "type": "boolean"
+        },
+        "validationScope": {
+          "type": "string"
         },
         "validationState": {
           "type": "string"

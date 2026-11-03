@@ -153,7 +153,7 @@ public class InterruptibleToolExecutorTest
         {
             McpProtocolHandler protocol = mock(McpProtocolHandler.class);
             when(protocol.parse(BODY)).thenReturn(new McpProtocolHandler().parse(BODY));
-            when(protocol.processRequest(eq(BODY), any(), anyLong(), any())).thenAnswer(invocation -> {
+            when(protocol.processRequest(eq(BODY), any(), anyLong(), any(), any())).thenAnswer(invocation -> {
                 operationThread.set(Thread.currentThread());
                 entered.countDown();
                 try

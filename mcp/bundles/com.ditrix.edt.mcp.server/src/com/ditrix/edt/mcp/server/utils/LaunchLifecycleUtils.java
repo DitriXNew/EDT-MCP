@@ -23,6 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
@@ -3299,9 +3300,8 @@ public final class LaunchLifecycleUtils
      * will not end. The destructive-consent gate is exactly such a caller.
      * </p>
      * <p>
-     * This form posts the same question with {@code asyncExec} and waits on a latch for at most
-     * {@code timeoutMillis}. A late answer is harmless: the runnable only reads a shell into a
-     * holder nobody is waiting on any more.
+     * {@link BoundedUiCall} dispatches the read inline or waits at most {@code timeoutMillis}.
+     * A late answer only fills a holder nobody is waiting on any more.
      * </p>
      * <p>
      * A timeout is its OWN outcome and is never reported as "no shell". Collapsing the two would
@@ -3315,41 +3315,27 @@ public final class LaunchLifecycleUtils
      */
     public static ShellProbe grabActiveShellWithin(long timeoutMillis)
     {
-        Display display = workbenchDisplayOrNull();
-        if (display == null || display.isDisposed())
-        {
-            return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
-        }
-        if (display.getThread() == Thread.currentThread())
-        {
-            // Already ON the UI thread (rename_metadata_object asks the consent gate from inside
-            // its syncExec scope). Posting the question here and then waiting for it would block
-            // the very thread that has to run it: the latch could not be counted down before the
-            // deadline, so the probe would ALWAYS time out. There is nothing to wait for on this
-            // thread - read the shell inline, which is what the syncExec form did here.
-            return inlineShellAnswer(activeOrFirstShell(display));
-        }
+        return grabActiveShellWithin(BoundedUiCall.workbenchExecutorOrNull(),
+            () -> activeOrFirstShell(Display.getCurrent()), timeoutMillis);
+    }
+
+    static ShellProbe grabActiveShellWithin(BoundedUiCall.UiExecutor executor,
+        Supplier<Shell> readShell, long timeoutMillis)
+    {
         final Shell[] holder = new Shell[1];
-        CountDownLatch answered = new CountDownLatch(1);
-        try
+        BoundedUiCall.Dispatch dispatched = BoundedUiCall.dispatch(executor,
+            () -> holder[0] = readShell.get(), timeoutMillis, BoundedUiCall.UiThreadPolicy.RUN_INLINE);
+        switch (dispatched.outcome())
         {
-            display.asyncExec(() -> {
-                try
-                {
-                    holder[0] = activeOrFirstShell(display);
-                }
-                finally
-                {
-                    answered.countDown();
-                }
-            });
+            case COMPLETED:
+                return inlineShellAnswer(holder[0]);
+            case NO_UI, SUBMISSION_FAILED:
+                return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
+            case TIMED_OUT:
+                return new ShellProbe(ShellProbeOutcome.TIMED_OUT, null);
+            default:
+                throw new IllegalStateException("Unexpected shell dispatch outcome: " + dispatched.outcome());
         }
-        catch (RuntimeException disposedMidCall)
-        {
-            // The display went away between the probe and the post: the same answer as no display.
-            return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
-        }
-        return awaitShellAnswer(answered, holder, timeoutMillis);
     }
 
     /**
@@ -3386,23 +3372,11 @@ public final class LaunchLifecycleUtils
      */
     static ShellProbe awaitShellAnswer(CountDownLatch answered, Shell[] holder, long timeoutMillis)
     {
-        try
+        if (!BoundedUiCall.await(answered, timeoutMillis))
         {
-            if (!answered.await(timeoutMillis, TimeUnit.MILLISECONDS))
-            {
-                return new ShellProbe(ShellProbeOutcome.TIMED_OUT, null);
-            }
-        }
-        catch (InterruptedException e)
-        {
-            // An interrupt is not an answer. Restore the flag and report the same "did not
-            // answer" outcome rather than inventing a shell or a headless verdict.
-            Thread.currentThread().interrupt();
             return new ShellProbe(ShellProbeOutcome.TIMED_OUT, null);
         }
-        Shell shell = holder[0];
-        return shell != null ? new ShellProbe(ShellProbeOutcome.SHELL, shell)
-            : new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
+        return inlineShellAnswer(holder[0]);
     }
 
     // ==================================================================================

@@ -25,7 +25,9 @@ Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.egit.core;bundle-version="[6.8.0,8.0.0)"
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server
-Import-Package: com._1c.g5.modeling.xml,
+Import-Package: com._1c.g5.designer.ssh.client,
+ com._1c.g5.designer.ssh.client.operation,
+ com._1c.g5.modeling.xml,
  com._1c.g5.modeling.xml.linking,
  com._1c.g5.v8.bm.common.collections,
  com._1c.g5.v8.bm.core,
@@ -159,6 +161,7 @@ Import-Package: com._1c.g5.modeling.xml,
  org.eclipse.equinox.security.storage,
  org.eclipse.equinox.security.storage.provider,
  org.eclipse.ui.navigator,
+ org.eclipse.ui.texteditor,
  org.eclipse.xtext.parser,
  org.eclipse.xtext.resource,
  com._1c.g5.v8.dt.ql.model,

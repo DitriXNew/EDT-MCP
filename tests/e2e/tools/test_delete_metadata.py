@@ -497,6 +497,45 @@ def test_delete_form_attribute_confirm():
 _OBJECT_FIELDS = ("Code", "Description", "Attribute")
 
 
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_attribute_stale_hash_refuses_without_writing():
+    form = "Catalog.Catalog.Form.ItemForm"
+    fqn = form + ".Attribute.Object"
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview main attribute deletion")
+    assert pv.structured.get("action") == "preview", repr(pv.structured)
+    old_hash = pv.structured.get("contentHash")
+    assert isinstance(old_hash, str) and old_hash, "preview must return contentHash: %r" % pv.structured
+    assert_no_diff()
+
+    created = call("create_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Field.HashLateField",
+        "properties": [{"name": "dataPath", "value": "Object.Code"}]})
+    assert_ok(created, "grow the deletion scope after preview")
+    assert_contains(read_disk(_FORM), "<name>HashLateField</name>", "new field persisted before refusal")
+    wait_for_project_ready()
+    before = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(before, "read the changed form before confirm")
+    assert_contains(before.text, "HashLateField", "MODEL: scope grew after preview")
+    snapshot = tree_snapshot()
+
+    refused = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "confirm": True, "expectedHash": old_hash})
+    error = assert_error(refused, "stale form-attribute hash")
+    assert_error_quality(error, names=[fqn, "expectedHash"], suggests=["confirm=false", "contentHash"])
+    assert_contains(error, "The form changed since the preview", "actionable stale-preview refusal")
+    assert_tree_unchanged(snapshot, "refusal must preserve every fixture file, including the new field")
+    after = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(after, "read the form after refusal")
+    assert after.text == before.text, "refusal must preserve the complete form model"
+    fresh = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(fresh, "preview again after refusal")
+    assert fresh.structured.get("contentHash") != old_hash, "expanded scope must have a different hash"
+    assert "HashLateField" in [it.get("name") for it in fresh.structured.get("items", [])], \
+        "new preview must disclose the field the old preview did not authorize"
+    assert_tree_unchanged(snapshot, "read-back and new preview must also leave the fixture unchanged")
+
+
 def _picked(structured):
     """The items EDT's delete picks by binding: {name: dataPath}, without what only sits inside them
     (contained) or merely loses its path (unbound)."""
@@ -576,8 +615,11 @@ def test_delete_non_main_form_attribute_takes_only_its_own_bound_field():
     assert_not_contains(pv.structured.get("message", ""), "MAIN attribute",
                         "a non-main attribute carries no main-attribute note")
 
-    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
-    assert_ok(r, "delete the non-main attribute (confirm)")
+    content_hash = pv.structured.get("contentHash")
+    assert isinstance(content_hash, str) and content_hash, "form-attribute preview must return contentHash"
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "confirm": True, "expectedHash": content_hash})
+    assert_ok(r, "delete the non-main attribute with its matching preview hash")
     assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
     poll_disk_lacks(_FORM, "<name>DNField</name>", ctx="the field bound to DNAttr must be gone")
     xml = read_disk(_FORM)
@@ -585,6 +627,11 @@ def test_delete_non_main_form_attribute_takes_only_its_own_bound_field():
     for name in _OBJECT_FIELDS:
         assert_contains(xml, "<name>%s</name>" % name, "a field bound elsewhere (%s) must survive" % name)
     assert_contains(xml, "<name>Object</name>", "the main attribute must survive")
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(details, "model read-back after matching-hash delete")
+    assert_not_contains(details.text, "DNAttr", "MODEL: deleted attribute is gone")
+    assert_not_contains(details.text, "DNField", "MODEL: bound field is gone")
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")

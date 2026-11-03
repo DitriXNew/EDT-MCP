@@ -47,8 +47,8 @@ public enum ToolGroup
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
         "Application and infobase management, external-object builds, launch, testing, " //$NON-NLS-1$
             + "background jobs, and Workmate", //$NON-NLS-1$
-        "get_applications", "infobase_sessions", "list_configurations", "create_launch_config", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "delete_launch_config", //$NON-NLS-1$
+        "get_applications", "infobase_sessions", "infobase_extensions", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "create_launch_config", "delete_launch_config", //$NON-NLS-1$ //$NON-NLS-2$
         "create_infobase", "delete_infobase", "update_database", "launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "terminate_launch", "run_yaxunit_tests", "ask_workmate", "get_job_status", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "cancel_job", "build_external_objects", "set_infobase_credentials", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -64,7 +64,7 @@ public enum ToolGroup
 
     BSL_CODE("bslCode", "BSL Code", //$NON-NLS-1$ //$NON-NLS-2$
         "Module source reading/writing, structure, search, call hierarchy, navigation, and forms", //$NON-NLS-1$
-        "read_module_source", "write_module_source", "get_module_structure", "list_modules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "open_editor", "read_module_source", "write_module_source", "get_module_structure", "list_modules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "search_in_code", "read_method_source", "get_method_call_hierarchy", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_outgoing_structures", "go_to_definition", "get_symbol_info", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_form_layout_snapshot", //$NON-NLS-1$

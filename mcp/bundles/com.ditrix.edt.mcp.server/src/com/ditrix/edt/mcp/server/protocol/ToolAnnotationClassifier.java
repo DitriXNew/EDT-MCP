@@ -52,7 +52,8 @@ public final class ToolAnnotationClassifier
         "clone_metadata_object",
         "delete_metadata", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
-        "infobase_sessions", //$NON-NLS-1$
+        "infobase_sessions",
+        "infobase_extensions", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
         "delete_project", //$NON-NLS-1$
         "delete_launch_config", //$NON-NLS-1$

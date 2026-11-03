@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -13,6 +14,39 @@ import java.util.Map;
  */
 public final class MarkdownUtils
 {
+    /** Ten names keep ordinary lists readable while bounding a single table cell. */
+    public static final int TABLE_CELL_ITEM_LIMIT = 10;
+
+    /**
+     * Joins at most {@link #TABLE_CELL_ITEM_LIMIT} items, preserving their order and reporting
+     * the exact omitted count. Pass the result to {@link #tableRow(String...)} for escaping.
+     *
+     * @param items the display names
+     * @return the bounded, unescaped cell text
+     */
+    public static String cappedList(Collection<String> items)
+    {
+        StringBuilder cell = new StringBuilder();
+        int shown = 0;
+        for (String item : items)
+        {
+            if (shown == TABLE_CELL_ITEM_LIMIT)
+            {
+                break;
+            }
+            if (shown++ > 0)
+            {
+                cell.append(", "); //$NON-NLS-1$
+            }
+            cell.append(item);
+        }
+        if (items.size() > shown)
+        {
+            cell.append(" \u2026 (+").append(items.size() - shown).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return cell.toString();
+    }
+
     private MarkdownUtils()
     {
         // Utility class - no instantiation
