@@ -227,22 +227,23 @@ For a CommonAttribute, the target's own LIVE `dataSeparation` value selects the 
 Adding is IDEMPOTENT: attaching a member already listed does not duplicate it. For a CommonAttribute / ExchangePlan (a wrapper list with a per-entry flag) a re-add UPDATES that member's flag (`use` / `autoRecord`, counted under `updated` rather than `added`); for a Catalog owner / Document register record / Subsystem content object (a plain reference, no flag) a re-add is a no-op. Removing a member that is not listed is a clean error. Nothing is written unless every entry resolves. The result's `content` counts object is `{added, updated, removed}` for a CommonAttribute / ExchangePlan change and `{added, removed}` for a Catalog owners / Document register records / Subsystem content change.
 
 ## Authoring a spreadsheet template (template)
-A **SpreadsheetDocument** template (a "Табличный документ" / print form / макет - the layout used for invoices, acts and printed reports) has its cell content authored through the `template` payload instead of `properties`, on a template FQN. Create the empty template OBJECT first with `create_metadata` (`CommonTemplate.<Name>` for a shared template, or `<Type>.<Owner>.Template.<Name>` for an object-owned one - e.g. `DataProcessor.Invoices.Template.Printout`); it is a SpreadsheetDocument template by default. Then fill its content here. Spreadsheet arrays apply only to a SpreadsheetDocument template; TextDocument content uses the text surface below. Binary-data, DCS and graphical content remain unsupported here. A `template` payload cannot be combined with `properties`, a membership `content` payload or a Role payload in the same call; a `template` payload on a non-template FQN is a clean, actionable error. The change goes through a BM write transaction and force-exports the template's `.mxlx` content to disk once (no manual `clean_project`). Render the result to a PNG with `get_template_screenshot` to visually verify it.
+A **SpreadsheetDocument** print template uses `template` instead of `properties`. First create it with `create_metadata`: `CommonTemplate.<Name>` (shared) or `<Type>.<Owner>.Template.<Name>` (owned, e.g. `DataProcessor.Invoices.Template.Printout`); SpreadsheetDocument is the default type. TextDocument uses the text surface below; binary, DCS and graphical content are unsupported here. A `template` payload requires a matching template FQN and cannot mix with `properties`, membership `content` or a Role payload. Writes use a BM transaction and force-export `.mxlx` once; no `clean_project` is needed. Visually verify with `get_template_screenshot`.
 
 The `template` object takes any of these arrays (all optional; omit an array to leave that aspect untouched):
-- `cells` - `[{row, col, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?}]`:
+- `cells` - `[{row, col, replace?, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?}]`:
   - `row`, `col` (required) - the 0-based row and column index of the cell.
   - `text` - a static text value shown in the cell. A cell is either `text` OR a `parameter`, not both.
   - `parameter` - the name of a print-time PARAMETER (filled by BSL at output, e.g. via `ОбластьМакета.Параметры.<Name>`); the cell shows the parameter's value when the template is printed.
-  - `bold` - `true` to embolden the cell font.
+  - `bold` - `true` to embolden the cell font, `false` to disable bold.
   - `fontSize` - the font size (points), a positive integer.
   - `hAlign` - horizontal alignment: `Left` / `Center` / `Right` / `Auto` / `Width`.
   - `vAlign` - vertical alignment: `Top` / `Center` / `Bottom`.
-  - `wrap` - `true` to word-wrap the cell text (otherwise a single line).
-  - `textOrientation` - text rotation, in the PLATFORM's own unit: **tenths of a degree**, `0..3600`. `900` is 90 degrees (vertical text in a narrow column header); `0` is explicitly horizontal. The value is passed through unscaled - EDT's own cell-property editor shows 0..360 degrees and multiplies by ten before storing it.
+  - `wrap` - `true` to word-wrap; `false` unsets explicit placement (inherits row / column / document placement). Also accepts `Auto` / `Cut` / `Block` / `Wrap`.
+  - `textOrientation` - rotation in **tenths of a degree**, `0..3600`, passed through unscaled: `900` is 90 degrees; `0` is explicitly horizontal. EDT's editor displays degrees.
   - `autoIndent` - automatic indent, `0..100` (EDT's cell-property spinner range). EDT greys the indent fields out while the cell is rotated.
   - `autoMarkIncomplete` - `true` to auto-mark the cell as incomplete when it is empty (an input-field behaviour).
-  - Setting a cell OVERWRITES that `(row, col)` cell; the rest of the content is kept (authoring is additive per cell, not a whole-content replace).
+  - Cells **MERGE by default**: sent properties change; omitted properties keep their current values. `replace:true` on an entry requests the old full replacement: omitted cell content and formatting reset. Other cells, merges and named areas are kept in either mode.
+  - Non-empty `text` or `parameter` clears the other content kind. To clear just the named content, send `text:""` or `parameter:""`. For example, `{row:1,col:0,wrap:true}` keeps the existing parameter; `{row:1,col:0,parameter:""}` removes its binding while keeping formatting.
 - `merges` - `[{fromRow, fromCol, toRow, toCol}]`: a merged rectangular cell range (0-based, inclusive).
 - `areas` - `[{name, fromRow, fromCol, toRow, toCol}]`: a NAMED area over a cell range, for programmatic `ПолучитьОбласть("<name>")` / `Вывести` output from BSL.
 - `columnWidths` - `[{col, width?, autoWidthCalculation?, widthWeightFactor?}]`: the sizing of a column (0-based index). At least one of the three sizing members is required.
@@ -252,7 +253,7 @@ The `template` object takes any of these arrays (all optional; omit an array to 
   - Both need a project on 1C:Enterprise **8.3.10 or later** (the project's `Runtime-Version`): the `.mxlx` writer stores neither below that, so on an older project they are refused rather than accepted and silently dropped. A fixed `width` has no such floor.
 - `rowHeights` - `[{row, height}]`: the height of a row (0-based index).
 
-An omitted formatting key leaves that property UNSET, so the cell keeps inheriting it from the row / column / document format; an explicit `0` / `false` is a real value that overrides the inheritance. An explicit `null` counts as omitted.
+An explicit `null` counts as omitted. New/replaced cells inherit omitted formatting from row / column / document; merged cells keep it. Explicit numeric `0` / boolean `false` overrides inheritance (except `wrap:false`, which unsets placement).
 
 The cell-only keys (`textOrientation`, `autoIndent`, `autoMarkIncomplete`) and the column-only keys (`autoWidthCalculation`, `widthWeightFactor`) are each refused in the other's array instead of being silently ignored.
 

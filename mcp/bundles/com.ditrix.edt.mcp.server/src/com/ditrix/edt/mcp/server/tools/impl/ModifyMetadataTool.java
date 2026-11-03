@@ -411,7 +411,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "only replace creates a missing file. Replacing an existing file requires expectedHash or " //$NON-NLS-1$
                 + "expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
-                + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
+                + "0-based, required), replace?, text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
                 + "('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? " //$NON-NLS-1$
                 + "(rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is " //$NON-NLS-1$
@@ -420,12 +420,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); " //$NON-NLS-1$
                 + "'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share " //$NON-NLS-1$
                 + "of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' " //$NON-NLS-1$
-                + "[{row, height}] column / row sizes. An omitted formatting key leaves that property " //$NON-NLS-1$
-                + "UNSET (the cell inherits it). For textOrientation / autoIndent / autoMarkIncomplete / " //$NON-NLS-1$
-                + "autoWidthCalculation / widthWeightFactor an explicit 0 / false overrides that " //$NON-NLS-1$
-                + "inheritance and null counts as omitted; bold:false alone and wrap:false are the same as " //$NON-NLS-1$
-                + "omitting them. " //$NON-NLS-1$
-                + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
+                + "[{row, height}] column / row sizes. Cells MERGE: omitted properties keep their values; " //$NON-NLS-1$
+                + "replace:true resets omitted cell content and formatting. Non-empty text/parameter clears " //$NON-NLS-1$
+                + "the other; an empty string clears the named content. bold:false disables bold; wrap:false " //$NON-NLS-1$
+                + "unsets placement (inherit). Null counts as omitted; 0/false on numeric/boolean format " //$NON-NLS-1$
+                + "keys overrides inheritance. Other cells, merges and areas are kept. Valid " //$NON-NLS-1$
                 + "only for the matching template type; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$

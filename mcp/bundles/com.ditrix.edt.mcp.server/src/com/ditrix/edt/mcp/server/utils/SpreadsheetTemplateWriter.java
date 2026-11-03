@@ -15,10 +15,12 @@ import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.mcore.Font;
-import com._1c.g5.v8.dt.mcore.FontDef;
+import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.MutableFont;
 import com._1c.g5.v8.dt.moxel.Cell;
 import com._1c.g5.v8.dt.moxel.Column;
 import com._1c.g5.v8.dt.moxel.Columns;
@@ -74,8 +76,8 @@ import com.google.gson.JsonPrimitive;
  * <li>A column width / row height lives on a {@link Format} ({@link Format#setWidth(int)} /
  * {@link Format#setHeight(int)}) referenced by the column's / row's {@code formatIndex}.</li>
  * <li>Every {@link Format} attribute is UNSETTABLE, so "absent" and "set to the default value" are
- * distinct: an omitted key leaves the feature unset (the cell inherits it from the row / column /
- * document format), while an explicit {@code 0} / {@code false} is a real value that overrides that
+ * distinct: an unset feature inherits from the row / column / document format, while an explicit
+ * {@code 0} / {@code false} is a real value that overrides that
  * inheritance. The serializer writes each attribute only when {@code isSetXxx()}.</li>
  * <li>Auto width calculation / width weight factor are COLUMN properties: the platform reads them only
  * from the COLUMN's format ({@code SheetAccessor.isAutoWidthCalculation} /
@@ -112,6 +114,7 @@ public final class SpreadsheetTemplateWriter
     private static final String KEY_COL = "col"; //$NON-NLS-1$
     private static final String KEY_TEXT = "text"; //$NON-NLS-1$
     private static final String KEY_PARAMETER = "parameter"; //$NON-NLS-1$
+    private static final String KEY_REPLACE = "replace"; //$NON-NLS-1$
     private static final String KEY_BOLD = "bold"; //$NON-NLS-1$
     private static final String KEY_FONT_SIZE = "fontSize"; //$NON-NLS-1$
     private static final String KEY_H_ALIGN = "hAlign"; //$NON-NLS-1$
@@ -178,7 +181,7 @@ public final class SpreadsheetTemplateWriter
     {
         /** Non-null when the spec was rejected up front (nothing mutated): a ready ToolResult.error JSON. */
         public final String error;
-        /** Number of cells written (created or overwritten). */
+        /** Number of cells written (created, merged or replaced). */
         public final int cells;
         /** Number of merges added. */
         public final int merges;
@@ -306,15 +309,12 @@ public final class SpreadsheetTemplateWriter
         Row row = getOrCreateRow(document, plan.row);
         Cell cell = getOrCreateCell(row, plan.col);
 
-        // Overwrite semantics: writing a (row, col) is a TRUE REPLACE, so first clear any prior content
-        // and formatting - a re-authored cell must reproduce EXACTLY the plan, with no stale fill / text /
-        // style surviving. Resetting the formatIndex to the reserved neutral base format (index 0, a TEXT
-        // fill) is what makes overwriting a PARAMETER cell with plain text actually render the text: the
-        // moxel reader dispatches on the format's FillType, so keeping the old FillType.PARAMETER format
-        // would return the now-null parameter and show blank.
-        cell.setText(null);
-        cell.setParameter(null);
-        cell.setFormatIndex(0);
+        if (plan.replace)
+        {
+            cell.setText(null);
+            cell.setParameter(null);
+            cell.setFormatIndex(0);
+        }
 
         applyCellContent(cell, plan);
         applyCellFormat(document, cell, plan);
@@ -322,51 +322,62 @@ public final class SpreadsheetTemplateWriter
 
     /**
      * Sets the cell's content: its report parameter name, or its literal text as a {@link LocalString}
-     * keyed by the neutral language code. A content-less (style-only) plan leaves the cell cleared.
+     * keyed by the neutral language code. Empty strings clear the named content; omitted keys keep it.
      */
     private static void applyCellContent(Cell cell, CellPlan plan)
     {
-        if (plan.parameter != null)
+        if (plan.parameterPresent)
         {
             cell.setParameter(plan.parameter);
+            if (plan.parameter != null)
+            {
+                cell.setText(null);
+            }
         }
-        else if (plan.text != null)
+        if (plan.textPresent)
         {
-            LocalString text = ContentFactory.eINSTANCE.createLocalString();
-            text.getContent().put(NEUTRAL_LANGUAGE_KEY, plan.text);
+            LocalString text = null;
+            if (plan.text != null)
+            {
+                text = ContentFactory.eINSTANCE.createLocalString();
+                text.getContent().put(NEUTRAL_LANGUAGE_KEY, plan.text);
+                cell.setParameter(null);
+            }
             cell.setText(text);
         }
     }
 
     /**
      * Points the cell's {@code formatIndex} at an interned {@link Format} carrying the plan's font /
-     * alignment / wrap / fill. A plan with no styling and no parameter keeps the neutral base format
-     * (index 0) already reset by the caller.
+     * alignment / wrap / fill, preserving omitted features and never mutating a pooled entry in place.
      */
     private static void applyCellFormat(SpreadsheetDocument document, Cell cell, CellPlan plan)
     {
+        Format format = plan.replace ? MoxelFactory.eINSTANCE.createFormat()
+            : EcoreUtil.copy(document.getFormats().get(cell.getFormatIndex()));
         Integer fontIndex = null;
-        if (plan.bold || plan.fontSize != null)
+        if (plan.boldPresent || plan.fontSize != null)
         {
-            fontIndex = internFont(document, plan.bold, plan.fontSize);
+            fontIndex = internFont(document, format, plan);
         }
-        FillType fillType = plan.parameter != null ? FillType.PARAMETER : null;
-        if (fontIndex != null || plan.hAlign != null || plan.vAlign != null || plan.textPlacement != null
-            || plan.textOrientation != null || plan.autoIndent != null || plan.autoMarkIncomplete != null
-            || fillType != null)
+        FillType fillType = null;
+        if (plan.parameter != null)
         {
-            cell.setFormatIndex(internFormat(document, buildCellFormat(fontIndex, plan, fillType)));
+            fillType = FillType.PARAMETER;
         }
+        else if (plan.text != null || (plan.parameterPresent && format.getFillType() == FillType.PARAMETER))
+        {
+            fillType = FillType.TEXT;
+        }
+        applyCellFormatMembers(format, fontIndex, plan, fillType);
+        cell.setFormatIndex(internFormat(document, format));
     }
 
     /**
-     * Builds the cell {@link Format} carrying the resolved font index / alignments / wrap / rotation /
-     * auto indent / auto-mark-incomplete / fill type. Only the members the plan actually carries are set,
-     * so an omitted key leaves its feature UNSET and the cell keeps inheriting it.
+     * Applies only supplied members to a private format copy; omitted features retain their set-state.
      */
-    private static Format buildCellFormat(Integer fontIndex, CellPlan plan, FillType fillType)
+    private static void applyCellFormatMembers(Format format, Integer fontIndex, CellPlan plan, FillType fillType)
     {
-        Format format = MoxelFactory.eINSTANCE.createFormat();
         if (fontIndex != null)
         {
             format.setFont(fontIndex.intValue());
@@ -383,6 +394,10 @@ public final class SpreadsheetTemplateWriter
         {
             format.setTextPlacement(plan.textPlacement);
         }
+        else if (plan.wrapPresent)
+        {
+            format.unsetTextPlacement();
+        }
         if (plan.textOrientation != null)
         {
             format.setTextOrientation(plan.textOrientation.intValue());
@@ -397,9 +412,15 @@ public final class SpreadsheetTemplateWriter
         }
         if (fillType != null)
         {
-            format.setFillType(fillType);
+            if (fillType == FillType.TEXT)
+            {
+                format.unsetFillType();
+            }
+            else
+            {
+                format.setFillType(fillType);
+            }
         }
-        return format;
     }
 
     /** Adds a merged region as a {@link Merge} over the delta-encoded {@link Rect}. */
@@ -541,17 +562,28 @@ public final class SpreadsheetTemplateWriter
     }
 
     /**
-     * Interns a font (bold + optional size) into the shared fonts pool, returning its index. An identical
-     * font already in the pool is reused (dedup); otherwise a fresh {@link FontDef} is appended.
+     * Copies the existing font and applies supplied members through the shared font writer, then interns it.
      */
-    private static int internFont(SpreadsheetDocument document, boolean bold, Integer fontSize)
+    private static int internFont(SpreadsheetDocument document, Format format, CellPlan plan)
     {
-        FontDef desired = McoreFactory.eINSTANCE.createFontDef();
-        desired.setBold(bold);
-        if (fontSize != null)
+        Font desired = format.isSetFont() ? EcoreUtil.copy(document.getFonts().get(format.getFont()))
+            : McoreFactory.eINSTANCE.createFontDef();
+        if (!(desired instanceof MutableFont))
         {
-            desired.setHeight(fontSize.intValue());
+            FontRef reference = McoreFactory.eINSTANCE.createFontRef();
+            reference.setFont(document.getFonts().get(format.getFont()));
+            desired = reference;
         }
+        JsonObject members = new JsonObject();
+        if (plan.boldPresent)
+        {
+            members.addProperty(KEY_BOLD, plan.bold);
+        }
+        if (plan.fontSize != null)
+        {
+            members.addProperty(KEY_HEIGHT, plan.fontSize);
+        }
+        StyleValueBuilder.applyFontMembers(desired, StyleValueBuilder.parseFontMembers(members, false));
         EList<Font> fonts = document.getFonts();
         for (int i = 0; i < fonts.size(); i++)
         {
@@ -773,6 +805,13 @@ public final class SpreadsheetTemplateWriter
             return indexError(where, KEY_COL);
         }
 
+        if (has(entry, KEY_REPLACE) && (!entry.get(KEY_REPLACE).isJsonPrimitive()
+            || !entry.getAsJsonPrimitive(KEY_REPLACE).isBoolean()))
+        {
+            return ERR_CELL + where + ") 'replace' must be a boolean, got " + entry.get(KEY_REPLACE) //$NON-NLS-1$
+                + "; use replace:true for full replacement."; //$NON-NLS-1$
+        }
+
         String text = nonEmptyString(entry, KEY_TEXT);
         String parameter = nonEmptyString(entry, KEY_PARAMETER);
         if (text != null && parameter != null)
@@ -786,14 +825,16 @@ public final class SpreadsheetTemplateWriter
         {
             return style.error;
         }
-        if (text == null && parameter == null && !style.hasAnyStyle())
+        if (!has(entry, KEY_TEXT) && !has(entry, KEY_PARAMETER) && !has(entry, KEY_BOLD)
+            && !has(entry, KEY_WRAP) && !style.hasAnyStyle()
+            && !Boolean.TRUE.equals(boolMember(entry, KEY_REPLACE)))
         {
             return ERR_CELL + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$
                 + "'fontSize', 'hAlign', 'vAlign', 'wrap', 'textOrientation', 'autoIndent' or " //$NON-NLS-1$
                 + "'autoMarkIncomplete'."; //$NON-NLS-1$
         }
 
-        plan.cells.add(new CellPlan(row.intValue(), col.intValue(), text, parameter, style));
+        plan.cells.add(new CellPlan(row.intValue(), col.intValue(), text, parameter, style, entry));
         return null;
     }
 
@@ -814,7 +855,7 @@ public final class SpreadsheetTemplateWriter
         }
 
         HorizontalAlignment hAlign = null;
-        if (entry.has(KEY_H_ALIGN))
+        if (has(entry, KEY_H_ALIGN))
         {
             hAlign = resolveEnum(HorizontalAlignment.values(), stringMember(entry, KEY_H_ALIGN));
             if (hAlign == null)
@@ -824,7 +865,7 @@ public final class SpreadsheetTemplateWriter
             }
         }
         VerticalAlignment vAlign = null;
-        if (entry.has(KEY_V_ALIGN))
+        if (has(entry, KEY_V_ALIGN))
         {
             vAlign = resolveEnum(VerticalAlignment.values(), stringMember(entry, KEY_V_ALIGN));
             if (vAlign == null)
@@ -1096,7 +1137,7 @@ public final class SpreadsheetTemplateWriter
      */
     private static WrapResult parseWrap(JsonObject entry, String where)
     {
-        if (!entry.has(KEY_WRAP))
+        if (!has(entry, KEY_WRAP))
         {
             return WrapResult.ok(null);
         }
@@ -1429,14 +1470,17 @@ public final class SpreadsheetTemplateWriter
     }
 
     /**
-     * A validated cell: its index, content (text XOR parameter) and resolved formatting. Every optional
-     * formatting member is nullable: {@code null} means the key was omitted, so its {@link Format} feature
-     * stays UNSET and the cell inherits it.
+     * A validated cell patch. Presence distinguishes explicit empty/false values from omitted members.
      */
     static final class CellPlan
     {
         final int row;
         final int col;
+        final boolean replace;
+        final boolean textPresent;
+        final boolean parameterPresent;
+        final boolean boldPresent;
+        final boolean wrapPresent;
         final String text;
         final String parameter;
         final boolean bold;
@@ -1449,10 +1493,15 @@ public final class SpreadsheetTemplateWriter
         final Integer autoIndent;
         final Boolean autoMarkIncomplete;
 
-        CellPlan(int row, int col, String text, String parameter, CellStyleResult style)
+        CellPlan(int row, int col, String text, String parameter, CellStyleResult style, JsonObject entry)
         {
             this.row = row;
             this.col = col;
+            this.replace = Boolean.TRUE.equals(boolMember(entry, KEY_REPLACE));
+            this.textPresent = has(entry, KEY_TEXT);
+            this.parameterPresent = has(entry, KEY_PARAMETER);
+            this.boldPresent = has(entry, KEY_BOLD);
+            this.wrapPresent = has(entry, KEY_WRAP);
             this.text = text;
             this.parameter = parameter;
             this.bold = style.bold;

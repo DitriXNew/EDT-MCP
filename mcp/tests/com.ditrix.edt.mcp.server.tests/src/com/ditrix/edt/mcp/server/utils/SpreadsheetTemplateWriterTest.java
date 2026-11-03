@@ -15,6 +15,9 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.Font;
+import com._1c.g5.v8.dt.mcore.FontDef;
+import com._1c.g5.v8.dt.mcore.FontRef;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.moxel.Cell;
 import com._1c.g5.v8.dt.moxel.Format;
 import com._1c.g5.v8.dt.moxel.Merge;
@@ -117,7 +120,7 @@ public class SpreadsheetTemplateWriterTest
         // parameter, its stale PARAMETER fill and any prior styling - else the text renders blank because
         // the moxel reader dispatches on the format's FillType.
         SpreadsheetTemplateWriter.apply(doc,
-            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"Total\"}]}")); //$NON-NLS-1$
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"Total\",\"replace\":true}]}")); //$NON-NLS-1$
         Cell cell = cellAt(doc, 0, 0);
         assertNull("overwriting with text must clear the parameter", cell.getParameter()); //$NON-NLS-1$
         assertEquals("Total", cell.getText().getContent().get("#")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -127,6 +130,184 @@ public class SpreadsheetTemplateWriterTest
             0, cell.getFormatIndex());
         assertTrue("the overwritten text cell must not keep a PARAMETER fill", //$NON-NLS-1$
             formatOf(doc, cell).getFillType() != FillType.PARAMETER);
+    }
+
+    @Test
+    public void testMergeKeepsParameterAndUnsentFormattingWithoutChangingSharedFormat()
+    {
+        SpreadsheetDocument doc = newDocument();
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":1,"col":0,"parameter":"Amount","bold":true,"fontSize":12,"hAlign":"Center"},
+                      {"row":1,"col":1,"parameter":"Other","bold":true,"fontSize":12,"hAlign":"Center"}]}
+            """)).hasError());
+        Cell neighbor = cellAt(doc, 1, 1);
+        int sharedIndex = neighbor.getFormatIndex();
+        formatOf(doc, neighbor).setBackColor(3);
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":1,\"col\":0,\"wrap\":true}]} ")).hasError());
+
+        Cell changed = cellAt(doc, 1, 0);
+        Format format = formatOf(doc, changed);
+        assertEquals("Amount", changed.getParameter());
+        assertEquals(FillType.PARAMETER, format.getFillType());
+        assertEquals(HorizontalAlignment.CENTER, format.getHorizontalAlignment());
+        assertEquals(3, format.getBackColor());
+        assertTrue(doc.getFonts().get(format.getFont()).bold());
+        assertEquals(12, doc.getFonts().get(format.getFont()).height());
+        assertEquals(TextPlacement.WRAP, format.getTextPlacement());
+        assertEquals(sharedIndex, neighbor.getFormatIndex());
+        assertFalse(formatOf(doc, neighbor).isSetTextPlacement());
+        assertEquals("Other", neighbor.getParameter());
+    }
+
+    @Test
+    public void testMergeChangesSentContentAndFontPropertiesOnly()
+    {
+        SpreadsheetDocument doc = newDocument();
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":"Amount","bold":true,"fontSize":12,"wrap":true}]}
+            """)).hasError());
+        Format oldFormat = formatOf(doc, cellAt(doc, 0, 0));
+        FontDef original = (FontDef)doc.getFonts().get(oldFormat.getFont());
+        original.setItalic(true);
+        original.setFaceName("Arial");
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"text":"Total","fontSize":18}]}
+            """)).hasError());
+        Cell changed = cellAt(doc, 0, 0);
+        Format format = formatOf(doc, changed);
+        Font font = doc.getFonts().get(format.getFont());
+        assertNull(changed.getParameter());
+        assertEquals("Total", changed.getText().getContent().get("#"));
+        assertEquals(FillType.TEXT, format.getFillType());
+        assertEquals(TextPlacement.WRAP, format.getTextPlacement());
+        assertEquals(18, font.height());
+        assertTrue(font.bold());
+        assertTrue(font.italic());
+        assertEquals("Arial", font.faceName());
+        assertEquals(12, original.height());
+        assertEquals(FillType.PARAMETER, oldFormat.getFillType());
+    }
+
+    @Test
+    public void testReplaceStyleOnlyDropsOmittedContentAndFormatting()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":"Amount","bold":true,"hAlign":"Center"}]}
+            """));
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"wrap":true,"replace":true}]}
+            """)).hasError());
+        Cell changed = cellAt(doc, 0, 0);
+        Format format = formatOf(doc, changed);
+        assertNull(changed.getText());
+        assertNull(changed.getParameter());
+        assertEquals(TextPlacement.WRAP, format.getTextPlacement());
+        assertFalse(format.isSetFont());
+        assertFalse(format.isSetHorizontalAlignment());
+        assertEquals(FillType.TEXT, format.getFillType());
+    }
+
+    @Test
+    public void testMergeEmptyContentClearsAndFalseTurnsOffStyle()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":"Amount","bold":true,"fontSize":12,"wrap":true}]}
+            """));
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":"","bold":false,"wrap":false}]}
+            """)).hasError());
+        Cell changed = cellAt(doc, 0, 0);
+        Format format = formatOf(doc, changed);
+        assertNull(changed.getParameter());
+        assertNull(changed.getText());
+        assertEquals(FillType.TEXT, format.getFillType());
+        assertFalse(format.isSetTextPlacement());
+        assertFalse(doc.getFonts().get(format.getFont()).bold());
+        assertEquals(12, doc.getFonts().get(format.getFont()).height());
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"literal\"}]} ")).hasError());
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"\"}]} ")).hasError());
+        assertNull(changed.getText());
+    }
+
+    @Test
+    public void testMergeNullKeepsCurrentValueAndFalseOnlyIsAccepted()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":"Amount","bold":true,"textOrientation":900}]}
+            """));
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"parameter":null,"textOrientation":null,"bold":false,"replace":false}]}
+            """)).hasError());
+        Cell changed = cellAt(doc, 0, 0);
+        assertEquals("Amount", changed.getParameter());
+        assertEquals(900, formatOf(doc, changed).getTextOrientation());
+        assertFalse(doc.getFonts().get(formatOf(doc, changed).getFont()).bold());
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"wrap\":false}]} ")).hasError());
+    }
+
+    @Test
+    public void testInvalidReplaceFlagRejectsEntirePlan()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result result = SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"text":"first"},
+                      {"row":1,"col":0,"text":"second","replace":"yes"}]}
+            """));
+        assertTrue(result.hasError());
+        assertTrue(result.error.contains("replace"));
+        assertTrue(result.error.contains("boolean"));
+        assertTrue(doc.getRows().isEmpty());
+    }
+
+    @Test
+    public void testReplaceOnlyClearsCellAndMergeSwitchesTextToParameter()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"text":"literal","fontSize":14,"wrap":true}]}
+            """));
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"parameter\":\"Amount\"}]} ")).hasError());
+        Cell cell = cellAt(doc, 0, 0);
+        assertNull(cell.getText());
+        assertEquals("Amount", cell.getParameter());
+        assertEquals(FillType.PARAMETER, formatOf(doc, cell).getFillType());
+        assertEquals(TextPlacement.WRAP, formatOf(doc, cell).getTextPlacement());
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"replace\":true}]} ")).hasError());
+        assertNull(cell.getText());
+        assertNull(cell.getParameter());
+        assertEquals(0, cell.getFormatIndex());
+    }
+
+    @Test
+    public void testMergeKeepsFontReferenceAndUnsentOverrides()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"literal\",\"bold\":true}]} "));
+        FontRef original = McoreFactory.eINSTANCE.createFontRef();
+        FontDef base = McoreFactory.eINSTANCE.createFontDef();
+        original.setFont(base);
+        original.setItalic(true);
+        original.setHeight(14);
+        doc.getFonts().set(0, original);
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"bold\":false}]} ")).hasError());
+        FontRef changed = (FontRef)doc.getFonts().get(formatOf(doc, cellAt(doc, 0, 0)).getFont());
+        assertTrue(base == changed.getFont());
+        assertTrue(changed.isSetBold());
+        assertFalse(changed.isBold());
+        assertTrue(changed.isItalic());
+        assertEquals(14, changed.height());
+        assertFalse(original.isSetBold());
     }
 
     @Test
