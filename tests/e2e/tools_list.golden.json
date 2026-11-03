@@ -5730,6 +5730,9 @@
         "valid": {
           "type": "boolean"
         },
+        "validationScope": {
+          "type": "string"
+        },
         "warningCount": {
           "type": "integer"
         }
