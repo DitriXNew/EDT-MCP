@@ -88,6 +88,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormEditContextTestAccess;
@@ -316,6 +317,134 @@ public class DeleteMetadataFormAttributeTest
         return preview(form, attribute, edt());
     }
 
+    private static String previewToken(String fqn, DeleteMetadataTool.FormDeletePreview data)
+    {
+        JsonObject result = JsonParser.parseString(DeleteMetadataTool.formDeletePreviewResult(fqn,
+            FormElementWriter.parse(fqn), false, data)).getAsJsonObject();
+        return result.get("contentHash").getAsString(); //$NON-NLS-1$
+    }
+
+    private static String confirmWithHash(Form form, String fqn, String expectedHash,
+        AtomicInteger consents, AtomicInteger writes)
+    {
+        FormAttribute target = named(form, FormElementWriter.parse(fqn).name);
+        FormAttributeDeletion prediction = edt();
+        DeleteMetadataTool.FormAttributeDeleter platform = deleter(prediction, (tx, a) ->
+        {
+            writes.incrementAndGet();
+            for (EObject bound : prediction.plan(form, a).bound)
+            {
+                EcoreUtil.remove(bound);
+            }
+            EcoreUtil.remove(a);
+        });
+        DeleteMetadataTool.FormDeletePreview current = preview(form, target, platform);
+        DeleteMetadataTool tool = new DeleteMetadataTool((name, consent) ->
+        {
+            consents.incrementAndGet();
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+        return tool.gateFormMemberDelete(fqn, FormElementWriter.parse(fqn), false, current, expectedHash, () ->
+        {
+            DeleteMetadataTool.deleteAttributeInTx(form, target, null, platform, fqn, current.scope);
+            return "deleted"; //$NON-NLS-1$
+        });
+    }
+
+    @Test
+    public void testMatchingPreviewHashDeletesTheAttributeAndBoundItems()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        String hash = previewToken(FQN, preview(form, named(form, "Object"))); //$NON-NLS-1$
+        AtomicInteger consents = new AtomicInteger();
+        AtomicInteger writes = new AtomicInteger();
+        assertEquals("deleted", confirmWithHash(form, FQN, " \"" + hash.toUpperCase(java.util.Locale.ROOT) //$NON-NLS-1$ //$NON-NLS-2$
+            + "\" ", consents, writes)); //$NON-NLS-1$
+        assertEquals(1, consents.get());
+        assertEquals(1, writes.get());
+        assertTrue(form.getAttributes().stream().noneMatch(a -> "Object".equals(a.getName()))); //$NON-NLS-1$
+        assertNull(item(form, "Code")); //$NON-NLS-1$
+        assertNotNull(item(form, "OtherField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOldPreviewHashRefusesBeforeConsentAndWritesWhenTableGrows()
+    {
+        Form form = tableForm();
+        String fqn = "Catalog.Catalog.Form.ItemForm.Attribute.Rows"; //$NON-NLS-1$
+        String hash = previewToken(fqn, preview(form, named(form, "Rows"))); //$NON-NLS-1$
+        ((Table)item(form, "RowsTable")).getItems().add(field("Late", "Rows", "Price")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Form before = EcoreUtil.copy(form);
+        AtomicInteger consents = new AtomicInteger();
+        AtomicInteger writes = new AtomicInteger();
+        String answer = confirmWithHash(form, fqn, hash, consents, writes);
+        assertFalse("a stale hash must refuse before the write callback", "deleted".equals(answer)); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = JsonParser.parseString(answer).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        for (String part : List.of(fqn, "The form changed since the preview", "Nothing was changed", //$NON-NLS-1$ //$NON-NLS-2$
+            "confirm=false", "contentHash", "expectedHash")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue(error, error.contains(part));
+        }
+        assertEquals("no consent, even if ALLOW would reuse session consent", 0, consents.get()); //$NON-NLS-1$
+        assertEquals("no write or export can start", 0, writes.get()); //$NON-NLS-1$
+        assertTrue("the entire model is unchanged", EcoreUtil.equals(before, form)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHashCoversMembersBeyondThePreviewListLimit()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        for (int i = 0; i < 60; i++)
+        {
+            form.getItems().add(field("Bound" + i, "Object")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        var before = preview(form, named(form, "Object")); //$NON-NLS-1$
+        String hash = previewToken(FQN, before);
+        assertEquals(ContentHash.of(before.scopeSignature(FQN)), hash);
+        form.getItems().add(field("BeyondLimit", "Object")); //$NON-NLS-1$ //$NON-NLS-2$
+        var after = preview(form, named(form, "Object")); //$NON-NLS-1$
+        assertEquals(before.boundItems, after.boundItems);
+        assertFalse(hash.equals(previewToken(FQN, after)));
+        AtomicInteger writes = new AtomicInteger();
+        confirmWithHash(form, FQN, hash, new AtomicInteger(), writes);
+        assertEquals(0, writes.get());
+    }
+
+    @Test
+    public void testUnrelatedFormEditDoesNotInvalidateTheScopeHash()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        String hash = previewToken(FQN, preview(form, named(form, "Object"))); //$NON-NLS-1$
+        form.getItems().add(field("Unrelated", "Other")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("deleted", confirmWithHash(form, FQN, hash, new AtomicInteger(), new AtomicInteger())); //$NON-NLS-1$
+        assertNotNull(item(form, "Unrelated")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOmittedHashUsesTheCurrentScope()
+    {
+        for (String hash : new String[] {null, "", " "}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Form form = itemForm("Object"); //$NON-NLS-1$
+            assertEquals("deleted", confirmWithHash(form, FQN, hash, new AtomicInteger(), new AtomicInteger())); //$NON-NLS-1$
+            assertTrue(form.getAttributes().stream().noneMatch(a -> "Object".equals(a.getName()))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testHashIsBoundToTheTargetFormAddress()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        var data = preview(form, named(form, "Object")); //$NON-NLS-1$
+        String hash = previewToken("Catalog.Other.Form.ItemForm.Attribute.Object", data); //$NON-NLS-1$
+        AtomicInteger writes = new AtomicInteger();
+        confirmWithHash(form, FQN, hash, new AtomicInteger(), writes);
+        assertEquals(0, writes.get());
+        assertNotNull(named(form, "Object")); //$NON-NLS-1$
+    }
+
     // ---- the preview ---------------------------------------------------------------------------
 
     @Test
@@ -395,7 +524,7 @@ public class DeleteMetadataFormAttributeTest
             asked.add(preview);
             return DestructiveConsentGate.ConsentDecision.REJECT;
         }).gateFormMemberDelete("Catalog.Catalog.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
-            FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows"), false, data, () -> "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows"), false, data, null, () -> "{}"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("the attribute + its own members + 2 picked + 2 contained", //$NON-NLS-1$
             1 + data.descendants.size() + 4, asked.get(0).getTotalCount());
         assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("2 member(s) inside them")); //$NON-NLS-1$
@@ -683,7 +812,7 @@ public class DeleteMetadataFormAttributeTest
             asked.add(preview);
             return DestructiveConsentGate.ConsentDecision.REJECT;
         }).gateFormMemberDelete("Catalog.Catalog.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
-            FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows"), false, data, () -> "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows"), false, data, null, () -> "{}"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("the column + the 3 additional columns", 1 + data.descendants.size() + 3, //$NON-NLS-1$
             asked.get(0).getTotalCount());
         assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("3 additional column(s)")); //$NON-NLS-1$
@@ -1913,7 +2042,7 @@ public class DeleteMetadataFormAttributeTest
         {
             asked.add(preview);
             return DestructiveConsentGate.ConsentDecision.REJECT;
-        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, () -> "{}"); //$NON-NLS-1$
+        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, null, () -> "{}"); //$NON-NLS-1$
         assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains(SETTINGS_FILE));
         assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("An open editor of this form")); //$NON-NLS-1$
     }
@@ -2089,7 +2218,7 @@ public class DeleteMetadataFormAttributeTest
         {
             asked.add(preview);
             return DestructiveConsentGate.ConsentDecision.REJECT;
-        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, () -> "{}"); //$NON-NLS-1$
+        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, null, () -> "{}"); //$NON-NLS-1$
         assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("choice-parameter links of kept fields")); //$NON-NLS-1$
     }
 

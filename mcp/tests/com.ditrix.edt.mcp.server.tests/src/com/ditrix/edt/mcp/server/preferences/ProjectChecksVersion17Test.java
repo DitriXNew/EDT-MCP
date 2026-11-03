@@ -20,7 +20,7 @@ public class ProjectChecksVersion17Test
     @Test
     public void version17IsRegisteredWithoutTakingTheVersion16Step()
     {
-        assertEquals(18, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertEquals(19, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
         for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
         {
@@ -50,7 +50,7 @@ public class ProjectChecksVersion17Test
             PreferenceStore store = stored(id, 14);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = id.equals("analysis-only")
-                ? Set.of("owner_disabled", "get_form_screenshot", "business_process_route_map", "project_checks", "open_editor")
+                ? Set.of("owner_disabled", "get_form_screenshot", "business_process_route_map", "project_checks", "infobase_extensions", "open_editor")
                 : Set.of("owner_disabled", "get_form_screenshot");
             assertEquals(expected, disabled(store));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
@@ -65,8 +65,8 @@ public class ProjectChecksVersion17Test
             PreferenceStore store = stored(id, version);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(version < 16
-                ? Set.of("owner_disabled", "business_process_route_map", "project_checks")
-                : Set.of("owner_disabled", "project_checks"));
+                ? Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions")
+                : Set.of("owner_disabled", "project_checks", "infobase_extensions"));
             if (id.equals("analysis-only"))
             {
                 expected.add("open_editor");

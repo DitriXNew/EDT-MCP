@@ -47,6 +47,64 @@ import org.junit.Test;
  */
 public class FormStructureReaderTest
 {
+    @Test
+    public void testCommandCellIsCappedButRefusalKeepsAllHandlers()
+    {
+        var factory = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE;
+        var form = factory.createForm();
+        var command = factory.createFormCommand();
+        command.setName("Print");
+        var action = factory.createFormExtensionCommandHandlerContainer();
+        for (int i = 1; i <= 13; i++)
+        {
+            var handler = factory.createCommandHandlerExtension();
+            handler.setName("Handler" + i);
+            action.getHandlers().add(handler);
+        }
+        command.setAction(action);
+        form.getFormCommands().add(command);
+        String md = FormStructureReader.render("CommonForm.F", form, "en");
+        String commands = md.substring(md.indexOf("## Commands"), md.indexOf("## Event handlers"));
+        assertTrue(commands.contains("Handler10 \u2026 (+3 more)"));
+        assertFalse(commands.contains("Handler11"));
+        assertTrue(FormStructureReader.actionHandlerOf(command).endsWith("Handler12, Handler13"));
+    }
+
+    @Test
+    public void testTypeCellsAreCappedInAllThreeTables()
+    {
+        var factory = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE;
+        var form = factory.createForm();
+        var attribute = factory.createFormAttribute();
+        attribute.setName("Values");
+        attribute.setValueType(manyTypes());
+        var column = factory.createFormAttributeColumn();
+        column.setName("Column");
+        column.setValueType(manyTypes());
+        attribute.getColumns().add(column);
+        form.getAttributes().add(attribute);
+        var parameter = factory.createFormParameter();
+        parameter.setName("Input");
+        parameter.setValueType(manyTypes());
+        form.getParameters().add(parameter);
+        String md = FormStructureReader.render("CommonForm.F", form, "en");
+        assertEquals(3, md.split("\\QType10 \u2026 (+3 more)\\E", -1).length - 1);
+        assertFalse(md.contains("Type11"));
+    }
+
+    private static com._1c.g5.v8.dt.mcore.TypeDescription manyTypes()
+    {
+        var factory = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE;
+        var description = factory.createTypeDescription();
+        for (int i = 1; i <= 13; i++)
+        {
+            var type = factory.createType();
+            type.setName("Type" + i);
+            description.getTypes().add(type);
+        }
+        return description;
+    }
+
     // ==================== resolveMdForm: pure FQN parsing (null config tolerated) ====================
 
     @Test

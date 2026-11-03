@@ -97,6 +97,7 @@ import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -536,6 +537,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty(MetadataDeleteBatch.ATOMIC, "Batch only: must be true (default). Model all-or-nothing; disk export is separate.")
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = execute the deletion; default false = preview only.") //$NON-NLS-1$
+            .stringProperty("expectedHash", //$NON-NLS-1$
+                "Optional form-attribute/column scope guard: pass the preview's contentHash on confirm=true; " //$NON-NLS-1$
+                + "a changed scope refuses without writing. Omit to use the current scope. Ignored for other targets.") //$NON-NLS-1$
             .booleanProperty("force", //$NON-NLS-1$
                 "true = delete despite incoming references the refactoring cannot auto-clean or " //$NON-NLS-1$
                 + "platform prohibitions (only the incoming references are left dangling); never " //$NON-NLS-1$
@@ -736,6 +740,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty("success", "Whether the request succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "Either 'preview', 'executed' or 'blocked'") //$NON-NLS-1$
             .stringProperty("fqn", "FQN of the node targeted for deletion") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("contentHash", "Form-attribute/column preview token; pass as expectedHash on confirm") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_REFACTORING_TITLE, "Title of the delete refactoring (preview)") //$NON-NLS-1$
             .objectArrayProperty(KEY_ITEMS, "Metadata items the deletion would remove (preview)") //$NON-NLS-1$
             .booleanProperty(KEY_BLOCKING, "Whether blockingReferences or platformProhibitions BLOCK " //$NON-NLS-1$
@@ -842,6 +847,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             WriteScope.recordNothingQueued();
         }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
+        String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
 
         // Normalized BEFORE the context is resolved, because the FQN goes IN: the specialized
         // deletes below (predefined item, XDTO member) return before the generic path that
@@ -875,7 +881,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return ToolResult.error(columnErr).toJson();
             }
-            return deleteFormMember(ctx, normFqn, formRef, confirm);
+            return deleteFormMember(ctx, normFqn, formRef, confirm, expectedHash);
         }
 
         // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself. create_metadata
@@ -2482,7 +2488,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Deletes one form member; attributes/columns also use EDT's designer deletion service. */
     private String deleteFormMember(ProjectContext ctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean confirm)
+        FormElementWriter.FormMemberRef ref, boolean confirm, String expectedHash)
     {
         final boolean handler = FormElementWriter.isHandlerToken(ref.kindToken);
         try
@@ -2515,7 +2521,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // to authorize a delete that cannot run.
             final FormAttributeDeleter attributeDeleter = attributeDeleterFor(data, normFqn);
             final List<String> authorizedScope = data.scope;
-            return gateFormMemberDelete(normFqn, ref, handler, data,
+            return gateFormMemberDelete(normFqn, ref, handler, data, expectedHash,
                 () -> performFormDelete(fctx, normFqn, ref, handler, version, attributeDeleter,
                     authorizedScope));
         }
@@ -2617,8 +2623,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @return the mutation's result, or the refusal error
      */
     String gateFormMemberDelete(String normFqn, FormElementWriter.FormMemberRef ref, boolean handler,
-        FormDeletePreview data, DeleteWrite write)
+        FormDeletePreview data, String expectedHash, DeleteWrite write)
     {
+        if (data.scope != null && expectedHash != null && !expectedHash.isBlank()
+            && !ContentHash.matches(data.scopeSignature(normFqn), expectedHash))
+        {
+            return ToolResult.error("The form changed since the preview: expectedHash for '" + normFqn //$NON-NLS-1$
+                + "' does not match its current deletion scope. Nothing was changed - run delete_metadata " //$NON-NLS-1$
+                + "with confirm=false again, then pass its new contentHash as expectedHash with confirm=true.") //$NON-NLS-1$
+                .toJson();
+        }
         // The breakdown is DERIVED from what the walk actually found, not a fixed phrase naming the
         // kinds the walk used to follow: the prompt named "nested items, attribute columns" while an
         // event handler and a command's action went along unmentioned (issue #295 review).
@@ -2768,7 +2782,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
         FormDeletePreview data = readFormDeletePreview(fctx, ref, handler, normFqn, version);
+        return formDeletePreviewResult(normFqn, ref, handler, data);
+    }
 
+    static String formDeletePreviewResult(String normFqn, FormElementWriter.FormMemberRef ref,
+        boolean handler, FormDeletePreview data)
+    {
         if (!data.found)
         {
             return formMemberNotFound(ref, handler, data.kindAdvice);
@@ -2788,7 +2807,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String consequences = data.attribute
             ? data.boundItemsSentence() + data.mainAttributeNote(false)
                 + " It is deleted through EDT's form-attribute service, as the form designer deletes it - " //$NON-NLS-1$
-                + "the confirmed response lists what was actually removed. Call confirm=true to apply." //$NON-NLS-1$
+                + "the confirmed response lists what was actually removed. Call confirm=true with expectedHash " //$NON-NLS-1$
+                + "set to this contentHash to apply only this scope." //$NON-NLS-1$
             : " Cross-references to it (a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
                 + "to apply."; //$NON-NLS-1$
@@ -2798,6 +2818,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_REFACTORING_TITLE, "Delete form " + memberWord + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_ITEMS, removed)
             .put(KEY_BLOCKING, false);
+        if (data.scope != null)
+        {
+            result.put("contentHash", ContentHash.of(data.scopeSignature(normFqn))); //$NON-NLS-1$
+        }
         return putBlockingReferences(result, Collections.emptyList())
             .put(McpKeys.MESSAGE, "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.formPath + " would remove " //$NON-NLS-1$
@@ -5784,6 +5808,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          * {@code null} for any other member. The confirmed delete recomputes it and refuses a change.
          */
         List<String> scope;
+
+        /** Serializes the full, untruncated scope together with its normalized target address. */
+        String scopeSignature(String normFqn)
+        {
+            return GsonProvider.toJson(List.of(normFqn, scope));
+        }
 
         /** Counts a removed member and lists it while the list has room. */
         void addRemoved(EObject member, boolean contained)

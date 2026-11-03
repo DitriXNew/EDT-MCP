@@ -19,6 +19,7 @@ Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc/Dry
 HTTPService.ProbeService (the only place a 64-bit property exists), ...
 """
 
+import base64
 import os
 import re
 import time
@@ -56,6 +57,68 @@ from harness import (
     restore_extension_fixture,
     poll_disk_contains_all,
 )
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_template_cells_merge_preserves_parameter_and_supports_replace_and_clear():
+    fqn = "Catalog.Catalog.Template.E2ECellMerge624"
+    mxlx = "src/Catalogs/Catalog/Templates/E2ECellMerge624/Template.mxlx"
+    ns = {"m": "http://v8.1c.ru/8.2/data/spreadsheet"}
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "create SpreadsheetDocument template")
+    wait_for_project_ready()
+
+    def write(cells):
+        result = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                          "template": {"cells": cells}})
+        assert_ok(result, "write template cells")
+        assert result.structured["persisted"] is True, result.structured
+        assert result.structured["template"]["cells"] == len(cells), result.structured
+
+    write([{"row": 1, "col": 0, "parameter": "Amount624", "bold": True, "fontSize": 12},
+           {"row": 1, "col": 1, "text": "Neighbor624"}])
+    poll_disk_contains(mxlx, "<parameter>Amount624</parameter>", ctx="seed parameter reaches disk")
+    write([{"row": 1, "col": 0, "wrap": True}])
+    poll_disk_contains(mxlx, "<textPlacement>Wrap</textPlacement>", ctx="merged wrap reaches disk")
+    root = ET.fromstring(read_disk(mxlx))
+    cells = [cell for cell in root.iter("{" + ns["m"] + "}c")
+             if cell.findtext("m:parameter", namespaces=ns) == "Amount624"]
+    assert len(cells) == 1, "style-only merge must keep the parameter in its cell"
+    # Serialized format indices are 1-based; the implicit neutral format 0 is omitted.
+    fmt = root.findall("m:format", ns)[int(cells[0].findtext("m:f", namespaces=ns)) - 1]
+    assert fmt.findtext("m:fillType", namespaces=ns) == "Parameter", ET.tostring(fmt)
+    assert fmt.findtext("m:textPlacement", namespaces=ns) == "Wrap", ET.tostring(fmt)
+    font = root.findall("m:font", ns)[int(fmt.findtext("m:font", namespaces=ns))]
+    assert font.get("bold") == "true" and font.get("height") == "12", ET.tostring(font)
+    assert "Neighbor624" in read_disk(mxlx), "merge must keep neighboring cells"
+
+    # The renderer reads the live BM content; disk checks above pin the actual parameter and style.
+    wait_for_project_ready()
+    shot = call("get_template_screenshot", {"projectName": PROJECT, "templatePath": fqn})
+    assert_ok(shot, "merged template renders from the live model")
+    blob = shot.raw["result"]["content"][0]["resource"]["blob"]
+    assert base64.b64decode(blob)[:8] == b"\x89PNG\r\n\x1a\n", "renderer must return a PNG"
+
+    write([{"row": 1, "col": 0, "wrap": True, "replace": True}])
+    doc = read_disk(mxlx)
+    assert "<parameter>Amount624</parameter>" not in doc, "replace must drop omitted parameter"
+    assert "Neighbor624" in doc, "replace must keep neighboring cells"
+    write([{"row": 1, "col": 0, "parameter": "Clear624"}])
+    assert "<parameter>Clear624</parameter>" in read_disk(mxlx), "seed the binding before clearing"
+    write([{"row": 1, "col": 0, "parameter": ""}])
+    assert "<parameter>Clear624</parameter>" not in read_disk(mxlx), "empty parameter must clear binding"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_template_cells_invalid_replace_flag_is_atomic():
+    result = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "CommonTemplate.PrintForm",
+        "template": {"cells": [{"row": 1, "col": 0, "text": "MustNotWrite624"},
+                               {"row": 2, "col": 0, "wrap": True, "replace": "yes"}]},
+    })
+    error = assert_error(result, "replace must be a JSON boolean")
+    assert_error_quality(error, names=["replace", "yes"], suggests=["boolean", "replace:true"])
+    assert_no_diff("invalid replace flag must reject all cells before mutation")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

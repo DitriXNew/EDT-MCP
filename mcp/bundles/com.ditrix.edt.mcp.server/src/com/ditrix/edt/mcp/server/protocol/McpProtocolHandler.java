@@ -207,6 +207,13 @@ public class McpProtocolHandler
     public String processRequest(String requestBody, JsonRpcRequest request, long startNanos,
         ClientCapabilities sessionCapabilities)
     {
+        return processRequest(requestBody, request, startNanos, sessionCapabilities, null);
+    }
+
+    /** Uses a per-call completion sink when transport owns selection of the client response. */
+    public String processRequest(String requestBody, JsonRpcRequest request, long startNanos,
+        ClientCapabilities sessionCapabilities, java.util.function.Consumer<String> completion)
+    {
         String response = null;
         try
         {
@@ -227,7 +234,14 @@ public class McpProtocolHandler
                 String method = request != null ? request.getMethod() : null;
                 String toolName = (request != null && McpConstants.METHOD_TOOLS_CALL.equals(method))
                     ? request.getToolName() : null;
-                recordToHistory(method, toolName, requestBody, response, durationMs);
+                if (completion != null)
+                {
+                    completion.accept(response);
+                }
+                else
+                {
+                    recordToHistory(method, toolName, requestBody, response, durationMs);
+                }
             }
             catch (Exception recordingFailure) // NOSONAR: history recording must never break a call
             {
