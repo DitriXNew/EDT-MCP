@@ -1596,15 +1596,23 @@ def test_create_attribute_column_russian_token():
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_a_field_cannot_walk_past_a_memberless_column():
-    # A column typed UUID / ValueStorage holds one opaque value, so no tail can resolve against it and
-    # EDT does not flag the binding. The terminality check knew only the four primitives while the
-    # type builder had grown these two, so 'Rows.Id.Part' was accepted merely because the 'Id' column
-    # existed and the tool reported success for a dead binding (issue #295 review). Asserted LIVE
-    # because a real form's types are platform PROXIES, not the in-memory Types a unit test builds.
+    # A column typed UUID holds one opaque value, so no tail can resolve against it and EDT does not
+    # flag the binding (issue #295 review). Asserted LIVE because a real form's types are platform
+    # PROXIES, not the in-memory Types a unit test builds. ValueStorage is not in EDT's column type
+    # picker (EditTypeInfoCategory), so typing a column with it is refused instead (#829).
     attr = "E2EOpaqueOwner"
     _seed_collection_attribute(attr)
     base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
-    for col, kind in (("OpaqueId", "UUID"), ("OpaqueBlob", "ValueStorage")):
+    blob = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column.OpaqueBlob"})
+    assert_ok(blob, "seed column OpaqueBlob")
+    wait_for_project_ready()
+    refused = assert_error(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": base + ".Column.OpaqueBlob",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueStorage"}]}}]}),
+        "ValueStorage is not offered for a form attribute column")
+    assert_error_quality(refused, names=["ValueStorage"], suggests=["type picker"],
+                         ctx="the refusal names the type and why it is not allowed")
+    for col, kind in (("OpaqueId", "UUID"),):
         c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
         assert_ok(c, "seed column " + col)
         wait_for_project_ready()
