@@ -218,6 +218,90 @@ public class InterruptibleToolHistoryTest
         }
     }
 
+    @Test
+    public void olderCompletionKeepsOverlappingCallInterruptible() throws Exception
+    {
+        McpServer server = new McpServer();
+        try (Call first = new Call(server, false, "First completed"))
+        {
+            first.start();
+            try (Call second = new Call(server, false, "Second completed"))
+            {
+                second.start();
+                ActiveToolCall target = server.getActiveToolCall();
+                first.finishWork();
+                first.awaitRequest();
+                assertSame("Older completion must retain the newer interrupt target",
+                    target, server.getActiveToolCall());
+                assertTrue(second.signal());
+                second.awaitRequest();
+                assertTrue("Signalling must not cancel the background operation", second.worker.get().isAlive());
+                assertNull(server.getActiveToolCall());
+                second.finishWork();
+                assertEquals(2, history.size());
+                assertTrue(history.snapshot().get(1).isInterrupted());
+                assertEquals("success", history.snapshot().get(1).getBackgroundOutcome().getStatus());
+            }
+        }
+    }
+
+    @Test
+    public void olderRequestInterruptionKeepsOverlappingCallInterruptible() throws Exception
+    {
+        McpServer server = new McpServer();
+        try (Call first = new Call(server, false, "First completed"))
+        {
+            first.start();
+            try (Call second = new Call(server, false, "Second completed"))
+            {
+                second.start();
+                ActiveToolCall target = server.getActiveToolCall();
+                first.request.interrupt();
+                first.awaitRequest();
+                assertSame(target, server.getActiveToolCall());
+                assertTrue(second.signal());
+                second.awaitRequest();
+            }
+        }
+    }
+
+    @Test
+    public void cappedOrdinaryErrorStaysInErrorFilterAndStats() throws Exception
+    {
+        assertCappedOrdinaryResponse(true);
+    }
+
+    @Test
+    public void cappedOrdinarySuccessStaysOutOfErrorFilterAndStats() throws Exception
+    {
+        assertCappedOrdinaryResponse(false);
+    }
+
+    private void assertCappedOrdinaryResponse(boolean error) throws Exception
+    {
+        try (Call call = new Call(new McpServer(), error, "x".repeat(25000)))
+        {
+            call.start();
+            call.finishWork();
+            call.awaitRequest();
+            assertEquals(error, StatsAggregator.isErrorResponse(call.response.get()));
+            McpCallRecord row = history.snapshot().get(0);
+            assertTrue(row.getOriginalResponseChars() > row.getResponseJson().length());
+            assertEquals(call.response.get().length(), row.getOriginalResponseChars());
+            assertFalse(row.isInterrupted());
+            assertNull(row.getBackgroundOutcome());
+            assertEquals(error ? 1 : 0, StatsAggregator.aggregate(history.snapshot()).getTotalErrors());
+            JsonObject errors = JsonParser.parseString(new GetMcpHistoryTool().execute(
+                Map.of("tool", NAME, "status", "error"))).getAsJsonObject();
+            assertEquals(error ? 1 : 0, errors.get("matched").getAsInt());
+            JsonObject page = JsonParser.parseString(new GetMcpHistoryTool().execute(
+                Map.of("tool", NAME, "status", error ? "error" : "ok"))).getAsJsonObject();
+            assertEquals(1, page.get("matched").getAsInt());
+            assertEquals(error ? "error" : "ok", page.getAsJsonArray("records").get(0)
+                .getAsJsonObject().get("status").getAsString());
+        }
+    }
+
     private McpCallRecord assertSignal(Call call)
     {
         assertEquals(1, history.size());
@@ -233,7 +317,7 @@ public class InterruptibleToolHistoryTest
 
     private final class Call implements AutoCloseable, McpCallHistory.HistoryListener
     {
-        final McpServer server = new McpServer();
+        final McpServer server;
         final HttpExchange exchange = mock(HttpExchange.class);
         final ByteArrayOutputStream output = new ByteArrayOutputStream();
         final CountDownLatch entered = new CountDownLatch(1);
@@ -247,6 +331,12 @@ public class InterruptibleToolHistoryTest
 
         Call(boolean error) throws Exception
         {
+            this(new McpServer(), error, error ? "Probe failed; retry the operation." : "Completed probe");
+        }
+
+        Call(McpServer server, boolean error, String text) throws Exception
+        {
+            this.server = server;
             when(exchange.getResponseHeaders()).thenReturn(new Headers());
             when(exchange.getResponseBody()).thenReturn(output);
             IMcpTool tool = mock(IMcpTool.class);
@@ -256,7 +346,7 @@ public class InterruptibleToolHistoryTest
                 worker.set(Thread.currentThread());
                 entered.countDown();
                 assertTrue("Work was not released", release.await(10, TimeUnit.SECONDS));
-                return error ? ToolResult.error("Probe failed; retry the operation.").toJson() : "Completed probe";
+                return error ? ToolResult.error(text).toJson() : text;
             });
             registry.register(tool);
             history.addListener(this);

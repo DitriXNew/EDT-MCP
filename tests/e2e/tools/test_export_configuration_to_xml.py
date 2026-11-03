@@ -134,7 +134,7 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
     """Export TestConfiguration to a fresh OS-temp directory (outside the repo).
 
     API present  -> assert the real success contract: FrontMatter status: success,
-                    the export heading, the echoed project, AND real .xml files on
+                    the export heading, the echoed project, AND Configuration.xml on
                     disk in the temp dir.
     API absent   -> assert the clear, actionable not-installed sentinel.
     Either way TestConfiguration must stay byte-for-byte unchanged.
@@ -178,8 +178,7 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
         else:
             # API present: assert the REAL success document, not just 'not error'.
             assert_ok(r, "export TestConfiguration to temp dir")
-            # FrontMatter (MARKDOWN tool -> r.text). status: success proves the tool
-            # reached the post-invoke success branch, not a half-finished path.
+            # Check both the success document and the root file already present on return.
             assert_contains(r.text, "tool: export_configuration_to_xml",
                             "FrontMatter must tag the producing tool")
             assert_contains(r.text, "status: success",
@@ -191,10 +190,17 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
                             "body must carry the export heading")
             assert_contains(r.text, "- Project: " + PROJECT,
                             "body must echo the exported project")
-            # GROUND TRUTH: the export must have written real .xml files into the
-            # temp dir. This is what fails if exportProject silently wrote nothing.
-            assert _has_xml_output(out_dir), \
-                "export reported success but wrote no .xml files under outputPath"
+            root_xml = os.path.join(out_dir, "Configuration.xml")
+            assert os.path.isfile(root_xml), \
+                "export reported success without Configuration.xml directly under outputPath"
+            # Make a pre-existing dump observably old, beyond filesystem timestamp granularity.
+            old_time_ns = 1_700_000_000_000_000_000
+            os.utime(root_xml, ns=(old_time_ns, old_time_ns))
+            before = os.stat(root_xml)
+            repeated = call("export_configuration_to_xml", args)
+            assert_ok(repeated, "re-export must rewrite a pre-existing root")
+            assert os.stat(root_xml).st_mtime_ns > before.st_mtime_ns, \
+                "success must reflect this export's write, not the pre-existing root"
         # In BOTH branches: exporting the model to an EXTERNAL dir must never mutate
         # the source project on disk.
         assert_no_diff("export writes to an external dir, never into TestConfiguration")

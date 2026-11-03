@@ -129,21 +129,21 @@ public class InterruptibleToolExecutor
                     if (activeCall.hasResponded())
                     {
                         // User already sent a response, don't send another
-                        server.clearActiveToolCall();
+                        server.clearActiveToolCall(activeCall);
                         return null;
                     }
                 }
                 catch (InterruptedException e)
                 {
                     Thread.currentThread().interrupt();
-                    server.clearActiveToolCall();
+                    server.clearActiveToolCall(activeCall);
                     return null;
                 }
             }
         }
 
         // Clear active tool call
-        server.clearActiveToolCall();
+        server.clearActiveToolCall(activeCall);
 
         // Check if response was already sent while we were waiting
         if (!activeCall.selectNormalResponse(resultContainer[0]))

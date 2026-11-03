@@ -9,11 +9,51 @@ import static org.junit.Assert.*;
 
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+
 /** Retention, enablement, and identity rules for late background updates. */
 public class McpCallCaptureTest
 {
     private static final String SIGNAL = "{\"result\":{\"isError\":true}}";
     private static final String OK = "{\"result\":{}}";
+
+    @Test
+    public void cappedJsonRpcErrorKeepsItsStatus()
+    {
+        McpCallHistory history = new McpCallHistory();
+        String response = JsonUtils.buildJsonRpcError(-32603,
+            "x".repeat(McpCallHistory.MAX_PAYLOAD_CHARS + 100), 1);
+        history.record("tools/call", "large", "{}", response, 1);
+        McpCallRecord row = history.snapshot().get(0);
+        assertTrue(row.getResponseJson().contains(McpCallHistory.TRUNCATION_MARKER));
+        assertEquals(response.length(), row.getOriginalResponseChars());
+        assertTrue(StatsAggregator.isErrorRecord(row));
+        assertEquals(1, StatsAggregator.aggregate(history.snapshot()).getTotalErrors());
+    }
+
+    @Test
+    public void cappedBackgroundCompletionPreservesInterruptedErrorStatus()
+    {
+        for (boolean error : new boolean[] {false, true})
+        {
+            McpCallHistory history = new McpCallHistory();
+            McpCallHistory.CallCapture call = history.beginCall("tools/call", "large", "{}", System.nanoTime());
+            call.recordResponse(SIGNAL, true);
+            McpCallRecord before = history.snapshot().get(0);
+            String large = "x".repeat(McpCallHistory.MAX_PAYLOAD_CHARS + 100);
+            String completion = error ? JsonUtils.buildJsonRpcError(-32603, large, 1)
+                : "{\"result\":{\"text\":\"" + large + "\"}}";
+            call.completed(completion);
+            McpCallRecord after = history.snapshot().get(0);
+            assertTrue(StatsAggregator.isErrorRecord(after));
+            assertEquals(error ? "error" : "success", after.getBackgroundOutcome().getStatus());
+            assertEquals(before.getResponseJson(), after.getResponseJson());
+            assertEquals(before.getOriginalResponseChars(), after.getOriginalResponseChars());
+            assertNull(before.getBackgroundOutcome());
+            assertEquals(1, history.size());
+            assertEquals(1, StatsAggregator.aggregate(history.snapshot()).getTotalErrors());
+        }
+    }
 
     @Test
     public void capturesKeepTheirOwnOutcomeWhenTheyCompleteInReverseOrder()

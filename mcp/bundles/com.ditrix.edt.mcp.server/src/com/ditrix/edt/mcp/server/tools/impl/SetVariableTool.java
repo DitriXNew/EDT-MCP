@@ -22,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugFrameResolver;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.VariableSerializer;
 
 /**
@@ -248,7 +249,7 @@ public class SetVariableTool implements IMcpTool
             }
             catch (DebugException de)
             {
-                resultRef.set(ToolResult.error(unwrapMessage(de)).toJson());
+                resultRef.set(ToolResult.error(PlatformFailures.describe(de)).toJson());
             }
             catch (RuntimeException re)
             {
@@ -272,27 +273,4 @@ public class SetVariableTool implements IMcpTool
         return resultRef.get();
     }
 
-    /**
-     * Extracts the most informative message from a {@link DebugException}: the
-     * message of its wrapped status exception, then the status message, then the
-     * exception's own message — so the caller sees the underlying 1C debug error
-     * rather than a generic wrapper.
-     */
-    private static String unwrapMessage(DebugException de)
-    {
-        if (de.getStatus() != null)
-        {
-            Throwable cause = de.getStatus().getException();
-            if (cause != null && cause.getMessage() != null && !cause.getMessage().isEmpty())
-            {
-                return cause.getMessage();
-            }
-            String statusMessage = de.getStatus().getMessage();
-            if (statusMessage != null && !statusMessage.isEmpty())
-            {
-                return statusMessage;
-            }
-        }
-        return de.getMessage() != null ? de.getMessage() : de.toString();
-    }
 }

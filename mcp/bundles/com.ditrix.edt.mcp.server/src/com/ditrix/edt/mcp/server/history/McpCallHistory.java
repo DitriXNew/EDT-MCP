@@ -19,7 +19,8 @@ import org.eclipse.jface.preference.IPreferenceStore;
  * Bounded, thread-safe in-memory ring of {@link McpCallRecord} exchanges captured
  * at the MCP transport choke point.
  *
- * <p><b>Invariants.</b> {@link #record} is O(1), non-blocking, thread-safe under
+ * <p><b>Invariants.</b> {@link #record} classifies the complete response before capping
+ * its payloads, then appends in O(1). It is non-blocking, thread-safe under
  * many concurrent producer (transport) threads plus a single UI reader, and
  * <em>never</em> throws to its caller — recording history must never perturb the
  * request that is being served. Memory is bounded by the cached buffer size times
@@ -32,8 +33,7 @@ import org.eclipse.jface.preference.IPreferenceStore;
  *
  * <p>The recording flag and buffer size are cached fields, refreshed only when
  * preferences change (via {@link #setRecordingEnabled} / {@link #setBufferSize});
- * {@code record} never reads the preference store, keeping the hot path allocation-
- * and I/O-free.</p>
+ * {@code record} never reads the preference store, keeping the hot path I/O-free.</p>
  */
 public final class McpCallHistory // NOSONAR intentional singleton (getInstance); a single shared ring is by design
 {
@@ -148,14 +148,13 @@ public final class McpCallHistory // NOSONAR intentional singleton (getInstance)
 
             // Cap payloads BEFORE taking the buffer lock so the critical section is
             // strictly the O(1) evict + add (no substring/allocation under the lock).
-            // Capture the ORIGINAL lengths first (an O(1) String.length(), no JSON parse
-            // on the hot path) so the statistics measure the real payload size even when
-            // the stored body is truncated to the ring's per-record cap.
+            // Preserve the original sizes and status before truncation can discard error markers.
             int origRequestChars = requestJson == null ? 0 : requestJson.length();
             int origResponseChars = responseJson == null ? 0 : responseJson.length();
+            boolean error = interrupted || StatsAggregator.isErrorResponse(responseJson);
             McpCallRecord entry = new McpCallRecord(System.currentTimeMillis(), method, toolName,
                 capPayload(requestJson), capPayload(responseJson), durationMs, origRequestChars,
-                origResponseChars, interrupted, outcome);
+                origResponseChars, interrupted, error, outcome);
 
             int cap = clampCap(bufferSize);
             synchronized (bufferLock)
