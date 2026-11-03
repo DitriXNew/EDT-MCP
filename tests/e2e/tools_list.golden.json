@@ -455,6 +455,161 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Clone one metadata object with EDT's native paste semantics. Call once without confirm to preview, then repeat the same newName and transfer selection with confirm=true and expectedHash. Code text stays unchanged; incoming relations transfer only when selected. Full parameters and examples: call get_tool_guide('clone_metadata_object').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "type": "boolean"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "newName": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "transfer": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "subsystem",
+                  "roleRights"
+                ],
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "owner"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "clone_metadata_object",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "preview",
+            "cloned"
+          ],
+          "type": "string"
+        },
+        "codeReferencePolicy": {
+          "type": "string"
+        },
+        "codeReferences": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "contentHash": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "incomingReferencePolicy": {
+          "type": "string"
+        },
+        "incomingRelations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "modelObjects": {
+          "type": "integer"
+        },
+        "namePolicy": {
+          "type": "string"
+        },
+        "notCopied": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "referenceScanComplete": {
+          "type": "boolean"
+        },
+        "resources": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "roleMembershipPolicy": {
+          "type": "string"
+        },
+        "selectedTransfers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sourceFqn": {
+          "type": "string"
+        },
+        "subsystemMembershipPolicy": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "supported": {
+          "type": "boolean"
+        },
+        "transferred": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "warning": {
+          "type": "string"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": false,

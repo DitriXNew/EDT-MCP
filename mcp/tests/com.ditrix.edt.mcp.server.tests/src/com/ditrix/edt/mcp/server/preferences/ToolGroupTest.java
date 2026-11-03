@@ -239,6 +239,7 @@ public class ToolGroupTest
         // add_form_*/set_form_item_property/delete_form_item tools were folded into
         // create/modify/delete_metadata and removed in F4b).
         assertTrue(tools.contains("modify_metadata"));
+        assertTrue(tools.contains("clone_metadata_object")); //$NON-NLS-1$
         assertTrue(tools.contains("adopt_metadata_object")); //$NON-NLS-1$
         assertTrue(tools.contains("dcs")); //$NON-NLS-1$
         assertFalse(tools.contains("add_form_attribute"));
@@ -246,6 +247,6 @@ public class ToolGroupTest
         assertFalse(tools.contains("add_form_command"));
         assertFalse(tools.contains("delete_form_item"));
         assertFalse(tools.contains("add_form_item"));
-        assertEquals(7, tools.size());
+        assertEquals(8, tools.size());
     }
 }

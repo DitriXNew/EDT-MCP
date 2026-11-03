@@ -25,8 +25,8 @@ public class ProjectChecksMigrationTest
             PreferenceStore store = stored(preset, 16);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = preset.equals("analysis-only")
-                ? Set.of("owner_disabled_tool", "project_checks", "infobase_extensions", "open_editor")
-                : Set.of("owner_disabled_tool", "project_checks", "infobase_extensions");
+                ? Set.of("owner_disabled_tool", "project_checks", "infobase_extensions", "clone_metadata_object", "open_editor")
+                : Set.of("owner_disabled_tool", "project_checks", "infobase_extensions", "clone_metadata_object");
             assertEquals(expected, disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,

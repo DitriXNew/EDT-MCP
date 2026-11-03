@@ -55,6 +55,9 @@ public class WriteScopeInventoryTest
         // DECLARES by exporting, plus an explicit statement for the branches that write without
         // submitting an export of their own, or that succeed while queuing nothing at all.
         "com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool", //$NON-NLS-1$
+        // Clone exports its attached tops, Configuration and selected roles/subsystems in the requested project.
+        // Explicit writes declare that project; preview queues nothing, partial native writes name that project.
+        "com.ditrix.edt.mcp.server.tools.impl.CloneMetadataObjectTool", //$NON-NLS-1$
         "com.ditrix.edt.mcp.server.tools.impl.ResyncToDiskTool", //$NON-NLS-1$
         "com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool", //$NON-NLS-1$
         // Route-map writes export their external top object; get explicitly queues nothing.

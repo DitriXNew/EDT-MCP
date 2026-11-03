@@ -754,14 +754,14 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(Set.of("owner_disabled", "write_module_source", "open_editor"), disabledTools(store));
+        assertEquals(Set.of("owner_disabled", "write_module_source", "open_editor", "clone_metadata_object"), disabledTools(store));
         assertEquals(ToolPreset.ANALYSIS_ONLY.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
             store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test
-    public void testVersion19LeavesOtherProfilesAndMissingProvenanceAlone()
+    public void testLaterMigrationsLeaveNavigationOptInsAndOtherProvenanceAlone()
     {
         for (String presetId : new String[] {null, ToolPreset.CUSTOM.getId(), ToolPreset.CODE_REVIEW.getId(),
             ToolPreset.DEVELOPMENT.getId(), ToolPreset.ALL_TOOLS.getId()})
@@ -774,7 +774,9 @@ public class ToolSettingsServiceTest
 
             ToolSettingsService.ensureMigratedForTest(store);
 
-            assertEquals("Profile " + presetId, Set.of("owner_disabled"), disabledTools(store));
+            Set<String> expected = ToolPreset.CODE_REVIEW.getId().equals(presetId)
+                ? Set.of("owner_disabled", "clone_metadata_object") : Set.of("owner_disabled");
+            assertEquals("Profile " + presetId, expected, disabledTools(store));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
                 store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(presetId == null ? "" : presetId,

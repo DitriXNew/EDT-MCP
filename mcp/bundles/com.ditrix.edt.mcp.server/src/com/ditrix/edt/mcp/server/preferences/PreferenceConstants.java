@@ -121,8 +121,9 @@ public final class PreferenceConstants
      * 17 = a stored read-only profile gains {@code project_checks}.
      * 18 = recorded read-only profiles gain {@code infobase_extensions}.
      * 19 = a stored Analysis Only profile gains {@code open_editor}.
+     * 20 = recorded read-only profiles gain {@code clone_metadata_object}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 19;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 20;
 
     /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$
