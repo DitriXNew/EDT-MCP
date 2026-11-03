@@ -3426,7 +3426,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "List installed infobase extensions and install, update or uninstall .cfe files. DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true; writes require user consent and verify actual infobase state. Full parameters and examples: call get_tool_guide('infobase_extensions').",
+    "description": "List installed infobase extensions and install, update or uninstall .cfe files. DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true and expectedHash from the preview's contentHash; writes require user consent; update verification requires a changed expectedVersion. Full parameters and examples: call get_tool_guide('infobase_extensions').",
     "inputSchema": {
       "properties": {
         "action": {
@@ -3446,6 +3446,9 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "expectedHash": {
+          "type": "string"
         },
         "expectedVersion": {
           "type": "string"
@@ -3482,6 +3485,9 @@
           "type": "object"
         },
         "applicationId": {
+          "type": "string"
+        },
+        "contentHash": {
           "type": "string"
         },
         "count": {

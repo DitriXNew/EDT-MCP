@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionErrorProjection;
 import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle;
 import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Request;
+import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Target;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.e1c.g5.dt.applications.IApplication;
@@ -47,8 +48,8 @@ public class InfobaseExtensionsTool implements IMcpTool
     public String getDescription()
     {
         return "List installed infobase extensions and install, update or uninstall .cfe files. "
-            + "DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true; "
-            + "writes require user consent and verify actual infobase state. "
+            + "DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true and expectedHash from the preview's contentHash; "
+            + "writes require user consent; update verification requires a changed expectedVersion. "
             + "Full parameters and examples: call get_tool_guide('infobase_extensions').";
     }
 
@@ -63,8 +64,9 @@ public class InfobaseExtensionsTool implements IMcpTool
             .stringProperty("cfePath", "Required for install/update: absolute path on the EDT host.")
             .booleanProperty("safeMode", "Install defaults true; update preserves the installed value.")
             .booleanProperty("protectionFromDangerousActions", "Install defaults true; update preserves the installed value.")
-            .stringProperty("expectedVersion", "Optional exact version required in the post-operation read-back.")
+            .stringProperty("expectedVersion", "Optional exact read-back version; update verification requires a value different from the installed version.")
             .booleanProperty("confirm", "Default false previews; true requests consent and executes the write.")
+            .stringProperty("expectedHash", "Required with confirm=true: contentHash from the preview; changed inputs require a fresh preview.")
             .integerProperty("timeoutSeconds", "Operation deadline, 10..600; default 120. A timeout does not imply rollback.")
             .build();
     }
@@ -86,6 +88,7 @@ public class InfobaseExtensionsTool implements IMcpTool
             .stringProperty("message", "Preview instructions.")
             .integerProperty("count", "Number of installed extensions.")
             .booleanProperty("requiresConfirmation", "True for a write preview.")
+            .stringProperty("contentHash", "Preview state hash; pass as expectedHash with confirm=true.")
             .booleanProperty("extensionInstalled", "Actual presence after a completed write.")
             .stringProperty("verification", "verified, mismatched or notVerified.")
             .stringProperty("verificationReason", "Why post-failure read-back was unavailable.")
@@ -141,7 +144,8 @@ public class InfobaseExtensionsTool implements IMcpTool
                 params.containsKey("protectionFromDangerousActions")
                     ? JsonUtils.extractBooleanArgument(params, "protectionFromDangerousActions", true) : null,
                 JsonUtils.extractStringArgument(params, "expectedVersion"),
-                JsonUtils.extractBooleanArgument(params, "confirm", false));
+                JsonUtils.extractBooleanArgument(params, "confirm", false),
+                JsonUtils.extractStringArgument(params, "expectedHash"));
             String validation = InfobaseExtensionLifecycle.validate(request);
             if (validation != null)
             {
@@ -190,7 +194,8 @@ public class InfobaseExtensionsTool implements IMcpTool
                         try
                         {
                             result.set(DesignerExtensionBackend.withConnection(resolved.project(), application,
-                                monitor, backend -> InfobaseExtensionLifecycle.execute(request, backend,
+                                monitor, backend -> InfobaseExtensionLifecycle.execute(request,
+                                    new Target(projectName, applicationId), backend,
                                     preview -> {
                                         ConsentDecision decision = DestructiveConsentGate.getInstance().requireConsent(NAME,
                                             new ConsentPreview(preview.getTitle(), "Application " + applicationId + ": "

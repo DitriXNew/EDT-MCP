@@ -27,6 +27,10 @@ def test_action_and_write_validation_precede_platform_access():
         ({"action": "uninstall", "extensionName": "Runtime", "safeMode": False}, "remove those parameters"),
         ({"action": "install", "extensionName": "Runtime", "cfePath": "relative.cfe"}, "absolute path"),
         ({"action": "list", "confirm": True}, "remove write parameters"),
+        ({"action": "list", "expectedHash": "stale"}, "remove write parameters"),
+        ({"action": "uninstall", "extensionName": "Runtime", "confirm": True}, "expectedHash is required"),
+        ({"action": "uninstall", "extensionName": "Runtime", "expectedHash": "stale"},
+         "expectedHash is accepted only with confirm=true"),
         ({"timeoutSeconds": 601}, "10 to 600"),
     ]
     for params, expected in cases:

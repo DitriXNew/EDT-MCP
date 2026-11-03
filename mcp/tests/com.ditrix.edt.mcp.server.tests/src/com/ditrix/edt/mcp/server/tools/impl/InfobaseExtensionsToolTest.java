@@ -34,6 +34,8 @@ public class InfobaseExtensionsToolTest
         assertTrue(tool.returnsInfobaseData());
         assertTrue(tool.getDescription().contains("get_tool_guide('infobase_extensions')"));
         assertTrue(tool.getDescription().contains("WITHOUT confirm"));
+        assertTrue(tool.getDescription().contains("expectedHash"));
+        assertTrue(tool.getDescription().contains("contentHash"));
         assertTrue(ToolAnnotationClassifier.classify(tool.getName()).getDestructiveHint());
         assertTrue(DestructiveConsentGate.GATED_TOOLS.contains(tool.getName()));
     }
@@ -43,7 +45,7 @@ public class InfobaseExtensionsToolTest
         JsonObject schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject();
         assertEquals(2, schema.getAsJsonArray("required").size());
         for (String key : List.of("projectName", "applicationId", "action", "extensionName", "cfePath",
-            "safeMode", "protectionFromDangerousActions", "expectedVersion", "confirm", "timeoutSeconds"))
+            "safeMode", "protectionFromDangerousActions", "expectedVersion", "confirm", "expectedHash", "timeoutSeconds"))
         {
             assertTrue(key, schema.getAsJsonObject("properties").has(key));
         }
@@ -54,10 +56,11 @@ public class InfobaseExtensionsToolTest
     @Test public void declaresActualStateAndVerificationOutputs()
     {
         var properties = JsonParser.parseString(tool.getOutputSchema()).getAsJsonObject().getAsJsonObject("properties");
-        for (String key : List.of("extensions", "actualState", "extensionInstalled", "verification", "mutationOutcomeUnknown"))
+        for (String key : List.of("extensions", "actualState", "extensionInstalled", "verification", "mutationOutcomeUnknown", "contentHash"))
         {
             assertTrue(key, properties.has(key));
         }
+        assertFalse(properties.has("expectedHash"));
     }
 
     @Test public void rejectsInvalidActionsAndMissingNamesBeforeApplicationResolution()
@@ -74,6 +77,18 @@ public class InfobaseExtensionsToolTest
         assertError(params("confirm", "true"), "remove write parameters");
         assertError(params("safeMode", "false"), "remove write parameters");
         assertError(params("cfePath", "anything.cfe"), "remove write parameters");
+        assertError(params("expectedHash", "stale"), "remove write parameters");
+    }
+
+    @Test public void confirmationRequiresExpectedHashBeforeApplicationResolution()
+    {
+        var parameters = params("action", "uninstall");
+        parameters.put("extensionName", "Runtime");
+        parameters.put("confirm", "true");
+        assertError(parameters, "expectedHash is required");
+        parameters.put("confirm", "false");
+        parameters.put("expectedHash", "stale");
+        assertError(parameters, "expectedHash is accepted only with confirm=true");
     }
 
     @Test public void rejectsUnsafeBooleanAndTimeoutCoercion()

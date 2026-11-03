@@ -7,17 +7,25 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Predicate;
 
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /** Runtime lifecycle policy, independent of the Designer transport. */
 public final class InfobaseExtensionLifecycle
 {
     public record Request(String action, String extensionName, Path cfePath, Boolean safeMode,
-        Boolean protectionFromDangerousActions, String expectedVersion, boolean confirm)
+        Boolean protectionFromDangerousActions, String expectedVersion, boolean confirm, String expectedHash)
+    {
+    }
+
+    public record Target(String projectName, String applicationId)
     {
     }
 
@@ -62,7 +70,7 @@ public final class InfobaseExtensionLifecycle
         boolean file = "install".equals(request.action()) || "update".equals(request.action());
         if (list && (request.extensionName() != null || request.cfePath() != null || request.confirm()
             || request.safeMode() != null || request.protectionFromDangerousActions() != null
-            || request.expectedVersion() != null))
+            || request.expectedVersion() != null || request.expectedHash() != null))
         {
             return "action=list accepts only projectName, applicationId and timeoutSeconds; remove write parameters.";
         }
@@ -105,10 +113,18 @@ public final class InfobaseExtensionLifecycle
                 return "Cannot read cfePath '" + path + "'; check the file permissions and retry.";
             }
         }
+        if (request.confirm() && (request.expectedHash() == null || request.expectedHash().isBlank()))
+        {
+            return "expectedHash is required with confirm=true. Request a fresh preview without confirm and pass its contentHash.";
+        }
+        if (!request.confirm() && request.expectedHash() != null)
+        {
+            return "expectedHash is accepted only with confirm=true; omit it to request a fresh preview.";
+        }
         return null;
     }
 
-    public static ToolResult execute(Request request, Backend backend, Predicate<ConsentPreview> consent,
+    public static ToolResult execute(Request request, Target target, Backend backend, Predicate<ConsentPreview> consent,
         WriteGuard guard, Runnable mutationEntered) throws Exception
     {
         List<Extension> before = checked(backend.read());
@@ -133,15 +149,6 @@ public final class InfobaseExtensionLifecycle
         boolean safe = request.safeMode() != null ? request.safeMode() : install || previous.safeMode();
         boolean protection = request.protectionFromDangerousActions() != null
             ? request.protectionFromDangerousActions() : install || previous.protectionFromDangerousActions();
-        if (!request.confirm())
-        {
-            return ToolResult.success().put("requiresConfirmation", true).put("action", request.action())
-                .put("extensionName", request.extensionName()).put("stateBefore", previous == null ? null : previous.details())
-                .put("requestedSafeMode", uninstall ? null : safe)
-                .put("requestedProtectionFromDangerousActions", uninstall ? null : protection)
-                .put("message", "Preview only. Back up the infobase, then repeat with confirm=true. "
-                    + (uninstall ? "Uninstall can permanently delete extension data." : "Loading and restructuring can change infobase data."));
-        }
         Path staged = null;
         try
         {
@@ -149,6 +156,24 @@ public final class InfobaseExtensionLifecycle
             {
                 staged = Files.createTempFile("edt-mcp-extension-", ".cfe");
                 Files.copy(request.cfePath(), staged, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            String current = previewContent(request, target, before, safe, protection, staged);
+            if (!request.confirm())
+            {
+                return ToolResult.success().put("requiresConfirmation", true).put("action", request.action())
+                    .put("extensionName", request.extensionName()).put("stateBefore", previous == null ? null : previous.details())
+                    .put("requestedSafeMode", uninstall ? null : safe)
+                    .put("requestedProtectionFromDangerousActions", uninstall ? null : protection)
+                    .put("contentHash", ContentHash.of(current))
+                    .put("message", "Preview only. Back up the infobase, then repeat with confirm=true and expectedHash=contentHash. "
+                        + (uninstall ? "Uninstall can permanently delete extension data." : "Loading and restructuring can change infobase data."));
+            }
+            // Staleness check for an honest agent, not an authentication token.
+            if (!ContentHash.matches(current, request.expectedHash()))
+            {
+                return ToolResult.error("expectedHash does not match the current extension preview. "
+                    + "The target, parameters, installed extensions or .cfe bytes changed; nothing was changed. "
+                    + "Request a fresh preview without confirm and retry with its up-to-date contentHash.");
             }
             ConsentPreview preview = new ConsentPreview("Modify infobase extension",
                 request.action() + "; extension data can be changed or permanently deleted."
@@ -189,13 +214,20 @@ public final class InfobaseExtensionLifecycle
                     && (request.expectedVersion() == null || request.expectedVersion().equals(actual.version()));
                 boolean othersUnchanged = before.stream().filter(e -> !e.name().equals(request.extensionName())).toList()
                     .equals(after.stream().filter(e -> !e.name().equals(request.extensionName())).toList());
-                ToolResult result = matches && othersUnchanged ? ToolResult.success()
+                boolean updateEvidence = install || uninstall || request.expectedVersion() != null
+                    && !request.expectedVersion().equals(previous.version());
+                boolean verified = matches && othersUnchanged && updateEvidence;
+                ToolResult result = verified ? ToolResult.success()
+                    : matches && othersUnchanged ? ToolResult.error("The Designer operation returned, but the update cannot be verified "
+                        + "without an expectedVersion different from the installed version. Inspect action=list before retrying; "
+                        + "the infobase may already have changed.")
                     : ToolResult.error("The Designer operation returned, but extension read-back mismatched the request. "
                         + "Inspect action=list and the EDT Error Log before retrying; the infobase may already have changed.");
-                return result.put("verification", matches && othersUnchanged ? "verified" : "mismatched")
+                return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", "Presence, runtime flags, preserved active state, other extensions and expectedVersion when supplied; not binary file identity.");
+                    .put("verificationScope", "Presence, runtime flags, preserved active state, other extensions and expectedVersion when supplied; "
+                        + "updates require an observed transition to expectedVersion; not binary file identity.");
             }
             catch (Exception failure)
             {
@@ -231,6 +263,38 @@ public final class InfobaseExtensionLifecycle
                 }
             }
         }
+    }
+
+    private static String previewContent(Request request, Target target, List<Extension> before,
+        boolean safe, boolean protection, Path staged) throws Exception
+    {
+        String artifactHash = null;
+        if (staged != null)
+        {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (var input = Files.newInputStream(staged))
+            {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1)
+                {
+                    digest.update(buffer, 0, count);
+                }
+            }
+            artifactHash = HexFormat.of().formatHex(digest.digest());
+        }
+        Map<String, Object> inputs = new TreeMap<>();
+        inputs.put("projectName", target.projectName());
+        inputs.put("applicationId", target.applicationId());
+        inputs.put("action", request.action());
+        inputs.put("extensionName", request.extensionName());
+        inputs.put("cfePath", request.cfePath() == null ? null : request.cfePath().toAbsolutePath().normalize().toString());
+        inputs.put("safeMode", safe);
+        inputs.put("protectionFromDangerousActions", protection);
+        inputs.put("expectedVersion", request.expectedVersion());
+        inputs.put("artifactHash", artifactHash);
+        inputs.put("inventory", before.stream().map(e -> new TreeMap<>(e.details())).toList());
+        return GsonProvider.toJson(inputs);
     }
 
     private static Extension find(List<Extension> states, String name)
