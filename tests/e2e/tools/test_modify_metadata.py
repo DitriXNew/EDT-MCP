@@ -182,6 +182,29 @@ def _assignable_text(fqn):
     return r.text
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_external_data_source_cube_members_825():
+    eds = "ExternalDataSource.E2E825Modify"
+    cube = eds + ".Cube.C"
+    table = cube + ".DimensionTable.DT"
+    members = [table, table + ".Field.F", cube + ".Dimension.D", cube + ".Resource.R"]
+    for fqn in [eds, cube] + members:
+        assert wait_for_project_ready(), "indexing before create " + fqn
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    for fqn in members:
+        assert wait_for_project_ready(), "indexing before modify " + fqn
+        requested = fqn.replace(".DimensionTable.", ".ТаблицаИзмерения.").replace(".Field.", ".Поле.")
+        value = "E2E825 changed " + fqn.rsplit(".", 1)[-1]
+        changed = call("modify_metadata", {"projectName": PROJECT, "fqn": requested,
+                       "properties": [{"name": "comment", "value": value}]})
+        assert_ok(changed, requested)
+        assert changed.structured.get("persisted") is True, changed.structured
+        path = "src/ExternalDataSources/E2E825Modify/Cubes/C/"
+        path += "DimensionTables/DT/DT.mdo" if fqn.startswith(table) else "C.mdo"
+        assert_contains(read_disk(path), "<comment>" + value + "</comment>", "immediate member export")
+        assert_contains(_assignable_text(fqn), value, "the addressed member changed in the model")
+
+
 def _commands_group_cells(owner_fqn, command):
     """The `Group` cell of `command`'s row in the owner's `### Commands` table, read in the default
     and the `full: true` view (issue #733), as {full: cell}."""
@@ -1260,6 +1283,65 @@ def test_set_uuid_type():
     _seed_attr_and_set_type("E2ETypeUuidAttr", {"types": [{"kind": "UUID"}]})
     poll_diff_contains("<types>UUID</types>",
                        ctx="the UUID type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_characteristic_value_type_on_tabular_section_attribute_bilingual():
+    names = ("E2EExpenseItems811", "СтатьиРасходов811")
+    for name in names:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + name,
+        }), "seed characteristic chart " + name)
+    section = "Catalog.Catalog.TabularSection.E2ECharacteristics811"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": section}),
+              "seed the tabular section")
+    wait_for_project_ready()
+    cases = (
+        {"kind": "Characteristic", "ref": names[0]},
+        {"kind": "Characteristic." + names[1]},
+        {"kind": "Характеристика", "ref": names[1]},
+        {"kind": "Характеристика." + names[0]},
+    )
+    for index, item in enumerate(cases):
+        attr = "Value%d" % index
+        fqn = section + ".Attribute." + attr
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed the tabular-section attribute")
+        wait_for_project_ready()
+        r = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "type", "value": {"types": [item]}}],
+        })
+        assert_ok(r, "set characteristic VALUE type: %r" % item)
+        assert "type" in (r.structured.get("applied") or [])
+        expected = "Characteristic." + (item["ref"] if "ref" in item else item["kind"].split(".", 1)[1])
+        # DISK FIRST: inspect this attribute inside its own section, before any further MCP call.
+        root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+        sections = [el for el in root if el.tag.rsplit("}", 1)[-1] == "tabularSections"
+                    and any(c.tag.rsplit("}", 1)[-1] == "name" and c.text == "E2ECharacteristics811"
+                            for c in el)]
+        assert len(sections) == 1
+        attrs = [el for el in sections[0] if el.tag.rsplit("}", 1)[-1] == "attributes"
+                 and any(c.tag.rsplit("}", 1)[-1] == "name" and c.text == attr for c in el)]
+        assert len(attrs) == 1
+        stored = [el.text for el in attrs[0].iter() if el.tag.rsplit("}", 1)[-1] == "types"]
+        assert stored == [expected], "must store the characteristic TypeSet, got %r" % stored
+        _assert_assignable_current(fqn, "type", "TYPE_DESCRIPTION", expected)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_unknown_characteristic_name_is_actionable_and_changes_nothing():
+    fqn = "Catalog.Catalog.Attribute.Attribute"
+    for item in ({"kind": "Characteristic", "ref": "MissingChart811"},
+                 {"kind": "Характеристика.НетТакогоПВХ811"}):
+        r = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "type", "value": {"types": [item]}}],
+        })
+        error = assert_error(r, "unknown characteristic chart")
+        name = item.get("ref") or item["kind"].split(".", 1)[1]
+        assert_error_quality(error, names=[name], suggests=["ChartOfCharacteristicTypes", "get_metadata_objects"])
+        assert_no_diff()
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -4619,3 +4701,68 @@ def test_retype_of_a_defined_type_runs_the_referrer_reset():
     poll_disk_contains("src/DefinedTypes/%s/%s.mdo" % (defined, defined), "<precision>15</precision>",
                        ctx="the DefinedType's new type must reach disk")
     _assert_reset_reported(r, "the type change also reset the fill value of every editable object typed with it")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_text_template_edit_modes_guards_and_exact_line_endings():
+    from harness import settle_or_fail
+    from tools.test_text_templates import (
+        _owner, _create, _details, _text_and_hash, _hash, _descriptor, _cleanup,
+    )
+
+    owner, root = _owner("Modes826")
+    try:
+        fqn, path = _create(owner, root, "Текст826", "TextDocument")
+        russian_fqn = fqn.replace("DataProcessor.", "Обработка.").replace(".Template.", ".Макет.")
+
+        def written(spec, expected, address=fqn):
+            result = call("modify_metadata", {"projectName": PROJECT, "fqn": address, "template": spec})
+            assert_ok(result, "text template edit")
+            assert path.read_bytes() == expected.encode("utf-8"), "exact disk bytes after edit"
+            assert _text_and_hash(_details(fqn)) == (expected, _hash(expected))
+            assert _text_and_hash(_details(russian_fqn)) == (expected, _hash(expected))
+            assert result.structured["template"]["contentHash"] == _hash(expected)
+            return expected
+
+        text = written({"mode": "replace", "text": "Привет\r\nneedle\r\n", "expectedSource": ""},
+                       "Привет\r\nneedle\r\n", russian_fqn)
+        old_hash = _hash(text)
+        text = written({"mode": "append", "text": "tail needle\n", "expectedHash": old_hash},
+                       text + "tail needle\n")
+        text = written({"oldText": "tail", "text": "end", "expectedHash": _hash(text)},
+                       text.replace("tail", "end"), russian_fqn)
+
+        for spec, words in [
+            ({"oldText": "absent826", "text": "x"}, ["0 literal matches"]),
+            ({"oldText": "needle", "text": "x"}, ["2 literal matches"]),
+            ({"text": "x"}, ["oldText"]),
+            ({"mode": "replace", "text": "x"}, ["expectedSource"]),
+            ({"mode": "append", "text": "x", "expectedHash": old_hash}, [_hash(text)]),
+            ({"mode": "replace", "text": "x", "expectedSource": "stale", "overwrite": True},
+             ["expectedSource"]),
+        ]:
+            before_tree = tree_snapshot()
+            refused = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "template": spec})
+            assert_error_quality(assert_error(refused, "unsafe text edit"),
+                                 names=words, suggests=["get_metadata_details"])
+            assert_tree_unchanged(before_tree, "rejected edit must change no project file")
+            assert path.read_bytes() == text.encode("utf-8")
+            assert _text_and_hash(_details(fqn)) == (text, _hash(text))
+
+        text = written({"mode": "replace", "text": "final\r\n",
+                        "expectedSource": text.replace("\r\n", "\n")}, "final\r\n")
+        text = written({"mode": "replace", "text": "forced", "overwrite": True}, "forced")
+        _descriptor(root, "Текст826", "TextDocument")
+        assert_ok(call("revalidate_objects", {"projectName": PROJECT, "objects": [owner]}),
+                  "validate edited template owner")
+        settle_or_fail("text template validation")
+        errors = call("get_project_errors", {
+            "projectName": PROJECT, "objectFqns": [owner], "severity": "ERRORS",
+        })
+        assert_ok(errors, "edited owner validation markers")
+        assert errors.structured["objectsResolved"], "owner must resolve before scanning markers"
+        assert_contains(errors.structured["report"], "# No Errors Found", "no errors on edited owner")
+        assert errors.structured["problemsFound"] == 0
+        written({"mode": "replace", "text": "", "expectedHash": _hash(text)}, "")
+    finally:
+        _cleanup(owner, root)

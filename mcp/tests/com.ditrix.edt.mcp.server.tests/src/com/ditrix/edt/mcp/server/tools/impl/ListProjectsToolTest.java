@@ -15,24 +15,28 @@ import static org.junit.Assert.assertTrue;
 import java.util.HashMap;
 
 import org.junit.Test;
+import org.eclipse.core.resources.ResourcesPlugin;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link ListProjectsTool}.
- * <p>
- * Takes no parameters and {@code execute()} goes straight to the live
- * {@code ResourcesPlugin.getWorkspace()} workspace (the EDT boundary), so there
- * is no argument-validation branch and no pure static helper that can run
- * headlessly: both {@code listProjects()} and {@code readEdtStatusAndNatures}
- * read the live workspace / construct against {@code IProject}. The
- * unit-testable surface is therefore the static metadata contract (the tool uses
- * the {@code IMcpTool} default MARKDOWN response type and, being a content tool,
- * declares no structured output schema); the project list is covered by the E2E
- * suite — execute() is deliberately NOT called here.
+ * Checks the schema contract and the workspace identity in the headless Eclipse workspace.
  */
 public class ListProjectsToolTest
 {
+    @Test
+    public void testMachineListReportsActualWorkspaceEvenWithoutProjects()
+    {
+        JsonObject result = JsonParser.parseString(ListProjectsTool.listProjectsJson()).getAsJsonObject();
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(ResourcesPlugin.getWorkspace().getRoot().getLocation().toOSString(),
+            result.get("workspacePath").getAsString());
+        assertTrue(result.get("projects").isJsonArray());
+    }
+
     @Test
     public void testName()
     {

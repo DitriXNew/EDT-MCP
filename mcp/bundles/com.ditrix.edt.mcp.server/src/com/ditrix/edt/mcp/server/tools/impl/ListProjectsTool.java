@@ -136,7 +136,8 @@ public class ListProjectsTool implements IMcpTool
                 row.put("natures", naturesStr); //$NON-NLS-1$
                 rows.add(row);
             }
-            return ToolResult.success().put("projects", rows).toJson(); //$NON-NLS-1$
+            return ToolResult.success().put("projects", rows) //$NON-NLS-1$
+                .put("workspacePath", workspace.getRoot().getLocation().toOSString()).toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {

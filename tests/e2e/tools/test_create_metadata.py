@@ -93,6 +93,145 @@ def test_form_parameter_collection_types_refused_at_creation():
     assert_no_diff()
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_generate_content_on_non_form_is_actionable_and_writes_nothing():
+    for fqn in ("Catalog.Z828Invalid", "CommonForm.Z828Invalid"):
+        e = assert_error(call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn, "generateContent": True}), "non-form generation")
+        assert_error_quality(e, names=[fqn], suggests=["Omit these options"])
+    assert_no_diff()
+
+
+def _assert_generated_register_list(form_xml, owner_fqn):
+    root = ET.fromstring(form_xml)
+    tables = [node for node in root.iter()
+              if node.attrib.get("{http://www.w3.org/2001/XMLSchema-instance}type") == "form:Table"]
+    assert len(tables) == 1, "wizard must generate one main table: %s" % form_xml
+    table = tables[0]
+    for prop, expected in (("commandBarLocation", "None"), ("defaultItem", "true"),
+                           ("enableStartDrag", "true"), ("initialTreeView", "ExpandTopLevel")):
+        assert _direct_child_text(table, prop) == expected, "%s must be %s: %s" % (prop, expected, form_xml)
+    # Alternation defaults differ between the 8.5.1 fixture and the issue's 8.3.27 live acceptance stand.
+    assert _direct_child_text(table, "representation") != "HierarchicalList", form_xml
+    assert "DynamicList" in form_xml and "<main>true</main>" in form_xml, form_xml
+    assert "<mainTable>" in form_xml and owner_fqn in form_xml, form_xml
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_generate_register_lists_and_assign_each_real_default_slot():
+    for kind in ("InformationRegister", "AccumulationRegister", "AccountingRegister", "CalculationRegister"):
+        owner = kind + ".Z828Register"
+        fqn = owner + ".Form.ListForm"
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed register")
+        wait_for_project_ready()
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                    "generateContent": True, "setAsDefault": True})
+        assert_ok(r, "generate default register list")
+        assert r.structured["generateContent"] is True, r.structured
+        rel = "src/%ss/Z828Register" % kind
+        _assert_generated_register_list(read_disk(rel + "/Forms/ListForm/Form.form"), owner)
+        assert "<defaultListForm>%s</defaultListForm>" % fqn in read_disk(rel + "/Z828Register.mdo")
+        d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+        assert_ok(d, "read generated list form")
+        assert_contains(d.text, "Form Structure")
+        assert_contains(d.text, "List")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_generate_information_register_record_and_russian_list():
+    owner = "InformationRegister.Z828Records"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed independent register")
+    wait_for_project_ready()
+    for purpose, address, name, slot in (
+            ("LIST", "РегистрСведений.Z828Records.Форма.ФормаСписка", "ФормаСписка", "defaultListForm"),
+            ("RECORD", owner + ".Form.RecordForm", "RecordForm", "defaultRecordForm"),
+            ("RECORD_SET", owner + ".Form.RecordSetForm", "RecordSetForm", None)):
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": address,
+                                    "formType": purpose, "generateContent": True, "setAsDefault": slot is not None})
+        assert_ok(r, "generate register " + purpose)
+        form_xml = read_disk("src/InformationRegisters/Z828Records/Forms/%s/Form.form" % name)
+        assert "<main>true</main>" in form_xml, form_xml
+        if purpose == "RECORD":
+            assert "InformationRegisterRecordManager.Z828Records" in form_xml, form_xml
+        elif purpose == "RECORD_SET":
+            assert "InformationRegisterRecordSet.Z828Records" in form_xml, form_xml
+        else:
+            _assert_generated_register_list(form_xml, owner)
+        mdo = read_disk("src/InformationRegisters/Z828Records/Z828Records.mdo")
+        if slot is not None:
+            assert "<%s>%s.Form.%s</%s>" % (slot, owner, name, slot) in mdo, mdo
+        d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner + ".Form." + name]})
+        assert_ok(d, "read generated " + purpose)
+        assert_contains(d.text, "Form Structure")
+        assert_contains(d.text, "List" if purpose == "LIST" else "Record")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_register_invalid_generation_leaves_owner_and_files_unchanged():
+    owner = "InformationRegister.Z828Refusal"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed refusal register")
+    before = tree_snapshot()
+    for options, bad, remedy in (({"formType": "OBJECT"}, "OBJECT", "formType"),
+                                 ({"formType": "CHOICE"}, "CHOICE", "formType"),
+                                 ({"formType": "nonsense"}, "nonsense", "Use OBJECT"),
+                                 ({"formType": "RECORD_SET", "setAsDefault": True},
+                                  "RECORD_SET", "setAsDefault=false"),
+                                 ({"objectFields": []}, "objectFields", "Omit objectFields")):
+        args = {"projectName": PROJECT, "fqn": owner + ".Form.Rejected", "generateContent": True}
+        args.update(options)
+        e = assert_error(call("create_metadata", args), "invalid generation options")
+        assert_error_quality(e, names=[bad], suggests=[remedy])
+        assert_tree_unchanged(before, ctx="refused generation must not leave a descriptor or content")
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner]})
+    assert_ok(d, "read register after refusals")
+    assert_not_contains(d.text, "Rejected")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_generate_catalog_and_document_list_and_choice_forms():
+    for kind in ("Catalog", "Document"):
+        owner = kind + ".Z828Owner"
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed list/choice owner")
+        wait_for_project_ready()
+        for purpose, slot in (("LIST", "defaultListForm"), ("CHOICE", "defaultChoiceForm")):
+            fqn = owner + ".Form." + purpose
+            r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "formType": purpose,
+                                        "generateContent": True, "setAsDefault": True})
+            assert_ok(r, "generate " + fqn)
+            rel = "src/%ss/Z828Owner" % kind
+            xml = read_disk(rel + "/Forms/%s/Form.form" % purpose)
+            assert "DynamicList" in xml and "<main>true</main>" in xml, xml
+            mdo = read_disk(rel + "/Z828Owner.mdo")
+            assert "<%s>%s</%s>" % (slot, fqn, slot) in mdo, mdo
+            d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+            assert_ok(d, "read generated list/choice")
+            assert_contains(d.text, "List")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_generate_extension_owned_register_list():
+    owner = "InformationRegister.tests_Z828ExtRegister"
+    fqn = owner + ".Form.ListForm"
+    try:
+        assert_ok(call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": owner}), "seed extension register")
+        wait_for_project_ready()
+        r = call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": fqn,
+                                    "generateContent": True, "setAsDefault": True})
+        assert_ok(r, "generate extension-owned register list")
+        rel = "src/InformationRegisters/tests_Z828ExtRegister"
+        xml = poll_disk_contains_all(rel + "/Forms/ListForm/Form.form", ["<main>true</main>"],
+                                     ctx="extension list content", fixture_rel=TESTS_PROJECT_REL)
+        _assert_generated_register_list(xml, owner)
+        poll_disk_contains_all(rel + "/tests_Z828ExtRegister.mdo",
+                               ["<defaultListForm>%s</defaultListForm>" % fqn],
+                               ctx="extension list default", fixture_rel=TESTS_PROJECT_REL)
+        d = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [fqn]})
+        assert_ok(d, "read extension register list")
+        assert_contains(d.text, "List")
+    finally:
+        restore_extension_fixture("issue 828 extension list generation")
+
+
 def _objects_text(metadata_type):
     """Read back the model's object list for one type as markdown (the client view)."""
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": metadata_type})
@@ -506,6 +645,61 @@ def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
     row = next((cells for cells in rows if len(cells) >= 3 and cells[0] == attr), None)
     assert row is not None, "the attributes table must list %s:\n%s" % (attr, details.text[:1500])
     assert row[2] == "String", "MODEL read-back: the new attribute's Type cell must be String, got %r" % (row,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_predefined_characteristic_with_characteristic_value_type_bilingual():
+    names = ("E2EValueChart811", "ЗначенияХарактеристик811")
+    for name in names:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + name,
+        }), "seed the value chart " + name)
+    owner = "E2ECharacteristicOwner811"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + owner,
+    }), "seed the predefined-item owner")
+    wait_for_project_ready()
+    cases = (
+        {"kind": "Characteristic", "ref": names[0]},
+        {"kind": "Characteristic." + names[1]},
+        {"kind": "Характеристика", "ref": names[1]},
+        {"kind": "Характеристика." + names[0]},
+    )
+    for index, item in enumerate(cases):
+        name = "Value%d" % index
+        fqn = "ChartOfCharacteristicTypes.%s.Predefined.%s" % (owner, name)
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "valueType", "value": {"types": [item]}}],
+        })
+        assert_ok(r, "create predefined characteristic with value type %r" % item)
+        expected = "Characteristic." + (item["ref"] if "ref" in item else item["kind"].split(".", 1)[1])
+        root = ET.fromstring(read_disk("src/ChartsOfCharacteristicTypes/%s/%s.mdo" % (owner, owner)))
+        stored, _ = _type_of(_named_element(root, name, "the new characteristic"), name)
+        assert stored == [expected], "must store the characteristic TypeSet, got %r" % stored
+        details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+        assert_ok(details, "read the predefined characteristic value type")
+        assert_contains(details.text, expected, "value type round-trips using the same token")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_predefined_characteristic_rejects_unknown_value_chart_without_changes():
+    owner = "E2EUnknownValueChart811"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + owner,
+    }), "seed the predefined-item owner")
+    wait_for_project_ready()
+    for item in ({"kind": "Characteristic", "ref": "MissingChart811"},
+                 {"kind": "Характеристика.НетТакогоПВХ811"}):
+        before = tree_snapshot()
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes.%s.Predefined.InvalidValue" % owner,
+            "properties": [{"name": "valueType", "value": {"types": [item]}}],
+        })
+        error = assert_error(r, "unknown characteristic value chart at creation")
+        name = item.get("ref") or item["kind"].split(".", 1)[1]
+        assert_error_quality(error, names=[name], suggests=["ChartOfCharacteristicTypes", "get_metadata_objects"])
+        assert_tree_unchanged(before, "a refused type must not create the predefined item")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -3309,3 +3503,53 @@ def test_create_error_carries_no_marker_fields():
     assert_error_quality(e, names=["Catalog.Catalog"], suggests=["already exists"], ctx="duplicate create")
     assert_no_marker_fields(r.structured, "an error reports no markers")
     assert_no_diff("a refused create must not touch disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_external_data_source_nested_members_survive_refresh_825():
+    eds = "ExternalDataSource.E2E825Create"
+    cube = eds + ".Cube.C"
+    dimension_table = cube + ".DimensionTable.DT"
+    base = "src/ExternalDataSources/E2E825Create"
+    cases = [
+        (eds, eds, "ExternalDataSource", base + "/E2E825Create.mdo", "E2E825Create"),
+        (eds + ".Table.TableT1", eds + ".Таблица.TableT1", "Table",
+         base + "/Tables/TableT1/TableT1.mdo", "TableT1"),
+        (eds + ".Table.TableT1.Field.F", eds + ".Table.TableT1.Поле.F", "Field",
+         base + "/Tables/TableT1/TableT1.mdo", "F"),
+        (eds + ".Function.Fn", eds + ".Функция.Fn", "Function", base + "/E2E825Create.mdo", "Fn"),
+        (cube, eds + ".Куб.C", "Cube", base + "/Cubes/C/C.mdo", "C"),
+        (cube + ".Dimension.D", cube + ".Измерение.D", "Dimension", base + "/Cubes/C/C.mdo", "D"),
+        (cube + ".Resource.R", cube + ".Ресурс.R", "Resource", base + "/Cubes/C/C.mdo", "R"),
+        (dimension_table, cube + ".ТаблицаИзмерения.DT", "DimensionTable",
+         base + "/Cubes/C/DimensionTables/DT/DT.mdo", "DT"),
+        (dimension_table + ".Field.DF", cube + ".DimensionTable.DT.Поле.DF", "Field",
+         base + "/Cubes/C/DimensionTables/DT/DT.mdo", "DF"),
+    ]
+    for canonical, requested, kind, path, name in cases:
+        assert wait_for_project_ready(), "indexing before " + requested
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": requested})
+        assert_ok(created, requested)
+        assert created.structured.get("kind") == kind, created.structured
+        assert created.structured.get("fqn") == canonical, created.structured
+        assert created.structured.get("persisted") is True, created.structured
+        assert_contains(read_disk(path), "<name>" + name + "</name>", "immediate disk create " + canonical)
+    assert_contains(read_disk("src/Configuration/Configuration.mdo"),
+                    "<externalDataSources>" + eds + "</externalDataSources>")
+    assert_contains(read_disk(base + "/E2E825Create.mdo"), "<tables>" + eds + ".Table.TableT1</tables>")
+    assert_contains(read_disk(base + "/Cubes/C/C.mdo"),
+                    "<dimensionTables>" + dimension_table + "</dimensionTables>")
+    assert_contains(read_disk(base + "/Cubes/C/DimensionTables/DT/DT.mdo"), "<parentCube>" + cube + "</parentCube>")
+    before = read_disk(base + "/Cubes/C/C.mdo")
+    invalid = call("create_metadata", {"projectName": PROJECT, "fqn": cube + ".Field.Invalid"})
+    assert_error_quality(assert_error(invalid), names=["Field"], suggests=["DimensionTable", "Resource"])
+    assert read_disk(base + "/Cubes/C/C.mdo") == before, "invalid member kind must preserve the Cube"
+    assert_ok(call("clean_project", {"projectName": PROJECT}), "reload only after checking exported bytes")
+    assert wait_for_project_ready(), "reload the created metadata from disk"
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [case[0] for case in cases], "assignable": True,
+    })
+    assert_ok(details)
+    assert_not_contains(details.text, "## Errors", "every new node survives refresh")
+    for canonical, _, _, _, _ in cases:
+        assert_contains(details.text, canonical, "model read-back after refresh")

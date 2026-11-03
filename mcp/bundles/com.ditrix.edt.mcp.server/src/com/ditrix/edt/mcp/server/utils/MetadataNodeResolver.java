@@ -20,6 +20,7 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
@@ -56,6 +57,8 @@ public final class MetadataNodeResolver
     private static final Map<String, String> CHILD_FEATURE_BY_TOKEN;
     /** The one collection whose EMF name differs from its metamodel code (the FQN token). */
     private static final Map<String, String> KIND_TOKEN_BY_FEATURE = Map.of("tableFields", "Field"); //$NON-NLS-1$ //$NON-NLS-2$
+    /** Table and DimensionTable expose the same Field kind under different EMF names. */
+    private static final Map<String, String> ALTERNATE_CHILD_FEATURE = Map.of("tableFields", "fields"); //$NON-NLS-1$ //$NON-NLS-2$
     static
     {
         Map<String, String> m = new LinkedHashMap<>();
@@ -145,6 +148,11 @@ public final class MetadataNodeResolver
             cp(0x0444, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x044f), cp(0x0444, 0x0443, 0x043d, 0x043a, 0x0446, 0x0438, 0x0438));
         putTokens(m, "tableFields", "field", "fields", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             cp(0x043f, 0x043e, 0x043b, 0x0435), cp(0x043f, 0x043e, 0x043b, 0x044f));
+        putTokens(m, "dimensionTables", "dimensiontable", "dimensiontables", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430, 0x0438, 0x0437, 0x043c, 0x0435,
+                0x0440, 0x0435, 0x043d, 0x0438, 0x044f),
+            cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b, 0x0438, 0x0437, 0x043c, 0x0435,
+                0x0440, 0x0435, 0x043d, 0x0438, 0x0439));
         CHILD_FEATURE_BY_TOKEN = Collections.unmodifiableMap(m);
     }
 
@@ -309,8 +317,7 @@ public final class MetadataNodeResolver
         }
         for (String featureName : new LinkedHashSet<>(CHILD_FEATURE_BY_TOKEN.values()))
         {
-            EStructuralFeature f = owner.eClass().getEStructuralFeature(featureName);
-            if (f instanceof EReference && childFeature(owner, kindTokenForFeature(featureName)) != null)
+            if (childFeature(owner, kindTokenForFeature(featureName)) != null)
             {
                 kinds.add(kindTokenForFeature(featureName));
             }
@@ -368,7 +375,7 @@ public final class MetadataNodeResolver
      * <p>Answers only when every part of the path is addressable: the outermost object is a
      * top-level configuration type, each level below it sits in a containment collection this
      * resolver has a kind token for, and every level has a programmatic Name (never the synonym).
-     * Anything else - a form, an integration service channel, a cube dimension, an unnamed
+     * Anything else - a form, an integration service channel, an unnamed
      * level, a non-metadata container - answers {@code null}, so the caller keeps whatever it used
      * before rather than printing an address that would not resolve.</p>
      *
@@ -391,8 +398,7 @@ public final class MetadataNodeResolver
         EStructuralFeature feature = object.eContainingFeature();
         if (container instanceof MdObject && !(container instanceof Configuration) && feature != null)
         {
-            if (strict && (!isAddressableStep(feature)
-                || childFeature((MdObject)container, kindTokenForFeature(feature.getName())) == null))
+            if (strict && childFeature((MdObject)container, kindTokenForFeature(feature.getName())) != feature)
             {
                 return null;
             }
@@ -430,12 +436,6 @@ public final class MetadataNodeResolver
             return null;
         }
         return object.eClass().getName() + '.' + object.getName();
-    }
-
-    /** Whether the kind token printed for {@code feature} maps back to that very feature. */
-    private static boolean isAddressableStep(EStructuralFeature feature)
-    {
-        return feature.getName().equals(featureNameForKind(kindTokenForFeature(feature.getName())));
     }
 
     /** Whether {@code object}'s EClass names a top-level configuration collection. */
@@ -882,13 +882,18 @@ public final class MetadataNodeResolver
     public static EReference childFeature(EClass ownerType, String kindToken)
     {
         String featureName = featureNameForKind(kindToken);
-        if (ownerType == null || featureName == null || ("Cube".equals(ownerType.getName()) //$NON-NLS-1$
-            && ("dimensions".equals(featureName) || "resources".equals(featureName)))) //$NON-NLS-1$ //$NON-NLS-2$
+        if (ownerType == null || featureName == null)
         {
             return null;
         }
         EStructuralFeature f = ownerType.getEStructuralFeature(featureName);
-        return (f instanceof EReference) ? (EReference)f : null;
+        if (f == null && ALTERNATE_CHILD_FEATURE.containsKey(featureName))
+        {
+            f = ownerType.getEStructuralFeature(ALTERNATE_CHILD_FEATURE.get(featureName));
+        }
+        // FieldSource.fields is a derived mcore collection, not metadata children.
+        return f instanceof EReference reference
+            && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(reference.getEReferenceType()) ? reference : null;
     }
 
     /**

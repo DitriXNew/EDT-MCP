@@ -42,6 +42,8 @@ import com._1c.g5.v8.dt.debug.model.base.data.DebugTargetType;
  */
 public class DebugServerTargetSupportTest
 {
+    private static final String SHARED_SERVER_APP_ID = "ServerApplication.Proj"; //$NON-NLS-1$
+
     @Test
     public void testServerAppIdPrefix()
     {
@@ -710,6 +712,44 @@ public class DebugServerTargetSupportTest
             liveTypedThread(DebugTargetType.SERVER));
         assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
             Arrays.asList(asServerTarget(server)), "Proj", "app-id")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static TargetWithApplication standaloneTarget(IThread... threads) throws Exception
+    {
+        TargetWithApplication target = targetBoundTo("Proj", SHARED_SERVER_APP_ID, threads); //$NON-NLS-1$
+        ILaunchConfiguration config = edtConfig("Standalone server"); //$NON-NLS-1$
+        when(config.getType().getIdentifier()).thenReturn(LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID);
+        ILaunch launch = liveLaunch(config, target);
+        when(target.getLaunch()).thenReturn(launch);
+        return target;
+    }
+
+    @Test
+    public void testDuplicateDetectSkipsStandaloneTargetWithLingeringClientThreads() throws Exception
+    {
+        TargetWithApplication server = standaloneTarget(liveTypedThread(DebugTargetType.SERVER),
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            Arrays.asList(asServerTarget(server)), "Proj", SHARED_SERVER_APP_ID)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDuplicateDetectSkipsStandaloneTargetWithOnlyClientThreads() throws Exception
+    {
+        TargetWithApplication server = standaloneTarget(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        assertNull(DebugServerTargetSupport.findFirstLiveClientThread(server));
+        assertNull(DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            Arrays.asList(asServerTarget(server)), "Proj", SHARED_SERVER_APP_ID)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDuplicateDetectFindsRealClientAfterStandaloneTarget() throws Exception
+    {
+        TargetWithApplication server = standaloneTarget(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        TargetWithApplication client = targetBoundTo("Proj", SHARED_SERVER_APP_ID, //$NON-NLS-1$
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        assertSame(client, DebugServerTargetSupport.findRuntimeClientDebugTarget(
+            Arrays.asList(asServerTarget(server), asServerTarget(client)), "Proj", SHARED_SERVER_APP_ID)); //$NON-NLS-1$
     }
 
     @Test

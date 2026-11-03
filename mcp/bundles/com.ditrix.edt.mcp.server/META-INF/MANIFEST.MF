@@ -164,4 +164,5 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  com._1c.g5.v8.dt.dcs.path,
  com._1c.g5.v8.dt.dcs.util,
  com._1c.g5.v8.dt.form.model,
+ com._1c.g5.v8.dt.form.generator,
  com._1c.g5.v8.dt.xdto.model

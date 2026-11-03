@@ -13,7 +13,7 @@ import com.google.gson.JsonObject;
 
 /**
  * Decides where one {@code tools/call} request goes: a specific backend (scoped by the
- * {@code projectName}/{@code project} argument), the {@code list_projects} fan-out, the
+ * {@code projectName}/{@code project} and optional {@code workspacePath}), the {@code list_projects} fan-out, the
  * proxy's own router tools, or an actionable error.
  * <p>
  * The hot-plug path lives here: a project MISS triggers ONE synchronous registry rescan
@@ -102,6 +102,12 @@ public final class ProjectRouter
     {
         if (METHOD_TOOLS_CALL.equals(method))
         {
+            String selectorError = WorkspaceRouting.argumentError(requestJson);
+            if (selectorError != null)
+            {
+                return RouteResult.error(selectorError);
+            }
+            String workspace = WorkspaceRouting.workspacePath(WorkspaceRouting.arguments(requestJson));
             JsonObject params = requestJson == null ? null : Json.obj(requestJson, "params"); //$NON-NLS-1$
             String toolName = params == null ? null : Json.str(params, "name"); //$NON-NLS-1$
             if (TOOL_ROUTER_STATUS.equals(toolName) || TOOL_ROUTER_REFRESH.equals(toolName))
@@ -110,12 +116,20 @@ public final class ProjectRouter
             }
             if (TOOL_LIST_PROJECTS.equals(toolName))
             {
+                if (workspace != null)
+                {
+                    RouteResult selected = routeScoped(null, workspace);
+                    if (selected.kind == RouteResult.Kind.ERROR)
+                    {
+                        return selected;
+                    }
+                }
                 return RouteResult.fanOut();
             }
             String project = extractProjectArg(requestJson);
-            if (project != null)
+            if (project != null || workspace != null)
             {
-                return routeScoped(project);
+                return routeScoped(project, workspace);
             }
         }
         return routeUnscoped();
@@ -124,9 +138,9 @@ public final class ProjectRouter
     /**
      * Routes a project-scoped call, rescanning ONCE on a miss (the hot-plug path).
      */
-    private RouteResult routeScoped(String project)
+    private RouteResult routeScoped(String project, String workspace)
     {
-        RouteResult known = lookup(project);
+        RouteResult known = lookup(project, workspace);
         if (known != null)
         {
             return known;
@@ -134,14 +148,18 @@ public final class ProjectRouter
         // On-miss rescan: the AI agent may have just started the EDT instance that
         // serves this project — notice it NOW instead of waiting for the periodic refresh.
         registry.refresh();
-        RouteResult rescanned = lookup(project);
+        RouteResult rescanned = lookup(project, workspace);
         if (rescanned != null)
         {
             return rescanned;
         }
-        return RouteResult.error("No running EDT instance serves project '" + project //$NON-NLS-1$
-            + "'. Live backends: " + describeLiveBackends() //$NON-NLS-1$
+        return RouteResult.error((project == null ? "No running EDT instance matches" //$NON-NLS-1$
+            : "No running EDT instance serves project '" + project + "'") //$NON-NLS-1$ //$NON-NLS-2$
+            + (workspace == null ? "" : " in workspacePath '" + workspace + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ". Live backends: " + describeLiveBackends() //$NON-NLS-1$
             + describeUnsupportedBackends()
+            + (workspace == null ? "" : ". Copy workspacePath exactly from list_projects or router_status; " //$NON-NLS-1$ //$NON-NLS-2$
+                + "update plugins that do not report workspacePath") //$NON-NLS-1$
             + ". If you just started EDT it may still be initializing - retry in ~30 s, or call router_refresh."); //$NON-NLS-1$
     }
 
@@ -182,17 +200,24 @@ public final class ProjectRouter
      *
      * @return the decision, or {@code null} when the project is unknown
      */
-    private RouteResult lookup(String project)
+    private RouteResult lookup(String project, String workspace)
     {
-        List<Integer> dupPorts = registry.duplicateProjects().get(project);
-        if (dupPorts != null)
+        List<BackendRegistry.BackendView> candidates = registry.backendViews().stream()
+            .filter(view -> project == null || view.projects().contains(project))
+            .filter(view -> workspace == null || workspace.equals(view.workspacePath()))
+            .toList();
+        if (candidates.size() > 1)
         {
-            return RouteResult.error("Project '" + project + "' is served by more than one EDT instance (ports " //$NON-NLS-1$ //$NON-NLS-2$
-                + joinPorts(dupPorts)
-                + "). Routing is ambiguous - close the project in the duplicate EDT instance, then call router_refresh."); //$NON-NLS-1$
+            return RouteResult.error("Project/workspace '" + (project == null ? workspace : project) //$NON-NLS-1$
+                + "' is served by more than one EDT instance (ports " //$NON-NLS-1$
+                + joinPorts(candidates.stream().map(view -> view.backend().getPort()).toList())
+                + "). Routing is ambiguous. Set workspacePath using list_projects or router_status: " //$NON-NLS-1$
+                + candidates.stream().map(view -> ":" + view.backend().getPort() + " workspacePath=" //$NON-NLS-1$ //$NON-NLS-2$
+                    + (view.workspacePath() == null ? "<unavailable; update this EDT-MCP plugin>" //$NON-NLS-1$
+                        : view.workspacePath())).toList()
+                + ". If copies share a workspacePath, close the duplicate EDT and call router_refresh."); //$NON-NLS-1$
         }
-        Backend owner = registry.byProject(project);
-        return owner == null ? null : RouteResult.backend(owner);
+        return candidates.isEmpty() ? null : RouteResult.backend(candidates.get(0).backend());
     }
 
     /**

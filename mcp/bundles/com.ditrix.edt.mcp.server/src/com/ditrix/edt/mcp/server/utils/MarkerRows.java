@@ -36,10 +36,14 @@ public final class MarkerRows
     /** One marker row. */
     public static class Row
     {
+        /** Project that owns the marker, or {@code null}. */
+        public String project;
         /** Short UID like "SU23". */
         public String checkCode;
         /** Symbolic ID like "bsl-legacy-check-expression-type", or {@code null}. */
         public String checkId;
+        /** Check contributor, when the full UID could be resolved. */
+        public String contributorId;
         /** The marker message. */
         public String message;
         /** Where the marker is, or a placeholder when it could not be resolved. */
@@ -50,6 +54,10 @@ public final class MarkerRows
         public String modulePath;
         /** 1-based line inside the module, or {@code null}. */
         public Integer line;
+        /** Stored 0-based UTF-16 text offset, or {@code null}; never inferred from the line. */
+        public Integer offset;
+        /** Stored UTF-16 text length, or {@code null}; zero is a valid length. */
+        public Integer length;
         /** Whether this check has an EDT auto-fix (apply via apply_quick_fix). */
         public boolean hasQuickFix;
     }
@@ -132,17 +140,17 @@ public final class MarkerRows
 
         // Build the row, reusing the already resolved symbolic check id and presentation.
         R error = newRow.get();
+        IProject project = marker.getProject();
+        error.project = project != null ? project.getName() : null;
         error.checkCode = shortUid;
         error.checkId = symbolicCheckId;
+        error.contributorId = checkUid != null ? checkUid.getContributorId() : null;
         error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
             && CheckDescriptionLoader.has(symbolicCheckId);
         error.hasQuickFix = hasQuickFix;
         error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
 
-        // Structural locator: for a marker that points at a BSL text position the
-        // module path + 1-based line live in the marker's own extraInfo map (no model
-        // read), so they are safe to read regardless of the transaction boundary. Both
-        // stay null for markers that do not resolve to a BSL module location.
+        // Copy saved text coordinates inside the same read boundary as the rest of the row.
         populateModuleLocation(marker, error);
         if (presentationResolved)
         {
@@ -256,15 +264,14 @@ public final class MarkerRows
     }
 
     /**
-     * Populates the structural BSL locator ({@code modulePath} + {@code line}) on the row when the
-     * marker points at a position inside a BSL module, leaving both {@code null} otherwise.
+     * Copies saved text coordinates and the structural BSL locator into the detached row.
      *
      * <p>The locator is read straight from the marker's {@link Marker#getExtraInfo()} map —
      * {@link StandardExtraInfo#TEXT_URI_TO_PROBLEM} (the EMF platform URI of the problem) and
-     * {@link StandardExtraInfo#TEXT_LINE} (1-based line). EDT fills these for text/Xtext
-     * issues (e.g. BSL editor markers; see {@code BmAwareResourceValidatorListener}). Because
-     * the values are plain strings already stored on the marker, reading them touches NO
-     * model state and is therefore safe with respect to the BM read-transaction boundary.</p>
+     * {@link StandardExtraInfo#TEXT_LINE} (1-based line), {@link StandardExtraInfo#TEXT_OFFSET}
+     * and {@link StandardExtraInfo#TEXT_LENGTH}. Call inside the marker's BM read boundary.
+     * Coordinates are independent optional values; no source read, normalization or bounds
+     * correction is performed. Missing, malformed or negative values remain {@code null}.</p>
      *
      * <p>The module path is only set when the URI genuinely resolves to a {@code .bsl} module
      * under the source folder, so it matches the {@code modulePath} shape accepted by
@@ -279,6 +286,9 @@ public final class MarkerRows
             return;
         }
 
+        error.offset = nonNegativeTextCoordinate(extraInfo, StandardExtraInfo.TEXT_OFFSET);
+        error.length = nonNegativeTextCoordinate(extraInfo, StandardExtraInfo.TEXT_LENGTH);
+
         String uriToProblem = extraInfo.get(StandardExtraInfo.TEXT_URI_TO_PROBLEM);
         String modulePath = resolveBslModulePath(uriToProblem);
         if (modulePath == null)
@@ -292,6 +302,20 @@ public final class MarkerRows
         if (line != null && line.intValue() >= 1)
         {
             error.line = line;
+        }
+    }
+
+    private static Integer nonNegativeTextCoordinate(IExtraInfoMap extraInfo, StandardExtraInfo key)
+    {
+        try
+        {
+            Integer value = extraInfo.get(key);
+            return value != null && value.intValue() >= 0 ? value : null;
+        }
+        catch (NumberFormatException e)
+        {
+            // A malformed optional coordinate must not discard the marker or the report.
+            return null;
         }
     }
 

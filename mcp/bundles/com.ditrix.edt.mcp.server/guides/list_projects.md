@@ -13,7 +13,9 @@ It always lists the whole workspace - there is no filter.
 ## What you get
 With `format=md` (the default): a Markdown table with one row per project - **Name**, **State** (`ready` / `building` / `not_available` / `unknown`), **Path** on disk, **Open** (Yes/No), **EDT Project** (Yes if it has the 1C configuration or extension nature), an abbreviated **Natures** list (first few, with `...+N` for the rest), and a trailing **Reason** column (empty when ready). A total count is shown above the table.
 
-With `format=json`: `structuredContent` carries `{"projects": [{"name", "state", "reason"?, "path", "open", "edtProject", "natures"}]}` - the same rows, machine-readable. `open` is a boolean; `edtProject` is a boolean ONLY when the nature was actually determined and is **omitted** for a closed or uninspected project (mirroring the table's `-`), so a consumer can tell "not an EDT project" from "not inspected".
+With `format=json`: `structuredContent` carries `{"workspacePath": "...", "projects": [{"name", "state", "reason"?, "path", "open", "edtProject", "natures"}]}` - the same rows, machine-readable. `workspacePath` identifies the Eclipse workspace, including when it has no projects. Project `path` is the project location and can be outside the workspace. `open` is a boolean; `edtProject` is a boolean ONLY when the nature was actually determined and is **omitted** for a closed or uninspected project (mirroring the table's `-`), so a consumer can tell "not an EDT project" from "not inspected".
+
+Through the Multi-EDT proxy, each merged project row carries its backend's `workspacePath`. If a project name appears in several workspaces, copy the selected row's `workspacePath` exactly into the next tool call alongside `projectName`. The proxy consumes that selector; direct backend tools do not declare it.
 
 ## State
 - `ready`: the EDT context is running and its derived data is complete. JSON omits `reason`; the Markdown Reason cell is empty.

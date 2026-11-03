@@ -84,6 +84,32 @@ import com.google.gson.JsonParser;
 public class CreateMetadataToolTest
 {
     @Test
+    public void testGenerateContentOnNonFormIsRefusedBeforeProjectResolution()
+    {
+        for (String fqn : Arrays.asList("Catalog.NewCatalog", "CommonForm.NewForm",
+            "Catalog.Catalog.Form.ItemForm.Table.List"))
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "Unused");
+            params.put("fqn", fqn);
+            params.put("generateContent", "true");
+            JsonObject result = JsonParser.parseString(new CreateMetadataTool().executeOnUiThread(params))
+                .getAsJsonObject();
+            assertFalse(result.get("success").getAsBoolean());
+            assertTrue(result.get("error").getAsString().contains(fqn));
+            assertTrue(result.get("error").getAsString().contains("Omit these options"));
+        }
+    }
+
+    @Test
+    public void testFormPurposeIsDeclaredInSchema()
+    {
+        JsonObject schema = JsonParser.parseString(new CreateMetadataTool().getInputSchema()).getAsJsonObject();
+        assertTrue(schema.getAsJsonObject("properties").has("formType"));
+        assertTrue(schema.toString().contains("RECORD_SET"));
+    }
+
+    @Test
     public void testNameConstant()
     {
         assertEquals("create_metadata", new CreateMetadataTool().getName()); //$NON-NLS-1$

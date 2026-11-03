@@ -122,7 +122,6 @@ import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
-import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -408,8 +407,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
                 + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash " //$NON-NLS-1$
-                + "with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to " //$NON-NLS-1$
+                "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, " //$NON-NLS-1$
+                + "overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; " //$NON-NLS-1$
+                + "only replace creates a missing file. Replacing an existing file requires expectedHash or " //$NON-NLS-1$
+                + "expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
@@ -2026,6 +2027,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "' no longer exists; re-read get_metadata_details.").toJson());
                 }
                 BasicTemplate current = (BasicTemplate)object;
+                String locked = VendorSupportGuard.refusalFor(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
+                if (locked != null)
+                {
+                    throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                }
+                EObject owner = current.eContainer();
+                if (owner instanceof MdObject && !(owner instanceof Configuration))
+                {
+                    locked = VendorSupportGuard.refusalFor(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
+                    if (locked != null)
+                    {
+                        throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                    }
+                }
                 String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
                 if (error != null)
                 {
@@ -2040,14 +2055,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         .toJson());
                 }
                 IFile file = TemplateContentSupport.contentFile(ctx.project, current);
-                error = TemplateContentSupport.writeText(current, file, templateSpec, files);
-                if (error != null)
+                TemplateContentSupport.TextWriteResult written =
+                    TemplateContentSupport.writeTextResult(current, file, templateSpec, files);
+                if (written.error() != null)
                 {
-                    throw new TemplateWriteException(error);
+                    throw new TemplateWriteException(written.error());
                 }
                 TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
                     writeCtx.dtProject, writeCtx.fqnGenerator, file);
-                return ContentHash.of(templateSpec.get("text").getAsString());
+                return written.contentHash();
             });
             files.commit();
         }

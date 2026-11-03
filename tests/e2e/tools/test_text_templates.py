@@ -111,7 +111,7 @@ def test_text_template_roundtrip_utf8_hash_and_stale_guard():
         text = '{\n  "message": "Привет, мир",\n  "version": 730\n}\n'
         written = call("modify_metadata", {
             "projectName": PROJECT, "fqn": fqn,
-            "template": {"text": text, "expectedHash": _hash("")},
+            "template": {"mode": "replace", "text": text, "expectedHash": _hash("")},
         })
         assert path.read_bytes() == text.encode("utf-8"), "exact UTF-8 bytes, no BOM, trailing LF"
         assert _text_and_hash(_details(fqn)) == (text, _hash(text))
@@ -121,7 +121,7 @@ def test_text_template_roundtrip_utf8_hash_and_stale_guard():
         before_tree = tree_snapshot()
         stale = call("modify_metadata", {
             "projectName": PROJECT, "fqn": fqn,
-            "template": {"text": "must not replace", "expectedHash": _hash("")},
+            "template": {"mode": "replace", "text": "must not replace", "expectedHash": _hash("")},
         })
         assert_tree_unchanged(before_tree, "stale expectedHash must change nothing")
         assert path.read_bytes() == text.encode("utf-8"), "stale hash leaves disk unchanged"
@@ -151,7 +151,7 @@ def test_text_template_retype_nonempty_refused_empty_allowed():
         assert path.read_bytes() == b""
         assert _text_and_hash(_details(fqn))[0] == ""
         assert_ok(call("modify_metadata", {
-            "projectName": PROJECT, "fqn": fqn, "template": {"text": "keep\n"},
+            "projectName": PROJECT, "fqn": fqn, "template": {"mode": "replace", "text": "keep\n", "expectedSource": ""},
         }), "populate before retype")
         before = path.read_bytes()
         before_tree = tree_snapshot()
@@ -166,7 +166,7 @@ def test_text_template_retype_nonempty_refused_empty_allowed():
         assert_error_quality(assert_error(refused, "non-empty retype"),
                              names=["content"], suggests=["create_metadata"])
         assert_ok(call("modify_metadata", {
-            "projectName": PROJECT, "fqn": fqn, "template": {"text": ""},
+            "projectName": PROJECT, "fqn": fqn, "template": {"mode": "replace", "text": "", "expectedSource": "keep\n"},
         }), "clear text explicitly")
         retyped = call("modify_metadata", {
             "projectName": PROJECT, "fqn": fqn,

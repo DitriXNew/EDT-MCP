@@ -39,11 +39,12 @@ public class CreateMetadataToolExternalDataSourceTest
         Method dispatch = CreateMetadataTool.class.getDeclaredMethod("isReferencedTopTarget",
             MetadataNodeResolver.CreateTarget.class);
         dispatch.setAccessible(true);
-        for (String fqn : List.of(TABLE, CUBE, FUNCTION, FIELD))
+        for (String fqn : List.of(TABLE, CUBE, FUNCTION, FIELD, DIMENSION_TABLE, DIMENSION_FIELD, DIMENSION, RESOURCE))
         {
             var target = MetadataNodeResolver.resolveForCreate(f.scope(), fqn);
             assertNotNull(fqn, target);
-            assertEquals(fqn, fqn.equals(TABLE) || fqn.equals(CUBE), dispatch.invoke(null, target));
+            assertEquals(fqn, fqn.equals(TABLE) || fqn.equals(CUBE) || fqn.equals(DIMENSION_TABLE),
+                dispatch.invoke(null, target));
         }
     }
 
@@ -57,6 +58,43 @@ public class CreateMetadataToolExternalDataSourceTest
         assertTrue(eds, eds.contains("It accepts: Table, Cube, Function"));
         String table = (String)refusal.invoke(null, f.scope(), TABLE + ".Column.X");
         assertTrue(table, table.contains("It accepts: Command, Template, Field"));
+        String cube = (String)refusal.invoke(null, f.scope(), CUBE + ".Column.X");
+        assertTrue(cube, cube.contains("It accepts: Dimension, Resource, Command, Template, DimensionTable"));
+        String dimensionTable = (String)refusal.invoke(null, f.scope(), DIMENSION_TABLE + ".Column.X");
+        assertTrue(dimensionTable, dimensionTable.contains("It accepts: Command, Template, Field"));
+    }
+
+    @Test public void cubeMemberFactoriesPreserveDesignerTypes() throws Exception
+    {
+        var f = new ExternalDataSourceFixtures();
+        f.cube.getDimensions().clear();
+        f.cube.getResources().clear();
+        f.dimensionTable.getFields().clear();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        IEObjectProvider provider = mock(IEObjectProvider.class);
+        var stringType = McoreFactory.eINSTANCE.createType();
+        doReturn(stringType).when(provider).createProxy("String");
+        for (String fqn : List.of(DIMENSION, RESOURCE, DIMENSION_FIELD))
+        {
+            var target = MetadataNodeResolver.resolveForCreate(f.config, fqn);
+            assertNotNull(fqn, target);
+            var child = CreateMetadataTool.createMemberChild(new CreateMetadataTool.MemberChildSpec(factory,
+                target.elementType, target.owner, Version.LATEST, target.childName, new CreateMetadataTool.Props(),
+                null, target.feature, provider));
+            assertSame(child, MetadataNodeResolver.resolveExisting(f.config, fqn).object);
+            var typed = (com._1c.g5.v8.dt.metadata.mdclass.TypeDescriptionProvider)child;
+            assertNotNull(typed.getTypeDescription());
+            if (fqn.equals(DIMENSION))
+            {
+                assertTrue(typed.getTypeDescription().getTypes().isEmpty());
+            }
+            else
+            {
+                assertEquals(List.of(stringType), typed.getTypeDescription().getTypes());
+                assertEquals(10, typed.getTypeDescription().getStringQualifiers().getLength());
+            }
+            verify(factory).create(target.elementType, target.owner, Version.LATEST);
+        }
     }
 
     @Test public void fieldFactoryDeclineStillProducesString10() throws Exception

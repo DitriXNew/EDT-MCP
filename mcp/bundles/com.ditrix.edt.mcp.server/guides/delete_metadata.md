@@ -80,6 +80,8 @@ Only the owner's own pointers are cleaned: deleting an owned form clears the def
 
 ## External data source members
 
+Cube members use `...Cube.C.DimensionTable.DT(.Field.F)`, `...Cube.C.Dimension.D` and `...Cube.C.Resource.R` (including Russian tokens). DimensionTable registration is checked in the Cube's `.mdo`; its fields are checked in `Cubes/C/DimensionTables/DT/DT.mdo` under `fields`. Dimensions and resources are checked inline in the Cube's file.
+
 Use `ExternalDataSource.E.Table.T`, `...Table.T.Field.F`, `ExternalDataSource.E.Function.Fn` or `...Cube.C` (Russian tokens also work). The delete runs EDT's delete refactoring on that node, also for a source that still has Tables or Cubes, then exports the file that registers the node: the source's `.mdo` for a Table, Cube or Function, the Table's `.mdo` for a Field. Deleting a Table removes its `<tables>` line from the source's `.mdo` and its `Tables/T/` folder; deleting a source that still has Tables and Cubes removes the whole `src/ExternalDataSources/E/` directory, child files included. A forced delete then checks that file as described above. See the create_metadata guide, "External data source structure", for defaults, layout and boundaries.
 
 ## Additional columns

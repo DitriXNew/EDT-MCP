@@ -15,15 +15,30 @@ Java API - every type is JDK or standard OSGi, and the contract is fixed by
 `mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server/bridge/IEdtMcpBridge.java`
 in this workspace.
 
-You do not need `JShellSession` or `JShellManual` for this, and you may not have them:
-EDT-MCP registers a JShell session under a constant id and the manual id below is a fixed
-entry in your own catalogue. Call `JShell` directly with
+EDT-MCP registers a JShell session under a constant id, so you do not need
+`JShellSession`. Call `JShell` directly with
 
     scope           = "eclipse"
     repl_session_id = "edt-mcp"
-    manual_ids      = ["jshell_edt_canonical_imports"]
+    manual_ids      = ["active_workbench"]
+    request_description  = "Call EDT-MCP through its in-process bridge."
+    response_description = "EDT-MCP tool response was printed."
 
-and this code:
+This setup was verified on Workmate **1.0.8** with EDT 2026.2.1 on Windows 11
+([#787](https://github.com/DitriXNew/EDT-MCP/issues/787)). `active_workbench` is also
+present in the inspected Workmate **1.0.5 and 1.0.7** scenario registries and their
+`JShell` examples. The old `jshell_edt_canonical_imports` id is in the inspected
+**1.0.5** EDT metadata manual catalogue, but absent from the inspected **1.0.7**
+builds and rejected on **1.0.8** in #787. Use `active_workbench` for this Eclipse
+bridge setup across these versions.
+
+`manual_ids` is validated against the installed build's live catalogue;
+unknown or blank ids are rejected before code executes. For another
+build, use `JShellManual` when available to obtain an exact `manual_id`. If it is
+unavailable in chat, report the installed Workmate version and the exact error
+instead of guessing a replacement. Keep `repl_session_id = "edt-mcp"`.
+
+Use this code:
 
 ```java
 {
@@ -48,6 +63,17 @@ parameter, examples - comes from a tool of its own: `mcp.apply("get_tool_guide",
 There is no HTTP route for you: `java.net.URL`, `java.net.Socket` and `ProcessBuilder` are on
 your restricted-types list and there is no `Execute` tool here. Ignore any advice about
 calling EDT-MCP over `curl` or `localhost:8765`.
+
+## Tools disabled by default
+
+`git` and `ask_workmate` are **disabled by default**. `enable_toolset` only changes
+progressive-disclosure visibility and does not enable them. Ask the user to enable
+the needed tool in **Window → Preferences → MCP Server → Tools** (`git` has its own
+**Git** group). A response such as `Tool 'git' is disabled by the user` confirms
+that the bridge reached the dispatcher; report it and ask for the tool to be enabled
+before retrying a request for commits, branches or a diff through `git`.
+
+After editing this rules file, start a new Workmate chat so it loads the changes.
 
 ## Rules
 

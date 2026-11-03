@@ -188,12 +188,33 @@ public final class BuildUtils
      */
     public static void waitForDerivedData(IProject project, long timeoutMs)
     {
+        awaitDerivedData(project, timeoutMs);
+    }
+
+    /** @return whether all queued derived data completed within the default timeout */
+    public static boolean awaitDerivedData(IProject project)
+    {
+        return awaitDerivedData(project, DEFAULT_DD_TIMEOUT_MS);
+    }
+
+    /**
+     * Drains the contexts already queued by EDT's resource/model listeners without scheduling
+     * new objects. A failed or interrupted drain must not authorise an infobase update.
+     *
+     * @return {@code true} only when the project's derived data completed
+     */
+    public static boolean awaitDerivedData(IProject project, long timeoutMs)
+    {
+        if (Thread.currentThread().isInterrupted())
+        {
+            return false;
+        }
         try
         {
             IDerivedDataManager ddManager = resolveDerivedDataManager(project);
             if (ddManager == null)
             {
-                return;
+                return false;
             }
 
             // Wait for ALL derived data. Callers of this method depend on that: the cascade
@@ -212,10 +233,17 @@ public final class BuildUtils
             {
                 Activator.logInfo("Derived data wait timed out for: " + project.getName()); //$NON-NLS-1$
             }
+            return completed;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
         }
         catch (Exception e)
         {
             Activator.logError("Error waiting for derived data", e); //$NON-NLS-1$
+            return false;
         }
     }
 
@@ -805,8 +833,12 @@ public final class BuildUtils
      * @param project the workspace project
      * @return the manager, or {@code null} when the project or a service is unavailable
      */
-    private static IDerivedDataManager resolveDerivedDataManager(IProject project)
+    static IDerivedDataManager resolveDerivedDataManager(IProject project)
     {
+        if (project == null || Activator.getDefault() == null)
+        {
+            return null;
+        }
         IDerivedDataManagerProvider ddProvider = Activator.getDefault().getDerivedDataManagerProvider();
         if (ddProvider == null)
         {

@@ -307,7 +307,7 @@ public final class ExtensionOriginUtils
      * @param project the workspace project (may be {@code null})
      * @return the IV8Project, or {@code null} when it cannot be resolved
      */
-    private static IV8Project resolveV8Project(IProject project)
+    static IV8Project resolveV8Project(IProject project)
     {
         if (project == null)
         {

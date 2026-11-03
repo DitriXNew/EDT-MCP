@@ -24,12 +24,19 @@ def test_format_json_returns_structured_projects():
     r = call("list_projects", {"format": "json"})
     assert_ok(r, "list_projects format=json")
     structured = r.structured or {}
+    workspace = structured.get("workspacePath")
+    assert isinstance(workspace, str) and workspace.strip(), \
+        "format=json must identify the EDT workspace for proxy routing: %r" % (structured,)
     projects = structured.get("projects")
     assert isinstance(projects, list) and projects, \
         "format=json must return structuredContent.projects: %r" % (structured,)
     names = [p.get("name") for p in projects if isinstance(p, dict)]
     assert PROJECT in names, \
         "structuredContent.projects must include the fixture project %r: %r" % (PROJECT, names)
+    repeated = call("list_projects", {"format": "json"})
+    assert_ok(repeated, "repeat workspace discovery")
+    assert (repeated.structured or {}).get("workspacePath") == workspace, \
+        "workspace identity must remain stable across requests"
     assert_no_diff("a read tool must not touch the project on disk")
 
 
