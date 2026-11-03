@@ -3566,6 +3566,134 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "List installed infobase extensions and install, update or uninstall .cfe files. DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=true and expectedHash from the preview's contentHash; writes require user consent; update verification requires a changed expectedVersion. Full parameters and examples: call get_tool_guide('infobase_extensions').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "install",
+            "update",
+            "uninstall"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "cfePath": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "boolean"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "expectedVersion": {
+          "type": "string"
+        },
+        "extensionName": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "protectionFromDangerousActions": {
+          "type": "boolean"
+        },
+        "safeMode": {
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "projectName",
+        "applicationId"
+      ],
+      "type": "object"
+    },
+    "name": "infobase_extensions",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actualState": {
+          "type": "object"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "extensionInstalled": {
+          "type": "boolean"
+        },
+        "extensionName": {
+          "type": "string"
+        },
+        "extensions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "requestedProtectionFromDangerousActions": {
+          "type": "boolean"
+        },
+        "requestedSafeMode": {
+          "type": "boolean"
+        },
+        "requiresConfirmation": {
+          "type": "boolean"
+        },
+        "stateBefore": {
+          "type": "object"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "verification": {
+          "type": "string"
+        },
+        "verificationReason": {
+          "type": "string"
+        },
+        "verificationScope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its exact full UUID can target it. Full parameters and examples: call get_tool_guide('infobase_sessions').",
     "inputSchema": {
       "properties": {

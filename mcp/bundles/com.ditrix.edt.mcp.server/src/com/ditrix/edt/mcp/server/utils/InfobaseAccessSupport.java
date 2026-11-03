@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -14,8 +13,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.eclipse.core.runtime.Adapters;
-import org.eclipse.core.runtime.Platform;
-import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
@@ -52,14 +49,6 @@ public final class InfobaseAccessSupport
 {
     /** Shared deadline for the store plus its consumer-facing read-back. */
     public static final long CREDENTIAL_STORE_TIMEOUT_MS = 30_000L;
-
-    /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
-    private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
-        "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
-
-    /** Internal singleton holding the platform-services Guice injector (loaded via the owning bundle). */
-    private static final String PLATFORM_SERVICES_CORE_CLASS =
-        "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"; //$NON-NLS-1$
 
     /** Fixed replacement for a credential found in platform-produced diagnostic text. */
     private static final String CREDENTIAL_REDACTION_MARKER = "[REDACTED]"; //$NON-NLS-1$
@@ -889,34 +878,7 @@ public final class InfobaseAccessSupport
     {
         try
         {
-            Bundle psCoreBundle = Platform.getBundle(PLATFORM_SERVICES_CORE_BUNDLE_ID);
-            if (psCoreBundle == null)
-            {
-                Activator.logError("infobase access: bundle '" + PLATFORM_SERVICES_CORE_BUNDLE_ID //$NON-NLS-1$
-                    + "' not found — the EDT platform-services plugin is not installed", null); //$NON-NLS-1$
-                return null;
-            }
-            Class<?> coreClass = psCoreBundle.loadClass(PLATFORM_SERVICES_CORE_CLASS);
-            Method getDefault = coreClass.getDeclaredMethod("getDefault"); //$NON-NLS-1$
-            getDefault.setAccessible(true); // NOSONAR reflective access required (EDT internals, no Require-Bundle)
-            Object coreInstance = getDefault.invoke(null);
-            if (coreInstance == null)
-            {
-                psCoreBundle.start(Bundle.START_TRANSIENT);
-                coreInstance = getDefault.invoke(null);
-                if (coreInstance == null)
-                {
-                    return null;
-                }
-            }
-            Method getInjector = coreClass.getDeclaredMethod("getInjector"); //$NON-NLS-1$
-            getInjector.setAccessible(true); // NOSONAR reflective access required (EDT internals, no Require-Bundle)
-            Object injector = getInjector.invoke(coreInstance);
-            if (injector == null)
-            {
-                return null;
-            }
-            return ((com.google.inject.Injector)injector).getInstance(IInfobaseAccessManager.class);
+            return PlatformServicesSupport.resolve(IInfobaseAccessManager.class);
         }
         catch (Exception e) // NOSONAR probe must never crash the tool
         {

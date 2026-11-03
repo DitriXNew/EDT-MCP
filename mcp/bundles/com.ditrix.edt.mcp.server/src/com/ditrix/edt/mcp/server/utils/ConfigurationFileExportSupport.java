@@ -454,21 +454,27 @@ public final class ConfigurationFileExportSupport
         Path target, IProgressMonitor monitor) throws Exception // NOSONAR platform failures are reported by the caller
     {
         IExportConfigurationFileService service = ServiceAccess.get(IExportConfigurationFileService.class);
+        InfobaseReference actual = service.checked(infobase).orElse(infobase);
+        ComponentExecutorInfo<ILaunchableRuntimeComponent, IThickClientLauncher> thickClient =
+            resolveThickClient(project, actual);
+        service.exportConfigurationOrExtension(actual, thickClient.getComponent(),
+            thickClient.getExecutor(), extensionName, target, monitor);
+    }
+
+    /** Resolves the same installed platform for dump export and runtime extension operations. */
+    public static ComponentExecutorInfo<ILaunchableRuntimeComponent, IThickClientLauncher> resolveThickClient(
+        IProject project, InfobaseReference infobase) throws Exception
+    {
         IResolvableRuntimeInstallationManager installations =
             ServiceAccess.get(IResolvableRuntimeInstallationManager.class);
         IRuntimeComponentManager components = ServiceAccess.get(IRuntimeComponentManager.class);
 
-        // The wizard refreshes the reference from the registry the same way.
-        InfobaseReference actual = service.checked(infobase).orElse(infobase);
         IResolvableRuntimeInstallation resolvable = installations.resolveByProjectAndInfobase(
-            ENTERPRISE_PLATFORM_RUNTIME, project, actual, InfobaseAccessType.UPDATE);
+            ENTERPRISE_PLATFORM_RUNTIME, project, infobase, InfobaseAccessType.UPDATE);
         RuntimeInstallation installation = resolvable.resolve(
-            List.of(IRuntimeComponentTypes.THICK_CLIENT), actual.getAppArch());
-        ComponentExecutorInfo<ILaunchableRuntimeComponent, IThickClientLauncher> thickClient =
-            components.resolveExecutor(ILaunchableRuntimeComponent.class, IThickClientLauncher.class,
+            List.of(IRuntimeComponentTypes.THICK_CLIENT), infobase.getAppArch());
+        return components.resolveExecutor(ILaunchableRuntimeComponent.class, IThickClientLauncher.class,
                 installation, IRuntimeComponentTypes.THICK_CLIENT);
-        service.exportConfigurationOrExtension(actual, thickClient.getComponent(),
-            thickClient.getExecutor(), extensionName, target, monitor);
     }
 
     /**
