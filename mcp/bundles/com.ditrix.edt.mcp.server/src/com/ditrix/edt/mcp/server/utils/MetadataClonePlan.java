@@ -227,7 +227,6 @@ public final class MetadataClonePlan
             throw new IllegalArgumentException("Destination folder for newName '" + newName
                 + "' already exists. Inspect its files and choose an unused name; clone never overwrites a folder.");
         }
-        checkExternalFiles(graph, fs);
         Map<String, String> files = ownedFileHashes(graph, fs, rootFile);
         content.append(files).append('\n');
         List<String> topFqns = topFqns(graph);
@@ -331,20 +330,6 @@ public final class MetadataClonePlan
             || portable.startsWith(sourceRelative + "/") || portable.contains("/" + sourceRelative + "/");
     }
 
-    private static void checkExternalFiles(Map<String, EObject> graph, IProjectFileSystemSupport fs)
-    {
-        for (EObject node : graph.values())
-        {
-            for (EReference ref : node.eClass().getEAllReferences())
-            {
-                if (external(ref) && !ref.isDerived() && node.eIsSet(ref) && node.eGet(ref, false) != null)
-                {
-                    requireFile(fs.getFile(node, ref), "external property '" + ref.getName() + "'");
-                }
-            }
-        }
-    }
-
     /** Stable serialization used by postconditions and revision checks, never EObject.toString(). */
     public static String modelFingerprint(EObject object)
     {
@@ -430,8 +415,9 @@ public final class MetadataClonePlan
             text.append(entry.getKey()).append(':').append(object.eClass().getName()).append('{');
             for (EStructuralFeature feature : object.eClass().getEAllStructuralFeatures())
             {
-                if (feature.isDerived() || (feature.isTransient()
-                    && !(feature instanceof EReference && external((EReference)feature))))
+                // External proxies exist even without files; owned models and file hashes cover their content.
+                if (feature.isDerived() || feature.isTransient()
+                    || (feature instanceof EReference && external((EReference)feature)))
                 {
                     continue;
                 }
@@ -687,14 +673,48 @@ public final class MetadataClonePlan
                 {
                     continue;
                 }
-                IFile file = fs.getFile(node, ref);
-                if (file != null && (file.exists() || (node.eIsSet(ref) && node.eGet(ref, false) != null)))
-                {
-                    addFile(result, entry.getKey() + "@" + ref.getName(), file);
-                }
+                addFile(result, entry.getKey() + "@" + ref.getName(), externalFile(node, ref, fs));
             }
         }
         return result;
+    }
+
+    private static IFile externalFile(EObject owner, EReference ref, IProjectFileSystemSupport fs)
+    {
+        IFile file = fs.getFile(owner, ref);
+        if (file != null && file.exists())
+        {
+            return file;
+        }
+        Object value = owner.eGet(ref, false);
+        if (value instanceof EObject && hasExternalContent((EObject)value))
+        {
+            requireFile(file, "external property '" + ref.getName() + "'");
+        }
+        // Native paste copies ordinary external properties only when their source file exists.
+        return null;
+    }
+
+    private static boolean hasExternalContent(EObject object)
+    {
+        if (object.eIsProxy())
+        {
+            return false;
+        }
+        if (object instanceof com._1c.g5.v8.dt.bsl.model.Module)
+        {
+            org.eclipse.xtext.nodemodel.INode node = org.eclipse.xtext.nodemodel.util.NodeModelUtils.getNode(object);
+            // ModuleType/owner identify an empty module too; only syntax or authored AST children are content.
+            return (node != null && !node.getText().isBlank()) || !PersistedContents.of(object).isEmpty();
+        }
+        for (EStructuralFeature feature : object.eClass().getEAllStructuralFeatures())
+        {
+            if (!feature.isDerived() && !feature.isTransient() && object.eIsSet(feature))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void addFile(Map<String, IFile> files, String key, IFile file)

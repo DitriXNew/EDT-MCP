@@ -20,6 +20,78 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 public class MetadataCloneDiskVerifierTest
 {
     @Test
+    public void metadataDiskVerificationAllowsAbsentModuleFiles() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        verifyMetadataFileWithModuleReferences(fixture);
+        verify(fixture.objectModule, never()).getContents(true);
+        verify(fixture.managerModule, never()).getContents(true);
+    }
+
+    @Test
+    public void metadataDiskVerificationDoesNotTreatPresentModulesAsEmbeddedXml() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        when(fixture.objectModule.exists()).thenReturn(true);
+        when(fixture.managerModule.exists()).thenReturn(true);
+        verifyMetadataFileWithModuleReferences(fixture);
+        // Separate copied-file hashes verify BSL bytes; the .mdo has no embedded module AST/proxy.
+        verify(fixture.objectModule, never()).getContents(true);
+        verify(fixture.managerModule, never()).getContents(true);
+    }
+
+    private static void verifyMetadataFileWithModuleReferences(MetadataCloneFilesFixture fixture) throws Exception
+    {
+        Catalog disk = EcoreUtil.copy(fixture.source);
+        disk.setObjectModule(null);
+        disk.setManagerModule(null);
+        org.eclipse.emf.ecore.resource.Resource resource = mock(org.eclipse.emf.ecore.resource.Resource.class);
+        when(resource.getErrors()).thenReturn(new org.eclipse.emf.common.util.BasicEList<>());
+        when(resource.getContents()).thenReturn(new org.eclipse.emf.common.util.BasicEList<>(java.util.List.of(disk)));
+        org.eclipse.emf.ecore.resource.Resource.Factory factory = uri -> resource;
+        MapRestore registration = new MapRestore("clone819", factory);
+        try
+        {
+            when(fixture.sourceFile.getFullPath()).thenReturn(new org.eclipse.core.runtime.Path("/P/Source.clone819"));
+            MetadataCloneDiskVerifier.verify(fixture.sourceFile, fixture.source,
+                mock(com._1c.g5.v8.dt.core.platform.IDtProject.class), null, mock(ISymbolicNameService.class));
+            verify(resource).load(any(java.io.InputStream.class), any(java.util.Map.class));
+            verify(resource).unload();
+        }
+        finally
+        {
+            registration.close();
+        }
+    }
+
+    private static final class MapRestore implements AutoCloseable
+    {
+        private final java.util.Map<String, Object> factories =
+            org.eclipse.emf.ecore.resource.Resource.Factory.Registry.INSTANCE.getExtensionToFactoryMap();
+        private final String extension;
+        private final Object previous;
+
+        MapRestore(String extension, org.eclipse.emf.ecore.resource.Resource.Factory factory)
+        {
+            this.extension = extension;
+            previous = factories.put(extension, factory);
+        }
+
+        @Override
+        public void close()
+        {
+            if (previous == null)
+            {
+                factories.remove(extension);
+            }
+            else
+            {
+                factories.put(extension, previous);
+            }
+        }
+    }
+
+    @Test
     public void equalPersistedModelsPass()
     {
         Catalog model = MdClassFactory.eINSTANCE.createCatalog();

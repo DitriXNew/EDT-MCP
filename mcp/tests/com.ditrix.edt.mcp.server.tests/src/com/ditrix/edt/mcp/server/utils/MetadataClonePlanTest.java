@@ -38,6 +38,128 @@ import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
 public class MetadataClonePlanTest
 {
     @Test
+    public void previewWithOnlyMetadataFileIgnoresAbsentModuleProxies() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        MetadataClonePlan preview = fixture.preview();
+        assertEquals(List.of("Source.mdo"), List.copyOf(preview.files.keySet()));
+        assertEquals(preview.hash(), fixture.preview().hash());
+        verify(fixture.objectModule, never()).getContents(true);
+        verify(fixture.managerModule, never()).getContents(true);
+        fixture.source.setObjectModule(null);
+        fixture.source.setManagerModule(null);
+        assertEquals("Absent proxies are not persisted content", preview.hash(), fixture.preview().hash());
+    }
+
+    @Test
+    public void previewIncludesBothModuleFilesAndDetectsAppearanceRemovalAndByteDrift() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        String absent = fixture.preview().hash();
+        when(fixture.objectModule.exists()).thenReturn(true);
+        when(fixture.managerModule.exists()).thenReturn(true);
+        MetadataClonePlan present = fixture.preview();
+        assertEquals(3, present.files.size());
+        assertTrue(present.files.containsKey("ObjectModule.bsl"));
+        assertTrue(present.files.containsKey("ManagerModule.bsl"));
+        assertNotEquals(absent, present.hash());
+        when(fixture.objectModule.getContents(true)).thenAnswer(call ->
+            new java.io.ByteArrayInputStream("// changed".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertNotEquals(present.hash(), fixture.preview().hash());
+        when(fixture.objectModule.exists()).thenReturn(false);
+        when(fixture.managerModule.exists()).thenReturn(false);
+        assertEquals(absent, fixture.preview().hash());
+    }
+
+    @Test
+    public void resolvedEmptyModulesDoNotRequireFilesButAuthoredAstDoes() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        com._1c.g5.v8.dt.bsl.model.Module module = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createModule();
+        module.setModuleType(com._1c.g5.v8.dt.bsl.model.ModuleType.OBJECT_MODULE);
+        fixture.source.setObjectModule(module);
+        assertEquals(1, fixture.preview().files.size());
+        module.getDeclareStatements().add(com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createDeclareStatement());
+        try
+        {
+            fixture.preview();
+            fail("Authored model content without its exported file must be refused");
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("objectModule"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("Save/export"));
+        }
+    }
+
+    @Test
+    public void presentButUnreadableModuleIsStillRefused() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        when(fixture.managerModule.exists()).thenReturn(true);
+        when(fixture.managerModule.getContents(true)).thenThrow(new org.eclipse.core.runtime.CoreException(
+            org.eclipse.core.runtime.Status.error("unreadable")));
+        try
+        {
+            fixture.preview();
+            fail("An existing module cannot be silently omitted");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("ManagerModule.bsl"));
+            assertTrue(expected.getMessage().contains("Save and refresh"));
+        }
+    }
+
+    @Test
+    public void absentTemplateContentAndFormModuleAreOptionalButResolvedFormContentIsNot() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        com._1c.g5.v8.dt.metadata.mdclass.Template template = MdClassFactory.eINSTANCE.createTemplate();
+        template.setName("Empty");
+        EObject content = org.eclipse.emf.ecore.EcoreFactory.eINSTANCE.createEObject();
+        ((org.eclipse.emf.ecore.InternalEObject)content).eSetProxyURI(
+            org.eclipse.emf.common.util.URI.createURI("unresolved:/Catalog.Source.Template.Empty.Template"));
+        template.setTemplate(content);
+        fixture.source.getTemplates().add(template);
+        IFile missingTemplate = MetadataCloneFilesFixture.file("Source/Templates/Empty/Template.mxlx", false, "");
+        when(fixture.fs.getFile(template,
+            (org.eclipse.emf.ecore.EReference)template.eClass().getEStructuralFeature("template"))).thenReturn(missingTemplate);
+        com._1c.g5.v8.dt.form.model.Form form = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm();
+        com._1c.g5.v8.dt.bsl.model.Module module = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createModule();
+        ((org.eclipse.emf.ecore.InternalEObject)module).eSetProxyURI(
+            org.eclipse.emf.common.util.URI.createURI("unresolved:/Catalog.Source.Form.ItemForm.Module"));
+        form.setModule(module);
+        IFile missingModule = MetadataCloneFilesFixture.file("Source/Forms/ItemForm/Module.bsl", false, "");
+        when(fixture.fs.getFile(form,
+            (org.eclipse.emf.ecore.EReference)form.eClass().getEStructuralFeature("module"))).thenReturn(missingModule);
+        assertEquals(1, fixture.preview().files.size());
+        assertTrue(MetadataClonePlan.ownedResources(Map.of("form", form), fixture.fs).isEmpty());
+        verify(missingTemplate, never()).getContents(true);
+        verify(missingModule, never()).getContents(true);
+
+        com._1c.g5.v8.dt.metadata.mdclass.CatalogForm metaForm = MdClassFactory.eINSTANCE.createCatalogForm();
+        metaForm.setName("ItemForm");
+        metaForm.setForm(form);
+        fixture.source.getForms().add(metaForm);
+        form.getAttributes().add(com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute());
+        IFile missingForm = MetadataCloneFilesFixture.file("Source/Forms/ItemForm/Form.form", false, "");
+        when(fixture.fs.getFile(metaForm,
+            (org.eclipse.emf.ecore.EReference)metaForm.eClass().getEStructuralFeature("form")))
+                .thenReturn(missingForm);
+        try
+        {
+            fixture.preview();
+            fail("Missing exported form content cannot become an optional empty resource");
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("form"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("Save/export"));
+        }
+    }
+
+    @Test
     public void catalogHasBilingualProgrammaticResolution()
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();

@@ -16,11 +16,54 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataCloneFilesFixture;
+import com.ditrix.edt.mcp.server.utils.MetadataClonePlan;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 public class CloneMetadataObjectToolTest
 {
+    @Test
+    public void confirmManifestAcceptsMetadataOnlySource() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        MetadataClonePlan preview = fixture.preview();
+        assertEquals(preview.hash(), fixture.preview().hash());
+        JsonArray manifest = CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
+        assertEquals(1, manifest.size());
+        JsonObject root = manifest.get(0).getAsJsonObject();
+        assertEquals("src/Catalogs/Copy/Copy.mdo", root.get("file").getAsString());
+        assertTrue(root.get("modeled").getAsBoolean());
+        assertEquals(fixture.clone.getUuid().toString(), root.get("uuid").getAsString());
+    }
+
+    @Test
+    public void confirmManifestRequiresEveryPresentModule() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        when(fixture.objectModule.exists()).thenReturn(true);
+        when(fixture.managerModule.exists()).thenReturn(true);
+        MetadataClonePlan preview = fixture.preview();
+        when(fixture.copiedObjectModule.exists()).thenReturn(true);
+        when(fixture.copiedManagerModule.exists()).thenReturn(true);
+        JsonArray manifest = CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
+        assertEquals(3, manifest.size());
+        assertTrue(manifest.toString().contains("src/Catalogs/Copy/ObjectModule.bsl"));
+        assertTrue(manifest.toString().contains("src/Catalogs/Copy/ManagerModule.bsl"));
+        when(fixture.copiedManagerModule.exists()).thenReturn(false);
+        try
+        {
+            CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
+            fail("An omitted source module must not pass confirmation");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("omitted owned resource"));
+            assertTrue(expected.getMessage().contains("managerModule"));
+        }
+    }
+
     @Test
     public void declaresPreviewProtocolAndNestedTransferSchema()
     {

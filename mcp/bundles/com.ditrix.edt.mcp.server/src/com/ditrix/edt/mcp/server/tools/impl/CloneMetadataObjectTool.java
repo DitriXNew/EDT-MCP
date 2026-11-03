@@ -220,7 +220,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
         catch (RuntimeException e)
         {
-            return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e)
+            return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
                 + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
         }
         if (!confirm)
@@ -396,7 +396,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
     }
 
-    private static JsonArray resourceManifest(MetadataClonePlan plan, MdObject source, MdObject clone,
+    static JsonArray resourceManifest(MetadataClonePlan plan, MdObject source, MdObject clone,
         IProjectFileSystemSupport fs)
     {
         Map<String, EObject> originals = MetadataClonePlan.graph(source);

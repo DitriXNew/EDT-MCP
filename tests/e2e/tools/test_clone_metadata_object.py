@@ -21,6 +21,7 @@ def _preview(**arguments):
     result = _clone(**arguments)
     assert_ok(result, "clone preview")
     data = result.structured
+    assert isinstance(data, dict) and data.get("success") is True, "clone preview refused: " + result.error_text()
     assert data["action"] == "preview", data
     assert data["contentHash"], data
     assert data["codeReferencePolicy"] == "preserveText", data
@@ -73,6 +74,9 @@ def _top_roundtrip(kind, plural):
     source_path = "src/%s/E2ECloneSource/E2ECloneSource.mdo" % plural
     source_hash = _hash_file(source_path)
     source_xml = _xml(source_path)
+    for module in ("ObjectModule.bsl", "ManagerModule.bsl"):
+        assert not os.path.exists(os.path.join(PROJECT_DIR, "src", plural, "E2ECloneSource", module)), "seed must have no optional module files"
+        assert all(not row["file"].endswith("/" + module) for row in preview["resources"]), preview
     data = _apply(preview, fqn=source, newName="E2ECloneNamed")
     # Disk checks precede read-back; the clone call itself owes the export drain.
     root = _xml("src/%s/E2ECloneNamed/E2ECloneNamed.mdo" % plural)
@@ -84,6 +88,8 @@ def _top_roundtrip(kind, plural):
     assert _hash_file(source_path) == source_hash, "copy must preserve the source bytes"
     assert data["fqn"] == target and data["namePolicy"] == "callerSupplied", data
     assert not os.path.exists(os.path.join(PROJECT_DIR, "src", plural, "E2ECloneSource1")), "no auto-name may leak"
+    for module in ("ObjectModule.bsl", "ManagerModule.bsl"):
+        assert not os.path.exists(os.path.join(PROJECT_DIR, "src", plural, "E2ECloneNamed", module)), "absent source modules must remain absent"
     assert_contains(_details(target), "CloneField", "owned member must resolve from cloned model")
     assert_contains(_details(source), "E2ECloneSource", "source must remain addressable")
 
@@ -136,6 +142,7 @@ def test_clone_preserves_named_forms_modules_templates_types_and_predefined():
     template_hash = _hash_file("src/Catalogs/Catalog/Templates/Invoice/Template.mxlx")
     before = tree_snapshot()
     preview = _preview(fqn="Catalog.Catalog", newName="E2ERichClone")
+    assert {"src/" + path for path in modules} <= {row["file"] for row in preview["resources"]}, preview
     assert_tree_unchanged(before, "rich source preview")
     data = _apply(preview, fqn="Catalog.Catalog", newName="E2ERichClone")
     name = data["fqn"].split(".")[1]
@@ -298,5 +305,5 @@ def test_clone_negative_contract():
         assert_error_quality(message, names=names, suggests=suggests)
         assert_no_diff()
     message = assert_error(call("clone_metadata_object", {}), "required arguments")
-    assert_error_quality(message, names=["projectName"], suggests=["required", "Missing"])
+    assert_error_quality(message, names=["projectName"], suggests=["required", "list_projects"])
     assert_no_diff()
