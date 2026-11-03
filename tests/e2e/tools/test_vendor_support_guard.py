@@ -138,6 +138,26 @@ def test_vendor_modify_refused_on_a_locked_object_and_member():
 
 
 @e2e_test(tool="modify_metadata", kind="write")
+def test_vendor_text_template_edit_is_refused_without_changing_bytes():
+    before = _start()
+    fqn = "Catalog.Locked.Template.Text826"
+    details = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
+    assert_ok(details, "read existing locked text template")
+    assert_contains(details.text, "Vendor-locked text template #826.", "locked template resolves in model")
+    for address in (fqn, "Справочник.Locked.Макет.Text826"):
+        for spec in ({"mode": "append", "text": "E2E vendor"},
+                     {"oldText": "#826", "text": "E2E vendor"},
+                     {"mode": "replace", "text": "E2E vendor", "overwrite": True}):
+            _refused("modify_metadata", {"fqn": address, "template": spec},
+                     [address], "edit text owned by a locked catalog")
+            _assert_byte_identical(before, "refused text template edit")
+    after = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
+    assert_ok(after, "re-read refused text edit")
+    assert after.text == details.text, "refusal must leave text and contentHash unchanged in model"
+    assert_no_diff("base project remains unchanged by a supported-project refusal")
+
+
+@e2e_test(tool="modify_metadata", kind="write")
 def test_vendor_modify_of_a_locked_configuration_root_is_refused():
     """The configuration ROOT is locked in this fixture (see the module docstring), and a change to it
     (issue #741) is judged on the root itself - not waved through as "not found", and not answered with

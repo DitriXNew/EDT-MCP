@@ -4533,3 +4533,68 @@ def test_retype_of_a_defined_type_runs_the_referrer_reset():
     poll_disk_contains("src/DefinedTypes/%s/%s.mdo" % (defined, defined), "<precision>15</precision>",
                        ctx="the DefinedType's new type must reach disk")
     _assert_reset_reported(r, "the type change also reset the fill value of every editable object typed with it")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_text_template_edit_modes_guards_and_exact_line_endings():
+    from harness import settle_or_fail
+    from tools.test_text_templates import (
+        _owner, _create, _details, _text_and_hash, _hash, _descriptor, _cleanup,
+    )
+
+    owner, root = _owner("Modes826")
+    try:
+        fqn, path = _create(owner, root, "Текст826", "TextDocument")
+        russian_fqn = fqn.replace("DataProcessor.", "Обработка.").replace(".Template.", ".Макет.")
+
+        def written(spec, expected, address=fqn):
+            result = call("modify_metadata", {"projectName": PROJECT, "fqn": address, "template": spec})
+            assert_ok(result, "text template edit")
+            assert path.read_bytes() == expected.encode("utf-8"), "exact disk bytes after edit"
+            assert _text_and_hash(_details(fqn)) == (expected, _hash(expected))
+            assert _text_and_hash(_details(russian_fqn)) == (expected, _hash(expected))
+            assert result.structured["template"]["contentHash"] == _hash(expected)
+            return expected
+
+        text = written({"mode": "replace", "text": "Привет\r\nneedle\r\n", "expectedSource": ""},
+                       "Привет\r\nneedle\r\n", russian_fqn)
+        old_hash = _hash(text)
+        text = written({"mode": "append", "text": "tail needle\n", "expectedHash": old_hash},
+                       text + "tail needle\n")
+        text = written({"oldText": "tail", "text": "end", "expectedHash": _hash(text)},
+                       text.replace("tail", "end"), russian_fqn)
+
+        for spec, words in [
+            ({"oldText": "absent826", "text": "x"}, ["0 literal matches"]),
+            ({"oldText": "needle", "text": "x"}, ["2 literal matches"]),
+            ({"text": "x"}, ["oldText"]),
+            ({"mode": "replace", "text": "x"}, ["expectedSource"]),
+            ({"mode": "append", "text": "x", "expectedHash": old_hash}, [_hash(text)]),
+            ({"mode": "replace", "text": "x", "expectedSource": "stale", "overwrite": True},
+             ["expectedSource"]),
+        ]:
+            before_tree = tree_snapshot()
+            refused = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "template": spec})
+            assert_error_quality(assert_error(refused, "unsafe text edit"),
+                                 names=words, suggests=["get_metadata_details"])
+            assert_tree_unchanged(before_tree, "rejected edit must change no project file")
+            assert path.read_bytes() == text.encode("utf-8")
+            assert _text_and_hash(_details(fqn)) == (text, _hash(text))
+
+        text = written({"mode": "replace", "text": "final\r\n",
+                        "expectedSource": text.replace("\r\n", "\n")}, "final\r\n")
+        text = written({"mode": "replace", "text": "forced", "overwrite": True}, "forced")
+        _descriptor(root, "Текст826", "TextDocument")
+        assert_ok(call("revalidate_objects", {"projectName": PROJECT, "objects": [owner]}),
+                  "validate edited template owner")
+        settle_or_fail("text template validation")
+        errors = call("get_project_errors", {
+            "projectName": PROJECT, "objectFqns": [owner], "severity": "ERRORS",
+        })
+        assert_ok(errors, "edited owner validation markers")
+        assert errors.structured["objectsResolved"], "owner must resolve before scanning markers"
+        assert_contains(errors.structured["report"], "# No Errors Found", "no errors on edited owner")
+        assert errors.structured["problemsFound"] == 0
+        written({"mode": "replace", "text": "", "expectedHash": _hash(text)}, "")
+    finally:
+        _cleanup(owner, root)
