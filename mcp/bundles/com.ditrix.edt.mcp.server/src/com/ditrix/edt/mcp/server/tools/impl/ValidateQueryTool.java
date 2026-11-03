@@ -29,6 +29,9 @@ import org.eclipse.xtext.validation.CheckMode;
 import org.eclipse.xtext.validation.IResourceValidator;
 import org.eclipse.xtext.validation.Issue;
 
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.ql.dcs.resource.QlDcsResource;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -36,6 +39,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -90,6 +95,7 @@ public class ValidateQueryTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("valid", "true when the query has zero issues") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(DCS_MODE, "Whether DCS validation mode was used") //$NON-NLS-1$
+            .stringProperty("validationScope", "Project and metadata scope used for validation") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("errorCount", "Number of ERROR-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("warningCount", "Number of WARNING-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("infoCount", "Number of INFO-severity issues") //$NON-NLS-1$ //$NON-NLS-2$
@@ -166,7 +172,31 @@ public class ValidateQueryTool implements IMcpTool
      * @param dcsMode whether to use DCS validation mode
      * @return JSON result with validation errors
      */
-    private String doValidateQuery(IProject project, String queryText, boolean dcsMode)
+    String doValidateQuery(IProject project, String queryText, boolean dcsMode)
+    {
+        try
+        {
+            IV8Project v8Project = ExtensionOriginUtils.resolveV8Project(project);
+            IBmModelManager modelManager = Activator.getDefault().getBmModelManager();
+            IBmModel model = v8Project == null || modelManager == null
+                ? null : modelManager.getModel(v8Project.getDtProject());
+            if (model == null)
+            {
+                return ToolResult.error("Metadata model is unavailable for project '" + project.getName() //$NON-NLS-1$
+                    + "'. Check list_projects, wait for the project to become ready, and retry.").toJson(); //$NON-NLS-1$
+            }
+            return BmTransactions.read(model, "Validate query", //$NON-NLS-1$
+                (tx, monitor) -> doValidateQuery(project, v8Project, queryText, dcsMode));
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error resolving query validation context", e); //$NON-NLS-1$
+            return ToolResult.error("Cannot validate a query in project '" + project.getName() //$NON-NLS-1$
+                + "': " + e.getMessage() + ". Check list_projects and retry when the project is ready.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private String doValidateQuery(IProject project, IV8Project v8Project, String queryText, boolean dcsMode)
     {
         XtextResource resource = null;
         try
@@ -205,10 +235,7 @@ public class ValidateQueryTool implements IMcpTool
             if (resource instanceof QlDcsResource)
             {
                 QlDcsResource qlResource = (QlDcsResource) resource;
-                // Match EDT's query editor: use the extension + base model union; regular projects are a no-op.
-                qlResource.setParentScopeAware(true);
-                qlResource.addOptions("DcsValidationModeOption", dcsMode); //$NON-NLS-1$
-                qlResource.setPreComputeAnnounceAlias(dcsMode);
+                configureResource(qlResource, v8Project, dcsMode);
             }
             
             // Load the query text into the resource
@@ -229,7 +256,7 @@ public class ValidateQueryTool implements IMcpTool
             List<QueryIssue> issues = collectIssues(resource, validator);
 
             // Build the result
-            return buildResult(issues, dcsMode);
+            return buildResult(issues, dcsMode, validationScope(project));
         }
         catch (IOException e)
         {
@@ -261,6 +288,27 @@ public class ValidateQueryTool implements IMcpTool
                 }
             }
         }
+    }
+
+    static void configureResource(QlDcsResource resource, IV8Project project, boolean dcsMode)
+    {
+        // The union flag adds the parent scope; IDtProjectAware supplies the extension's own index.
+        resource.setDtProject(project.getDtProject());
+        resource.setParentScopeAware(true);
+        resource.addOptions("DcsValidationModeOption", dcsMode); //$NON-NLS-1$
+        resource.setPreComputeAnnounceAlias(dcsMode);
+    }
+
+    static String validationScope(IProject project)
+    {
+        String scope = "Project '" + project.getName() + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (ExtensionOriginUtils.isExtensionProject(project))
+        {
+            IProject base = ExtensionOriginUtils.resolveBaseProject(project);
+            return scope + " (extension" + (base == null ? ")" //$NON-NLS-1$ //$NON-NLS-2$
+                : " + base configuration '" + base.getName() + "')"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return scope;
     }
     
     /**
@@ -341,6 +389,11 @@ public class ValidateQueryTool implements IMcpTool
      */
     static String buildResult(List<QueryIssue> issues, boolean dcsMode)
     {
+        return buildResult(issues, dcsMode, null);
+    }
+
+    static String buildResult(List<QueryIssue> issues, boolean dcsMode, String validationScope)
+    {
         List<Map<String, Object>> issueList = new ArrayList<>();
         for (QueryIssue issue : issues)
         {
@@ -366,6 +419,7 @@ public class ValidateQueryTool implements IMcpTool
         return ToolResult.success()
             .put("valid", issues.isEmpty()) //$NON-NLS-1$
             .put(DCS_MODE, dcsMode)
+            .put("validationScope", validationScope) //$NON-NLS-1$
             .put("errorCount", //$NON-NLS-1$
                 issues.stream().filter(i -> ERROR.equals(i.severity)).count())
             .put("warningCount", //$NON-NLS-1$

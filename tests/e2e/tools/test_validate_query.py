@@ -20,7 +20,8 @@ rubber-stamping.
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
+    assert_contains, assert_no_diff, assert_no_diff_rel, FIXTURE_REL_BY_PROJECT,
+    e2e_test, PROJECT, TESTS_PROJECT,
 )
 
 
@@ -85,7 +86,51 @@ def test_extension_union_scope_resolves_extension_owned_object():
         "the extension-owned object must be valid in the union scope: %r" % (r.structured,)
     assert r.structured.get("issues") == [], \
         "the extension-owned object must produce no issues: %r" % (r.structured,)
+    assert r.structured.get("validationScope") == \
+        "Project '%s' (extension + base configuration '%s')" % (TESTS_PROJECT, PROJECT), \
+        "validation must name the extension and base scope: %r" % (r.structured,)
     assert_no_diff("validate_query is read-only; nothing may change on disk")
+    assert_no_diff_rel(FIXTURE_REL_BY_PROJECT[TESTS_PROJECT])
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_extension_union_resolves_own_and_adopted_fields_together_in_both_dialects():
+    queries = (
+        "SELECT E.Ref, E.ExtValue, B.Description "
+        "FROM Catalog.tests_ExtOnly AS E "
+        "LEFT JOIN Catalog.Catalog AS B ON E.ExtValue = B.Description",
+        "ВЫБРАТЬ E.Ссылка, E.ExtValue, B.Наименование "
+        "ИЗ Справочник.tests_ExtOnly КАК E "
+        "ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Catalog КАК B ПО E.ExtValue = B.Наименование",
+    )
+    for dcs_mode in (False, True):
+        for query in queries:
+            r = call("validate_query", {
+                "projectName": TESTS_PROJECT, "queryText": query, "dcsMode": dcs_mode,
+            })
+            assert_ok(r, "extension-owned and inherited fields in the same query")
+            assert r.structured is not None, "missing structuredContent: %r" % (r.text,)
+            assert r.structured.get("valid") is True, r.structured
+            assert r.structured.get("issues") == [], r.structured
+            assert r.structured.get("dcsMode") is dcs_mode, r.structured
+    assert_no_diff()
+    assert_no_diff_rel(FIXTURE_REL_BY_PROJECT[TESTS_PROJECT])
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_extension_owned_object_still_rejects_unknown_field():
+    r = call("validate_query", {
+        "projectName": TESTS_PROJECT,
+        "queryText": "SELECT E.ExtValue, E.NoSuchField713 FROM Catalog.tests_ExtOnly AS E",
+    })
+    assert_ok(r, "semantic errors are returned as validation issues")
+    assert r.structured is not None, "missing structuredContent: %r" % (r.text,)
+    assert r.structured.get("valid") is False, r.structured
+    errors = [issue for issue in r.structured.get("issues", []) if issue.get("severity") == "ERROR"]
+    assert len(errors) == 1, "only the unknown field must fail: %r" % (r.structured,)
+    assert_contains(errors[0].get("message", ""), "NoSuchField713")
+    assert_no_diff()
+    assert_no_diff_rel(FIXTURE_REL_BY_PROJECT[TESTS_PROJECT])
 
 
 @e2e_test(tool="validate_query", kind="read")

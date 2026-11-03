@@ -14,7 +14,7 @@ Validates 1C:Enterprise query language (QL) text in the context of a project, us
 The QL parser is dialect-aware: both the English and Russian forms of keywords and table-type tokens are accepted (e.g. `SELECT ... FROM Catalog.Products` and `ВЫБРАТЬ ... ИЗ Справочник.Продукты`). Do not assume a single dialect. Metadata objects are referenced by their programmatic `Name` (not by synonym); only the type token (Catalog / Справочник) may be in either language.
 
 ## Result shape
-JSON with `valid` (true when there are zero issues), `dcsMode`, `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
+JSON with `valid` (true when there are zero issues), `dcsMode`, `validationScope` (the project and, for a linked extension, its base configuration), `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
 
 ## Examples
 - Plain query: `{ "projectName": "MyProj", "queryText": "SELECT Ref FROM Catalog.Products" }`.
