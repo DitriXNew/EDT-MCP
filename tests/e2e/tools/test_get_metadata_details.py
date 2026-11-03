@@ -72,7 +72,7 @@ def test_form_type_cell_caps_names_without_changing_assignable_value():
     assert_contains(row, "CatalogRef.E2ECellType10 \u2026 (+1 more)", "ten visible types and exact tail")
     assert_not_contains(row, names[10], "eleventh type is omitted only from the cell")
     assignable = call("get_metadata_details", {
-        "projectName": PROJECT, "objectFqns": [attribute_fqn], "view": "assignable"})
+        "projectName": PROJECT, "objectFqns": [attribute_fqn], "assignable": True})
     assert_ok(assignable, "read back the full assignable type")
     for name in names:
         assert_contains(assignable.text, name, "the complete type value remains available")
