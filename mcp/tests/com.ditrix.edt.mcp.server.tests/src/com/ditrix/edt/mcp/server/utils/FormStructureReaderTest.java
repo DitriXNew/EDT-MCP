@@ -48,6 +48,24 @@ import org.junit.Test;
 public class FormStructureReaderTest
 {
     @Test
+    public void testRenderCanonicalFormHeaders()
+    {
+        var form = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm();
+        for (String[] address : new String[][] {
+            { "Catalog.Products.forms.ItemForm", "Catalog.Products.Form.ItemForm" },
+            { "Catalogs.Products.Forms.ItemForm", "Catalog.Products.Form.ItemForm" },
+            { "Справочник.Товары.Форма.ФормаЭлемента", "Catalog.Товары.Form.ФормаЭлемента" },
+            { "CommonForm.Picker", "CommonForm.Picker" },
+            { "ОбщаяФорма.Выбор", "CommonForm.Выбор" }
+        })
+        {
+            String heading = "# Form Structure: " + address[1] + "\n\n";
+            assertTrue(address[0], FormStructureReader.render(address[0], form, "en").startsWith(heading));
+            assertTrue(address[0], FormStructureReader.render(address[0], form, "ru", 1).startsWith(heading));
+        }
+    }
+
+    @Test
     public void testCommandCellIsCappedButRefusalKeepsAllHandlers()
     {
         var factory = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE;
@@ -253,7 +271,7 @@ public class FormStructureReaderTest
 
         String md = FormStructureReader.render("Catalog.Products.Forms.ItemForm", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue(md.startsWith("# Form Structure: Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
+        assertTrue(md.startsWith("# Form Structure: Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
         assertTrue(md.contains("## Items")); //$NON-NLS-1$
         assertTrue(md.contains("- MainGroup (type: FormGroup, id: 1)")); //$NON-NLS-1$
         // The child field is indented one level under its container.
