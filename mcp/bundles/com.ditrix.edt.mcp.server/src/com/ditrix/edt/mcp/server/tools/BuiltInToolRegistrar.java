@@ -11,6 +11,7 @@ import java.util.List;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CloneMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool;
 import com.ditrix.edt.mcp.server.tools.impl.AskWorkmateTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
@@ -252,6 +253,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new CreateMetadataTool());
         catalogue.add(new ModifyMetadataTool());
         catalogue.add(new AdoptMetadataObjectTool());
+        catalogue.add(new CloneMetadataObjectTool());
         catalogue.add(new ValidateXdtoPackageTool());
 
         // Three-way configuration comparison (read-only: nothing is ever merged).

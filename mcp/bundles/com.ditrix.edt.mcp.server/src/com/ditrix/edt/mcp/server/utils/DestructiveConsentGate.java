@@ -147,6 +147,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code DestructiveConsentGateTest} so the two lists never silently drift.
      */
     public static final Set<String> GATED_TOOLS = Set.of(
+        "clone_metadata_object",
         "delete_metadata", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
         "delete_project", //$NON-NLS-1$
