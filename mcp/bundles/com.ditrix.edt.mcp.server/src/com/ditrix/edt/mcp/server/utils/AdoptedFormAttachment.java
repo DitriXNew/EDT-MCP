@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.EList;
@@ -35,36 +36,65 @@ public final class AdoptedFormAttachment
     public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
         ITopObjectFqnGenerator generator)
     {
+        return complete(tx, source, allocation, generator, reason -> { });
+    }
+
+    /** Reports exactly one decline token; all callbacks and model access stay inside the caller's write. */
+    public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
+        ITopObjectFqnGenerator generator, Consumer<String> declined)
+    {
         MdObject owner = AdoptedFormLookup.findOwner(tx, source);
         EObject baseOwner = source.eContainer();
         EStructuralFeature feature = source.eContainingFeature();
-        if (owner == null || !(baseOwner instanceof IBmObject) || !(allocation instanceof BasicForm)
-            || !(allocation instanceof IBmObject) || allocation.eContainer() != null
-            || ((IBmObject)allocation).bmGetId() != IBmObject.BM_NULL_ID
-            || allocation.eIsProxy() || allocation.eClass() != source.eClass()
-            || !ExtensionServices.isAdopted(allocation) || !originMatches(source, (MdObject)allocation)
-            || !(feature instanceof EReference) || !((EReference)feature).isContainment()
-            || !feature.isMany())
+        if (owner == null)
         {
-            return null;
+            return decline(declined, "ownerUnavailable"); //$NON-NLS-1$
+        }
+        if (!(baseOwner instanceof IBmObject))
+        {
+            return decline(declined, "sourceOwnerNotBm"); //$NON-NLS-1$
+        }
+        if (!(allocation instanceof BasicForm) || !(allocation instanceof IBmObject))
+        {
+            return decline(declined, "allocationNotForm"); //$NON-NLS-1$
+        }
+        if (allocation.eContainer() != null || ((IBmObject)allocation).bmGetId() != IBmObject.BM_NULL_ID)
+        {
+            return decline(declined, "allocationAlreadyAttached"); //$NON-NLS-1$
+        }
+        if (allocation.eIsProxy() || allocation.eClass() != source.eClass())
+        {
+            return decline(declined, "allocationTypeOrProxy"); //$NON-NLS-1$
+        }
+        if (!ExtensionServices.isAdopted(allocation))
+        {
+            return decline(declined, "allocationNotAdopted"); //$NON-NLS-1$
+        }
+        if (!originMatches(source, (MdObject)allocation))
+        {
+            return decline(declined, "allocationOriginMismatch"); //$NON-NLS-1$
+        }
+        if (!(feature instanceof EReference) || !((EReference)feature).isContainment() || !feature.isMany())
+        {
+            return decline(declined, "sourceFeatureNotContainment"); //$NON-NLS-1$
         }
         IBmObject originalOwner = (IBmObject)baseOwner;
         if (originalOwner.bmGetId() == IBmObject.BM_NULL_ID
             || originalOwner.bmGetNamespace() == null || originalOwner.bmGetNamespace() == tx.getNamespace()
             || originalOwner.bmGetId() != ((IBmObject)owner).bmGetId())
         {
-            return null;
+            return decline(declined, "ownerIdsOrNamespacesDoNotCollide"); //$NON-NLS-1$
         }
         Object contents = owner.eGet(feature);
         if (!(contents instanceof EList<?>))
         {
-            return null;
+            return decline(declined, "formsNotEList"); //$NON-NLS-1$
         }
         @SuppressWarnings("unchecked")
         EList<EObject> forms = (EList<EObject>)contents;
         if (forms.isEmpty() || !forms.contains(source))
         {
-            return null;
+            return decline(declined, "notFalseContainment"); //$NON-NLS-1$
         }
         for (EObject candidate : forms)
         {
@@ -74,28 +104,41 @@ public final class AdoptedFormAttachment
                     || source.getUuid() != null
                         && source.getUuid().equals(((MdObject)candidate).getExtendedConfigurationObject())))
             {
-                return null;
+                return decline(declined, "duplicateForm(" + label(candidate) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         BasicForm copy = (BasicForm)allocation;
         EObject content = copy.getForm();
+        boolean expectsContent = content != null || source.getForm() != null;
+        String expectedFqn = generator == null || !expectsContent ? null
+            : generator.generateExternalPropertyFqn(allocation, MdClassPackage.Literals.BASIC_FORM__FORM);
+        // BasicForm.form is transient; the native copier registers its external top object synchronously.
+        IBmObject registered = expectedFqn == null ? null : tx.getTopObjectByFqn(expectedFqn);
+        if (registered instanceof AbstractForm && !registered.eIsProxy() && primary(tx, registered))
+        {
+            content = registered;
+        }
         if (content == null && source.getForm() != null)
         {
-            return null;
+            return decline(declined, "missingContent(expected=" + expectedFqn + ", registered=" //$NON-NLS-1$ //$NON-NLS-2$
+                + label(registered) + ")"); //$NON-NLS-1$
         }
         List<IBmObject> external = new ArrayList<>();
         String oldFqn = null;
         if (content != null)
         {
-            if (!(content instanceof IBmObject) || content.eIsProxy() || !primary(tx, (IBmObject)content))
+            if (!(content instanceof AbstractForm) || !(content instanceof IBmObject) || content.eIsProxy())
             {
-                return null;
+                return decline(declined, "contentTypeOrProxy(" + label(content) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (!primary(tx, (IBmObject)content))
+            {
+                return decline(declined, "contentNotPrimary(" + label(content) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
             oldFqn = BmObjectAddress.topFqnOrNull((IBmObject)content);
-            if (oldFqn == null || generator == null || !oldFqn.equals(generator.generateExternalPropertyFqn(
-                allocation, MdClassPackage.Literals.BASIC_FORM__FORM)))
+            if (oldFqn == null || expectedFqn == null || !oldFqn.equals(expectedFqn))
             {
-                return null;
+                return decline(declined, "contentFqnMismatch(old=" + oldFqn + ", expected=" + expectedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
             Iterator<IBmObject> objects = tx.getTopObjectIterator();
             while (objects.hasNext())
@@ -109,7 +152,7 @@ public final class AdoptedFormAttachment
             }
             if (!external.contains(content))
             {
-                return null;
+                return decline(declined, "contentMissingFromTopObjects(" + oldFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         // Keep EDT's allocation, origin link, form and BaseForm; only finish the missed addChild.
@@ -136,8 +179,15 @@ public final class AdoptedFormAttachment
                     ((AbstractForm)object).setMdForm((BasicForm)attached);
                 }
             }
+            ((BasicForm)attached).setForm((AbstractForm)content);
         }
         return attached;
+    }
+
+    private static EObject decline(Consumer<String> declined, String reason)
+    {
+        declined.accept(reason);
+        return null;
     }
 
     /** Captures plain diagnostic text while all observed objects are still inside the transaction. */

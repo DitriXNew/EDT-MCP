@@ -509,6 +509,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         assertTrue(error, error.contains("copy=CatalogFormImpl:null#-1, container=null, feature=null"));
         assertTrue(error, error.contains("ownerFound=false") && error.contains("formsCount=0"));
         assertTrue(error, error.contains("candidates=[]"));
+        assertTrue(error, error.contains("declined=ownerUnavailable"));
         assertEquals("the failure must be diagnosable in edt.log", 1, warnings.size());
         assertEquals(IStatus.WARNING, warnings.get(0).getSeverity());
         assertTrue(error, error.contains(warnings.get(0).getMessage().substring("adopt_metadata_object: ".length())));

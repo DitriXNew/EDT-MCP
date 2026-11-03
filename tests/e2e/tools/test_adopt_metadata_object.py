@@ -808,6 +808,8 @@ def test_adopting_standard_picture_only_form_has_no_common_dependencies():
         form_xml = read_fixture_file(TESTS_PROJECT_REL, form_disk)
         assert_contains(form_xml, "<headerPicture", "the adopted form must preserve its PictureRef")
         assert_contains(form_xml, "Change", "the adopted form must preserve its standard picture")
+        snapshot = read_fixture_file(TESTS_PROJECT_REL, form_disk.replace("/Form.form", "/BaseForm/Form.form"))
+        assert_contains(snapshot, "Change", "the native base snapshot must retain the standard picture")
         pictures = _picture_dependencies(adopted, "standard-picture dependencies")
         payload = _structured(adopted, "first standard-picture form adoption into an existing owner")
         assert payload.get("action") == "adopted", payload
@@ -818,6 +820,7 @@ def test_adopting_standard_picture_only_form_has_no_common_dependencies():
         })
         assert_ok(details, "read the adopted standard-picture field from the extension model")
         assert_contains(details.text, "StdPicture.Change", "the platform picture must round-trip in the copy")
+        _assert_no_adoption_errors(form_fqn)
     finally:
         if not calls_aborted():
             restore_extension_fixture("adoption of a standard-picture-only form")

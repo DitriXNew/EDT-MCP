@@ -13,16 +13,20 @@ import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.common.util.URI;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -33,9 +37,15 @@ import com._1c.g5.v8.bm.core.IBmPlatformTransaction;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.Picture;
+import com._1c.g5.v8.dt.mcore.PictureRef;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 
 /** The native containment fast path can mistake a different namespace's child for a stored child. */
@@ -145,10 +155,70 @@ public class AdoptedFormAttachmentTest
     }
 
     @Test
+    public void testCiStandardPictureFormUsesStoredContentWhenTheAllocationReferenceIsMissing()
+    {
+        String name = "E2EStandardPictureAdoptForm";
+        String oldFqn = "CatalogForm." + name + ".Form";
+        String newFqn = "Catalog.Catalog.Form." + name + ".Form";
+        when(baseOwner.getName()).thenReturn("Catalog");
+        when(owner.getName()).thenReturn("Catalog");
+        when(((IBmObject)baseOwner).bmGetId()).thenReturn(12884901888L);
+        when(((IBmObject)owner).bmGetId()).thenReturn(12884901888L);
+        when(((IBmObject)baseOwner).bmGetNamespace().getName()).thenReturn("TestConfiguration");
+        when(((IBmObject)owner).bmGetNamespace()).thenReturn(namespace);
+        when(namespace.getName()).thenReturn("TestConfiguration.tests");
+        when(source.getName()).thenReturn(name);
+        when(((IBmObject)source).bmGetId()).thenReturn(12884902302L);
+        when(copy.getName()).thenReturn(name);
+        CatalogForm item = (CatalogForm)forms.get(0);
+        when(item.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
+        when(item.getName()).thenReturn("ItemForm");
+        when(item.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        when(((IBmObject)item).bmGetId()).thenReturn(12884901896L);
+        when(tx.getTopObjectByFqn("Catalog.Catalog")).thenReturn((IBmObject)owner);
+
+        Form data = FormFactory.eINSTANCE.createForm();
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        Picture standard = mock(Picture.class, withSettings().extraInterfaces(InternalEObject.class));
+        when(standard.eIsProxy()).thenReturn(true);
+        when(((InternalEObject)standard).eProxyURI()).thenReturn(URI.createURI("v8:/Pictures/Std/8.3.27#/Change"));
+        PictureRef ref = McoreFactory.eINSTANCE.createPictureRef();
+        ref.setPicture(standard);
+        field.setHeaderPicture(ref);
+        data.getItems().add(field);
+        Form stored = mock(Form.class, withSettings().extraInterfaces(IBmObject.class)
+            .defaultAnswer(delegatesTo(data)));
+        org.mockito.Mockito.doReturn(3001L).when((IBmObject)stored).bmGetId();
+        org.mockito.Mockito.doReturn(true).when((IBmObject)stored).bmIsTop();
+        org.mockito.Mockito.doReturn(oldFqn).when((IBmObject)stored).bmGetFqn();
+        when(source.getForm()).thenReturn(data);
+        when(copy.getForm()).thenReturn(null); // BasicForm.form is a transient external-content reference.
+        when(tx.getTopObjectByFqn(oldFqn)).thenReturn((IBmObject)stored);
+        when(tx.getTopObjectIterator()).thenAnswer(inv -> List.of((IBmObject)stored).iterator());
+        when(generator.generateExternalPropertyFqn(copy, MdClassPackage.Literals.BASIC_FORM__FORM))
+            .thenAnswer(inv -> copyId.get() == IBmObject.BM_NULL_ID ? oldFqn : newFqn);
+        String before = AdoptedFormAttachment.describe(tx, source, copy);
+        assertTrue(before, before.contains("#12884902302") && before.contains("container=null, feature=null"));
+        assertTrue(before, before.contains("ownerFound=true") && before.contains("formsCount=1, containsSource=true"));
+        assertTrue(before, before.contains("adopted=true,primary=true,originUuidMatch=false"));
+
+        assertSame(copy, AdoptedFormAttachment.complete(tx, source, copy, generator));
+        verify(copy).setForm(stored);
+        verify(stored).setMdForm(copy);
+        verify(tx).updateTopObjectFqn((IBmObject)stored, newFqn);
+        assertSame(standard, ((PictureRef)field.getHeaderPicture()).getPicture());
+        CatalogForm check = MdClassFactory.eINSTANCE.createCatalogForm();
+        check.setForm(stored);
+        FormPictureDependencies.Result pictures = FormPictureDependencies.collect(check);
+        assertTrue(pictures.found.toString(), pictures.found.isEmpty());
+        assertTrue(pictures.unresolved.toString(), pictures.unresolved.isEmpty());
+    }
+
+    @Test
     public void testDoNotAttachWhenContainsDoesNotHaveTheNativeFalsePositive()
     {
         falseContains = false;
-        assertRefused();
+        assertEquals("notFalseContainment", assertRefused());
     }
 
     @Test
@@ -174,42 +244,90 @@ public class AdoptedFormAttachmentTest
     {
         when(source.getForm()).thenReturn(content);
         when(copy.getForm()).thenReturn(null);
-        assertRefused();
+        assertTrue(assertRefused().startsWith("missingContent(expected=CatalogForm.Item.Form, registered=null)"));
     }
 
     @Test
     public void testDoNotAttachWhenOwnerIdsDoNotCollide()
     {
         when(((IBmObject)baseOwner).bmGetId()).thenReturn(9001L);
-        assertRefused();
+        assertEquals("ownerIdsOrNamespacesDoNotCollide", assertRefused());
     }
 
     @Test
     public void testDoNotAttachSourceInTheSameNamespace()
     {
         when(((IBmObject)baseOwner).bmGetNamespace()).thenReturn(namespace);
-        assertRefused();
+        assertEquals("ownerIdsOrNamespacesDoNotCollide", assertRefused());
     }
 
     @Test
     public void testDoNotAttachWhenAnExistingFormHasTheSameName()
     {
         when(((CatalogForm)forms.get(0)).getName()).thenReturn("Item");
-        assertRefused();
+        assertTrue(assertRefused().startsWith("duplicateForm("));
     }
 
     @Test
     public void testDoNotAttachACopyWithTheWrongOrigin()
     {
         when(copy.getExtendedConfigurationObject()).thenReturn(UUID.randomUUID());
-        assertRefused();
+        assertEquals("allocationOriginMismatch", assertRefused());
     }
 
     @Test
     public void testDoNotMoveSecondaryFormContent()
     {
         when(platform.getContainingDataStore((IBmObject)content)).thenReturn(mock(IBmNamespaceDataStore.class));
-        assertRefused();
+        assertTrue(assertRefused().startsWith("contentNotPrimary("));
+    }
+
+    @Test
+    public void testRegisteredPrimaryFormReplacesAnInheritedAllocationReference()
+    {
+        when(platform.getContainingDataStore((IBmObject)content)).thenReturn(mock(IBmNamespaceDataStore.class));
+        Form own = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
+        when(((IBmObject)own).bmGetId()).thenReturn(3003L);
+        when(((IBmObject)own).bmIsTop()).thenReturn(true);
+        when(((IBmObject)own).bmGetFqn()).thenReturn("CatalogForm.Item.Form");
+        when(tx.getTopObjectByFqn("CatalogForm.Item.Form")).thenReturn((IBmObject)own);
+        when(tx.getTopObjectIterator()).thenAnswer(inv -> List.of((IBmObject)own).iterator());
+        assertSame(copy, AdoptedFormAttachment.complete(tx, source, copy, generator));
+        verify(copy).setForm(own);
+        verify(own).setMdForm(copy);
+        verify(tx).updateTopObjectFqn((IBmObject)own, "Catalog.Goods.Form.Item.Form");
+        verify(content, never()).setMdForm(any());
+    }
+
+    @Test
+    public void testDoNotUseAnInheritedRegisteredFormWhenOwnContentIsMissing()
+    {
+        when(source.getForm()).thenReturn(content);
+        when(copy.getForm()).thenReturn(null);
+        when(platform.getContainingDataStore((IBmObject)content)).thenReturn(mock(IBmNamespaceDataStore.class));
+        when(tx.getTopObjectByFqn("CatalogForm.Item.Form")).thenReturn((IBmObject)content);
+        assertTrue(assertRefused().startsWith("missingContent(expected=CatalogForm.Item.Form, registered="));
+    }
+
+    @Test
+    public void testDeclineIdentifiesTheContentFqnMismatch()
+    {
+        when(((IBmObject)content).bmGetFqn()).thenReturn("CatalogForm.Other.Form");
+        assertEquals("contentFqnMismatch(old=CatalogForm.Other.Form, expected=CatalogForm.Item.Form)", assertRefused());
+    }
+
+    @Test
+    public void testDeclineIdentifiesMissingExternalTopObjects()
+    {
+        when(tx.getTopObjectIterator()).thenReturn(List.<IBmObject>of().iterator());
+        assertEquals("contentMissingFromTopObjects(CatalogForm.Item.Form)", assertRefused());
+    }
+
+    @Test
+    public void testDeclineIdentifiesANonAdoptedAllocation()
+    {
+        when(copy.getObjectBelonging()).thenReturn(ObjectBelonging.NATIVE);
+        assertEquals("allocationNotAdopted", assertRefused());
     }
 
     @Test
@@ -240,10 +358,13 @@ public class AdoptedFormAttachmentTest
         assertTrue(text, text.contains("adopted=false,primary=true,originUuidMatch=false"));
     }
 
-    private void assertRefused()
+    private String assertRefused()
     {
-        assertNull(AdoptedFormAttachment.complete(tx, source, copy, generator));
+        List<String> reasons = new ArrayList<>();
+        assertNull(AdoptedFormAttachment.complete(tx, source, copy, generator, reasons::add));
         assertEquals(1, forms.size());
         verify(tx, never()).updateTopObjectFqn(any(), any());
+        assertEquals("each decline must identify exactly one guard", 1, reasons.size());
+        return reasons.get(0);
     }
 }

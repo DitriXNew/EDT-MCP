@@ -1183,13 +1183,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             if (inTx == null)
             {
                 String recoveryFailure = null;
+                AtomicReference<String> declined = new AtomicReference<>("notApplicable"); //$NON-NLS-1$
                 if (source instanceof BasicForm && copy instanceof IBmObject
                     && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID)
                 {
                     try
                     {
                         inTx = AdoptedFormAttachment.complete(tx, (BasicForm)source, copy,
-                            Activator.getDefault().getTopObjectFqnGenerator());
+                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set);
                         if (inTx != null)
                         {
                             Activator.logInfo("adopt_metadata_object: Completed native form attachment after a " //$NON-NLS-1$
@@ -1199,12 +1200,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     catch (RuntimeException e)
                     {
                         recoveryFailure = e.getMessage();
+                        declined.set("exception(" + e.getClass().getSimpleName() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                 }
                 if (inTx == null)
                 {
                     String message = "Adopted copy is unavailable (" //$NON-NLS-1$
                         + AdoptedFormAttachment.describe(tx, source, copy)
+                        + ", declined=" + declined.get() //$NON-NLS-1$
                         + (recoveryFailure == null ? "" : ", attachmentFailure=" + recoveryFailure) //$NON-NLS-1$ //$NON-NLS-2$
                         + "); inspect the extension with get_metadata_objects before retrying adoption."; //$NON-NLS-1$
                     Activator.logWarning("adopt_metadata_object: " + message); //$NON-NLS-1$
