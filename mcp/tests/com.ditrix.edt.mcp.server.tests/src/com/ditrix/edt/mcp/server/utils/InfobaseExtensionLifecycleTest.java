@@ -1,0 +1,329 @@
+/**
+ * MCP Server for EDT - Tests
+ * Copyright (C) 2026 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+package com.ditrix.edt.mcp.server.utils;
+
+import static org.junit.Assert.*;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Backend;
+import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Extension;
+import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Request;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+public class InfobaseExtensionLifecycleTest
+{
+    @Rule public TemporaryFolder folder = new TemporaryFolder();
+    private static final Extension OLD = new Extension("Runtime", "1", false, false, false, "old");
+    private static final Extension OTHER = new Extension("Other", "7", true, true, true, "other");
+
+    private static class Fake implements Backend
+    {
+        List<Extension> states = List.of();
+        final List<String> calls = new ArrayList<>();
+        boolean ignoreLoad;
+        boolean ignoreFlags;
+        boolean ignoreDelete;
+        boolean breakOthers;
+        int reads;
+        Path loadedPath;
+        String loadedContent;
+        boolean failUpdate;
+        boolean failReadAfterWrite;
+
+        @Override public List<Extension> read()
+        {
+            calls.add("read");
+            reads++;
+            if (failReadAfterWrite && loadedPath != null)
+            {
+                throw new IllegalStateException("read-back connection was lost");
+            }
+            return states;
+        }
+
+        @Override public void load(Path file, String name) throws Exception
+        {
+            calls.add("load:" + name);
+            loadedPath = file;
+            loadedContent = Files.readString(file);
+            if (!ignoreLoad)
+            {
+                var next = new ArrayList<>(states.stream().filter(e -> !e.name().equals(name)).toList());
+                next.add(new Extension(name, "2", true, true, true, "new"));
+                states = next;
+            }
+        }
+
+        @Override public void update(String name)
+        {
+            calls.add("update:" + name);
+            if (failUpdate)
+            {
+                throw new IllegalStateException("Infobase exclusive lock denied");
+            }
+            if (breakOthers)
+            {
+                states = states.stream().filter(e -> !e.name().equals("Other")).toList();
+            }
+        }
+
+        @Override public void flags(String name, boolean safe, boolean protection, Boolean active)
+        {
+            calls.add("flags:" + name);
+            if (!ignoreFlags)
+            {
+                states = states.stream().map(e -> !e.name().equals(name) ? e
+                    : new Extension(name, e.version(), active == null ? e.active() : active,
+                        safe, protection, e.hash())).toList();
+            }
+        }
+
+        @Override public void delete(String name)
+        {
+            calls.add("delete:" + name);
+            if (!ignoreDelete)
+            {
+                states = states.stream().filter(e -> !e.name().equals(name)).toList();
+            }
+        }
+    }
+
+    private Request request(String action, boolean confirm) throws Exception
+    {
+        Path file = folder.newFile("input" + System.nanoTime() + ".cfe").toPath();
+        Files.writeString(file, "CFE fixture");
+        return new Request(action, "Runtime", action.equals("uninstall") ? null : file, null, null, "uninstall".equals(action) ? null : "2", confirm);
+    }
+
+    private JsonObject run(Request request, Fake backend) throws Exception
+    {
+        return json(InfobaseExtensionLifecycle.execute(request, backend, preview -> true, () -> {}, () -> {}));
+    }
+
+    private static JsonObject json(ToolResult result)
+    {
+        return JsonParser.parseString(result.toJson()).getAsJsonObject();
+    }
+
+    @Test public void listReadsActualFlagsAndEmptyInventory() throws Exception
+    {
+        Request list = new Request("list", null, null, null, null, null, false);
+        Fake backend = new Fake();
+        assertEquals(0, run(list, backend).get("count").getAsInt());
+        backend.states = List.of(OLD);
+        JsonObject state = run(list, backend).getAsJsonArray("extensions").get(0).getAsJsonObject();
+        assertEquals("1", state.get("version").getAsString());
+        assertFalse(state.get("active").getAsBoolean());
+        assertFalse(state.get("safeMode").getAsBoolean());
+        assertFalse(state.get("protectionFromDangerousActions").getAsBoolean());
+        assertEquals(List.of("read", "read"), backend.calls);
+    }
+
+    @Test public void installPreviewDoesNotAskConsentOrWrite() throws Exception
+    {
+        Fake backend = new Fake();
+        JsonObject result = json(InfobaseExtensionLifecycle.execute(request("install", false), backend,
+            preview -> { fail("preview asked consent"); return false; }, () -> fail("preview guarded a write"),
+            () -> fail("preview entered a mutation")));
+        assertTrue(result.get("requiresConfirmation").getAsBoolean());
+        assertTrue(result.get("requestedSafeMode").getAsBoolean());
+        assertTrue(result.get("requestedProtectionFromDangerousActions").getAsBoolean());
+        assertEquals(List.of("read"), backend.calls);
+    }
+
+    @Test public void installVerifiesActualVersionAndSafeDefaults() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OTHER);
+        JsonObject result = run(request("install", true), backend);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("verified", result.get("verification").getAsString());
+        assertEquals("2", result.getAsJsonObject("actualState").get("version").getAsString());
+        assertEquals(List.of("read", "read", "load:Runtime", "flags:Runtime", "update:Runtime", "read"), backend.calls);
+        assertTrue(result.get("extensionInstalled").getAsBoolean());
+    }
+
+    @Test public void successfulLoadWithoutAnInstalledExtensionIsFailure() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.ignoreLoad = true;
+        JsonObject result = run(request("install", true), backend);
+        assertFalse(result.get("success").getAsBoolean());
+        assertFalse(result.get("extensionInstalled").getAsBoolean());
+        assertEquals("mismatched", result.get("verification").getAsString());
+    }
+
+    @Test public void updatePreservesFalseFlagsAndDisabledState() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OLD, OTHER);
+        JsonObject result = run(request("update", true), backend);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        JsonObject actual = result.getAsJsonObject("actualState");
+        assertEquals("2", actual.get("version").getAsString());
+        assertFalse(actual.get("safeMode").getAsBoolean());
+        assertFalse(actual.get("active").getAsBoolean());
+        assertFalse(actual.get("protectionFromDangerousActions").getAsBoolean());
+    }
+
+    @Test public void explicitFlagChangesAreVerified() throws Exception
+    {
+        Fake backend = new Fake();
+        Request original = request("install", true);
+        Request request = new Request("install", "Runtime", original.cfePath(), false, false, "2", true);
+        assertTrue(run(request, backend).get("success").getAsBoolean());
+        backend = new Fake();
+        backend.ignoreFlags = true;
+        assertFalse(run(request, backend).get("success").getAsBoolean());
+    }
+
+    @Test public void oldVersionIsNotReportedAsVerifiedUpdate() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OLD);
+        backend.ignoreLoad = true;
+        assertFalse(run(request("update", true), backend).get("success").getAsBoolean());
+    }
+
+    @Test public void uninstallVerifiesAbsence() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OLD, OTHER);
+        JsonObject result = run(request("uninstall", true), backend);
+        assertTrue(result.get("success").getAsBoolean());
+        assertFalse(result.get("extensionInstalled").getAsBoolean());
+        assertEquals(List.of(OTHER), backend.states);
+    }
+
+    @Test public void noOpUninstallFailsVerification() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OLD);
+        backend.ignoreDelete = true;
+        assertFalse(run(request("uninstall", true), backend).get("success").getAsBoolean());
+    }
+
+    @Test public void installNeverOverwritesAndUpdateNeverCreates() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OLD);
+        assertFalse(run(request("install", true), backend).get("success").getAsBoolean());
+        backend.states = List.of();
+        assertFalse(run(request("update", true), backend).get("success").getAsBoolean());
+        assertFalse(run(request("uninstall", true), backend).get("success").getAsBoolean());
+        assertEquals(List.of("read", "read", "read"), backend.calls);
+    }
+
+    @Test public void rejectedConsentNeverWrites() throws Exception
+    {
+        Fake backend = new Fake();
+        JsonObject result = json(InfobaseExtensionLifecycle.execute(request("install", true), backend,
+            preview -> false, () -> fail("rejected write"), () -> fail("rejected write")));
+        assertFalse(result.get("success").getAsBoolean());
+        assertEquals(List.of("read"), backend.calls);
+    }
+
+    @Test public void changedInventoryDuringConsentRequiresFreshPreview() throws Exception
+    {
+        Fake backend = new Fake();
+        JsonObject result = json(InfobaseExtensionLifecycle.execute(request("install", true), backend,
+            preview -> { backend.states = List.of(OLD); return true; }, () -> fail("stale write"), () -> fail("stale write")));
+        assertFalse(result.get("success").getAsBoolean());
+        assertEquals(List.of("read", "read"), backend.calls);
+    }
+
+    @Test public void changedOtherExtensionFailsVerification() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.states = List.of(OTHER);
+        backend.breakOthers = true;
+        assertFalse(run(request("install", true), backend).get("success").getAsBoolean());
+    }
+
+    @Test public void cancellationBetweenStepsPreventsRemainingWrites() throws Exception
+    {
+        Fake backend = new Fake();
+        AtomicInteger guards = new AtomicInteger();
+        JsonObject result = json(InfobaseExtensionLifecycle.execute(request("install", true), backend, preview -> true,
+            () -> { if (guards.incrementAndGet() == 2) throw new IllegalStateException("cancelled"); }, () -> {}));
+        assertFalse(result.get("success").getAsBoolean());
+        assertTrue(result.get("error").getAsString().contains("cancelled"));
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean());
+        assertEquals(List.of("read", "read", "load:Runtime", "read"), backend.calls);
+    }
+
+    @Test public void freezesCfeBeforeConsentAndCleansUpItsCopy() throws Exception
+    {
+        Fake backend = new Fake();
+        Request request = request("install", true);
+        JsonObject result = json(InfobaseExtensionLifecycle.execute(request, backend, preview -> {
+            assertTrue(preview.getSubtitle().contains("safeMode=true"));
+            assertTrue(preview.getSubtitle().contains("protectionFromDangerousActions=true"));
+            try { Files.writeString(request.cfePath(), "changed during consent"); }
+            catch (Exception e) { throw new IllegalStateException(e); }
+            return true;
+        }, () -> {}, () -> {}));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("CFE fixture", backend.loadedContent);
+        assertNotEquals(request.cfePath(), backend.loadedPath);
+        assertFalse(Files.exists(backend.loadedPath));
+    }
+
+    @Test public void platformFailureRetainsItsCauseAndRereadsActualState() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.failUpdate = true;
+        JsonObject result = run(request("install", true), backend);
+        assertFalse(result.get("success").getAsBoolean());
+        assertTrue(result.get("error").getAsString().contains("Infobase exclusive lock denied"));
+        assertEquals("notVerified", result.get("verification").getAsString());
+        assertTrue(result.get("extensionInstalled").getAsBoolean());
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean());
+        assertEquals(3, backend.reads);
+    }
+
+    @Test public void unreadablePostStateNeverBecomesAbsenceOrSuccess() throws Exception
+    {
+        Fake backend = new Fake();
+        backend.failReadAfterWrite = true;
+        JsonObject result = run(request("install", true), backend);
+        assertFalse(result.get("success").getAsBoolean());
+        assertFalse(result.has("extensionInstalled"));
+        assertFalse(result.has("actualState"));
+        assertTrue(result.get("verificationReason").getAsString().contains("read-back connection was lost"));
+    }
+
+    @Test public void validatesFilesAndActionCombinations() throws Exception
+    {
+        assertNull(InfobaseExtensionLifecycle.validate(request("install", false)));
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("list", "Runtime", null, null, null, null, false)));
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("install", "Runtime", Path.of("relative.cfe"), null, null, null, false)));
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("uninstall", null, null, null, null, null, true)));
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("install", "Runtime", folder.newFile("wrong.cf").toPath(), null, null, null, true)));
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("install", "Runtime", folder.newFile("empty.cfe").toPath(), null, null, null, true)));
+    }
+
+    @Test public void acceptsEnglishAndRussianProgrammaticNamesButNotSynonyms() throws Exception
+    {
+        Request original = request("install", false);
+        for (String name : List.of("Runtime", "\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u0435"))
+        {
+            assertNull(InfobaseExtensionLifecycle.validate(new Request("install", name, original.cfePath(), null, null, null, false)));
+        }
+        assertNotNull(InfobaseExtensionLifecycle.validate(new Request("install", "Friendly extension", original.cfePath(), null, null, null, false)));
+    }
+}

@@ -6,12 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.lang.reflect.Method;
 
-import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
-import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
@@ -42,14 +39,6 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ExternalObjectDumpSupport
 {
-    /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
-    private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
-        "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
-
-    /** Internal singleton holding the platform-services Guice injector (loaded via the owning bundle). */
-    private static final String PLATFORM_SERVICES_CORE_CLASS =
-        "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"; //$NON-NLS-1$
-
     /** File extension of a dumped external data processor. */
     public static final String EXTENSION_EPF = "epf"; //$NON-NLS-1$
 
@@ -108,35 +97,7 @@ public final class ExternalObjectDumpSupport
     {
         try
         {
-            Bundle psCoreBundle = Platform.getBundle(PLATFORM_SERVICES_CORE_BUNDLE_ID);
-            if (psCoreBundle == null)
-            {
-                Activator.logError("external object dump: bundle '" + PLATFORM_SERVICES_CORE_BUNDLE_ID //$NON-NLS-1$
-                    + "' not found — the EDT platform-services plugin is not installed (resolving " //$NON-NLS-1$
-                    + service.getSimpleName() + ")", null); //$NON-NLS-1$
-                return null;
-            }
-            Class<?> coreClass = psCoreBundle.loadClass(PLATFORM_SERVICES_CORE_CLASS);
-            Method getDefault = coreClass.getDeclaredMethod("getDefault"); //$NON-NLS-1$
-            getDefault.setAccessible(true); // NOSONAR reflective access required (EDT internals, no Require-Bundle)
-            Object coreInstance = getDefault.invoke(null);
-            if (coreInstance == null)
-            {
-                psCoreBundle.start(Bundle.START_TRANSIENT);
-                coreInstance = getDefault.invoke(null);
-                if (coreInstance == null)
-                {
-                    return null;
-                }
-            }
-            Method getInjector = coreClass.getDeclaredMethod("getInjector"); //$NON-NLS-1$
-            getInjector.setAccessible(true); // NOSONAR reflective access required (EDT internals, no Require-Bundle)
-            Object injector = getInjector.invoke(coreInstance);
-            if (injector == null)
-            {
-                return null;
-            }
-            return ((com.google.inject.Injector)injector).getInstance(service);
+            return PlatformServicesSupport.resolve(service);
         }
         catch (Exception e) // NOSONAR probe must never crash the tool
         {

@@ -1,0 +1,68 @@
+## Guide
+
+Manage compiled configuration extensions directly in an infobase, without importing an extension
+project into the workspace. Resolve `applicationId` with `get_applications` first. This tool uses
+EDT's installed platform resolution, stored infobase access settings and Designer connection pool.
+It requires a platform supporting Designer extension operations. It never targets the base
+configuration and never terminates sessions automatically.
+For standalone-server applications, an unreadable session inventory or a non-Designer session
+blocks writes. A Designer session is reported only by kind; it is not assumed to belong to EDT.
+
+## Parameter details
+
+- `projectName` and `applicationId` are required, including for reads. The application is never inferred.
+- `action` is `list` (default), `install`, `update` or `uninstall`.
+- Writes require `extensionName`: the exact programmatic name, not a synonym or a guessed file stem.
+- Install/update require `cfePath`: an existing, non-empty `.cfe` on the EDT host, addressed by absolute path.
+- Install defaults `safeMode` and `protectionFromDangerousActions` to true. Update preserves each omitted
+  flag and the installed active state. Explicit false is supported only through the same consent gate.
+- `expectedVersion` optionally requires an exact version in the post-operation read-back. Supply it
+  for versioned deployment acceptance. An omitted version is reported as observed, without asserting
+  that the uploaded binary is identical to the installed binary.
+- `confirm` defaults false. Request the preview first, back up the infobase, then repeat with true.
+  The existing destructive-consent policy also applies; `confirm=true` does not bypass it.
+- `timeoutSeconds` defaults 120 (10..600). Application lookup has its own 30-second bound.
+
+## Calls
+
+```json
+{"projectName":"MyProject","applicationId":"<id from get_applications>","action":"list"}
+```
+
+```json
+{"projectName":"MyProject","applicationId":"<id from get_applications>","action":"install","extensionName":"EDTMCP_Runtime","cfePath":"D:/extensions/EDTMCP_Runtime.cfe","expectedVersion":"1.0.0"}
+```
+
+Repeat the install with `confirm:true` after reviewing the preview. For an existing extension use
+`action:"update"` and the new file/version; install refuses to overwrite an installed name. Update
+refuses to create an absent name. Uninstall also requires a preview and consent:
+
+```json
+{"projectName":"MyProject","applicationId":"<id from get_applications>","action":"uninstall","extensionName":"EDTMCP_Runtime"}
+```
+
+## Verification and failures
+
+List returns `extensions` and `count`; every record contains the actual name, version, active state,
+safeMode and protectionFromDangerousActions. Empty is a measured inventory, never a connection failure.
+
+Writes reread the inventory after consent and after the Designer operation. `verification:"verified"`
+means presence/absence, requested runtime flags, preserved active state, unchanged other extensions,
+and `expectedVersion` if supplied all matched. `actualState` carries the observed extension after
+install/update; `extensionInstalled:false` proves absence after uninstall. This does not prove binary
+file identity or runtime applicability in a newly opened application session.
+
+Mismatch is an error, even if the Designer returned normally. A platform exception or timeout never
+becomes success. `mutationOutcomeUnknown:true` means the infobase may already have changed; cancellation
+does not roll back a load, restructuring or deletion. The worker retains the shared application lock
+until it exits. Inspect `action:"list"` and the EDT Error Log before retrying. Fix credentials with
+`set_infobase_credentials`; inspect busy standalone-server sessions with `infobase_sessions` and obtain
+separate approval before terminating them.
+
+Uninstall can permanently delete extension data. Recovery requires a backup; reinstalling a `.cfe`
+does not restore deleted data. File-name inference, standalone flag-only edits and automatic
+session termination are outside this initial contract.
+
+Confirmed install/update calls load a private temporary copy captured before consent, so changing
+the source file while the consent dialog is open cannot substitute the bytes sent to Designer.
+The copy remains owned by the worker until the operation finishes and is then removed.
