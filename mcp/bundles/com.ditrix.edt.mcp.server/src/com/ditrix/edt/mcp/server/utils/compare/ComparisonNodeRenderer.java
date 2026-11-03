@@ -899,6 +899,7 @@ public final class ComparisonNodeRenderer
         }
         Map<Integer, List<String>> onlyAgainst = new HashMap<>();
         List<String> orderDifferences = new ArrayList<>();
+        List<String> sharedOrderDifferences = new ArrayList<>();
         boolean comparedAny = false;
         for (int peer = 0; peer < SIDES.length; peer++)
         {
@@ -914,6 +915,8 @@ public final class ComparisonNodeRenderer
                 remaining.merge(item.identity(), 1, Integer::sum);
             }
             int added = 0;
+            List<String> shared = new ArrayList<>();
+            Map<String, Integer> sharedRemaining = new HashMap<>();
             for (int index = 0; index < items.size(); index++)
             {
                 CollectionItem item = items.get(index);
@@ -927,11 +930,26 @@ public final class ComparisonNodeRenderer
                 else
                 {
                     remaining.put(item.identity(), count - 1);
+                    shared.add(item.identity());
+                    sharedRemaining.merge(item.identity(), 1, Integer::sum);
                 }
             }
-            if (added == 0 && remaining.values().stream().allMatch(count -> count == 0))
+            // Compare only matched occurrences: insertions/deletions do not imply a reorder,
+            // but they must not hide a change in the relative order of the shared items.
+            List<String> peerShared = new ArrayList<>();
+            for (CollectionItem item : compared)
             {
-                orderDifferences.add(sideLabel(SIDES[peer]));
+                int count = sharedRemaining.getOrDefault(item.identity(), 0);
+                if (count > 0)
+                {
+                    peerShared.add(item.identity());
+                    sharedRemaining.put(item.identity(), count - 1);
+                }
+            }
+            if (!shared.equals(peerShared))
+            {
+                boolean sameItems = added == 0 && remaining.values().stream().allMatch(count -> count == 0);
+                (sameItems ? orderDifferences : sharedOrderDifferences).add(sideLabel(SIDES[peer]));
             }
         }
         if (!comparedAny)
@@ -953,6 +971,10 @@ public final class ComparisonNodeRenderer
         if (!orderDifferences.isEmpty())
         {
             delta += "; same items, different order vs " + String.join(", ", orderDifferences); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!sharedOrderDifferences.isEmpty())
+        {
+            delta += "; shared items, different order vs " + String.join(", ", sharedOrderDifferences); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return delta;
     }

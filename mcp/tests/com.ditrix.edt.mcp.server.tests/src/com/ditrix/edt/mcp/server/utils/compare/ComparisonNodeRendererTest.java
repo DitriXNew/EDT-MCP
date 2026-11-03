@@ -223,6 +223,69 @@ public class ComparisonNodeRendererTest
     }
 
     @Test
+    public void testFieldReorderingWithAnAdditionKeepsOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(catalogWithInputFields("Description", "Code", "Parent"),
+                catalogWithInputFields("Code", "Description"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; shared items, different order vs Other"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main"));
+        assertFalse(row, row.contains("StandardAttribute.Code"));
+        assertFalse(row, row.contains("StandardAttribute.Description"));
+    }
+
+    @Test
+    public void testFieldOrderNoticesArePairwiseInThreeWayDeltas()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(catalogWithInputFields("Description", "Code", "Parent"),
+                catalogWithInputFields("Code", "Description"),
+                catalogWithInputFields("Code", "Description", "Parent"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; same items, different order vs Ancestor; shared items, different order vs Other"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+        assertTrue(row, row.contains("Only in Ancestor: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; same items, different order vs Main |"));
+    }
+
+    @Test
+    public void testFieldMembershipChangesWithoutReorderingHaveNoOrderNotice()
+    {
+        for (String[] fields : new String[][] {{"Code", "Description", "Parent"},
+            {"Parent", "Code", "Description"}, {"Code", "Parent", "Description"},
+            {"Description"}, {"Parent"}, {}})
+        {
+            String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+                access(new ComparedObjects<EObject>(catalogWithInputFields(fields),
+                    catalogWithInputFields("Code", "Description"), null)));
+            String row = rowContaining(text, "Only in Main");
+            assertNotNull(text, row);
+            assertFalse(row, row.contains("different order"));
+        }
+    }
+
+    private static Catalog catalogWithInputFields(String... names)
+    {
+        Catalog catalog = catalogNamed("Goods");
+        catalog.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000001"));
+        for (String name : names)
+        {
+            var field = McoreFactory.eINSTANCE.createField();
+            field.setName(name);
+            field.setFieldIdPrefix("StandardAttribute");
+            field.getSourceTypes().add(com._1c.g5.v8.dt.mcore.SourceType.INPUT_BY_STRING);
+            catalog.getFields().add(field);
+            catalog.getInputByString().add(field);
+        }
+        return catalog;
+    }
+
+    @Test
     public void testThreeWayDeltasHaveOneCellBudgetAcrossBothPeers()
     {
         String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
