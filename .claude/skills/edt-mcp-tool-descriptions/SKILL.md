@@ -54,6 +54,11 @@ Consequences, all of them counter-intuitive enough to be worth stating:
 - **Do not answer a behaviour problem by enlarging the guide.** 87 guides already cost
   ~111K tokens; in a wide session they, not the catalog, dominate. Growing them makes the
   payload worse and the behaviour the same.
+- **A large guide has a hard cap, and every PR shares it.** `get_tool_guide` truncates past
+  its output cap, and `GuideOutputSizeTest` / `ModifyMetadataGuideHeadroomTest` keep a small
+  merge headroom. When a guide sits near the cap, a PR that adds to it must stay NET-NEUTRAL:
+  condense existing wording (never a rule, a refusal condition or a parameter contract) by at
+  least as much as it adds — otherwise parallel PRs each pass alone and break after merging.
 - **A protocol that must not be skipped should not live in prose at all.** Even today's
   full description only gets preview→confirm 54% of the time. Text raises that to 98%;
   only server-side enforcement gets 100%.

@@ -99,6 +99,7 @@ import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.FormValueTypePolicy;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -7005,7 +7006,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         MetadataTypeBuilder.TypeTarget typeTarget = typeTargetForFeature(ctx.typeTarget, info.feature);
-        MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
+        MetadataTypeBuilder.Result tr = buildTypeDescription(prop.get(KEY_VALUE), ctx.config,
             ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
@@ -7018,8 +7019,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             return ToolResult.error(message).toJson();
         }
+        FormValueTypePolicy.Problem problem = info.feature == target.eClass().getEStructuralFeature("valueType") //$NON-NLS-1$
+            ? FormValueTypePolicy.check(target, tr.typeDescription) : null;
+        if (problem != null)
+        {
+            return ToolResult.error(problem.message()).toJson();
+        }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
+    }
+
+    /** Platform dependency seam; preparation and its guards remain shared with the live writer. */
+    protected MetadataTypeBuilder.Result buildTypeDescription(JsonElement spec, Configuration config,
+        MetadataScope scope, Version version, boolean extension, MetadataTypeBuilder.TypeTarget target)
+    {
+        return MetadataTypeBuilder.build(spec, config, scope, version, extension, target);
     }
 
     /**

@@ -73,6 +73,27 @@ _KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_form_parameter_collection_types_refused_at_creation():
+    for member in ("Parameter", "Attribute"):
+        for kind in ("Array", "Structure", "Map", "FixedArray", "FixedStructure", "FixedMap"):
+            r = call("create_metadata", {
+                "projectName": PROJECT,
+                "fqn": "Catalog.Catalog.Form.ItemForm.%s.E2EInvalidType" % member,
+                "properties": [{"name": "valueType", "value": {"types": [{"kind": kind}]}}],
+            })
+            err = assert_error(r, "refuse %s on a new form %s" % (kind, member))
+            assert_error_quality(err, names=[kind, member],
+                                 suggests=["without a type", "arbitrary", "modify_metadata"])
+            assert_no_diff()
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"], "full": True,
+    })
+    assert_ok(details, "read back the form after refused creates")
+    assert_not_contains(details.text, "E2EInvalidType", "no member created after refusal")
+    assert_no_diff()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_generate_content_on_non_form_is_actionable_and_writes_nothing():
     for fqn in ("Catalog.Z828Invalid", "CommonForm.Z828Invalid"):
         e = assert_error(call("create_metadata", {
@@ -1769,15 +1790,23 @@ def test_create_attribute_column_russian_token():
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_a_field_cannot_walk_past_a_memberless_column():
-    # A column typed UUID / ValueStorage holds one opaque value, so no tail can resolve against it and
-    # EDT does not flag the binding. The terminality check knew only the four primitives while the
-    # type builder had grown these two, so 'Rows.Id.Part' was accepted merely because the 'Id' column
-    # existed and the tool reported success for a dead binding (issue #295 review). Asserted LIVE
-    # because a real form's types are platform PROXIES, not the in-memory Types a unit test builds.
+    # A column typed UUID holds one opaque value, so no tail can resolve against it and EDT does not
+    # flag the binding (issue #295 review). Asserted LIVE because a real form's types are platform
+    # PROXIES, not the in-memory Types a unit test builds. ValueStorage is not in EDT's column type
+    # picker (EditTypeInfoCategory), so typing a column with it is refused instead (#829).
     attr = "E2EOpaqueOwner"
     _seed_collection_attribute(attr)
     base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
-    for col, kind in (("OpaqueId", "UUID"), ("OpaqueBlob", "ValueStorage")):
+    blob = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column.OpaqueBlob"})
+    assert_ok(blob, "seed column OpaqueBlob")
+    wait_for_project_ready()
+    refused = assert_error(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": base + ".Column.OpaqueBlob",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueStorage"}]}}]}),
+        "ValueStorage is not offered for a form attribute column")
+    assert_error_quality(refused, names=["ValueStorage"], suggests=["type picker"],
+                         ctx="the refusal names the type and why it is not allowed")
+    for col, kind in (("OpaqueId", "UUID"),):
         c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
         assert_ok(c, "seed column " + col)
         wait_for_project_ready()
