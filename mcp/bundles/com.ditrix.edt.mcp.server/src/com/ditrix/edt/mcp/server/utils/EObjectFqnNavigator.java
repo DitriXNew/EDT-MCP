@@ -40,7 +40,7 @@ public final class EObjectFqnNavigator
      * @param parts the full FQN split on {@code '.'}
      * @param startIndex the index to start from (skip the top-level type and name,
      *        typically {@code 2})
-     * @return the resolved nested EObject, or {@code null} if any segment is unresolved
+     * @return the resolved nested EObject, or {@code null} if any pair is incomplete or unresolved
      */
     public static EObject resolveNestedObject(EObject parent, String[] parts, int startIndex)
     {
@@ -50,7 +50,7 @@ public final class EObjectFqnNavigator
         {
             if (i + 1 >= parts.length)
             {
-                break;
+                return null;
             }
 
             String subTypeName = parts[i];

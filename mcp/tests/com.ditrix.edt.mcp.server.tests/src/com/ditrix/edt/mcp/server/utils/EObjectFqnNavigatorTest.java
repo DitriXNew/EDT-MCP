@@ -16,6 +16,43 @@ public class EObjectFqnNavigatorTest
     private static final MdClassFactory FACTORY = MdClassFactory.eINSTANCE;
 
     @Test
+    public void incompletePairDoesNotResolveToTopObject()
+    {
+        for (String name : new String[] { "Files", "Товары" })
+        {
+            var catalog = named(FACTORY.createCatalog(), name);
+            String top = "Catalog." + name;
+            assertSame(catalog, EObjectFqnNavigator.resolveNestedObject(catalog, top.split("\\."), 2));
+            for (String kind : new String[] { "Attribute", "CatalogAttribute" })
+                assertNull(top + "." + kind, EObjectFqnNavigator.resolveNestedObject(catalog,
+                    (top + "." + kind).split("\\."), 2));
+        }
+    }
+
+    @Test
+    public void incompletePairAfterMemberDoesNotResolveToMember()
+    {
+        var catalog = named(FACTORY.createCatalog(), "Files");
+        var attribute = named(FACTORY.createCatalogAttribute(), "Width");
+        catalog.getAttributes().add(attribute);
+        String stored = TagUtils.extractFqn((EObject)attribute);
+        assertSame(attribute, EObjectFqnNavigator.resolveNestedObject(catalog, stored.split("\\."), 2));
+        assertNull(EObjectFqnNavigator.resolveNestedObject(catalog, (stored + ".Attribute").split("\\."), 2));
+    }
+
+    @Test
+    public void incompletePairAfterSectionDoesNotResolveToSection()
+    {
+        var catalog = named(FACTORY.createCatalog(), "Товары");
+        var section = named(FACTORY.createCatalogTabularSection(), "Строки");
+        catalog.getTabularSections().add(section);
+        String stored = TagUtils.extractFqn((EObject)section);
+        assertSame(section, EObjectFqnNavigator.resolveNestedObject(catalog, stored.split("\\."), 2));
+        assertNull(EObjectFqnNavigator.resolveNestedObject(catalog,
+            (stored + ".TabularSectionAttribute").split("\\."), 2));
+    }
+
+    @Test
     public void storedCatalogAttributeCannotBePassedToTheCrudResolver()
     {
         var config = FACTORY.createConfiguration();
