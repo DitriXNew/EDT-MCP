@@ -596,6 +596,53 @@ public final class BslModuleUtils
     }
 
     /**
+     * Inserts a complete method with exactly one blank line at each occupied junction.
+     * Only surrounding blank lines are normalized; method bodies and preambles stay intact.
+     *
+     * @param moduleLines current module lines
+     * @param insertionLine 0-based insertion position, before a preamble or after a terminator
+     * @param methodLines complete method, optionally surrounded by blank lines
+     * @return new module lines without leading or trailing padding at a touched module edge
+     */
+    public static List<String> insertMethodLines(List<String> moduleLines, int insertionLine,
+        List<String> methodLines)
+    {
+        int left = insertionLine;
+        while (left > 0 && moduleLines.get(left - 1).isBlank())
+        {
+            left--;
+        }
+        int right = insertionLine;
+        while (right < moduleLines.size() && moduleLines.get(right).isBlank())
+        {
+            right++;
+        }
+        int first = 0;
+        while (first < methodLines.size() && methodLines.get(first).isBlank())
+        {
+            first++;
+        }
+        int last = methodLines.size();
+        while (last > first && methodLines.get(last - 1).isBlank())
+        {
+            last--;
+        }
+
+        List<String> result = new ArrayList<>(moduleLines.subList(0, left));
+        if (left > 0)
+        {
+            result.add(""); //$NON-NLS-1$
+        }
+        result.addAll(methodLines.subList(first, last));
+        if (right < moduleLines.size())
+        {
+            result.add(""); //$NON-NLS-1$
+        }
+        result.addAll(moduleLines.subList(right, moduleLines.size()));
+        return result;
+    }
+
+    /**
      * Finds every method declaration in source order using the shared bilingual
      * fallback patterns. Each declaration is paired only with its matching kind of
      * terminator. An unterminated declaration is returned with {@code complete=false}
