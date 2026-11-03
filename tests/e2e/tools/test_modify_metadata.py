@@ -1200,6 +1200,65 @@ def test_set_uuid_type():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_characteristic_value_type_on_tabular_section_attribute_bilingual():
+    names = ("E2EExpenseItems811", "СтатьиРасходов811")
+    for name in names:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes." + name,
+        }), "seed characteristic chart " + name)
+    section = "Catalog.Catalog.TabularSection.E2ECharacteristics811"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": section}),
+              "seed the tabular section")
+    wait_for_project_ready()
+    cases = (
+        {"kind": "Characteristic", "ref": names[0]},
+        {"kind": "Characteristic." + names[1]},
+        {"kind": "Характеристика", "ref": names[1]},
+        {"kind": "Характеристика." + names[0]},
+    )
+    for index, item in enumerate(cases):
+        attr = "Value%d" % index
+        fqn = section + ".Attribute." + attr
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed the tabular-section attribute")
+        wait_for_project_ready()
+        r = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "type", "value": {"types": [item]}}],
+        })
+        assert_ok(r, "set characteristic VALUE type: %r" % item)
+        assert "type" in (r.structured.get("applied") or [])
+        expected = "Characteristic." + (item["ref"] if "ref" in item else item["kind"].split(".", 1)[1])
+        # DISK FIRST: inspect this attribute inside its own section, before any further MCP call.
+        root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+        sections = [el for el in root if el.tag.rsplit("}", 1)[-1] == "tabularSections"
+                    and any(c.tag.rsplit("}", 1)[-1] == "name" and c.text == "E2ECharacteristics811"
+                            for c in el)]
+        assert len(sections) == 1
+        attrs = [el for el in sections[0] if el.tag.rsplit("}", 1)[-1] == "attributes"
+                 and any(c.tag.rsplit("}", 1)[-1] == "name" and c.text == attr for c in el)]
+        assert len(attrs) == 1
+        stored = [el.text for el in attrs[0].iter() if el.tag.rsplit("}", 1)[-1] == "types"]
+        assert stored == [expected], "must store the characteristic TypeSet, got %r" % stored
+        _assert_assignable_current(fqn, "type", "TYPE_DESCRIPTION", expected)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_unknown_characteristic_name_is_actionable_and_changes_nothing():
+    fqn = "Catalog.Catalog.Attribute.Attribute"
+    for item in ({"kind": "Characteristic", "ref": "MissingChart811"},
+                 {"kind": "Характеристика.НетТакогоПВХ811"}):
+        r = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "type", "value": {"types": [item]}}],
+        })
+        error = assert_error(r, "unknown characteristic chart")
+        name = item.get("ref") or item["kind"].split(".", 1)[1]
+        assert_error_quality(error, names=[name], suggests=["ChartOfCharacteristicTypes", "get_metadata_objects"])
+        assert_no_diff()
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_stored_attribute_type_to_defined_type_reaches_disk_and_model():
     defined_name = "E2EMoneyAmount"
     defined_fqn = "DefinedType." + defined_name

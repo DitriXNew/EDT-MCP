@@ -55,6 +55,8 @@ A name that already resolves (EXACT, case-insensitive match, recursively over to
 
 Owner-specific properties are OWNER-GATED like `valueType`: a property that does not apply to the addressed owner is REJECTED with an actionable error (never silently ignored). `valueType` is `ChartOfCharacteristicTypes` only; `actionPeriodIsBase` / `base` / `displaced` / `leading` are `ChartOfCalculationTypes` only; `accountType` / `offBalance` / `order` / `accountingFlags` / `extDimensionTypes` are `ChartOfAccounts` only. Every referenced sibling item / flag / linked-chart item is resolved to a live in-model object inside the SAME write transaction (by Name, never a proxy or a bare FQN string), and an unresolved name is a hard, actionable error naming the bad value - nothing is invented.
 
+The `valueType` description also accepts a characteristic value type: `{types:[{kind:'Characteristic', ref:'ExpenseItems'}]}` or `{types:[{kind:'Characteristic.ExpenseItems'}]}`. `Характеристика` is the equivalent Russian token. The name identifies a `ChartOfCharacteristicTypes` by programmatic Name, not synonym; the result reads back as `Characteristic.<Name>`.
+
 #### `ChartOfCalculationTypes` items (calculation types / ПланВидовРасчета)
 A calculation-type chart is FLAT: its predefined items have NO folders and NO nesting, so `isFolder` and `parent` are REJECTED with an owner-scoped error. Besides `description` these items accept:
 - `code` - matched to the chart's `codeType` exactly like a Catalog: a JSON number when `codeType=Number` (stored via the same non-negative-integer, precision/scale/`codeLength`-validated path - an over-length / fractional / negative code is REJECTED, never truncated), a JSON string when `codeType=String`. Omitted -> unset.
