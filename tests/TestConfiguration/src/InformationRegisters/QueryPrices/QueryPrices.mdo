@@ -11,11 +11,6 @@
   </producedTypes>
   <name>QueryPrices</name>
   <informationRegisterPeriodicity>Second</informationRegisterPeriodicity>
-  <writeMode>Independent</writeMode>
-  <dimensions uuid="8901e96c-c94f-563b-9edb-25c3316f0307">
-    <name>Item</name>
-    <type><types>String</types><stringQualifiers><length>10</length></stringQualifiers></type>
-  </dimensions>
   <resources uuid="e4b96d3d-67ee-5cbe-b302-1d2d9ae95a86">
     <name>Price</name>
     <type>
@@ -26,4 +21,13 @@
       </numberQualifiers>
     </type>
   </resources>
+  <dimensions uuid="8901e96c-c94f-563b-9edb-25c3316f0307">
+    <name>Item</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+  </dimensions>
 </mdclass:InformationRegister>

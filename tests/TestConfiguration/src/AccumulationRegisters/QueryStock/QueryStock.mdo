@@ -9,11 +9,6 @@
     <recordType typeId="63794cbe-cfe9-582c-8f3f-cc42c54ed96e" valueTypeId="dd59fe75-6770-59cf-a96a-8bf6e01d5c7f"/>
   </producedTypes>
   <name>QueryStock</name>
-  <registerType>Balance</registerType>
-  <dimensions uuid="eeed2fe5-e195-5494-9f58-e1ab072eeec5">
-    <name>Item</name>
-    <type><types>String</types><stringQualifiers><length>10</length></stringQualifiers></type>
-  </dimensions>
   <resources uuid="a4f7c905-832a-5219-bf19-05ec4e80e8f0">
     <name>Quantity</name>
     <type>
@@ -24,4 +19,13 @@
       </numberQualifiers>
     </type>
   </resources>
+  <dimensions uuid="eeed2fe5-e195-5494-9f58-e1ab072eeec5">
+    <name>Item</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+  </dimensions>
 </mdclass:AccumulationRegister>
