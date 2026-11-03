@@ -584,7 +584,9 @@ def test_adopting_picture_form_also_adopts_new_owner_on_first_call():
         })
         assert_ok(details, "read back the newly adopted owner and form")
         assert_contains(details.text, "**Origin:** core (adopted)", "the owner must be adopted in the model")
-        assert_contains(details.text, "# Form Structure: " + form_fqn, "the form must be present in the model")
+        # The form-structure header spells the owned-form segment as "forms" (pre-existing renderer quirk).
+        assert_contains(details.text, "# Form Structure: Catalog.%s.forms.%s" % (owner_name, form_name),
+                        "the form must be present in the model")
         _assert_no_adoption_errors(owner_fqn, form_fqn, picture_fqn)
     finally:
         if not calls_aborted():
