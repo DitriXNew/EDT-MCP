@@ -999,7 +999,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata').",
+    "description": "Add a new metadata object or member to a configuration. Autosort places governed objects; ask the user about manual order. Parameters and examples: get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
         "callType": {
@@ -1040,6 +1040,10 @@
         },
         "generateContent": {
           "type": "boolean"
+        },
+        "insertPosition": {
+          "description": "Optional 1-based position in the destination metadata collection. 1 is first; omit to append. Refuses values outside 1..size+1 before creation. Not applicable to form/XDTO content, predefined data or standalone external roots.",
+          "type": "integer"
         },
         "normalizeYo": {
           "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment / predefined-item description value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied.",
@@ -1102,6 +1106,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "autosort": {
+          "type": "object"
         },
         "callType": {
           "type": "string"
@@ -5718,6 +5725,135 @@
         },
         "variableName": {
           "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Inspect current metadata order with mode=list, or reorder by Name, explicit order, or one sibling move. Review order-sensitive changes: register DIMENSIONS define indexes and query speed; enum values affect ORDER BY/comparisons; subsystem content affects command interface order. Web-service parameter order defines handler signatures. Other ordered collections can affect presentation or positional access. Autosort maintains governed lists; ask the user about manual order. Full parameters and examples: call get_tool_guide('sort_metadata').",
+    "inputSchema": {
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "direction": {
+          "description": "Move mode: up/down, mutually exclusive with before/after.",
+          "enum": [
+            "up",
+            "down"
+          ],
+          "type": "string"
+        },
+        "fqn": {
+          "description": "Level: Configuration, Configuration.Catalogs, Catalog.X, or Catalog.X.Attributes. TYPE/KIND tokens accept Russian/English; Names are programmatic.",
+          "type": "string"
+        },
+        "items": {
+          "description": "Explicit mode: sibling Names in desired order; unlisted members follow stably.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "description": "Default alphabetical; list reads current order without writing. Explicit/move require a collection fqn.",
+          "enum": [
+            "alphabetical",
+            "explicit",
+            "move",
+            "list"
+          ],
+          "type": "string"
+        },
+        "objectName": {
+          "type": "string"
+        },
+        "positions": {
+          "description": "Positive move distance; default 1. Clamped at collection ends.",
+          "type": "integer"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "recursive": {
+          "description": "Default false. Alphabetical only: also order owned descendants.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "sort_metadata",
+    "outputSchema": {
+      "properties": {
+        "alreadySorted": {
+          "type": "boolean"
+        },
+        "autosortCollectionCount": {
+          "type": "integer"
+        },
+        "autosortCollections": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "collections": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "sensitiveCollections": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "subCollectionCount": {
+          "type": "integer"
+        },
+        "subCollections": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

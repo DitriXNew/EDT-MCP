@@ -737,7 +737,7 @@ def _confirmed(args):
 # the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
 # apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
-    "create_metadata", "modify_metadata", "write_module_source",
+    "sort_metadata", "create_metadata", "modify_metadata", "write_module_source",
     "apply_quick_fix", "build_external_objects",
     # The preview never writes; a confirmed clone writes only after validation and the hash check.
     "clone_metadata_object",
@@ -776,6 +776,8 @@ READ_ONLY_MODEL_ACTIONS = {
 
 
 def _is_read_only_model_action(tool, args):
+    if tool == "sort_metadata":
+        return isinstance(args, dict) and args.get("mode") == "list"
     return (isinstance(args, dict) and isinstance(args.get("action"), str)
             and args["action"] in READ_ONLY_MODEL_ACTIONS.get(tool, ()))
 
@@ -1822,6 +1824,49 @@ def diff():
 def read_disk(relpath):
     with open(os.path.join(PROJECT_DIR, relpath), encoding="utf-8") as f:
         return f.read()
+
+
+def metadata_collection_state(project_name, fqn):
+    """Read one actual model EList and its optional V8 code style autosort policy."""
+    result = call("sort_metadata", {"projectName": project_name, "fqn": fqn, "mode": "list"})
+    assert_ok(result, "read current model collection order: %s" % fqn)
+    body = result.structured or {}
+    rows = body.get("collections", [])
+    if body.get("mode") != "list" or len(rows) != 1 or not isinstance(rows[0].get("order"), list):
+        _fail("expected one read-only model order for %s, got %r" % (fqn, body))
+    if "autosort" in rows[0]:
+        assert_autosort_notice(rows[0], message=body.get("message", ""))
+    return rows[0]
+
+
+def assert_autosort_notice(payload, governs=None, message=None):
+    """Validate the shared user-owned autosort notice; presence is the capability signal."""
+    block = payload.get("autosort")
+    fields = {"plugin", "governs", "setting", "order", "effect", "userAction"}
+    if not isinstance(block, dict) or set(block) != fields:
+        _fail("expected a complete autosort notice, got %r" % block)
+    assert block["plugin"] == "1C:Code style V8 (com.e1c.v8codestyle.autosort)", block
+    if governs is not None:
+        assert block["governs"] == governs, block
+    assert block["setting"] in ("all top-level lists", "all subordinate lists", "this list"), block
+    assert block["order"] in ("ascending, natural", "ascending, plain", "descending, natural", "descending, plain"), block
+    action = block["userAction"]
+    assert action.startswith("Autosort (1C:Code style V8) keeps this list in alphabetical order. "), block
+    assert "ask the user to turn it off for this list in Project > Properties > V8 > Metadata objects sort > Auto sort" in action, block
+    assert action.endswith("do not change this setting yourself."), block
+    assert ".prefs" not in str(block) and "topObjects" not in str(block) and "subordinateObjects" not in str(block), block
+    text = payload.get("message", "") if message is None else message
+    assert action in text and block["effect"] in text, (block, text)
+    return block
+
+
+def autosort_descending(state):
+    return "autosort" in state and state["autosort"]["order"].startswith("descending,")
+
+
+def metadata_collection_order(project_name, fqn):
+    """Preserve stored order; get_metadata_objects is a presentation listing."""
+    return metadata_collection_state(project_name, fqn)["order"]
 
 
 # ── Markdown table parsing (this project's OWN presentation contract) ──────────

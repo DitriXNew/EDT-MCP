@@ -50,6 +50,7 @@ public class WriteScopeInventoryTest
     private static final Set<String> CLASSIFIED = new HashSet<>(Arrays.asList(
         // DECLARES by exporting: every export goes through BmTransactions.forceExportToDisk, which
         // records the project - so these declare simply by doing the write.
+        "com.ditrix.edt.mcp.server.tools.impl.SortMetadataTool",
         "com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool", //$NON-NLS-1$
         "com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool", //$NON-NLS-1$
         // DECLARES by exporting, plus an explicit statement for the branches that write without

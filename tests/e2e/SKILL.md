@@ -74,6 +74,8 @@ tests/e2e/
 
 ---
 
+For collection order use `metadata_collection_state(project, fqn)` for the observed EList and autosort policy, or `metadata_collection_order` for Names only; presentation listings do not prove order. Compare the parsed `.mdo` sequence and print actual parsed order on failure. Run manual modes on ungoverned lists; when an `autosort` block is present, validate it with `assert_autosort_notice`, assert the refusal and the allowed native-comparator sort. Default creation must also carry the notice. Never change user preferences to pass tests. `mode:list` is tracked as read-only even on transport failure.
+
 ## 5. Negative coverage is MANDATORY (not just happy paths)
 
 For **every** tool, in addition to the happy path, cover the **negative matrix**:

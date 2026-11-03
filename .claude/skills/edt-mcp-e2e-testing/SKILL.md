@@ -1,6 +1,6 @@
 ---
 name: edt-mcp-e2e-testing
-description: How to write/run the AUTOMATED black-box e2e suite (tests/e2e/) that covers every EDT-MCP tool (62 today) against a live server with git-fixture isolation, happy + negative + error-quality coverage, and an anti-cheat bar. Use when adding/editing a test in tests/e2e/, adding a new tool (the coverage ratchet requires a test), or running the suite. (For the older MANUAL per-tool reference checklists see edt-mcp-testing; for Java unit/build see edt-mcp-build-test.)
+description: How to write/run the AUTOMATED black-box e2e suite (tests/e2e/) that covers every EDT-MCP tool against a live server with git-fixture isolation, happy + negative + error-quality coverage, and an anti-cheat bar. Use when adding/editing a test in tests/e2e/, adding a new tool (the coverage ratchet requires a test), or running the suite. (For the older MANUAL per-tool reference checklists see edt-mcp-testing; for Java unit/build see edt-mcp-build-test.)
 ---
 
 # EDT-MCP — automated black-box e2e suite (tests/e2e/)
@@ -41,11 +41,13 @@ of `tests/e2e/SKILL.md` and `tests/TESTING.md` for the wire assertions and clean
 3. **Verify the effect the RIGHT way per `kind=`:**
    - `read` → `assert_no_diff()` + content.
    - `write` (file-write, write_module_source) → `assert_diff_contains()` (on disk).
-   - `write-metadata` (create/add/delete/rename) → **MODEL READ-BACK + on-disk structure.** Call a read tool and assert the change in the model, AND assert it landed on disk via `poll_diff_contains` of the **structural element** (`<name>X</name>`, `<catalogs>Type.X</catalogs>` — not the bare name). Metadata writes now persist to disk via forceExport (~1-2s lag → poll). The orchestrator runs `reset_fixture`+`reset_model` after these.
+   - `write-metadata` (create/add/delete/rename) → **MODEL READ-BACK + on-disk structure.** Call a read tool and assert the change in the model, AND assert it landed on disk via `poll_diff_contains` of the **structural element** (`<name>X</name>`, `<catalogs>Type.X</catalogs>` — not the bare name). Assert disk directly when the call submitted its export through the write barrier; poll only exports not covered by that call. The orchestrator runs `reset_fixture`+`reset_model` after these.
    - `action` → usually `assert_no_diff()` + status; never run a destructive happy mutation that corrupts the fixture.
    - **env-dependent** (form-render JVM flag, LanguageTool, debug no-session) → env-robust branch: real result OR a clear actionable **sentinel**.
 4. **Negative coverage is MANDATORY** (not just happy): invalid path/object, every XOR/conditional/enum, missing-required, boundaries. Assert **error QUALITY** (`assert_error_quality`): names the bad value + actionable next step. A vague/non-actionable tool error → `# AUDIT:` note + a fix-card; **do NOT weaken the test** to a bad error.
 5. **Anti-cheat (mutation thinking):** "would this test FAIL if the tool were broken?" If not, it's a CHEAT. No trivial asserts, no `assert_no_diff()`-only, no swallowed exceptions, no tolerant matching. A separate anti-cheat reviewer rules REAL/CHEAT.
+
+For order assertions use `metadata_collection_order` or `metadata_collection_state` (`sort_metadata` mode=list), then parse the exact `.mdo` sequence. Branch on the observed `autosort` block’s presence; validate its user-action message and exercise manual modes on an ungoverned collection and verify governed refusals.
 
 ## Don't
 - Don't add pip dependencies (stdlib only; the client is kept spec-conformant by hand on purpose).
