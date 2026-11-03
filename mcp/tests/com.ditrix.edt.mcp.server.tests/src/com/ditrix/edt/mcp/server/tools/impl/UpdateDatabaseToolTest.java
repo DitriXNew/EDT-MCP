@@ -868,6 +868,58 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void cancelledConfigurationLoadDoesNotDiagnoseInvalidXml()
+    {
+        InfobaseSynchronizationException sync = new InfobaseSynchronizationException("Synchronization failed");
+        sync.initCause(new ConfigurationLoadException("Command execution cancelled"));
+        ApplicationException failure = new ApplicationException("Platform interaction failed", sync);
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "Project", "app", false)).getAsJsonObject();
+        String error = result.get("error").getAsString();
+
+        assertFalse(result.get("success").getAsBoolean());
+        assertTrue(error, error.contains("server reported that the configuration load was cancelled"));
+        assertTrue(error, error.contains("initiator is unknown"));
+        assertTrue(error, error.contains("Check the infobase state"));
+        assertTrue(error, error.contains("Do not retry blindly"));
+        assertFalse(error, error.contains("rejected the configuration XML"));
+        assertFalse(error, error.contains("get_project_errors"));
+        assertFalse(error, error.contains("set_infobase_credentials"));
+    }
+
+    @Test
+    public void nestedCancellationMessageIsRecognizedOnlyInsideALoadFailure()
+    {
+        ApplicationException load = new ApplicationException("Update failed",
+            new ConfigurationLoadException(null, new RuntimeException("Command execution cancelled")));
+        assertTrue(UpdateDatabaseTool.describeInternalInfoHint(load)
+            .contains("initiator is unknown"));
+        assertEquals("", UpdateDatabaseTool.describeInternalInfoHint(new ApplicationException(
+            "Command execution cancelled")));
+    }
+
+    @Test
+    public void genericConfigurationLoadDoesNotAssertXmlRejection()
+    {
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(new ApplicationException("Update failed",
+            new ConfigurationLoadException(null)));
+        assertTrue(hint, hint.contains("configuration load failed"));
+        assertFalse(hint, hint.contains("rejected the configuration XML"));
+        assertFalse(hint, hint.contains("cancelled"));
+    }
+
+    @Test
+    public void timeoutGuideTreatsMissingCompletionAsUnknown()
+    {
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue(guide, guide.contains("unknown outcome"));
+        assertTrue(guide, guide.contains("includeBodies=true"));
+        assertTrue(guide, guide.contains("Command execution cancelled"));
+        assertTrue(guide, guide.contains("does not prove that nothing happened"));
+        assertFalse(guide, guide.contains("keeps running in EDT to completion"));
+    }
+
+    @Test
     public void testInternalInfoHintMatchesMarkerInNestedCause()
     {
         // The real Russian EDT message reported in #258.
