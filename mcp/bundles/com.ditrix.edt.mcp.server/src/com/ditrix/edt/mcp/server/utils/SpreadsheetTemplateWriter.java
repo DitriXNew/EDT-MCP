@@ -307,6 +307,7 @@ public final class SpreadsheetTemplateWriter
     private static void applyCell(SpreadsheetDocument document, CellPlan plan)
     {
         Row row = getOrCreateRow(document, plan.row);
+        boolean mergeExisting = !plan.replace && row.getCells().containsKey(Integer.valueOf(plan.col));
         Cell cell = getOrCreateCell(row, plan.col);
 
         if (plan.replace)
@@ -317,7 +318,7 @@ public final class SpreadsheetTemplateWriter
         }
 
         applyCellContent(cell, plan);
-        applyCellFormat(document, cell, plan);
+        applyCellFormat(document, cell, plan, mergeExisting);
     }
 
     /**
@@ -351,14 +352,15 @@ public final class SpreadsheetTemplateWriter
      * Points the cell's {@code formatIndex} at an interned {@link Format} carrying the plan's font /
      * alignment / wrap / fill, preserving omitted features and never mutating a pooled entry in place.
      */
-    private static void applyCellFormat(SpreadsheetDocument document, Cell cell, CellPlan plan)
+    private static void applyCellFormat(SpreadsheetDocument document, Cell cell, CellPlan plan, boolean mergeExisting)
     {
         Format format = plan.replace ? MoxelFactory.eINSTANCE.createFormat()
             : EcoreUtil.copy(document.getFormats().get(cell.getFormatIndex()));
         Integer fontIndex = null;
         if (plan.boldPresent || plan.fontSize != null)
         {
-            fontIndex = internFont(document, format, plan);
+            Format fontFormat = mergeExisting && !format.isSetFont() ? inheritedFontFormat(document, plan) : format;
+            fontIndex = internFont(document, fontFormat, plan);
         }
         FillType fillType = null;
         if (plan.parameter != null)
@@ -547,6 +549,32 @@ public final class SpreadsheetTemplateWriter
     }
 
     // ---- pooled interning ---------------------------------------------------------------------
+
+    /**
+     * Resolves an existing cell's inherited font in EDT's order (SheetAccessor.getCellFullFormat and
+     * ReadOnlyCellFullFormat.getFont): row, row-specific or document column, then document default.
+     * The column band's own format is not a cell-font source.
+     */
+    private static Format inheritedFontFormat(SpreadsheetDocument document, CellPlan plan)
+    {
+        Row row = document.getRows().get(Integer.valueOf(plan.row));
+        Format rowFormat = document.getFormats().get(row.getFormatIndex());
+        if (rowFormat.isSetFont())
+        {
+            return rowFormat;
+        }
+        Columns columns = row.getColumns() != null ? row.getColumns() : document.getColumns();
+        Column column = columns == null ? null : columns.getColumns().get(Integer.valueOf(plan.col));
+        if (column != null)
+        {
+            Format columnFormat = document.getFormats().get(column.getFormatIndex());
+            if (columnFormat.isSetFont())
+            {
+                return columnFormat;
+            }
+        }
+        return document.getFormats().get(document.getDefaultFormatIndex());
+    }
 
     /**
      * Ensures the formats pool has a neutral entry at index 0 (only on an empty pool). A cell that gets no
@@ -812,6 +840,15 @@ public final class SpreadsheetTemplateWriter
                 + "; use replace:true for full replacement."; //$NON-NLS-1$
         }
 
+        for (String key : new String[] { KEY_TEXT, KEY_PARAMETER })
+        {
+            if (has(entry, key) && (!entry.get(key).isJsonPrimitive()
+                || !entry.getAsJsonPrimitive(key).isString()))
+            {
+                return ERR_CELL + where + ") '" + key + "' must be a string, got " + entry.get(key) //$NON-NLS-1$ //$NON-NLS-2$
+                    + "; use an empty string to clear it."; //$NON-NLS-1$
+            }
+        }
         String text = nonEmptyString(entry, KEY_TEXT);
         String parameter = nonEmptyString(entry, KEY_PARAMETER);
         if (text != null && parameter != null)
@@ -846,7 +883,11 @@ public final class SpreadsheetTemplateWriter
      */
     private static CellStyleResult parseCellStyle(JsonObject entry, String where)
     {
-        boolean bold = Boolean.TRUE.equals(boolMember(entry, KEY_BOLD));
+        BoolResult bold = optionalBool(entry, where, KEY_BOLD);
+        if (bold.error != null)
+        {
+            return CellStyleResult.failed(bold.error);
+        }
         Integer fontSize = intMember(entry, KEY_FONT_SIZE);
         if (fontSize != null && fontSize.intValue() <= 0)
         {
@@ -900,7 +941,7 @@ public final class SpreadsheetTemplateWriter
             return CellStyleResult.failed(autoMarkIncomplete.error);
         }
 
-        return CellStyleResult.ok(bold, fontSize, hAlign, vAlign, wrap.value, textOrientation.value,
+        return CellStyleResult.ok(Boolean.TRUE.equals(bold.value), fontSize, hAlign, vAlign, wrap.value, textOrientation.value,
             autoIndent.value, autoMarkIncomplete.value);
     }
 

@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.Font;
@@ -19,6 +20,8 @@ import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.moxel.Cell;
+import com._1c.g5.v8.dt.moxel.Column;
+import com._1c.g5.v8.dt.moxel.Columns;
 import com._1c.g5.v8.dt.moxel.Format;
 import com._1c.g5.v8.dt.moxel.Merge;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
@@ -250,6 +253,211 @@ public class SpreadsheetTemplateWriterTest
         assertFalse(doc.getFonts().get(formatOf(doc, changed).getFont()).bold());
         assertFalse(SpreadsheetTemplateWriter.apply(doc,
             json("{\"cells\":[{\"row\":0,\"col\":0,\"wrap\":false}]} ")).hasError());
+    }
+
+    @Test
+    public void testMalformedTextRejectsEntireBatchWithoutMutation()
+    {
+        assertMalformedCellMemberRejected("text", new String[] {"{}", "[]", "42", "true"});
+    }
+
+    @Test
+    public void testMalformedParameterRejectsEntireBatchWithoutMutation()
+    {
+        assertMalformedCellMemberRejected("parameter", new String[] {"{}", "[]", "42", "false"});
+    }
+
+    @Test
+    public void testMalformedBoldRejectsEntireBatchWithoutMutation()
+    {
+        assertMalformedCellMemberRejected("bold", new String[] {"{}", "[]", "\"invalid\"", "2"});
+    }
+
+    private static void assertMalformedCellMemberRejected(String member, String[] values)
+    {
+        for (String value : values)
+        {
+            SpreadsheetDocument doc = newDocument();
+            assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+                {"cells":[{"row":0,"col":0,"text":"Keep text","bold":true},
+                          {"row":0,"col":1,"parameter":"KeepParameter","bold":true}]}
+                """)).hasError());
+            SpreadsheetDocument before = EcoreUtil.copy(doc);
+            int col = "parameter".equals(member) ? 1 : 0;
+            Result result = SpreadsheetTemplateWriter.apply(doc, json("""
+                {"cells":[{"row":4,"col":4,"text":"Must not be written"},
+                          {"row":0,"col":%d,"%s":%s}]}
+                """.formatted(col, member, value)));
+            assertTrue(member + ":" + value + " must reject the batch", result.hasError());
+            assertTrue(result.error, result.error.contains(member));
+            assertTrue("a rejected batch must preserve the entire model", EcoreUtil.equals(before, doc));
+        }
+    }
+
+    @Test
+    public void testMergeBoldPreservesInheritedRowFont()
+    {
+        assertInheritedFontMerge("row", "\"bold\":false");
+    }
+
+    @Test
+    public void testMergeFontSizePreservesInheritedRowFont()
+    {
+        assertInheritedFontMerge("row", "\"fontSize\":18");
+    }
+
+    @Test
+    public void testMergeBoldPreservesInheritedColumnFont()
+    {
+        assertInheritedFontMerge("column", "\"bold\":false");
+    }
+
+    @Test
+    public void testMergeFontSizePreservesInheritedColumnFont()
+    {
+        assertInheritedFontMerge("column", "\"fontSize\":18");
+    }
+
+    @Test
+    public void testMergeBoldPreservesInheritedDocumentFont()
+    {
+        assertInheritedFontMerge("document", "\"bold\":false");
+    }
+
+    @Test
+    public void testMergeFontSizePreservesInheritedDocumentFont()
+    {
+        assertInheritedFontMerge("document", "\"fontSize\":18");
+    }
+
+    @Test
+    public void testMergeUsesRowSpecificColumnFont()
+    {
+        assertInheritedFontMerge("rowColumns", "\"bold\":false");
+    }
+
+    @Test
+    public void testMergeKeepsInheritedFontReferenceAndOverrides()
+    {
+        SpreadsheetDocument doc = documentWithInheritedFont("row");
+        FontRef original = McoreFactory.eINSTANCE.createFontRef();
+        original.setFont(doc.getFonts().get(0));
+        original.setItalic(false);
+        doc.getFonts().add(original);
+        doc.getFormats().get(1).setFont(doc.getFonts().size() - 1);
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"fontSize\":18}]}")).hasError());
+        FontRef changed = (FontRef)doc.getFonts().get(formatOf(doc, cellAt(doc, 0, 0)).getFont());
+        assertTrue(original.getFont() == changed.getFont());
+        assertEquals("Arial", changed.faceName());
+        assertTrue(changed.bold());
+        assertTrue(changed.isSetItalic());
+        assertFalse(changed.italic());
+        assertEquals(18, changed.height());
+        assertEquals(14, original.height());
+        assertFalse(original.isSetHeight());
+    }
+
+    @Test
+    public void testNewCellFontEditUsesFreshFont()
+    {
+        assertFreshFontEdit("{\"row\":0,\"col\":2,\"bold\":false}", 2);
+    }
+
+    @Test
+    public void testReplacementFontEditUsesFreshFont()
+    {
+        assertFreshFontEdit("{\"row\":0,\"col\":0,\"bold\":false,\"replace\":true}", 0);
+    }
+
+    private static void assertFreshFontEdit(String patch, int col)
+    {
+        SpreadsheetDocument doc = documentWithInheritedFont("row");
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("{\"cells\":[" + patch + "]}")).hasError());
+        Font actual = doc.getFonts().get(formatOf(doc, cellAt(doc, 0, col)).getFont());
+        FontDef fresh = McoreFactory.eINSTANCE.createFontDef();
+        fresh.setBold(false);
+        assertTrue("new and replacement fonts retain fresh-font semantics", EcoreUtil.equals(fresh, actual));
+        assertEquals("Arial", doc.getFonts().get(0).faceName());
+    }
+
+    private static void assertInheritedFontMerge(String source, String patch)
+    {
+        SpreadsheetDocument doc = documentWithInheritedFont(source);
+        SpreadsheetDocument before = EcoreUtil.copy(doc);
+        assertFalse(SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0," + patch + "}]}")).hasError());
+        Font font = doc.getFonts().get(formatOf(doc, cellAt(doc, 0, 0)).getFont());
+        assertEquals(source + " font face must survive", "Arial", font.faceName());
+        assertTrue(font.italic());
+        assertTrue(font.underline());
+        boolean sizePatch = patch.contains("fontSize");
+        assertEquals(sizePatch ? 18 : 14, font.height());
+        assertEquals(sizePatch, font.bold());
+        assertEquals("Keep", cellAt(doc, 0, 0).getText().getContent().get("#"));
+        for (int i = 0; i < before.getFonts().size(); i++)
+        {
+            assertTrue(EcoreUtil.equals(before.getFonts().get(i), doc.getFonts().get(i)));
+        }
+        for (int i = 0; i < before.getFormats().size(); i++)
+        {
+            assertTrue(EcoreUtil.equals(before.getFormats().get(i), doc.getFormats().get(i)));
+        }
+        assertEquals(0, cellAt(doc, 0, 1).getFormatIndex());
+    }
+
+    private static SpreadsheetDocument documentWithInheritedFont(String source)
+    {
+        SpreadsheetDocument doc = newDocument();
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":0,"text":"Keep"},{"row":0,"col":1,"text":"Neighbor"}]}
+            """)).hasError());
+        FontDef original = McoreFactory.eINSTANCE.createFontDef();
+        original.setFaceName("Arial");
+        original.setHeight(14);
+        original.setBold(true);
+        original.setItalic(true);
+        original.setUnderline(true);
+        doc.getFonts().add(original);
+        Format inherited = MoxelFactory.eINSTANCE.createFormat();
+        inherited.setFont(0);
+        doc.getFormats().add(inherited);
+        int inheritedIndex = doc.getFormats().size() - 1;
+        FontDef otherFont = McoreFactory.eINSTANCE.createFontDef();
+        otherFont.setFaceName("Courier New");
+        doc.getFonts().add(otherFont);
+        Format otherFormat = MoxelFactory.eINSTANCE.createFormat();
+        otherFormat.setFont(1);
+        doc.getFormats().add(otherFormat);
+        int otherIndex = doc.getFormats().size() - 1;
+        doc.setDefaultFormatIndex(otherIndex);
+        Column column = MoxelFactory.eINSTANCE.createColumn();
+        column.setFormatIndex(otherIndex);
+        doc.getColumns().getColumns().put(Integer.valueOf(0), column);
+        Row row = doc.getRows().get(Integer.valueOf(0));
+        if ("row".equals(source))
+        {
+            row.setFormatIndex(inheritedIndex);
+        }
+        else if ("column".equals(source))
+        {
+            column.setFormatIndex(inheritedIndex);
+        }
+        else if ("rowColumns".equals(source))
+        {
+            Columns columns = MoxelFactory.eINSTANCE.createColumns();
+            Column rowColumn = MoxelFactory.eINSTANCE.createColumn();
+            rowColumn.setFormatIndex(inheritedIndex);
+            columns.getColumns().put(Integer.valueOf(0), rowColumn);
+            doc.getAllColumns().add(columns);
+            row.setColumns(columns);
+        }
+        else
+        {
+            doc.setDefaultFormatIndex(inheritedIndex);
+            column.setFormatIndex(0);
+        }
+        return doc;
     }
 
     @Test
