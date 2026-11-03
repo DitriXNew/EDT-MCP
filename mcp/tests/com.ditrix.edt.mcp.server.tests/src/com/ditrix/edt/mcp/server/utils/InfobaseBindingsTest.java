@@ -12,14 +12,18 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
+import org.eclipse.debug.core.ILaunchConfigurationListener;
+import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -30,11 +34,15 @@ public class InfobaseBindingsTest
     {
         public final IProject project = mock(IProject.class);
         public final IApplicationManager manager = mock(IApplicationManager.class);
-        public final IApplication prior = mock(IApplication.class);
+        public final IApplication prior = mock(IInfobaseApplication.class);
         public final AtomicReference<String> defaultId = new AtomicReference<>("prior");
         public final AtomicReference<String> launchId = new AtomicReference<>("prior");
         public final ILaunchConfiguration configuration = mock(ILaunchConfiguration.class);
         public final ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
+        public final ILaunchManager launchManager = mock(ILaunchManager.class);
+        public final IEclipsePreferences preferences = mock(IEclipsePreferences.class);
+        public final AtomicReference<IEclipsePreferences.IPreferenceChangeListener> defaultListener = new AtomicReference<>();
+        public final AtomicReference<ILaunchConfigurationListener> launchListener = new AtomicReference<>();
         public boolean failDefault;
         public boolean failLaunch;
 
@@ -43,6 +51,11 @@ public class InfobaseBindingsTest
             when(project.getName()).thenReturn("project");
             when(project.isOpen()).thenReturn(true);
             when(prior.getId()).thenReturn("prior");
+            when(prior.getProject()).thenReturn(project);
+            doAnswer(call -> { defaultListener.set(call.getArgument(0)); return null; })
+                .when(preferences).addPreferenceChangeListener(any());
+            doAnswer(call -> { launchListener.set(call.getArgument(0)); return null; })
+                .when(launchManager).addLaunchConfigurationListener(any());
             when(manager.getApplication(project, "prior")).thenReturn(Optional.of(prior));
             doAnswer(call -> {
                 if (failDefault) { throw new IllegalStateException("default store refused"); }
@@ -60,6 +73,7 @@ public class InfobaseBindingsTest
             when(configuration.getAttribute(eq(LaunchConfigUtils.ATTR_APPLICATION_ID), nullable(String.class)))
                 .thenAnswer(call -> launchId.get());
             when(configuration.getWorkingCopy()).thenReturn(copy);
+            when(copy.getOriginal()).thenReturn(configuration);
             when(copy.getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), nullable(String.class)))
                 .thenReturn("project");
             when(copy.getAttribute(eq(LaunchConfigUtils.ATTR_APPLICATION_ID), nullable(String.class)))
@@ -77,13 +91,34 @@ public class InfobaseBindingsTest
         public InfobaseBindings snapshot()
         {
             return InfobaseBindings.capture(manager, new IProject[] {project},
-                new ILaunchConfiguration[] {configuration}, p -> defaultId.get());
+                new ILaunchConfiguration[] {configuration}, p -> defaultId.get(), launchManager, preferences);
+        }
+
+        public void clearByUser() throws Exception
+        {
+            defaultId.set(null);
+            if (defaultListener.get() != null)
+            {
+                defaultListener.get().preferenceChange(new IEclipsePreferences.PreferenceChangeEvent(
+                    preferences, "project", "prior", null));
+            }
+            launchId.set(null);
+            if (launchListener.get() != null) { launchListener.get().launchConfigurationChanged(configuration); }
         }
 
         public void reset()
         {
-            defaultId.set(null);
-            launchId.set(null);
+            try (var coordination = InfobaseMutationCoordinator.acquire())
+            {
+                defaultId.set(null);
+                if (defaultListener.get() != null)
+                {
+                    defaultListener.get().preferenceChange(new IEclipsePreferences.PreferenceChangeEvent(
+                        preferences, "project", "prior", null));
+                }
+                launchId.set(null);
+                if (launchListener.get() != null) { launchListener.get().launchConfigurationChanged(configuration); }
+            }
         }
     }
 
@@ -157,6 +192,8 @@ public class InfobaseBindingsTest
         verify(state.manager).setDefaultApplication(state.project, state.prior);
         verify(state.copy).doSave();
         verify(state.manager, never()).getDefaultApplication(any());
+        verify(state.preferences).removePreferenceChangeListener(state.defaultListener.get());
+        verify(state.launchManager).removeLaunchConfigurationListener(state.launchListener.get());
     }
 
     @Test
@@ -304,6 +341,340 @@ public class InfobaseBindingsTest
         }, "project", false, false));
         assertFalse(result.get("success").getAsBoolean());
         assertEquals(1, result.getAsJsonArray("unrestoredBindings").size());
+    }
+
+    @Test
+    public void intentionalClearsDuringTheOperationAreKeptInBothResetOrders() throws Exception
+    {
+        for (boolean resetFirst : new boolean[] {false, true})
+        {
+            var state = new State();
+            var result = parse(state.snapshot().run(() -> {
+                if (resetFirst)
+                {
+                    state.reset();
+                    state.defaultId.set("human-choice");
+                    state.launchId.set("human-choice");
+                }
+                try { state.clearByUser(); }
+                catch (Exception failure) { throw new IllegalStateException(failure); }
+                if (!resetFirst) { state.reset(); }
+                return ToolResult.success().toJson();
+            }, "project", false, false));
+            assertNull("keep the user's cleared default", state.defaultId.get());
+            assertNull("keep the user's cleared launch binding", state.launchId.get());
+            assertFalse(result.get("success").getAsBoolean());
+            assertEquals(2, result.getAsJsonArray("unrestoredBindings").size());
+            verify(state.manager, never()).setDefaultApplication(any(), any());
+            verify(state.copy, never()).doSave();
+        }
+    }
+
+    @Test
+    public void registrationUuidDeletionExcludesItsCapturedApplicationBindings() throws Exception
+    {
+        var state = new State();
+        var reference = new ServerInfobaseTarget("host", "base").reference("base");
+        when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+        var result = parse(state.snapshot().run(() -> {
+            state.reset();
+            when(state.manager.getApplication(state.project, "prior")).thenReturn(Optional.empty());
+            return ToolResult.success().put("action", "deleted")
+                .put("registrationId", reference.getUuid().toString()).toJson();
+        }, "project", false, true));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNull(state.defaultId.get());
+        assertNull("never save a dangling deleted application ID", state.launchId.get());
+        assertEquals(2, result.getAsJsonArray("removedBindings").size());
+        verify(state.manager, never()).setDefaultApplication(any(), any());
+        verify(state.copy, never()).doSave();
+    }
+
+    @Test
+    public void invalidOperationResultsReturnErrorsAfterRecoveringBindings() throws Exception
+    {
+        for (String raw : new String[] {null, "null", "[]", "true", "\"text\"", "malformed", "{}",
+            "{\"success\":\"true\"}", "{\"success\":true,\"mutationPending\":{}}"})
+        {
+            var state = new State();
+            var result = parse(state.snapshot().run(() -> {
+                state.reset();
+                return raw;
+            }, "project", true, false));
+            assertFalse("invalid result must be an error: " + raw, result.get("success").getAsBoolean());
+            assertEquals("prior", state.defaultId.get());
+            assertEquals("prior", state.launchId.get());
+            assertEquals(2, result.getAsJsonArray("restoredBindings").size());
+            assertTrue(result.get("error").getAsString().contains("operation result"));
+        }
+    }
+
+    @Test
+    public void successlessPendingResultIsNormalizedWithoutSkippingRecoveryReport() throws Exception
+    {
+        var state = new State();
+        var result = parse(state.snapshot().run(() -> {
+            state.reset();
+            return "{\"mutationPending\":true,\"registrationId\":\"retained\"}";
+        }, "project", true, false));
+        assertFalse(result.get("success").getAsBoolean());
+        assertEquals("retained", result.get("registrationId").getAsString());
+        assertTrue(result.getAsJsonArray("unrestoredBindings").size() > 0);
+        verify(state.manager, never()).setDefaultApplication(any(), any());
+        verify(state.copy, never()).doSave();
+    }
+
+    @Test
+    public void intentionalClearDuringRecoveryLookupIsRecheckedBeforeWriting() throws Exception
+    {
+        var state = new State();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        when(state.manager.getApplication(state.project, "prior")).thenAnswer(call -> {
+            if (reads.getAndIncrement() > 0) { state.clearByUser(); }
+            return Optional.of(state.prior);
+        });
+        var result = parse(state.snapshot().run(() -> {
+            state.reset();
+            return ToolResult.success().toJson();
+        }, "project", false, false));
+        assertFalse(result.get("success").getAsBoolean());
+        assertNull(state.defaultId.get());
+        assertNull(state.launchId.get());
+        verify(state.manager, never()).setDefaultApplication(any(), any());
+        verify(state.copy, never()).doSave();
+    }
+
+    @Test
+    public void uuidDeletionRestoresUnrelatedRegistrationsAndExcludesOtherProjectsSharingTheUuid() throws Exception
+    {
+        var first = new State();
+        var shared = new State();
+        var unrelated = new State();
+        var target = new ServerInfobaseTarget("host", "base").reference("base");
+        var other = new ServerInfobaseTarget("host", "other").reference("other");
+        when(((IInfobaseApplication)first.prior).getInfobase()).thenReturn(target);
+        when(((IInfobaseApplication)shared.prior).getInfobase()).thenReturn(target);
+        when(((IInfobaseApplication)unrelated.prior).getInfobase()).thenReturn(other);
+        when(shared.project.getName()).thenReturn("shared");
+        when(unrelated.project.getName()).thenReturn("unrelated");
+        when(shared.configuration.getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), nullable(String.class)))
+            .thenReturn("shared");
+        when(unrelated.configuration.getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), nullable(String.class)))
+            .thenReturn("unrelated");
+        when(unrelated.copy.getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), nullable(String.class)))
+            .thenReturn("unrelated");
+        when(first.manager.getApplication(shared.project, "prior")).thenReturn(Optional.of(shared.prior));
+        when(first.manager.getApplication(unrelated.project, "prior")).thenReturn(Optional.of(unrelated.prior));
+        doAnswer(call -> { unrelated.defaultId.set("prior"); return null; })
+            .when(first.manager).setDefaultApplication(unrelated.project, unrelated.prior);
+        var snapshot = InfobaseBindings.capture(first.manager,
+            new IProject[] {first.project, shared.project, unrelated.project},
+            new ILaunchConfiguration[] {first.configuration, shared.configuration, unrelated.configuration},
+            project -> project == first.project ? first.defaultId.get()
+                : project == shared.project ? shared.defaultId.get() : unrelated.defaultId.get());
+        var result = parse(snapshot.run(() -> {
+            first.reset();
+            shared.reset();
+            unrelated.reset();
+            return ToolResult.success().put("action", "deleted")
+                .put("registrationId", target.getUuid().toString()).toJson();
+        }, "project", false, true));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(4, result.getAsJsonArray("removedBindings").size());
+        assertEquals(2, result.getAsJsonArray("restoredBindings").size());
+        assertNull(first.launchId.get());
+        assertNull(shared.launchId.get());
+        assertEquals("prior", unrelated.defaultId.get());
+        assertEquals("prior", unrelated.launchId.get());
+    }
+
+    @Test
+    public void registrationUuidPreviewAndFailureDoNotExcludeRestoration() throws Exception
+    {
+        for (boolean preview : new boolean[] {true, false})
+        {
+            var state = new State();
+            var reference = new ServerInfobaseTarget("host", "base").reference("base");
+            when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+            var result = parse(state.snapshot().run(() -> {
+                state.reset();
+                return (preview ? ToolResult.success().put("action", "preview")
+                    : ToolResult.error("cleanup refused"))
+                    .put("registrationId", reference.getUuid().toString()).toJson();
+            }, "project", false, true));
+            assertEquals(preview, result.get("success").getAsBoolean());
+            assertEquals(0, result.getAsJsonArray("removedBindings").size());
+            assertEquals(2, result.getAsJsonArray("restoredBindings").size());
+            assertEquals("prior", state.defaultId.get());
+            assertEquals("prior", state.launchId.get());
+        }
+    }
+
+    @Test
+    public void invalidOperationResultStillReportsFailedRestoration() throws Exception
+    {
+        var state = new State();
+        state.failLaunch = true;
+        var result = parse(state.snapshot().run(() -> {
+            state.reset();
+            return "[]";
+        }, "project", false, false));
+        assertFalse(result.get("success").getAsBoolean());
+        assertEquals(1, result.getAsJsonArray("restoredBindings").size());
+        assertEquals(1, result.getAsJsonArray("unrestoredBindings").size());
+        assertTrue(result.get("operationError").getAsString().contains("operation result"));
+        verify(state.preferences).removePreferenceChangeListener(state.defaultListener.get());
+        verify(state.launchManager).removeLaunchConfigurationListener(state.launchListener.get());
+    }
+
+    @Test
+    public void launchWorkingCopyEditsAreTrackedByTheirOriginalConfiguration() throws Exception
+    {
+        var state = new State();
+        var result = parse(state.snapshot().run(() -> {
+            state.launchId.set(null);
+            state.launchListener.get().launchConfigurationChanged(state.copy);
+            return ToolResult.success().toJson();
+        }, "project", false, false));
+        assertFalse(result.get("success").getAsBoolean());
+        assertNull(state.launchId.get());
+        assertEquals("prior", state.defaultId.get());
+        verify(state.copy, never()).doSave();
+    }
+
+    @Test
+    public void otherProjectsPreferenceEditsDoNotVetoRestoration() throws Exception
+    {
+        var state = new State();
+        var result = parse(state.snapshot().run(() -> {
+            state.reset();
+            state.defaultListener.get().preferenceChange(new IEclipsePreferences.PreferenceChangeEvent(
+                state.preferences, "other-project", "other-prior", null));
+            return ToolResult.success().toJson();
+        }, "project", false, false));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("prior", state.defaultId.get());
+        assertEquals("prior", state.launchId.get());
+    }
+
+    @Test
+    public void deletionClearsAndVerifiesBindingsThatEdtLeftDangling() throws Exception
+    {
+        for (boolean uuidDeletion : new boolean[] {true, false})
+        {
+            for (int alreadyCleared = 0; alreadyCleared < 4; alreadyCleared++)
+            {
+                var state = new State();
+                var reference = new ServerInfobaseTarget("host", "base").reference("base");
+                when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+                int cleared = alreadyCleared;
+                var result = parse(state.snapshot().run(() -> {
+                    if ((cleared & 1) != 0) { state.defaultId.set(null); }
+                    if ((cleared & 2) != 0) { state.launchId.set(null); }
+                    when(state.manager.getApplication(state.project, "prior")).thenReturn(Optional.empty());
+                    return ToolResult.success().put("action", "deleted")
+                        .put(uuidDeletion ? "registrationId" : "applicationId",
+                            uuidDeletion ? reference.getUuid().toString() : "prior").toJson();
+                }, "project", false, true));
+                assertTrue(result.toString(), result.get("success").getAsBoolean());
+                assertNull("clear the deleted application's stale default", state.defaultId.get());
+                assertNull("clear the saved RuntimeClient binding, not just the response", state.launchId.get());
+                assertEquals(2, result.getAsJsonArray("removedBindings").size());
+                for (var binding : result.getAsJsonArray("removedBindings"))
+                {
+                    assertEquals("", binding.getAsJsonObject().get("observedApplicationId").getAsString());
+                }
+                verify(state.manager, times((cleared & 1) == 0 ? 1 : 0))
+                    .setDefaultApplication(state.project, null);
+                verify(state.copy, times((cleared & 2) == 0 ? 1 : 0)).doSave();
+            }
+        }
+    }
+
+    @Test
+    public void failedOrUnsavedDeletionClearsAreReportedAsDangling() throws Exception
+    {
+        for (boolean defaultFails : new boolean[] {true, false})
+        {
+            for (boolean throwsFailure : new boolean[] {true, false})
+            {
+                var state = new State();
+                var reference = new ServerInfobaseTarget("host", "base").reference("base");
+                when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+                if (throwsFailure)
+                {
+                    state.failDefault = defaultFails;
+                    state.failLaunch = !defaultFails;
+                }
+                else if (defaultFails)
+                {
+                    doNothing().when(state.manager).setDefaultApplication(any(), any());
+                }
+                else
+                {
+                    doReturn(state.configuration).when(state.copy).doSave();
+                }
+                var result = parse(state.snapshot().run(() -> ToolResult.success().put("action", "deleted")
+                    .put("registrationId", reference.getUuid().toString()).toJson(), "project", false, true));
+                assertFalse("a dangling binding must prevent plain success: defaultFails=" + defaultFails
+                    + ", throwsFailure=" + throwsFailure + ": " + result, result.get("success").getAsBoolean());
+                assertEquals(1, result.getAsJsonArray("removedBindings").size());
+                assertEquals(1, result.getAsJsonArray("unrestoredBindings").size());
+                var dangling = result.getAsJsonArray("unrestoredBindings").get(0).getAsJsonObject();
+                assertEquals(defaultFails ? "defaultApplicationId" : "Thin client", dangling.get("setting").getAsString());
+                assertEquals("prior", dangling.get("observedApplicationId").getAsString());
+                assertTrue(dangling.get("requiredAction").getAsString().contains("Clear"));
+                assertEquals(defaultFails ? "prior" : null, state.defaultId.get());
+                assertEquals(defaultFails ? null : "prior", state.launchId.get());
+                assertTrue(result.get("error").getAsString().contains("EDT"));
+            }
+        }
+    }
+
+    @Test
+    public void deletionPreservesNewerApplicationChoicesInsteadOfClearingThem() throws Exception
+    {
+        var state = new State();
+        var reference = new ServerInfobaseTarget("host", "base").reference("base");
+        when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+        var result = parse(state.snapshot().run(() -> {
+            state.defaultId.set("human-choice");
+            state.launchId.set("human-choice");
+            return ToolResult.success().put("action", "deleted")
+                .put("registrationId", reference.getUuid().toString()).toJson();
+        }, "project", false, true));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("human-choice", state.defaultId.get());
+        assertEquals("human-choice", state.launchId.get());
+        assertEquals(0, result.getAsJsonArray("removedBindings").size());
+        assertEquals(2, result.getAsJsonArray("preservedBindings").size());
+        for (var binding : result.getAsJsonArray("preservedBindings"))
+        {
+            assertEquals("human-choice", binding.getAsJsonObject().get("applicationId").getAsString());
+        }
+        verify(state.manager, never()).setDefaultApplication(any(), any());
+        verify(state.copy, never()).doSave();
+    }
+
+    @Test
+    public void pendingDeletionDoesNotClaimClearsOrRecommendDeletedIds() throws Exception
+    {
+        var state = new State();
+        var reference = new ServerInfobaseTarget("host", "base").reference("base");
+        when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+        var result = parse(state.snapshot().run(() -> ToolResult.success().put("action", "deleted")
+            .put("registrationId", reference.getUuid().toString()).put("mutationPending", true).toJson(),
+            "project", false, true));
+        assertFalse(result.get("success").getAsBoolean());
+        assertEquals(0, result.getAsJsonArray("removedBindings").size());
+        assertEquals(3, result.getAsJsonArray("unrestoredBindings").size());
+        for (int index = 0; index < 2; index++)
+        {
+            assertEquals("", result.getAsJsonArray("unrestoredBindings").get(index)
+                .getAsJsonObject().get("applicationId").getAsString());
+        }
+        verify(state.manager, never()).setDefaultApplication(any(), any());
+        verify(state.copy, never()).doSave();
     }
 
     private static JsonObject parse(String result)

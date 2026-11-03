@@ -51,6 +51,26 @@ import com.google.gson.JsonParser;
 public class DeleteInfobaseToolTest
 {
     @Test
+    public void registrationDeletionResultExcludesTheCapturedBoundApplication() throws Exception
+    {
+        var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var reference = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("base");
+        when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+        var result = JsonParser.parseString(state.snapshot().run(() -> {
+            when(state.manager.getApplication(state.project, "prior")).thenReturn(Optional.empty());
+            return DeleteInfobaseTool.registrationResult("project", "base", reference.getUuid(), true).toJson();
+        }, "project", false, true)).getAsJsonObject();
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertFalse("registration cleanup keeps its existing response identity", result.has("applicationId"));
+        assertEquals(2, result.getAsJsonArray("removedBindings").size());
+        assertEquals(0, result.getAsJsonArray("unrestoredBindings").size());
+        assertNull(state.defaultId.get());
+        assertNull(state.launchId.get());
+        org.mockito.Mockito.verify(state.manager).setDefaultApplication(state.project, null);
+        org.mockito.Mockito.verify(state.copy).doSave();
+    }
+
+    @Test
     public void deletingNonDefaultInfobasePreservesOtherBindingsOrReportsFailure() throws Exception
     {
         for (boolean failRestore : new boolean[] {false, true})
