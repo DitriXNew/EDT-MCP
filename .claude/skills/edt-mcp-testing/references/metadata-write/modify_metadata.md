@@ -10,7 +10,7 @@
 - The write happens inside a BM **write transaction**; the read-back (`get_metadata_details`) is a separate **read transaction**. Runs on the model/UI side — do not hammer it concurrently with other write tools (`create_metadata`, `rename_metadata_object`, `delete_metadata`).
 - **Mutate THROUGH MCP.** This tool changes the in-memory BM model *and* the source tree. After a `-clean` redeploy EDT discards unsaved in-memory edits, so drive the change through this tool (not a hand edit of the `.mdo`) to keep model + disk in sync.
 - **No infobase exclusivity needed.** It touches the source tree / model, not the infobase DB; it does not require freeing the IB.
-- **Disk lag — closed since #406.** The owner top object's export is asynchronous, but the tool now drains its own export queue before answering (and refuses, saying nothing was rolled back, if that does not happen within 60s); the wait is skipped where the export state cannot be observed, and a drained queue is not proof the bytes are right. Assert on the file directly after the call; the old advice to poll described exactly the window that barrier closed.
+- **Export barrier.** The tool waits for its submitted export queue before answering when the state is observable. A timeout does not roll back the model. Assert the file immediately after the call; a drained queue alone does not prove the bytes are correct.
 
 **Discovery companion.** `get_metadata_details(assignable: true)` is the read for *"what can I set, and to what"*: for each assignable property it returns the value **kind** (e.g. `ENUM`), the **current value**, and the **allowed enum literals**. Always discover the real property name + allowed value from there before composing a `modify_metadata` call — property names and enum literals are model-driven, not guessable.
 
@@ -70,16 +70,28 @@ modify_metadata(
 
 The `types` list may mix several entries (a composite type). Pointing a `Ref` at an object with no reference type (e.g. a `CommonModule`) is a **clean actionable error**, not a crash. A malformed spec (a bare string, or missing `types`/`kind`) **fails fast** with a shape error.
 
+**Role-rights schema check.** Use `harness.initialize()` and `harness.call()` so successful structured payloads are validated against the advertised output schema. Seed a fresh role, then grant one right:
+```python
+from harness import call, initialize, wait_for_project_ready
+
+initialize()
+call("create_metadata", {"projectName": "TestConfiguration", "fqn": "Role.E2ESchemaRole"})
+wait_for_project_ready()
+call("modify_metadata", {"projectName": "TestConfiguration", "fqn": "Role.E2ESchemaRole",
+     "rights": [{"object": "Catalog.Catalog", "right": "Read", "value": "set"}]})
+```
+Require `success:true`, `persisted:true` and `applied:{rights:1,templates:0,roleProperties:0}`. Immediately check `src/Roles/E2ESchemaRole/Rights.rights` for the `Catalog.Catalog` / `Read` cell with value `true`, then read the Role through `get_metadata_details` with `language:"en"` and require its `allowed` row. Keep a generic-property call as the string-array control. Revert the seeded role and reload the model, or use the runner's `write-metadata` fixture reset.
+
 **Full test procedure (mutate-then-revert; `TestConfiguration` only).**
-1. **Confirm ready & clean.** `list_projects` → `TestConfiguration` `State=ready`. `git status -- TestConfiguration` should be clean so the post-revert diff is meaningful.
+1. **Confirm ready & clean.** `list_projects` → `TestConfiguration` `State=ready`. `git status -- tests/TestConfiguration` should be clean so the post-revert diff is meaningful.
 2. **Discover.** `get_metadata_details(projectName="TestConfiguration", objectFqns=["Catalog.Catalog.Attribute.Attribute"], assignable=true)` — note the heading **"Assignable properties"**, the **"Allowed values"** column, and at least one `| ENUM |` row. Pick a real property name + an allowed literal from it.
 3. **Happy paths (each asserts the structured echo AND disk):**
-   - **comment** — set `comment` on `Catalog.Catalog`; expect `action="modified"`, `comment` in `applied`; then read the `.mdo` diff for the comment text (no polling needed since #406).
+   - **comment** — set `comment` on `Catalog.Catalog`; expect `action="modified"`, `comment` in `applied`; then read the `.mdo` diff for the comment text (assert immediately after the call).
    - **synonym** — set `synonym` with `language:"en"`; expect `synonym` in `applied`; read the `.mdo` diff for the synonym text.
    - **enum on a member** — seed an attribute via `create_metadata` (`Catalog.Catalog.Attribute.E2EModEnumAttr`), wait ready, discover its enum prop+value, set it; expect that prop in `applied`.
    - **structured type Number** — seed an attribute, set `type` = `Number(precision=10, scale=2)`; expect `type` in `applied`; read the owner `.mdo` diff for `precision`.
    - **structured type Ref → Catalog** — seed an attribute, set `type` = `{"kind":"Ref","ref":"Catalog.Catalog"}`; expect `type` in `applied`.
-4. **Validation matrix (each reject must be actionable AND change nothing — assert no git diff):**
+4. **Generic-property validation matrix (each reject must be actionable AND change nothing — assert no git diff):**
    - **unknown property** — `name:"noSuchProperty_e2e"` → error names the bad property and suggests `not assignable` / `Assignable properties` / `assignable:true`.
    - **`name` property** — `name:"name"` → error points at `rename_metadata_object`.
    - **bad enum value** — discover a real enum prop, send `NotAValidLiteral_zzz` → error names the bad value and lists the **allowed literals** inline (the discovered one included).
@@ -91,17 +103,18 @@ The `types` list may mix several entries (a composite type). Pointing a `Ref` at
    - **nonexistent node** — `fqn="Catalog.DoesNotExist_e2e"` → error names the FQN, suggests `not found` / `get_metadata_objects`.
 5. **Verify a successful write (BOTH model and disk):**
    - **Model read-back:** `get_metadata_details(projectName="TestConfiguration", objectFqns=["Catalog.Catalog"])` → the new comment/synonym/type is present.
-   - **Disk:** read the owner `.mdo` (`Catalogs/Catalog/Catalog.mdo`) for the new literal. Since #406 the tool waits for its export queue to drain before answering, so the value is there when the call returns — no polling needed.
+   - **Disk:** read the owner `.mdo` (`Catalogs/Catalog/Catalog.mdo`) for the new literal. The tool waits for its export queue to drain before answering, so the value is there when the call returns — no polling needed.
    - **Sanity:** `get_project_errors(projectName="TestConfiguration")` — a valid property change should not introduce new errors.
 6. **REVERT (mandatory).** Restore the source tree:
-   `git checkout HEAD -- TestConfiguration && git clean -fd -- TestConfiguration`.
+   `git checkout HEAD -- tests/TestConfiguration && git clean -fd -- tests/TestConfiguration`.
    Then bring the **in-memory model** back in line with the reverted disk — the safest reset is a `pwsh D:\Soft\edt-redeploy.ps1` `-clean` relaunch (it reloads the model from disk), or re-import. Do **not** leave EDT running with a model that no longer matches the reverted `.mdo` files. (The e2e harness resets via `reset_model()` after every `write-metadata` test.)
 
 **Result.** JSON-responseType tool — the data is in the structured payload, with a `Done`/`Error` placeholder in the text channel. Shape below is **representative, from what `test_modify_metadata.py` asserts — not a live capture.**
 
-Success (structured payload):
+Generic-property success (structured payload):
 ```json
 {
+  "success": true,
   "action": "modified",
   "fqn": "Catalog.Catalog",
   "applied": ["comment"],
@@ -111,18 +124,19 @@ Success (structured payload):
 ```
 
 Field/shape notes:
-- **`action`** — `"modified"` on success; the quickest programmatic discriminator from an error envelope.
-- **`applied`** — the list of property names actually written (e.g. `comment`, `synonym`, the discovered enum prop, `type`). Assert membership here, not on the placeholder text.
-- **`persisted`** — the model write committed and the platform accepted a save task; since #406 the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is normally already written when you read this - though a drained queue proves nothing is still pending, not that the bytes are right (a platform-side write failure is logged, not reported here), and the wait is skipped where the export state cannot be observed.
+- **`success`** — test the boolean success flag; errors carry `success:false`.
+- **`action`** — `"modified"` for these successful property and Role-rights writes.
+- **`applied`** — a string array for generic property writes; an object `{rights, templates, roleProperties}` of integer counts for Role payloads. The declared `oneOf` admits both shapes. Assert names or counts in the structured payload.
+- **`persisted`** — the model write committed and the platform accepted a save task; the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is normally already written when you read this - though a drained queue proves nothing is still pending, not that the bytes are right (a platform-side write failure is logged, not reported here), and the wait is skipped where the export state cannot be observed.
 - **`fqn`** — echoes the addressed node.
 
 **Gotchas.**
-- **Validation is fail-fast and atomic.** Every property is checked *before* any mutation — one bad property in the array rejects the whole call and writes nothing. A rejected `modify_metadata` must leave **zero git diff** (the e2e tests assert `assert_no_diff`). If you ever see a partial write after a rejection, that's a bug.
+- **Generic-property validation is fail-fast and atomic.** Every property is checked *before* any mutation — one bad property in the array rejects the whole call and writes nothing. A rejected generic-property batch must leave **zero git diff** (the e2e tests assert `assert_no_diff`). If you ever see a partial write after a rejection, that's a bug.
 - **Discover, don't guess.** Property names and enum literals are model-driven. Read `get_metadata_details(assignable:true)` first; the error on an unknown property *also* lists the assignable set and points back to `assignable:true`, and the error on a bad enum literal lists the allowed values inline.
 - **`name` is reserved for rename.** Setting `name` is refused with a pointer to `rename_metadata_object` — `modify_metadata` never renames (no cascade).
 - **`type` is structured, never a string.** `"value": "String"` is a malformed spec (shape error citing `types`/`kind`). Use `{"types":[{"kind":...}]}`. A `Ref` at a non-ref object (e.g. `CommonModule.OK`) is a clean error (`not a reference type`), not a crash — the underlying `getRefType` would `AssertionError` on such kinds, and the tool converts that to an actionable message.
 - **Empty value never clears.** `value: ""` is rejected (error suggests `non-empty` / `does not clear`) — it does NOT silently null the property.
-- **Mutation safety / revert.** After any successful write, revert with `git checkout HEAD -- TestConfiguration && git clean -fd -- TestConfiguration`, then `-clean`-relaunch EDT so the in-memory model reloads from the reverted disk (otherwise model and `.mdo` disagree until restart). Always mutate *through MCP*, never by hand-editing `.mdo`.
-- **Disk lag — waited out since #406.** The owner `.mdo` export is asynchronous, but the tool now drains its own export queue before answering (and refuses, saying the model changed, if that does not happen within 60s). Reading the file once after the call is therefore enough; the old advice to poll described the window that barrier closed.
-- **Flaky output channel.** This is a JSON-responseType tool, so the text channel is a bare `Done`/`Error` placeholder — read the **structured** payload (`action`/`applied`/`persisted`), not the echoed text. If output comes back garbled, do NOT retry-spam a write; re-verify independently via `get_metadata_details` and `git status -- TestConfiguration`, and consult the EDT log `D:\WS\EDT\.metadata\.log`.
+- **Mutation safety / revert.** After any successful write, revert with `git checkout HEAD -- tests/TestConfiguration && git clean -fd -- tests/TestConfiguration`, then `-clean`-relaunch EDT so the in-memory model reloads from the reverted disk (otherwise model and `.mdo` disagree until restart). Always mutate *through MCP*, never by hand-editing `.mdo`.
+- **Role failures can leave committed writes.** A rights-task failure or a later template/role-property failure can report partial `applied` counts and `mutationCommitted:true`. Read back the role before retrying.
+- **Flaky output channel.** This is a JSON-responseType tool, so the text channel is a bare `Done`/`Error` placeholder — read the **structured** payload (`action`/`applied`/`persisted`), not the echoed text. If output comes back garbled, do NOT retry-spam a write; re-verify independently via `get_metadata_details` and `git status -- tests/TestConfiguration`, and consult the EDT log `D:\WS\EDT\.metadata\.log`.
 - **Bilingual.** The leading **TYPE token** of the FQN is bilingual (`Справочник`/`Catalog`, child tokens `реквизит`/`Attribute` etc.) and is normalized before resolution; the object/member **NAME** is programmatic and never translated — pass the real `Name`. The **`synonym`** is language-keyed via the property's **`language`** (a language **code** `en`/`ru`, NOT the language name) — that is a separate concern from the object's `Name`.

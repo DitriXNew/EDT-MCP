@@ -35,6 +35,8 @@ The module skips without a selected read-only preset. Use its direct entry point
 `clean_project` setup/cleanup is disabled by these presets. See the launch-preset section
 of `tests/e2e/SKILL.md` and `tests/TESTING.md` for the wire assertions and clean-fixture recipe.
 
+Use `harness.call()` for tool calls: it validates successful `structuredContent` against output schemas cached from `tools/list`. Treat a schema failure as a test failure; keep disk and model assertions.
+
 ## The rules in brief (details in tests/e2e/SKILL.md)
 1. **One file per tool**, `tests/e2e/tools/test_<tool>.py`, importing ONLY from `harness`. Adding a new MCP tool? add its test file — the **coverage ratchet** fails the suite otherwise.
 2. **git-fixture isolation:** `TestConfiguration` is a committed fixture. The orchestrator resets it before every test (`git reset` + `git checkout HEAD --` + `git clean -fd`). Read tools must leave it clean (`assert_no_diff()`).

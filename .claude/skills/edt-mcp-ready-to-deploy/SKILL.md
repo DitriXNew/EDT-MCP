@@ -33,6 +33,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
      | `MessagesParityTest` | a preferences key exists in one locale file only | add it to every `messages*.properties` |
      | `ProjectContextAdoptionRatchetTest` | a new `ResourcesPlugin.getWorkspace()` in `tools/impl` | resolve through `ProjectContext` |
      | e2e runner `test_fixture_hygiene` | fixture objects were added on purpose | `EDT_MCP_UPDATE_FIXTURE_DECLARATIONS=1 python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`, commit the pin |
+   - **Harness changes:** run `python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`; output-schema validator and call-path contracts live there.
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
    - **Touched the target platform, or a call into an EDT/platform API? Also compile against the older EDTs, once per installation — each with its own flags:**
@@ -47,7 +48,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 
 6. **Golden + tool docs** — if `tools/list` changed (new tool / description / schema / annotations), regenerate and commit the golden (`EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter tools_list`); the golden snapshot test must pass. A description, schema or GUIDE change also needs its `docs/tools/<tool>.md` page regenerated: `python docs/generate_tool_docs.py --port <port>` against a server running THIS branch's build, then commit only the pages of the tools the branch changed (plus the indexes for a new tool). Never generate pages from an integration build that holds several branches: a page embeds the whole guide, so it would carry the other branches' text.
 
-7. **Full e2e (Tier 3)** — `python tests/e2e/run_all.py --project TestConfiguration` → all pass (a handful of env-gated skips are normal), **fixture clean: True**. (`edt-mcp-e2e-testing`.)
+7. **Full e2e (Tier 3)** — `python tests/e2e/run_all.py --project TestConfiguration` → all pass (a handful of env-gated skips are normal), **fixture clean: True**. Each exercised success shape must pass the harness's cached `outputSchema` validation. (`edt-mcp-e2e-testing`.)
 
 8. **Protocol conformance** — run the official suite against the live server and pin known gaps:
    `npx @modelcontextprotocol/conformance@latest server --url http://127.0.0.1:8765/mcp --spec-version 2025-11-25 --expected-failures tests/conformance/baseline.yml`

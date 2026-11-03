@@ -32,6 +32,7 @@ Root: `mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server`
 - **Metadata object/type resolution (bilingual)** → `MetadataTypeUtils` (`findObject`, `normalizeFqn`); an existing node/member by FQN — `MetadataNodeResolver.resolveExisting`/`resolveForCreate`; a form — `FormStructureReader.resolveMdForm`. These are the shared bilingual resolvers — don't write your own.
 - **Synonym language** → `MetadataLanguageUtils.resolveLanguageCode(config, explicit)` + `getSynonymForLanguage(map, code)`. The synonym key is the **language code** (`getLanguageCode()`), NOT `getName()`.
 - **Result/error** → `ToolResult`: `ToolResult.success().put(...)` / `ToolResult.error(...)`. Errors only via `ToolResult.error(...).toJson()`, never a bare string, never an exception escaping the tool.
+- **Output schemas** → use `JsonSchemaBuilder` in `protocol/`; use `property(name, description, propertySchema)` for composed schemas such as `oneOf`, rather than adding a shape-specific builder method.
 - **Pagination** → the shared `Pagination` (`utils/Pagination.java`; one `limit`/`offset`, one "truncated" format).
 - **Markdown tables** → the shared builder (escapes `|`/newline), not a per-tool StringBuilder.
 - **Tool registration** → `BuiltInToolRegistrar`, not a list inside `McpServer`. EDT services — via `Activator.getDefault().getXxx()` or `ServiceAccess.get(IFoo.class)` (+ the package in MANIFEST Import-Package).

@@ -128,6 +128,10 @@ A separate **anti-cheat verifier subagent** will read every test and rule REAL o
 
 ## 7. Harness API (the contract — call these, do not re-implement)
 
+Use `call()` for tool calls. It validates successful, present `structuredContent` against that tool's `outputSchema`, cached from paginated `tools/list` once per run; failures name the tool, JSON path and schema rule. Error payloads and negotiated text-only responses bypass this success-schema check. Keep model and disk assertions: schema validity does not prove the effect.
+
+The stdlib validator supports `type` (including unions), `properties`, `items`, `required`, `enum`, `additionalProperties`, `oneOf` and `anyOf`. Extend it and its `runner_tests/test_output_schema.py` tests before emitting another validation keyword; do not add a dependency. Runner tests mocking `_post` must supply the catalogue or seed `_OUTPUT_SCHEMAS` for their mocked server.
+
 ```python
 from harness import (
     call,                                                     # tools/call (the orchestrator does the initialize handshake once)
