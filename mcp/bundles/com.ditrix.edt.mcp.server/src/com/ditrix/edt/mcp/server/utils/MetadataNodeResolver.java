@@ -20,6 +20,7 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
@@ -890,7 +891,9 @@ public final class MetadataNodeResolver
         {
             f = ownerType.getEStructuralFeature(ALTERNATE_CHILD_FEATURE.get(featureName));
         }
-        return (f instanceof EReference) ? (EReference)f : null;
+        // FieldSource.fields is a derived mcore collection, not metadata children.
+        return f instanceof EReference reference
+            && MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(reference.getEReferenceType()) ? reference : null;
     }
 
     /**

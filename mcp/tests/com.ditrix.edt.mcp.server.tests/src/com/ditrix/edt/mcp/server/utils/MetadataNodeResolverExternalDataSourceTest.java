@@ -175,4 +175,22 @@ public class MetadataNodeResolverExternalDataSourceTest
         assertNull(MetadataNodeResolver.resolveForCreate(f.config, "Catalog.P.Field.F"));
         assertNull(MetadataNodeResolver.resolveForCreate(f.config, DIMENSION_TABLE + ".Form.F"));
     }
+
+    @Test public void fieldAliasRejectsDerivedMcoreFieldsButKeepsMetadataFields()
+    {
+        for (var owner : List.of(MdClassPackage.Literals.CATALOG, MdClassPackage.Literals.CATALOG_TABULAR_SECTION))
+        {
+            var derived = (org.eclipse.emf.ecore.EReference)owner.getEStructuralFeature("fields");
+            assertNotNull(owner.getName(), derived);
+            assertFalse(MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(derived.getEReferenceType()));
+            for (String alias : MetadataTypeUtils.nestedKindAliases("Field"))
+            {
+                assertNull(owner.getName() + "." + alias, MetadataNodeResolver.childFeature(owner, alias));
+                assertSame(MdClassPackage.Literals.TABLE__TABLE_FIELDS,
+                    MetadataNodeResolver.childFeature(MdClassPackage.Literals.TABLE, alias));
+                assertSame(MdClassPackage.Literals.DIMENSION_TABLE__FIELDS,
+                    MetadataNodeResolver.childFeature(MdClassPackage.Literals.DIMENSION_TABLE, alias));
+            }
+        }
+    }
 }
