@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -167,6 +168,35 @@ public final class ApplicationSupport
         return readBounded("Resolve default EDT application: " + projectName, //$NON-NLS-1$
             "the EDT default-application lookup for project '" + projectName + "'", //$NON-NLS-1$ //$NON-NLS-2$
             timeoutMs, () -> manager.getDefaultApplication(project));
+    }
+
+    /** Resolves the effective default ID, retaining absence, failure and deadline as distinct outcomes. */
+    public static BoundedRead<Optional<String>> getDefaultApplicationIdBounded(IApplicationManager manager,
+            IProject project, long timeoutMs)
+    {
+        var read = getDefaultApplicationBounded(manager, project, timeoutMs);
+        Optional<String> id = null;
+        Throwable failure = read.failure();
+        if (read.concluded() && failure == null)
+        {
+            try
+            {
+                id = read.valueOrRethrow().map(IApplication::getId);
+            }
+            catch (ApplicationException unavailable)
+            {
+                failure = unavailable;
+            }
+        }
+        return new BoundedRead<>(id, failure, read.outcome(), read.deadlineFailure());
+    }
+
+    /** Read the stored explicit choice; EDT's effective-default getter can clear it or infer a sole app. */
+    public static String getStoredDefaultApplicationId(IProject project)
+    {
+        return InstanceScope.INSTANCE
+            .getNode("com.e1c.g5.dt.applications").node("applicationDefaults").node("applications") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .get(project.getName(), null);
     }
 
     /**

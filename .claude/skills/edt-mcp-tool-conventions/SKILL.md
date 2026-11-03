@@ -40,6 +40,8 @@ Read arguments via `JsonUtils.extractStringArgument/extractIntArgument/extractBo
 - not-found — one semantics: an empty list for "list", an error for "get a specific one". Don't mix null/empty/error.
 - Canonicalize create/modify/delete FQN echoes, preview/batch rows, follow-up hints and write-guard refusals with `MetadataTypeUtils.toCanonicalEnglishFqn`: English structural tokens, unchanged programmatic Names. Delete scope hashes use the canonical address as well as the removal scope.
 - Base success claims on observed effects: XML export requires a new or proven rewritten `Configuration.xml` (newer mtime or changed size/digest). Export submission is not completion; `dcs` requires an observed shared export drain. An error after a committed write carries `mutationCommitted`; recover/read back before retrying.
+- Mutation reports must follow read-back: a successful native call or deletion identity alone does not prove the resulting state. Infobase writers share `InfobaseBindings` and report `preservedBindings`, `restoredBindings`, `removedBindings`, and `unrestoredBindings`; incomplete recovery is an error. Claim removal only after observing the old binding gone. UUID-wide cleanup requires confirmed global deregistration; partial dissociation remains project-scoped.
+- Infobase recovery keeps differing non-null choices and restores cleared bindings; manual clears during the call are restored too. Do not infer user intent from preference/launch listeners. Explicit `setDefault=true` wins for the target project's default.
 
 ### Response format policy (Markdown vs JSON)
 

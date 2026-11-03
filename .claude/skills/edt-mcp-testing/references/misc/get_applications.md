@@ -8,19 +8,20 @@
 - Running MCP server (:8765), live EDT workbench, workspace `D:\WS\EDT`.
 - `projectName` is **required**. The tool first runs `ProjectStateChecker.checkReadyOrError(projectName)`, so the project must be **`State=ready`** — confirm via `list_projects` before calling (right after a `-clean` redeploy the index rebuilds and the project shows `building`; wait for `ready`).
 - The `IApplicationManager` OSGi service must be available (it is, in the normal EDT runtime).
-- Read-only: no mutation, nothing to revert.
+- No explicit tool mutation; EDT lookups may initialize application settings or clear a stale stored default. Check the explicit selection in EDT when testing preservation.
 
 **Call (real, against TestConfiguration):**
 ```
 get_applications(projectName="TestConfiguration")
 ```
 
-**Result.** JSON envelope (`ResponseType.JSON`). Real live output from TestConfiguration:
+**Result.** JSON envelope (`ResponseType.JSON`); expected shape with illustrative IDs:
 ```json
 {
   "success": true,
   "project": "TestConfiguration",
   "count": 1,
+  "defaultApplication": "resolved",
   "defaultApplicationId": "82e532bc-b103-401d-9ce2-6f0785aad340",
   "applications": [
     {
@@ -38,7 +39,8 @@ Field meaning (from `GetApplicationsTool`):
 - **`project`** — echo of the requested `projectName`. This always names the project you asked about, even when the applications were inherited from a base project.
 - **`inheritedFromProject`** — present **only** on the inherited branch: when the named project is an external-objects or extension project (an `IDependentProject`) that owns no applications, the tool re-runs the lookup against its base (parent) project and sets this field to that base project's name. Absent for configuration projects and whenever the named project owns its own applications.
 - **`count`** — number of applications.
-- **`defaultApplicationId`** — id of the project's default application (`IApplicationManager.getDefaultApplication`); omitted if none / on error.
+- **`defaultApplication`** — `resolved`, `none`, or `unknown`. A failed or timed-out lookup is `unknown`, not proof of absence.
+- **`defaultApplicationId`** — effective default ID resolved through `ApplicationSupport.getDefaultApplicationIdBounded`; present only for `resolved`. EDT can infer a sole application, so this does not prove an explicit default preference survived an infobase write. Check the explicit selection in EDT as well.
 - **`applications[]`** — one object per application:
   - **`id`** — application id (a GUID for an infobase app). Pass this to `update_database` / `launch`.
   - **`name`** — application name.
@@ -53,6 +55,7 @@ Field meaning (from `GetApplicationsTool`):
   "success": true,
   "project": "TestConfiguration",
   "count": 0,
+  "defaultApplication": "none",
   "applications": [],
   "message": "No applications found for project"
 }

@@ -639,8 +639,8 @@ public class GetApplicationsTool implements IMcpTool
     static DefaultApplication resolveDefaultApplicationId(IApplicationManager appManager,
         IProject project, long timeoutMs)
     {
-        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-            ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
+        ApplicationSupport.BoundedRead<Optional<String>> read =
+            ApplicationSupport.getDefaultApplicationIdBounded(appManager, project, timeoutMs);
         if (!read.concluded())
         {
             Activator.logError("Error getting default application: " + read.deadlineFailure(), null); //$NON-NLS-1$
@@ -649,10 +649,10 @@ public class GetApplicationsTool implements IMcpTool
         }
         try
         {
-            IApplication defaultApp = read.valueOrRethrow().orElse(null);
-            if (defaultApp != null)
+            String defaultId = read.valueOrRethrow().orElse(null);
+            if (defaultId != null)
             {
-                return new DefaultApplication(defaultApp.getId(), null);
+                return new DefaultApplication(defaultId, null);
             }
         }
         catch (ApplicationException e)

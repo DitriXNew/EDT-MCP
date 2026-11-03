@@ -74,6 +74,7 @@ from harness import (
     e2e_test,
     PROJECT,
     LIVE_INFOBASE,
+    snapshot_application_bindings,
 )
 
 # Sentinel for a project name that does not exist in the workspace.
@@ -217,6 +218,7 @@ def test_standalone_register_without_database_errors_naming_path():
 
     It also proves the old routing rejection is gone: standaloneServer+register is now a supported
     combination, so the error must NOT be the former 'not supported' message."""
+    before = snapshot_application_bindings(PROJECT)
     os.makedirs(_NO_DB_DIR, exist_ok=True)
     try:
         r = call("create_infobase",
@@ -232,6 +234,7 @@ def test_standalone_register_without_database_errors_naming_path():
             ("standaloneServer+register must no longer be rejected as 'not supported': %r" % err)
     finally:
         shutil.rmtree(_NO_DB_DIR, ignore_errors=True)
+    assert snapshot_application_bindings(PROJECT) == before, "refused registration changed application bindings"
     assert_no_diff("a rejected call must not touch the fixture")
 
 

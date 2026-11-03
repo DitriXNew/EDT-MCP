@@ -72,6 +72,57 @@ import com.google.gson.JsonParser;
  */
 public class SetInfobaseCredentialsToolTest
 {
+    @Test
+    public void credentialUpdateResetIsRestoredOrReportedAsFailure() throws Exception
+    {
+        for (int scenario : new int[] {0, 1, 2})
+        {
+            boolean failRestore = scenario == 1;
+            boolean namedConfiguration = scenario == 2;
+            var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            state.failLaunch = failRestore;
+            var accessManager = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+            doAnswer(call -> { state.reset(); return null; }).when(accessManager).updateSettings(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            var ref = storedFor();
+            var tool = new SetInfobaseCredentialsTool()
+            {
+                @Override
+                com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(com.e1c.g5.dt.applications.IApplicationManager manager)
+                {
+                    return state.snapshot();
+                }
+
+                @Override
+                StoreResult storeCredentials(com.e1c.g5.dt.applications.IApplication application,
+                        String user, String password, InfobaseAccess access, Runnable committed,
+                        com.ditrix.edt.mcp.server.utils.CredentialWriteControl allowed)
+                {
+                    try
+                    {
+                        accessManager.updateSettings(ref,
+                            com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED);
+                        committed.run();
+                        return StoreResult.verified(ref);
+                    }
+                    catch (Exception failure) { throw new IllegalStateException(failure); }
+                }
+            };
+            var result = JsonParser.parseString(tool.storeWithBindings(state.project, state.manager,
+                "project", "prior", "user", "", null,
+                namedConfiguration ? "Thin client" : null,
+                namedConfiguration ? state.configuration : null, false)).getAsJsonObject();
+            assertEquals(result.toString(), !failRestore, result.get("success").getAsBoolean());
+            assertEquals("prior", state.defaultId.get());
+            assertEquals(failRestore ? null : "prior", state.launchId.get());
+            assertEquals(failRestore ? 1 : 0, result.getAsJsonArray("unrestoredBindings").size());
+            assertEquals("prior", result.get("applicationId").getAsString());
+            assertEquals(namedConfiguration, result.get("clientConfigured").getAsBoolean());
+            verify(state.copy, times(namedConfiguration ? 2 : 1)).doSave();
+            verify(accessManager).updateSettings(org.mockito.ArgumentMatchers.eq(ref), org.mockito.ArgumentMatchers.any());
+        }
+    }
+
     private static final String INFOBASE_UUID = "eb53270d-489b-4f58-9f22-ae7fd9426bc9"; //$NON-NLS-1$
 
     private static InfobaseReference storedFor()
@@ -990,10 +1041,12 @@ public class SetInfobaseCredentialsToolTest
             + "above stays green", body); //$NON-NLS-1$
 
         int clientAt = offsetOf(body, "SetInfobaseCredentialsTool", "configureClient"); //$NON-NLS-1$ //$NON-NLS-2$
-        int commitAt = offsetOf(body, "InfobaseAccessSupport", "storeCredentials"); //$NON-NLS-1$ //$NON-NLS-2$
+        int commitAt = offsetOf(body, "SetInfobaseCredentialsTool", "storeCredentials"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the injectable store must delegate to the shared credential writer", //$NON-NLS-1$
+            bodyCalling(methods, "InfobaseAccessSupport", "storeCredentials")); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertTrue("the client write in " + body.name + " no longer sits next to the agent commit: " //$NON-NLS-1$ //$NON-NLS-2$
-            + "InfobaseAccessSupport.storeCredentials is not called in the same method, so a " //$NON-NLS-1$
+            + "the credential writer is not called in the same method, so a " //$NON-NLS-1$
             + "failure of the agent half can leave the launch configuration rewritten by a call " //$NON-NLS-1$
             + "that answered success:false", commitAt >= 0); //$NON-NLS-1$
         assertTrue("the launch configuration is written at bytecode offset " + clientAt //$NON-NLS-1$
@@ -1205,7 +1258,7 @@ public class SetInfobaseCredentialsToolTest
             int pc = 0;
             while (pc < code.length)
             {
-                if ((code[pc] & 0xFF) == 0xB8) // invokestatic
+                if ((code[pc] & 0xFF) == 0xB8 || (code[pc] & 0xFF) == 0xB6) // invokestatic / invokevirtual
                 {
                     int ref = readUnsignedShort(code, pc + 1);
                     calls.add(new StaticCall(pc, simpleName(text(classNames[refOwners[ref]])),

@@ -58,6 +58,7 @@ from harness import (
     PROJECT,
     cleanup_cluster_registration_probe,
     _workspace_dir,
+    snapshot_application_bindings,
 )
 
 NONEXISTENT_PROJECT = "NoSuchProject_di_zzz"
@@ -78,6 +79,8 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
     params = {"projectName": PROJECT, "mode": "register", "infobaseServer": "localhost:1541",
               "infobaseRef": probe, "infobaseName": name}
     registration_id = None
+    config_name = probe + "_client"
+    configuration_created = False
     try:
         created = call("create_infobase", params)
         registration_id = (created.structured or {}).get("registrationId")
@@ -136,8 +139,34 @@ def test_cluster_launcher_cleanup_does_not_require_a_visible_application():
         duplicate = call("create_infobase", params)
         error = assert_error(duplicate, "stale confirmation must retain the replacement")
         assert_error_quality(error, names=["address"], suggests=["get_applications"])
+        bound_id = recreated.structured["applicationId"]
+        client = call("create_launch_config", {"projectName": PROJECT, "name": config_name,
+                      "clientType": "thin", "applicationId": bound_id})
+        assert_ok(client, "bind a test-owned RuntimeClient to the replacement registration")
+        configuration_created = True
+        before = snapshot_application_bindings(PROJECT)
+        assert dict(before[1])[config_name] == bound_id, before
+        removed = call("delete_infobase", dict(cleanup, registrationId=registration_id, confirm=True))
+        assert_ok(removed, "UUID deletion of a bound application must not restore its dangling bindings")
+        registration_id = None
+        data = removed.structured
+        assert data["action"] == "deleted" and "applicationId" not in data, data
+        assert data["unrestoredBindings"] == [], data
+        assert any(entry["setting"] == config_name and entry["applicationId"] == bound_id
+                   for entry in data["removedBindings"]), data
+        assert not any(entry["applicationId"] == bound_id for entry in data["restoredBindings"]), data
+        after = snapshot_application_bindings(PROJECT)
+        assert dict(after[1])[config_name] != bound_id, after
+        if before[0] is not None and before[0] != bound_id:
+            assert after[0] == before[0], (before, after)
+        applications = call("get_applications", {"projectName": PROJECT})
+        assert_ok(applications, "the UUID-deleted application must remain absent")
+        assert not any(app.get("id") == bound_id for app in applications.structured["applications"])
     finally:
         try:
+            if configuration_created and not calls_aborted():
+                assert_ok(call("delete_launch_config", {"name": config_name, "confirm": True}),
+                          "remove only the test-owned RuntimeClient")
             if registration_id:
                 removed = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name,
                                "registrationId": registration_id,
@@ -190,11 +219,13 @@ def test_nonexistent_project_errors_with_hint():
 def test_nonexistent_application_id_errors_with_hint():
     """A real project but a non-existent applicationId -> 'Application not found' with
     a get_applications hint. Exercises the application-resolution chain."""
+    before = snapshot_application_bindings(PROJECT)
     r = call("delete_infobase",
              {"projectName": PROJECT, "applicationId": NONEXISTENT_APP_ID, "confirm": True})
     err = assert_error(r, "nonexistent applicationId")
     assert_error_quality(err, names=[NONEXISTENT_APP_ID], suggests=["get_applications"],
                          ctx="nonexistent applicationId is named with get_applications hint")
+    assert snapshot_application_bindings(PROJECT) == before, "refused deletion changed application bindings"
     assert_no_diff("a rejected call must not touch the fixture")
 
 
@@ -371,6 +402,7 @@ def _kept_directory_case(locked):
         data = result.structured
         assert data["action"] == "deleted", data
         assert data["deleteRegistration"] is True, data
+        assert data["registrationId"] == registration_id, data
         assert data["databaseFilesDeleted"] is False, data
         assert data["databaseFilesKept"] == "deleteFailed", data
         assert "were NOT deleted" in data["message"], data

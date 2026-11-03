@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseRegistration;
+import com.ditrix.edt.mcp.server.utils.InfobaseBindings;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -338,6 +339,21 @@ public class DeleteInfobaseTool implements IMcpTool
             boolean deleteDatabaseFiles, boolean confirm,
             Supplier<InfobaseAssociationContext> currentContext)
     {
+        return captureBindings(context.appManager).run(() -> deleteWithBindings(context, projectName,
+            applicationId, infobaseName, registrationId, deleteRegistration, deleteDatabaseFiles, confirm,
+            currentContext), projectName, false, true);
+    }
+
+    InfobaseBindings captureBindings(IApplicationManager manager)
+    {
+        return InfobaseBindings.capture(manager);
+    }
+
+    private String deleteWithBindings(DeleteContext context, String projectName, String applicationId,
+            String infobaseName, String registrationId, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, boolean confirm,
+            Supplier<InfobaseAssociationContext> currentContext)
+    {
         IProject project = context.project;
         IApplicationManager appManager = context.appManager;
         IInfobaseAssociationManager assocManager = context.assocManager;
@@ -604,6 +620,7 @@ public class DeleteInfobaseTool implements IMcpTool
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         return buildDeleteSuccessResult(id, plan.deleteRegistration,
+            plan.registrationSnapshot == null ? null : plan.registrationSnapshot.getUuid(),
             new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared));
     }
 
@@ -664,7 +681,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * @param subtitle a human-readable description of what will be removed
      * @return the decline/timeout error JSON on a non-ALLOW verdict, or {@code null} on ALLOW
      */
-    private static String checkDestructiveConsent(String targetName, String subtitle)
+    String checkDestructiveConsent(String targetName, String subtitle)
     {
         ConsentPreview preview = new ConsentPreview("Delete infobase", subtitle, 1, //$NON-NLS-1$
             java.util.Collections.singletonList(targetName));
@@ -1049,20 +1066,24 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the final success tool-result JSON after a file infobase was removed. Byte-for-byte
-     * identical to the inline result the success path produced. Read-only — all mutations
+     * Builds the final success tool-result JSON, carrying the confirmed removed launcher UUID.
+     * Read-only — all mutations
      * (dissociate / deregister / file deletion) have already happened at the call site.
      */
-    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
+    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration, UUID registrationId,
             DbFileOutcome db)
     {
-        return applyDatabaseFilesOutcome(ToolResult.success()
+        ToolResult result = applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
-            .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db);
+        if (deleteRegistration && registrationId != null)
+        {
+            result.put(KEY_REGISTRATION_ID, registrationId.toString());
+        }
+        return result.put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' removed from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
                     : " (EDT infobases list entry kept).") //$NON-NLS-1$
