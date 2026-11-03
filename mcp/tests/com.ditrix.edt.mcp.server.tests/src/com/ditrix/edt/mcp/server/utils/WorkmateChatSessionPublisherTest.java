@@ -126,6 +126,6 @@ public class WorkmateChatSessionPublisherTest
         // The rules files hardcode these two literals; changing either here silently
         // breaks every chat that follows the committed instructions.
         assertEquals("edt-mcp", WorkmateGateway.CHAT_SESSION_ID); //$NON-NLS-1$
-        assertEquals("jshell_edt_canonical_imports", WorkmateGateway.CHAT_MANUAL_ID); //$NON-NLS-1$
+        assertEquals("active_workbench", WorkmateGateway.CHAT_MANUAL_ID); //$NON-NLS-1$
     }
 }
