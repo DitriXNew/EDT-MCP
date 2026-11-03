@@ -21,7 +21,7 @@ rubber-stamping.
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_no_diff, assert_no_diff_rel, FIXTURE_REL_BY_PROJECT,
-    e2e_test, PROJECT, TESTS_PROJECT,
+    e2e_test, PROJECT, TESTS_PROJECT, assert_diff_contains, read_disk,
 )
 
 
@@ -230,17 +230,104 @@ def test_missing_projectname_errors_clearly():
 
 @e2e_test(tool="validate_query", kind="read")
 def test_missing_querytext_errors_clearly():
-    # queryText is the second required argument; omitting it must error and name
-    # the missing parameter.
+    # Neither queryText nor modulePath is an actionable XOR error.
     r = call("validate_query", {
         "projectName": PROJECT,
     })
     err = assert_error(r, "missing required queryText")
-    # AUDIT: message is "queryText is required" — names the parameter but offers
-    # no example/next step. suggests=[] until enriched. -> fix-card.
-    assert_error_quality(err, names=["queryText"], suggests=[],
-                         ctx="missing queryText names the parameter")
+    assert_error_quality(err, names=["queryText", "modulePath"], suggests=["exactly one", "list_modules"],
+                         ctx="missing input mode names both choices")
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+@e2e_test(tool="validate_query", kind="write-metadata")
+def test_stored_module_queries_map_diagnostics_and_skip_dynamic_in_both_languages():
+    # Runtime-only modules keep deliberate QL errors and their markers out of the shared baseline.
+    cases = [
+        ("E2EQueriesEn538", "QueryLiterals538", "qUERYlITERALS538", 14,
+         'Function QueryLiterals538(Condition) Export\n'
+         '\tQueryText = "SELECT\n\t| C.MissingField538\n\t|FROM Catalog.Catalog AS C";\n'
+         '\tDynamicText = "SELECT C.Ref FROM Catalog.Catalog AS C" + Condition;\n'
+         '\tCaption = "Select file";\n'
+         '\tQuotedAlias = "SELECT ""value"" AS Label";\n'
+         '\tQuotedFrom = "SELECT ""value"" FROM Catalog.Catalog";\n'
+         '\tReturn New Structure("Query,Dynamic,Caption,QuotedAlias,QuotedFrom", QueryText, DynamicText, Caption, QuotedAlias, QuotedFrom);\n'
+         'EndFunction\n'),
+        ("E2EЗапросы538", "Запросы538", "зАПРОСЫ538", 17,
+         'Функция Запросы538(Условие) Экспорт\n'
+         '\tТекстЗапроса = "ВЫБРАТЬ\n\t| C.MissingField538\n\t|ИЗ Справочник.Catalog КАК C";\n'
+         '\tДинамическийТекст = "ВЫБРАТЬ C.Ссылка ИЗ Справочник.Catalog КАК C" + Условие;\n'
+         '\tЗаголовок = "Выбрать файл";\n'
+         '\tСтрокаСМеткой = "ВЫБРАТЬ ""значение"" КАК Метка";\n'
+         '\tСтрокаИзТаблицы = "ВЫБРАТЬ ""значение"" ИЗ Справочник.Catalog";\n'
+         '\tВозврат Новый Структура("Запрос,Динамический,Заголовок,СМеткой,ИзТаблицы", ТекстЗапроса, ДинамическийТекст, Заголовок, СтрокаСМеткой, СтрокаИзТаблицы);\n'
+         'КонецФункции\n'),
+    ]
+    for module, expected_method, requested_method, column, source in cases:
+        fqn = "CommonModule." + module
+        path = "CommonModules/%s/Module.bsl" % module
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed dedicated query module")
+        assert_diff_contains("<name>%s</name>" % module, "the dedicated module must be exported")
+        listed = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "commonModules", "nameFilter": module})
+        assert_ok(listed, "dedicated module model read-back")
+        assert_contains(listed.text, "| " + module + " |", "the created module must exist in the model")
+        assert_ok(call("write_module_source", {"projectName": PROJECT, "modulePath": path,
+                  "mode": "replace", "source": source, "overwrite": True}), "write stored query fixture")
+        saved = read_disk("src/" + path)
+        # EDT stores BSL with a BOM and CRLF; the text itself must match exactly.
+        assert saved.lstrip("﻿").replace("\r\n", "\n") == source, \
+            "the exact query fixture must reach disk"
+        for scope in [{}, {"method": requested_method}, {"method": requested_method, "dcsMode": True}]:
+            r = call("validate_query", {"projectName": PROJECT, "modulePath": path, **scope})
+            assert_ok(r, "stored bilingual module queries")
+            payload = r.structured
+            assert payload and payload["foundCount"] == 3 and payload["skippedCount"] == 2, payload
+            query = payload["queries"][0]
+            assert query["method"] == expected_method and query["line"] == 2, query
+            assert query["column"] == column, query
+            assert query["validationState"] == "INVALID" and query["dcsMode"] is scope.get("dcsMode", False), query
+            issues = [i for i in query["issues"] if "MissingField538" in i.get("message", "")]
+            assert issues and all(i.get("line") == 3 and i.get("queryLine") == 2 for i in issues), query
+            skipped = payload["skipped"][0]
+            assert skipped["reason"] == "dynamic" and skipped["line"] == 5, skipped
+            assert skipped["method"] == expected_method, skipped
+            caption = payload["skipped"][1]
+            assert caption["reason"] == "no query structure" and caption["line"] == 6, caption
+            quoted = payload["queries"][1:]
+            assert len(quoted) == 2 and [q["line"] for q in quoted] == [7, 8], quoted
+            for projection in quoted:
+                assert projection["method"] == expected_method and projection["valid"] is True, projection
+                assert projection["validationState"] == "VALID" and projection["validationComplete"] is True, projection
+                assert projection["errorCount"] == 0 and projection["dcsMode"] is scope.get("dcsMode", False), projection
+            assert read_disk("src/" + path) == saved, "validation must leave the saved module unchanged"
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_module_input_contract_and_resolution_errors_are_actionable():
+    path = "CommonModules/Calc/Module.bsl"
+    for args, names, hints in [
+        ({"queryText": "SELECT 1", "modulePath": path}, ["queryText", "modulePath"], ["exactly one"]),
+        ({"method": "QueryLiterals538"}, ["method", "modulePath"], ["list_modules"]),
+        ({"method": "QueryLiterals538", "queryText": "SELECT 1"}, ["method", "modulePath"], ["remove method"]),
+        ({"method": " ", "modulePath": path}, ["method"], ["get_module_structure"]),
+        ({"modulePath": "CommonModules/Missing538/Module.bsl"}, ["Missing538"], ["list_modules"]),
+        ({"modulePath": path, "method": "Missing538"}, ["Missing538"], ["get_module_structure"]),
+    ]:
+        r = call("validate_query", {"projectName": PROJECT, **args})
+        err = assert_error(r, "module input contract")
+        assert_error_quality(err, names=names, suggests=hints)
+    assert_no_diff("rejected module calls leave the fixture unchanged")
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_method_without_query_literals_returns_empty_with_querytext_hint():
+    r = call("validate_query", {"projectName": PROJECT, "modulePath": "CommonModules/Calc/Module.bsl", "method": "Add"})
+    assert_ok(r, "method with no query literals")
+    assert r.structured["queries"] == [] and r.structured["skipped"] == [], r.structured
+    assert r.structured["foundCount"] == 0 and r.structured["skippedCount"] == 0, r.structured
+    assert "no query literal found" in r.structured["message"] and "queryText" in r.structured["message"], r.structured
+    assert_no_diff()
 
 
 @e2e_test(tool="validate_query", kind="read")

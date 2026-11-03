@@ -335,7 +335,8 @@ public final class FormStructureReader
     {
         int limit = Math.min(Math.max(1, rowLimit), MAX_NODES);
         StringBuilder sb = new StringBuilder();
-        sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("# Form Structure: ").append(MetadataTypeUtils.toCanonicalEnglishFqn(formPath))
+            .append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         renderItems(sb, formModel, language, limit);
         renderAttributes(sb, formModel, language, limit);
         renderAttributeColumns(sb, formModel, language, limit, false);
