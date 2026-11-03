@@ -39,9 +39,11 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_not_contains,
     assert_no_diff,
     assert_no_diff_rel,
     poll_disk_contains_all,
+    read_fixture_file,
     restore_extension_fixture,
     wait_for_project_ready,
     e2e_test,
@@ -275,6 +277,95 @@ def test_nested_subsystem_is_adopted_by_the_chain_list_subsystems_prints():
         raise
     else:
         restore_extension_fixture("a nested-subsystem adoption")
+
+
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
+def test_exchange_plan_cascade_reports_and_exports_actual_added_objects():
+    """Seed real exchange-plan content; compare the response with disk and model on any EDT.
+
+    Older EDT may adopt only the plan. A silent cascade must fail even if the response omits it:
+    both the extension's catalog listing and its files are independent evidence of the addition.
+    """
+    catalog_name = "E2EAdoptCascadeGoods"
+    plan_name = "E2EAdoptCascadePlan"
+    catalog = "Catalog." + catalog_name
+    plan = "ExchangePlan." + plan_name
+    catalog_path = "src/Catalogs/%s/%s.mdo" % (catalog_name, catalog_name)
+    plan_path = "src/ExchangePlans/%s/%s.mdo" % (plan_name, plan_name)
+    try:
+        for fqn in (catalog, plan):
+            assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                      "seed cascade source " + fqn)
+            wait_for_project_ready()
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": plan,
+            "content": [{"metadata": catalog, "autoRecord": "Allow"}],
+        }), "include the catalog in the base exchange plan")
+        wait_for_project_ready()
+        before = call("get_metadata_objects", {
+            "projectName": TESTS_PROJECT, "metadataType": "Catalog", "nameFilter": catalog_name,
+        })
+        assert_ok(before, "catalog is not adopted before this call")
+        assert_not_contains(before.text, catalog_name, "the cascade target must start absent")
+
+        response = _assert_adopted(call("adopt_metadata_object", {
+            "projectName": PROJECT, "fqn": plan, "extensionProjectName": TESTS_PROJECT,
+        }), plan, "adopt an exchange plan with real catalog content")
+
+        # Disk first: adoption submits its own exports and waits before answering.
+        plan_disk = read_fixture_file(TESTS_PROJECT_REL, plan_path)
+        config_disk = read_fixture_file(TESTS_PROJECT_REL, _EXT_CONFIGURATION_MDO)
+        assert_contains(plan_disk, "<name>%s</name>" % plan_name, "requested plan is exported")
+        assert_contains(plan_disk, _ADOPTED, "the plan on disk is adopted")
+        assert_contains(config_disk, "<exchangePlans>%s</exchangePlans>" % plan,
+                        "the extension registers the plan")
+        try:
+            catalog_disk = read_fixture_file(TESTS_PROJECT_REL, catalog_path)
+        except FileNotFoundError:
+            catalog_disk = None
+
+        listed = call("get_metadata_objects", {
+            "projectName": TESTS_PROJECT, "metadataType": "Catalog", "nameFilter": catalog_name,
+        })
+        assert_ok(listed, "read back whether EDT actually cascaded")
+        if catalog_name in listed.text:
+            if response.get("cascadedObjects") != [catalog] or response.get("cascadedCount") != 1:
+                raise AssertionError("EDT adopted the catalog, but the response must name it exactly: %r"
+                                     % response)
+            if catalog_disk is None:
+                raise AssertionError("the reported cascade has no catalog .mdo on disk")
+            assert_contains(catalog_disk, "<name>%s</name>" % catalog_name, "cascaded catalog is exported")
+            assert_contains(catalog_disk, _ADOPTED, "cascaded catalog is an adopted copy")
+            assert_contains(config_disk, "<catalogs>%s</catalogs>" % catalog,
+                            "the extension registers the cascaded catalog")
+            assert_contains(plan_disk, "<mdObject>%s</mdObject>" % catalog,
+                            "the adopted exchange plan preserves its content")
+            details = call("get_metadata_details", {
+                "projectName": TESTS_PROJECT, "objectFqns": [catalog],
+            })
+            assert_ok(details, "read back the cascaded catalog")
+            assert_contains(details.text, "## Catalog: " + catalog_name, "the model holds the added catalog")
+            assert_contains(details.text, "**Origin:** core (adopted)", "the model copy is adopted")
+        else:
+            if "cascadedObjects" in response or "cascadedCount" in response:
+                raise AssertionError("EDT did not cascade; the response must retain the ordinary shape: %r"
+                                     % response)
+            if catalog_disk is not None:
+                raise AssertionError("no model cascade was reported, but a catalog .mdo was added")
+            assert_not_contains(config_disk, "<catalogs>%s</catalogs>" % catalog,
+                                "older EDT adds only the requested plan")
+            assert_not_contains(plan_disk, "<mdObject>%s</mdObject>" % catalog,
+                                "older EDT does not adopt exchange-plan content")
+        details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [plan]})
+        assert_ok(details, "read back the requested adopted plan")
+        assert_contains(details.text, "## ExchangePlan: " + plan_name, "the model holds the requested plan")
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture("an exchange-plan cascade adoption")
+        raise
+    else:
+        restore_extension_fixture("an exchange-plan cascade adoption")
 
 
 @e2e_test(tool="adopt_metadata_object", kind="write-metadata")

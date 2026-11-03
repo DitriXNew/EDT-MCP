@@ -9,10 +9,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -20,7 +23,6 @@ import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
@@ -41,7 +43,9 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTopObjects;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.google.gson.JsonObject;
@@ -77,6 +81,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     /** Output key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    private static final String KEY_CASCADED_OBJECTS = "cascadedObjects"; //$NON-NLS-1$
+    private static final String KEY_CASCADED_COUNT = "cascadedCount"; //$NON-NLS-1$
 
     /**
      * The source is resolved ({@link MetadataNodeResolver#resolveAddress}) EXACTLY, as adopt always
@@ -130,6 +137,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
+            .stringArrayProperty(KEY_CASCADED_OBJECTS,
+                "Additional metadata top objects added by EDT, excluding the requested object's implicit " //$NON-NLS-1$
+                    + "owner/parent chain; sorted FQNs, capped at 100; absent when none were added") //$NON-NLS-1$
+            .integerProperty(KEY_CASCADED_COUNT,
+                "Total additional top objects added, including those beyond cascadedObjects' cap; absent when zero") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE,
                 "Present when the object was already adopted, and when the adopted copy carries no " //$NON-NLS-1$
                     + "extendedConfigurationObject link, so it is mapped to the base by name rather than by ID (it " //$NON-NLS-1$
@@ -257,6 +269,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
         // only for a NATIVE configuration root - an extension's root is ADOPTED, so nothing here locks.
 
+        if (extensionModel == null)
+        {
+            return ToolResult.error("Cannot inspect extension '" + extName //$NON-NLS-1$
+                + "' before adoption. Wait for the project to finish loading and retry.").toJson(); //$NON-NLS-1$
+        }
+        Set<String> before = new LinkedHashSet<>(MetadataTopObjects.snapshot(extensionModel));
+
         // The service runs its own BM write task on the extension's model, but exposes no rollback
         // outcome if it throws. Record the opaque interval before entering it; the known write
         // declaration immediately after a normal return takes precedence.
@@ -270,15 +289,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // write in this project, not a call that wrote nowhere.
         WriteScope.recordWrite(target.getProject());
 
-        // Persist the adopted TOP object's .mdo, the .mdo of every parent subsystem of an adopted
-        // nested subsystem, AND the extension Configuration.mdo registration (the parent collection
-        // changed), mirroring create_metadata. bmGetTopObject()/bmGetFqn() are safe identity reads on
-        // the objects the platform returned.
-        List<String> dirty = collectDirtyFqns(adopted, target);
-        boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
+        AdoptionChanges changes = collectChanges(extensionModel, before, adopted);
+        // The global-context commit also schedules EDT's cascade exports; explicitly submit every
+        // added metadata TOP here so WriteScope/history and the export barrier share the full set.
+        boolean persisted = changes.persistToDisk(target.getProject());
 
         // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
-        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted));
+        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted), changes.cascaded);
     }
 
     /**
@@ -377,6 +394,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
      */
     static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote)
     {
+        return adoptedResult(source, extName, persisted, mappingNote, Collections.emptyList());
+    }
+
+    /** Same result with the measured additional top objects; no new fields for an ordinary adoption. */
+    static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote,
+        List<String> cascaded)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
             .put("fqn", source.fqn) //$NON-NLS-1$
@@ -386,6 +410,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         if (mappingNote != null)
         {
             result.put(McpKeys.MESSAGE, mappingNote);
+        }
+        if (!cascaded.isEmpty())
+        {
+            result.put(KEY_CASCADED_OBJECTS, cascaded.subList(0, Math.min(cascaded.size(), Pagination.DEFAULT_LIMIT)))
+                .put(KEY_CASCADED_COUNT, cascaded.size());
         }
         return result.toJson();
     }
@@ -656,21 +685,52 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         return message;
     }
 
-    /**
-     * Collects the FQNs of the objects whose {@code .mdo} must be re-exported after an adoption: the
-     * {@link #dirtyFqns} of the adopted object and the target extension's own {@code Configuration}.
-     * A read-only computation — the actual disk export is done by the caller.
-     *
-     * @param adopted the object returned by the adopter
-     * @param target the target extension project
-     * @return the (possibly empty) list of dirty FQNs
-     */
-    private static List<String> collectDirtyFqns(EObject adopted, IExtensionProject target)
+    /** Measure after adoption, resolving the returned object in the extension's read transaction. */
+    static AdoptionChanges collectChanges(IBmModel model, Set<String> before, EObject adopted)
     {
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        Configuration extConfig =
-            configProvider != null ? configProvider.getConfiguration(target.getProject()) : null;
-        return dirtyFqns(adopted, extConfig);
+        long adoptedId = adopted instanceof IBmObject ? ((IBmObject)adopted).bmGetId() : 0;
+        return BmTransactions.read(model, "adopt_metadata_object: measure additions", (tx, monitor) -> { //$NON-NLS-1$
+            IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+            if (!(root instanceof Configuration))
+            {
+                throw new IllegalStateException("Extension configuration is unavailable; inspect the extension " //$NON-NLS-1$
+                    + "with get_metadata_objects before retrying adoption."); //$NON-NLS-1$
+            }
+            EObject copy = adopted instanceof IBmObject ? (EObject)tx.getObjectById(adoptedId) : null;
+            if (copy == null)
+            {
+                throw new IllegalStateException("Adopted copy is unavailable; inspect the extension with " //$NON-NLS-1$
+                    + "get_metadata_objects before retrying adoption."); //$NON-NLS-1$
+            }
+            List<String> requested = dirtyFqns(copy, (Configuration)root);
+            Set<String> added = new LinkedHashSet<>(MetadataTopObjects.fqns(tx));
+            added.removeAll(before);
+            List<String> cascaded = added.stream().filter(fqn -> !requested.contains(fqn))
+                .sorted().collect(Collectors.toList());
+            Set<String> dirty = new LinkedHashSet<>(requested);
+            dirty.remove(root.bmGetFqn());
+            dirty.addAll(added);
+            dirty.add(root.bmGetFqn());
+            return new AdoptionChanges(new ArrayList<>(dirty), cascaded);
+        });
+    }
+
+    /** Detached FQNs only: response caps never limit the export/history scope. */
+    static final class AdoptionChanges
+    {
+        final List<String> dirty;
+        final List<String> cascaded;
+
+        AdoptionChanges(List<String> dirty, List<String> cascaded)
+        {
+            this.dirty = dirty;
+            this.cascaded = cascaded;
+        }
+
+        boolean persistToDisk(IProject project)
+        {
+            return !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
+        }
     }
 
     /**

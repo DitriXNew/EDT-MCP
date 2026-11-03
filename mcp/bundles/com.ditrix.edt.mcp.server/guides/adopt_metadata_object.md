@@ -9,6 +9,7 @@ Creates the adopted copy in the extension with `objectBelonging=Adopted`, then f
 - `extensionProjectName` (optional) - the target extension's EDT project name. Required ONLY when several extensions extend the configuration; with exactly one extension it is auto-selected. If you omit it and there are several, the error lists the candidates.
 
 ## Cascade
+Newer EDT may adopt additional objects by cascade; `cascadedObjects` lists their top FQNs (up to 100), with `cascadedCount` giving the total.
 Adopting a MEMBER (or a nested object) implicitly adopts the owning object too (the parent must exist in the extension to host the member) - this mirrors the platform behaviour.
 A NESTED subsystem is addressed by its whole chain, exactly as list_subsystems prints it (`Subsystem.Sales.Subsystem.Orders`, any depth; each type token English or Russian) - a bare `Subsystem.Orders` names a top-level subsystem only. Adopting it first adopts every parent subsystem the extension does not have yet, and `fqn` in the result is that canonical chain.
 
