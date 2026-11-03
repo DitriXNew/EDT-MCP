@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -62,9 +63,13 @@ import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com._1c.g5.v8.dt.metadata.mdclass.WebService;
+import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.e1c.g5.v8.dt.distribution.model.ParentSupportMode;
 import com.e1c.g5.v8.dt.distribution.model.UserSupportMode;
+import com.google.gson.JsonArray;
 
 /**
  * Renderer tests over STUB node graphs - no EDT comparison engine is started anywhere here.
@@ -267,6 +272,118 @@ public class ComparisonNodeRendererTest
             assertNotNull(text, row);
             assertFalse(row, row.contains("different order"));
         }
+    }
+
+    @Test
+    public void testRepeatedNamespaceMembershipChangesHaveNoOrderNotice()
+    {
+        String[][][] pairs = {
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A"}},
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:A", "urn:B"}},
+            {{"urn:B", "urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A"}},
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A", "urn:B"}}
+        };
+        for (String[][] pair : pairs)
+        {
+            for (int side = 0; side < 2; side++)
+            {
+                String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+                    access(new ComparedObjects<EObject>(webServiceWithNamespaces(pair[side]),
+                        webServiceWithNamespaces(pair[1 - side]), null)));
+                String row = rowContaining(text, "Only in Main");
+                assertNotNull(text, row);
+                assertTrue(row, row.contains("urn:"));
+                assertFalse(row, row.contains("different order"));
+            }
+        }
+    }
+
+    @Test
+    public void testRepeatedNamespaceThreeWayMembershipChangesHaveNoOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A", "urn:C"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other, Ancestor) |"));
+        assertTrue(row, row.contains("Only in Other: (none) |"));
+        assertTrue(row, row.contains("Only in Ancestor: urn:C (vs Main, Other) |"));
+        assertFalse(row, row.contains("different order"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceOrderNoticesNameOnlyReorderedPeers()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:A", "urn:B"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other, Ancestor) |"));
+        assertTrue(row, row.contains("Only in Other: (none); same items, different order vs Ancestor |"));
+        assertTrue(row, row.contains("Only in Ancestor: (none); same items, different order vs Other |"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceReorderingWithAdditionKeepsOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:A", "urn:B", "urn:C"),
+                webServiceWithNamespaces("urn:B", "urn:A"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other), urn:C (vs Other)"
+            + "; shared items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceOrderMatchingRetainsSharedMultiplicity()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A", "urn:C"),
+                webServiceWithNamespaces("urn:B", "urn:A", "urn:A"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:C (vs Other)"
+            + "; shared items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+    }
+
+    @Test
+    public void testRepeatedNamespacesWithEqualCountsKeepOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:A", "urn:A", "urn:B"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: (none); same items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); same items, different order vs Main |"));
+    }
+
+    private static WebService webServiceWithNamespaces(String... namespaces)
+    {
+        JsonArray values = new JsonArray();
+        for (String namespace : namespaces)
+        {
+            values.add(namespace);
+        }
+        var parsed = McoreValueListBuilder.build(values, MetadataScope.ofConfiguration(null));
+        assertNull(parsed.error);
+        assertEquals(namespaces.length, parsed.items.size());
+        WebService service = MdClassFactory.eINSTANCE.createWebService();
+        service.setName("Exchange");
+        for (var item : parsed.items)
+        {
+            var value = McoreFactory.eINSTANCE.createStringValue();
+            value.setValue(item.namespaceUri);
+            service.getXdtoPackages().add(value);
+        }
+        return service;
     }
 
     private static Catalog catalogWithInputFields(String... names)

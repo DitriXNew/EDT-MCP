@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -949,7 +950,14 @@ public final class ComparisonNodeRenderer
             if (!shared.equals(peerShared))
             {
                 boolean sameItems = added == 0 && remaining.values().stream().allMatch(count -> count == 0);
-                (sameItems ? orderDifferences : sharedOrderDifferences).add(sideLabel(SIDES[peer]));
+                // Surplus duplicates can make the earliest matches disagree even when another
+                // matching preserves the order of every shared occurrence. Without duplicates the
+                // earliest matching is the only one, so the quadratic check is skipped.
+                if (sameItems || !hasDuplicates(items) && !hasDuplicates(compared)
+                    || !canMatchSharedItemsInOrder(items, compared, shared.size()))
+                {
+                    (sameItems ? orderDifferences : sharedOrderDifferences).add(sideLabel(SIDES[peer]));
+                }
             }
         }
         if (!comparedAny)
@@ -977,6 +985,47 @@ public final class ComparisonNodeRenderer
             delta += "; shared items, different order vs " + String.join(", ", sharedOrderDifferences); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return delta;
+    }
+
+    private static boolean hasDuplicates(List<CollectionItem> items)
+    {
+        Set<String> seen = new HashSet<>();
+        for (CollectionItem item : items)
+        {
+            if (!seen.add(item.identity()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether a common subsequence can include the full shared multiset, including duplicates. */
+    private static boolean canMatchSharedItemsInOrder(List<CollectionItem> items,
+        List<CollectionItem> compared, int sharedCount)
+    {
+        if (items.size() < compared.size())
+        {
+            return canMatchSharedItemsInOrder(compared, items, sharedCount);
+        }
+        // One row of longest-common-subsequence lengths bounds memory by the shorter list.
+        int[] lengths = new int[compared.size() + 1];
+        for (CollectionItem item : items)
+        {
+            int diagonal = 0;
+            for (int index = 0; index < compared.size(); index++)
+            {
+                int previous = lengths[index + 1];
+                lengths[index + 1] = item.identity().equals(compared.get(index).identity())
+                    ? diagonal + 1 : Math.max(previous, lengths[index]);
+                diagonal = previous;
+            }
+            if (lengths[compared.size()] == sharedCount)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
