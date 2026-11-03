@@ -140,6 +140,7 @@ from harness import (
     assert_no_diff, assert_diff_contains, assert_diff_paths,  # on-disk truth (git)
     read_disk, diff,                                          # rarely needed (prefer the asserts above)
     e2e_test, PROJECT,                                        # PROJECT == "TestConfiguration"
+    snapshot_application_bindings,                           # (effective default ID, sorted RuntimeClient name/ID pairs)
 )
 # NOTE: reset_fixture() and reset_model() also exist but the ORCHESTRATOR calls them
 # for you (reset_fixture before every test; reset_fixture+reset_model after every
@@ -152,7 +153,11 @@ from harness import (
 # and polls a file of a NON-BASE fixture with the same poll the base uses:
 #   poll_disk_contains_all(rel_path, needles, ctx=..., fixture_rel=TESTS_PROJECT_REL)
 #
-# Gated live-infobase helpers (used ONLY by tools/test_live_roundtrip.py, see §8.1):
+# Infobase refusal/write checks compare snapshot_application_bindings(PROJECT) before/after.
+# Verify bindings independently of the operation's recovery report; check sharing projects too
+# after global deregistration. The effective default may be inferred, so also verify the explicit
+# default selection in EDT for live acceptance.
+# Gated live-infobase helpers (see §8.1; infobase mutation probes also use this gate):
 #   requires_live_infobase(reason)   # first line; raises E2ESkip unless EDT_MCP_LIVE_INFOBASE=1
 #   parse_yaxunit_counts(text)       # YAXUnit Markdown summary -> {total,passed,failed,errors,skipped,result}
 #   extract_application_id(text)     # pull applicationId out of a debug-launch handle

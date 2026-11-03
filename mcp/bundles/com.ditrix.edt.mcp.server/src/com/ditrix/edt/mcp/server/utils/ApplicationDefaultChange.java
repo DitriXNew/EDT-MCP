@@ -10,7 +10,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.preferences.InstanceScope;
 
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -34,12 +33,7 @@ public final class ApplicationDefaultChange
 
     public static ApplicationDefaultChange capture(IApplicationManager manager, IProject project)
     {
-        // EDT 2026.1/2026.2 persist this project-global key. Read ONLY: native writes must update
-        // EDT's private cache and notify listeners. The public default getter can clear this key
-        // after a branch switch, or substitute an implicit single application, so it is not used.
-        return capture(manager, project, () -> InstanceScope.INSTANCE
-            .getNode("com.e1c.g5.dt.applications").node("applicationDefaults").node("applications") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .get(project.getName(), null));
+        return capture(manager, project, () -> ApplicationSupport.getStoredDefaultApplicationId(project));
     }
 
     public static ApplicationDefaultChange capture(IApplicationManager manager, IProject project,
@@ -85,6 +79,17 @@ public final class ApplicationDefaultChange
     /** A non-null note means the optional setting was skipped or failed. */
     public String apply(IApplication application, Runnable contextGuard)
     {
+        return apply(application, contextGuard, false);
+    }
+
+    /** Applies the caller's explicit setDefault request after the infobase write. */
+    public String applyAfterInfobaseWrite(IApplication application, Runnable contextGuard)
+    {
+        return apply(application, contextGuard, true);
+    }
+
+    private String apply(IApplication application, Runnable contextGuard, boolean explicitDefault)
+    {
         if (!captured)
         {
             return " setDefault was not applied: the previous explicit default could not be captured; inspect get_applications and set it manually."; //$NON-NLS-1$
@@ -100,7 +105,7 @@ public final class ApplicationDefaultChange
             {
                 return " setDefault was not applied: the stored default could not be verified; set it manually."; //$NON-NLS-1$
             }
-            if (!Objects.equals(previousId, current))
+            if (!explicitDefault && !Objects.equals(previousId, current))
             {
                 return " setDefault was not applied: the default changed during creation; the newer choice was kept."; //$NON-NLS-1$
             }

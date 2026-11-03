@@ -124,7 +124,13 @@ Creating the database and BINDING it to the project are two different facts, and
 | the last read compared every application and none of them was it | **error** (the text is in `error`, not `message`) — the infobase exists and the payload keeps `action`, `infobaseFile`, `infobaseName`, `applications`, but the project has no application for it | `false` |
 | the comparison could not be completed — the read failed, the call was interrupted before the poll budget was spent, or an application's identity could not be read | success, message says the binding is **UNVERIFIED** and why | **absent** |
 
-The error case is not "nothing happened": the database is on disk and must not be created again. Until the application appears, `update_database` / `create_launch_config` / `launch` refuse — they need an `applicationId`. Call `get_applications` to re-check; if it stays absent, the EDT error log is where to look next (the tool records that no application appeared; whether the platform logged a cause is up to it). Note that `delete_infobase` cannot clean this state up: it resolves its target only among the project's applications.
+The error case does not mean nothing happened: the database can remain on disk and must not be created again blindly. Re-check with `get_applications`; `update_database`, `create_launch_config`, and `launch` need an `applicationId`. If a launcher entry was retained, use the explicit `registrationId` cleanup described above, even when no project application is visible.
+
+## Application bindings
+
+Existing project defaults and RuntimeClient application selections are verified after the operation and restored if EDT cleared them, including on an operation error. `setDefault=true` explicitly selects the new application; omitting it preserves the prior default. Differing non-null choices are kept, but a manual clear during the call is restored too.
+
+`preservedBindings`, `restoredBindings`, `removedBindings`, and `unrestoredBindings` report recovery separately from `boundToProject`. A non-empty `unrestoredBindings` makes the response an error even when the infobase was created and bound. Inspect those entries in EDT's Applications/Run Configurations and re-read `get_applications` and `list_configurations` before retrying; do not create the database again blindly. A pending native write leaves recovery unverified until it finishes.
 
 ## Typical workflow
 

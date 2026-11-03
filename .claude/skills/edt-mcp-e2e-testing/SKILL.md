@@ -48,6 +48,7 @@ Use `harness.call()` for tool calls: it validates successful `structuredContent`
    - **env-dependent** (form-render JVM flag, LanguageTool, debug no-session) → env-robust branch: real result OR a clear actionable **sentinel**.
 4. **Negative coverage is MANDATORY** (not just happy): invalid path/object, every XOR/conditional/enum, missing-required, boundaries. Assert **error QUALITY** (`assert_error_quality`): names the bad value + actionable next step. A vague/non-actionable tool error → `# AUDIT:` note + a fix-card; **do NOT weaken the test** to a bad error.
 5. **Anti-cheat (mutation thinking):** "would this test FAIL if the tool were broken?" If not, it's a CHEAT. No trivial asserts, no `assert_no_diff()`-only, no swallowed exceptions, no tolerant matching. A separate anti-cheat reviewer rules REAL/CHEAT.
+6. **Infobase bindings:** use `snapshot_application_bindings(project)` from `harness` before and after refusals and writes; it reads the effective default and RuntimeClient IDs through MCP. Check after-state independently of `removedBindings`/`restoredBindings`. Global deregistration also needs read-back in another project sharing its UUID. Gate mutations that require a platform with `requires_live_infobase`; use mocked EDT services for reset/recovery/failure orders without a platform. The effective default can be inferred, so this snapshot alone does not prove an explicit default preference survived.
 
 ## Don't
 - Don't add pip dependencies (stdlib only; the client is kept spec-conformant by hand on purpose).

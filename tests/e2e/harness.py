@@ -2946,6 +2946,20 @@ def buffered_form_render_at_startup():
 # ──────────────────────────────────────────────────────────────────────────────
 # Assertions
 # ──────────────────────────────────────────────────────────────────────────────
+def snapshot_application_bindings(project):
+    """Observe default and RuntimeClient IDs for infobase refusal/validation checks."""
+    applications = call("get_applications", {"projectName": project})
+    assert_ok(applications, "snapshot application default")
+    configurations = call("list_configurations", {"projectName": project, "type": "client"})
+    assert_ok(configurations, "snapshot RuntimeClient bindings")
+    assert isinstance(applications.structured, dict), applications.structured
+    assert isinstance(configurations.structured, dict), configurations.structured
+    configs = configurations.structured["configurations"]
+    assert isinstance(configs, list), configs
+    return (applications.structured.get("defaultApplicationId"),
+            sorted((entry["name"], entry.get("applicationId")) for entry in configs))
+
+
 def assert_ok(result, ctx=""):
     if result.is_error:
         _fail("expected success but tool returned isError [%s]: %s" % (ctx, result.error_text()[:300]))

@@ -55,6 +55,20 @@ import com.google.gson.JsonParser;
 public class GetApplicationsToolTest
 {
     @Test
+    public void defaultIdAccessorFailureRetainsTheUnknownResponseText() throws Exception
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var application = mock(IApplication.class);
+        when(manager.getDefaultApplication(project)).thenReturn(Optional.of(application));
+        when(application.getId()).thenThrow(new ApplicationException("id unavailable"));
+        DefaultApplication result = GetApplicationsTool.resolveDefaultApplicationId(manager, project, 5_000);
+        assertNull(result.id());
+        assertEquals("The default application is UNKNOWN: the lookup failed (id unavailable). "
+            + "The applications above were read successfully.", result.note());
+    }
+
+    @Test
     public void testName()
     {
         assertEquals("get_applications", new GetApplicationsTool().getName()); //$NON-NLS-1$
