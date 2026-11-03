@@ -578,7 +578,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             MetadataDeleteBatch batch = MetadataDeleteBatch.parse(params);
             return batch.errors.isEmpty() ? null : batch.refusal();
         }
-        return params.containsKey(MetadataDeleteBatch.ATOMIC)
+        return params.containsKey("atomic")
             ? ToolResult.error("atomic is only supported with operations. Omit atomic for a single fqn.").toJson() : null;
     }
 
@@ -822,7 +822,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
-        if (params.containsKey(MetadataDeleteBatch.OPERATIONS))
+        if (params.containsKey("operations"))
         {
             return deleteFormBatch(params);
         }
