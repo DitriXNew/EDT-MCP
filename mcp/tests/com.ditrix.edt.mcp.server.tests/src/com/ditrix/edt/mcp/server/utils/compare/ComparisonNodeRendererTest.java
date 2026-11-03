@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -62,9 +63,13 @@ import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com._1c.g5.v8.dt.metadata.mdclass.WebService;
+import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.e1c.g5.v8.dt.distribution.model.ParentSupportMode;
 import com.e1c.g5.v8.dt.distribution.model.UserSupportMode;
+import com.google.gson.JsonArray;
 
 /**
  * Renderer tests over STUB node graphs - no EDT comparison engine is started anywhere here.
@@ -148,12 +153,9 @@ public class ComparisonNodeRendererTest
             text.contains("No differences in the compared properties")); //$NON-NLS-1$
     }
 
-    /**
-     * The display is NOT what changed. The cell keeps the short name - qualifying it there would
-     * lengthen every reference row to fix something nobody reads out of the table.
-     */
+    /** A differing collection must identify targets that share the same bare name. */
     @Test
-    public void testTheReferenceCellStillRendersTheBareName()
+    public void testReferenceDeltaQualifiesTargetsSharingABareName()
     {
         String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
             access(new ComparedObjects<EObject>(subsystemHolding(catalogNamed("Foo")), //$NON-NLS-1$
@@ -161,8 +163,275 @@ public class ComparisonNodeRendererTest
 
         String row = rowContaining(text, "Foo"); //$NON-NLS-1$
         assertNotNull("the content row must be rendered: " + text, row); //$NON-NLS-1$
-        assertFalse("the cell must not have grown a type prefix: " + row, //$NON-NLS-1$
-            row.contains("Catalog.Foo") || row.contains("Document.Foo")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(row, row.contains("Only in Main: Catalog.Foo (vs Other)"));
+        assertTrue(row, row.contains("Only in Other: Document.Foo (vs Main)"));
+    }
+
+    @Test
+    public void testEqualConfigurationCollectionsAreCapped()
+    {
+        var main = configurationWithModules("Shared", 13);
+        var other = configurationWithModules("Shared", 13);
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)));
+        String row = rowContaining(text, "Shared10");
+        assertNotNull(row);
+        assertTrue(row, row.contains("Shared10 \u2026 (+3 more)"));
+        assertFalse(row, row.contains("Shared11"));
+        assertFalse(row, row.contains("Only in"));
+        assertTrue(text, text.contains(" (0 differing)"));
+    }
+
+    @Test
+    public void testConfigurationDeltasRemainVisibleWithOneRowLimit()
+    {
+        var main = configurationWithModules("Shared", 12);
+        var other = configurationWithModules("Shared", 12);
+        main.getCommonModules().addAll(configurationWithModules("Main", 13).getCommonModules());
+        other.getCommonModules().addAll(configurationWithModules("Other", 11).getCommonModules());
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)), 1);
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(row);
+        assertTrue(row, row.contains("CommonModule.Main10 (vs Other) \u2026 (+3 more)"));
+        assertTrue(row, row.contains("CommonModule.Other10 (vs Main) \u2026 (+1 more)"));
+        assertFalse(row, row.contains("Shared"));
+        assertFalse(row, row.contains("Main11"));
+        assertTrue(text, text.contains(" (1 differing)"));
+        assertTrue(row, row.endsWith(" |  |"));
+    }
+
+    @Test
+    public void testThreeWayCollectionDeltaShowsSharedEditsAwayFromAncestor()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(configurationWithModules("New", 1),
+                configurationWithModules("New", 1), configurationWithModules("Old", 1))), 1);
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(row);
+        assertTrue(row, row.contains("Only in Main: CommonModule.New1 (vs Ancestor)"));
+        assertTrue(row, row.contains("Only in Other: CommonModule.New1 (vs Ancestor)"));
+        assertTrue(row, row.contains("Only in Ancestor: CommonModule.Old1 (vs Main, Other)"));
+        assertTrue(text, text.contains(" (1 differing)"));
+    }
+
+    @Test
+    public void testCollectionReorderingDoesNotBecomeAnEmptyDifference()
+    {
+        var main = configurationWithModules("Shared", 2);
+        var other = configurationWithModules("Shared", 2);
+        java.util.Collections.reverse(other.getCommonModules());
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)), 1);
+        assertTrue(text, text.contains("same items, different order"));
+        assertTrue(text, text.contains(" (1 differing)"));
+    }
+
+    @Test
+    public void testFieldReorderingWithAnAdditionKeepsOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(catalogWithInputFields("Description", "Code", "Parent"),
+                catalogWithInputFields("Code", "Description"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; shared items, different order vs Other"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main"));
+        assertFalse(row, row.contains("StandardAttribute.Code"));
+        assertFalse(row, row.contains("StandardAttribute.Description"));
+    }
+
+    @Test
+    public void testFieldOrderNoticesArePairwiseInThreeWayDeltas()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(catalogWithInputFields("Description", "Code", "Parent"),
+                catalogWithInputFields("Code", "Description"),
+                catalogWithInputFields("Code", "Description", "Parent"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; same items, different order vs Ancestor; shared items, different order vs Other"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+        assertTrue(row, row.contains("Only in Ancestor: Catalog.Goods.StandardAttribute.Parent (vs Other)"
+            + "; same items, different order vs Main |"));
+    }
+
+    @Test
+    public void testFieldMembershipChangesWithoutReorderingHaveNoOrderNotice()
+    {
+        for (String[] fields : new String[][] {{"Code", "Description", "Parent"},
+            {"Parent", "Code", "Description"}, {"Code", "Parent", "Description"},
+            {"Description"}, {"Parent"}, {}})
+        {
+            String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+                access(new ComparedObjects<EObject>(catalogWithInputFields(fields),
+                    catalogWithInputFields("Code", "Description"), null)));
+            String row = rowContaining(text, "Only in Main");
+            assertNotNull(text, row);
+            assertFalse(row, row.contains("different order"));
+        }
+    }
+
+    @Test
+    public void testRepeatedNamespaceMembershipChangesHaveNoOrderNotice()
+    {
+        String[][][] pairs = {
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A"}},
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:A", "urn:B"}},
+            {{"urn:B", "urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A"}},
+            {{"urn:A", "urn:B", "urn:A"}, {"urn:B", "urn:A", "urn:B"}}
+        };
+        for (String[][] pair : pairs)
+        {
+            for (int side = 0; side < 2; side++)
+            {
+                String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+                    access(new ComparedObjects<EObject>(webServiceWithNamespaces(pair[side]),
+                        webServiceWithNamespaces(pair[1 - side]), null)));
+                String row = rowContaining(text, "Only in Main");
+                assertNotNull(text, row);
+                assertTrue(row, row.contains("urn:"));
+                assertFalse(row, row.contains("different order"));
+            }
+        }
+    }
+
+    @Test
+    public void testRepeatedNamespaceThreeWayMembershipChangesHaveNoOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A", "urn:C"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other, Ancestor) |"));
+        assertTrue(row, row.contains("Only in Other: (none) |"));
+        assertTrue(row, row.contains("Only in Ancestor: urn:C (vs Main, Other) |"));
+        assertFalse(row, row.contains("different order"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceOrderNoticesNameOnlyReorderedPeers()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:A", "urn:B"))));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other, Ancestor) |"));
+        assertTrue(row, row.contains("Only in Other: (none); same items, different order vs Ancestor |"));
+        assertTrue(row, row.contains("Only in Ancestor: (none); same items, different order vs Other |"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceReorderingWithAdditionKeepsOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:A", "urn:B", "urn:C"),
+                webServiceWithNamespaces("urn:B", "urn:A"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:A (vs Other), urn:C (vs Other)"
+            + "; shared items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+    }
+
+    @Test
+    public void testRepeatedNamespaceOrderMatchingRetainsSharedMultiplicity()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A", "urn:C"),
+                webServiceWithNamespaces("urn:B", "urn:A", "urn:A"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: urn:C (vs Other)"
+            + "; shared items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); shared items, different order vs Main |"));
+    }
+
+    @Test
+    public void testRepeatedNamespacesWithEqualCountsKeepOrderNotice()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(webServiceWithNamespaces("urn:A", "urn:B", "urn:A"),
+                webServiceWithNamespaces("urn:A", "urn:A", "urn:B"), null)));
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(text, row);
+        assertTrue(row, row.contains("Only in Main: (none); same items, different order vs Other |"));
+        assertTrue(row, row.contains("Only in Other: (none); same items, different order vs Main |"));
+    }
+
+    private static WebService webServiceWithNamespaces(String... namespaces)
+    {
+        JsonArray values = new JsonArray();
+        for (String namespace : namespaces)
+        {
+            values.add(namespace);
+        }
+        var parsed = McoreValueListBuilder.build(values, MetadataScope.ofConfiguration(null));
+        assertNull(parsed.error);
+        assertEquals(namespaces.length, parsed.items.size());
+        WebService service = MdClassFactory.eINSTANCE.createWebService();
+        service.setName("Exchange");
+        for (var item : parsed.items)
+        {
+            var value = McoreFactory.eINSTANCE.createStringValue();
+            value.setValue(item.namespaceUri);
+            service.getXdtoPackages().add(value);
+        }
+        return service;
+    }
+
+    private static Catalog catalogWithInputFields(String... names)
+    {
+        Catalog catalog = catalogNamed("Goods");
+        catalog.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000001"));
+        for (String name : names)
+        {
+            var field = McoreFactory.eINSTANCE.createField();
+            field.setName(name);
+            field.setFieldIdPrefix("StandardAttribute");
+            field.getSourceTypes().add(com._1c.g5.v8.dt.mcore.SourceType.INPUT_BY_STRING);
+            catalog.getFields().add(field);
+            catalog.getInputByString().add(field);
+        }
+        return catalog;
+    }
+
+    @Test
+    public void testThreeWayDeltasHaveOneCellBudgetAcrossBothPeers()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(configurationWithModules("Main", 13),
+                configurationWithModules("Other", 13), configurationWithModules("Old", 13))), 1);
+        String row = rowContaining(text, "Only in Main");
+        assertNotNull(row);
+        assertTrue(row, row.contains("CommonModule.Main10 (vs Other, Ancestor) \u2026 (+3 more)"));
+        assertTrue(row, row.contains("CommonModule.Other10 (vs Main, Ancestor) \u2026 (+3 more)"));
+        assertTrue(row, row.contains("CommonModule.Old10 (vs Main, Other) \u2026 (+3 more)"));
+        assertFalse(row, row.contains("Main11"));
+        assertFalse(row, row.contains("Other11"));
+        assertFalse(row, row.contains("Old11"));
+        assertEquals(30, row.split("CommonModule\\.", -1).length - 1);
+    }
+
+    private static com._1c.g5.v8.dt.metadata.mdclass.Configuration configurationWithModules(
+        String prefix, int count)
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.setName("Test");
+        config.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000001"));
+        for (int i = 1; i <= count; i++)
+        {
+            var module = MdClassFactory.eINSTANCE.createCommonModule();
+            module.setName(prefix + i);
+            config.getCommonModules().add(module);
+        }
+        return config;
     }
 
     /**
@@ -178,6 +447,7 @@ public class ComparisonNodeRendererTest
 
         assertTrue("the same target on both sides is not a difference: " + text, //$NON-NLS-1$
             text.contains(" (0 differing)")); //$NON-NLS-1$
+        assertTrue(text, text.contains("| Content | Foo | Foo |  |"));
     }
 
     /**

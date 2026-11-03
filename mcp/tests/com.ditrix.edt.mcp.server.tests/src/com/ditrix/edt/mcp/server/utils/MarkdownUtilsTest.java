@@ -9,7 +9,9 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import org.junit.Test;
 
@@ -19,6 +21,30 @@ import org.junit.Test;
  */
 public class MarkdownUtilsTest
 {
+    @Test
+    public void testCappedListUnderAndAtLimit()
+    {
+        assertEquals("", MarkdownUtils.cappedList(List.of()));
+        assertEquals("a, b", MarkdownUtils.cappedList(List.of("a", "b")));
+        List<String> items = IntStream.rangeClosed(1, 10).mapToObj(i -> "Item" + i).toList();
+        assertEquals(String.join(", ", items), MarkdownUtils.cappedList(items));
+    }
+
+    @Test
+    public void testCappedListReportsExactOmittedCount()
+    {
+        List<String> items = IntStream.rangeClosed(1, 13).mapToObj(i -> "Item" + i).toList();
+        assertEquals(String.join(", ", items.subList(0, 10)) + " \u2026 (+3 more)",
+            MarkdownUtils.cappedList(items));
+    }
+
+    @Test
+    public void testCappedListIsEscapedExactlyOnceByTableRow()
+    {
+        assertEquals("| a\\|b, c d, ef |\n", MarkdownUtils.tableRow(
+            MarkdownUtils.cappedList(List.of("a|b", "c\nd", "e\rf"))));
+    }
+
     // ========== escapeForTable ==========
 
     @Test

@@ -71,6 +71,26 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
  */
 public class MetadataPropertyIntrospectorTest
 {
+    @Test
+    public void testCollectionItemsDoNotCapTheAssignableWireValue()
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        for (int i = 1; i <= 13; i++)
+        {
+            var module = MdClassFactory.eINSTANCE.createCommonModule();
+            module.setName("Module" + i);
+            config.getCommonModules().add(module);
+        }
+        PropertyInfo info = pick(MetadataPropertyIntrospector.introspect(config), "commonModules");
+        String expected = java.util.stream.IntStream.rangeClosed(1, 13)
+            .mapToObj(i -> "Module" + i).collect(java.util.stream.Collectors.joining(", "));
+        assertEquals(expected, info.currentValue);
+        assertTrue(info.valueIdentity.endsWith("CommonModule.Module13"));
+        assertEquals(13, info.collectionItems.size());
+        assertEquals("Module13", info.collectionItems.get(12).text());
+        assertEquals("CommonModule.Module13", info.collectionItems.get(12).identity());
+    }
+
     private static CatalogAttribute newAttribute()
     {
         return MdClassFactory.eINSTANCE.createCatalogAttribute();

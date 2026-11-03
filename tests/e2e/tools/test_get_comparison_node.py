@@ -62,6 +62,8 @@ from harness import (
     call,
     e2e_test,
     PROJECT,
+    read_disk,
+    wait_for_project_ready,
 )
 
 JOB_ID_ROW = re.compile(r"^\| jobId \| ([^|]+) \|\s*$", re.MULTILINE)
@@ -165,6 +167,48 @@ def _assert_honest_about_the_lazy_tree(text, ctx):
     if NOT_FINISHED_NOTICE in text and NO_DIFFERENCES in text.lower():
         _fail("[%s] the answer says the subtree is unfinished AND that there are no "
               "differences - one of those is a lie: %s" % (ctx, text[:400]))
+
+
+@e2e_test(tool="get_comparison_node", kind="write-metadata")
+def test_configuration_collection_delta_is_capped_with_limit_one():
+    names = ["E2ECellModule%02d" % i for i in range(1, 14)]
+    for name in names:
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "CommonModule." + name}),
+                  "seed a Main-only common module")
+        assert_contains(read_disk("src/CommonModules/%s/%s.mdo" % (name, name)),
+                        "<name>%s</name>" % name, "module declaration persisted")
+    wait_for_project_ready()
+    started = _start_comparison()
+    assert_ok(started, "compare the changed working tree with HEAD")
+    job_id = _job_id(started)
+    comparison_id = None
+    try:
+        report = _await_report(job_id)
+        if report is None:
+            raise AssertionError("the changed comparison did not finish within the polling budget")
+        found = COMPARISON_ID_ROW.search(report)
+        if not found:
+            raise AssertionError("no comparisonId in the completed comparison: " + report[:400])
+        comparison_id = found.group(1).strip()
+        result = call("get_comparison_node", {
+            "comparisonId": comparison_id, "objectFqn": "Configuration", "limit": 1})
+        assert_ok(result, "expand the Configuration collection with a one-row budget")
+        row = next((line for line in result.text.splitlines()
+                    if line.startswith("| Common modules |")), "")
+        assert_contains(row, "Only in Main: CommonModule." + names[0] + " (vs Other, Ancestor)",
+                        "show additions instead of a shared prefix")
+        assert_contains(row, names[9] + " (vs Other, Ancestor) \u2026 (+3 more)",
+                        "each delta is capped at ten")
+        assert_contains(row, "Only in Other: (none)", "Other has no unique modules")
+        assert_contains(row, "Only in Ancestor: (none)", "Ancestor has no unique modules")
+        for name in names[10:]:
+            if name in row:
+                raise AssertionError("an omitted module leaked into the cell: " + row)
+        if len(row.encode("utf-8")) > 2500:
+            raise AssertionError("the bounded collection row grew unexpectedly: " + row)
+    finally:
+        _cancel(job_id)
+        _release(comparison_id)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
