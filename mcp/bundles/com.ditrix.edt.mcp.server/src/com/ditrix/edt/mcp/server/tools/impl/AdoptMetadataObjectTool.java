@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.AdoptedFormAttachment;
+import com.ditrix.edt.mcp.server.utils.AdoptedFormContent;
 import com.ditrix.edt.mcp.server.utils.AdoptedFormLookup;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -1190,7 +1191,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     try
                     {
                         inTx = AdoptedFormAttachment.complete(tx, (BasicForm)source, copy,
-                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set);
+                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set,
+                            (original, attached) -> AdoptedFormContent.adopt(tx, adoptingModel, adopter, target, original, attached));
                         if (inTx != null)
                         {
                             Activator.logInfo("adopt_metadata_object: Completed native form attachment after a " //$NON-NLS-1$

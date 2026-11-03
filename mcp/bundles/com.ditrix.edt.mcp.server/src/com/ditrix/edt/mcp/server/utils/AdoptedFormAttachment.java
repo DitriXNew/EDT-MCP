@@ -10,6 +10,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.EList;
@@ -20,6 +21,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -42,6 +44,13 @@ public final class AdoptedFormAttachment
     /** Reports exactly one decline token; all callbacks and model access stay inside the caller's write. */
     public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
         ITopObjectFqnGenerator generator, Consumer<String> declined)
+    {
+        return complete(tx, source, allocation, generator, declined, null);
+    }
+
+    /** The optional callback runs EDT's native after-adopt participants on the now-stored metadata copy. */
+    public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
+        ITopObjectFqnGenerator generator, Consumer<String> declined, BiConsumer<BasicForm, BasicForm> adoptContent)
     {
         MdObject owner = AdoptedFormLookup.findOwner(tx, source);
         EObject baseOwner = source.eContainer();
@@ -118,10 +127,59 @@ public final class AdoptedFormAttachment
         {
             content = registered;
         }
+        boolean linkedContent = false;
+        if (!(content instanceof IBmObject) || !primary(tx, (IBmObject)content))
+        {
+            // FormExtender sets mdForm to its allocation, even when that allocation was not inserted.
+            Iterator<IBmObject> objects = tx.getTopObjectIterator();
+            while (objects.hasNext())
+            {
+                IBmObject candidate = objects.next();
+                if (candidate instanceof AbstractForm && !candidate.eIsProxy() && primary(tx, candidate)
+                    && ((AbstractForm)candidate).getMdForm() == allocation
+                    && (!(candidate instanceof Form) || ((Form)candidate).getExtensionForm() == null))
+                {
+                    if (linkedContent)
+                    {
+                        return decline(declined, "ambiguousLinkedContent"); //$NON-NLS-1$
+                    }
+                    content = candidate;
+                    linkedContent = true;
+                }
+            }
+        }
+        boolean missing = content == null && source.getForm() != null;
+        boolean foreign = content instanceof IBmObject && !primary(tx, (IBmObject)content);
+        String contentState = contentState(tx, missing ? "missingContent" : "contentNotPrimary", //$NON-NLS-1$ //$NON-NLS-2$
+            expectedFqn, registered, content);
+        if ((missing || foreign) && adoptContent != null && source.getForm() != null)
+        {
+            // Do not carry the inherited external reference into the extension during insertion.
+            copy.setForm(null);
+            BasicForm attached = attach(tx, source, allocation, forms);
+            try
+            {
+                adoptContent.accept(source, attached);
+                AbstractForm adoptedContent = attached.getForm();
+                String attachedFqn = generator.generateExternalPropertyFqn(attached, MdClassPackage.Literals.BASIC_FORM__FORM);
+                if (!(adoptedContent instanceof IBmObject) || adoptedContent.eIsProxy()
+                    || !primary(tx, (IBmObject)adoptedContent)
+                    || !attachedFqn.equals(BmObjectAddress.topFqnOrNull((IBmObject)adoptedContent))
+                    || adoptedContent instanceof Form && (((Form)adoptedContent).getBaseForm() == null
+                        || !primary(tx, (IBmObject)((Form)adoptedContent).getBaseForm())))
+                {
+                    throw new IllegalStateException("EDT did not create primary form content and BaseForm at " + attachedFqn); //$NON-NLS-1$
+                }
+                return attached;
+            }
+            catch (RuntimeException e)
+            {
+                throw new IllegalStateException(contentState + "; nativeContentAdoption=" + e.getMessage(), e); //$NON-NLS-1$
+            }
+        }
         if (content == null && source.getForm() != null)
         {
-            return decline(declined, "missingContent(expected=" + expectedFqn + ", registered=" //$NON-NLS-1$ //$NON-NLS-2$
-                + label(registered) + ")"); //$NON-NLS-1$
+            return decline(declined, contentState);
         }
         List<IBmObject> external = new ArrayList<>();
         String oldFqn = null;
@@ -133,10 +191,10 @@ public final class AdoptedFormAttachment
             }
             if (!primary(tx, (IBmObject)content))
             {
-                return decline(declined, "contentNotPrimary(" + label(content) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                return decline(declined, contentState);
             }
             oldFqn = BmObjectAddress.topFqnOrNull((IBmObject)content);
-            if (oldFqn == null || expectedFqn == null || !oldFqn.equals(expectedFqn))
+            if (oldFqn == null || expectedFqn == null || !linkedContent && !oldFqn.equals(expectedFqn))
             {
                 return decline(declined, "contentFqnMismatch(old=" + oldFqn + ", expected=" + expectedFqn + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
@@ -156,12 +214,7 @@ public final class AdoptedFormAttachment
             }
         }
         // Keep EDT's allocation, origin link, form and BaseForm; only finish the missed addChild.
-        forms.add(allocation);
-        MdObject attached = AdoptedFormLookup.find(tx, source);
-        if (!(attached instanceof BasicForm))
-        {
-            throw new IllegalStateException("EDT did not attach its form allocation to the stored owner"); //$NON-NLS-1$
-        }
+        BasicForm attached = attach(tx, source, allocation, forms);
         if (oldFqn != null)
         {
             String newFqn = generator.generateExternalPropertyFqn(attached, MdClassPackage.Literals.BASIC_FORM__FORM);
@@ -182,6 +235,27 @@ public final class AdoptedFormAttachment
             ((BasicForm)attached).setForm((AbstractForm)content);
         }
         return attached;
+    }
+
+    private static BasicForm attach(IBmTransaction tx, BasicForm source, EObject allocation, EList<EObject> forms)
+    {
+        forms.add(allocation);
+        MdObject attached = AdoptedFormLookup.find(tx, source);
+        if (!(attached instanceof BasicForm))
+        {
+            throw new IllegalStateException("EDT did not attach its form allocation to the stored owner"); //$NON-NLS-1$
+        }
+        return (BasicForm)attached;
+    }
+
+    private static String contentState(IBmTransaction tx, String reason, String expectedFqn,
+        EObject registered, EObject content)
+    {
+        return reason + "(expectedFqn=" + expectedFqn + ", registered=" + observed(() -> label(registered)) //$NON-NLS-1$ //$NON-NLS-2$
+            + ", content=" + observed(() -> label(content)) + ", namespace=" + observed(() -> namespace(content)) //$NON-NLS-1$ //$NON-NLS-2$
+            + ", store=" + observed(() -> content instanceof IBmObject //$NON-NLS-1$
+                && tx.getPlatformTransaction().getContainingDataStore((IBmObject)content) != null
+                    ? tx.getPlatformTransaction().getContainingDataStore((IBmObject)content).getName() : null) + ")"; //$NON-NLS-1$
     }
 
     private static EObject decline(Consumer<String> declined, String reason)

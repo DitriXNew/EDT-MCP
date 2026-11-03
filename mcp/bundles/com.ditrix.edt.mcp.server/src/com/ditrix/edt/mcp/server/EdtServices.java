@@ -8,8 +8,11 @@ package com.ditrix.edt.mcp.server;
 
 import java.lang.reflect.Constructor;
 import java.util.Set;
+import java.util.Optional;
 
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.Filter;
@@ -40,6 +43,7 @@ import com._1c.g5.v8.dt.form.service.datasourceinfo.IDataSourceInfoAssociationSe
 import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
+import com._1c.g5.v8.dt.md.extension.adopt.participants.IModelObjectAdopterParticipant;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.md.ui.presentation.IPresentationService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -802,6 +806,39 @@ public class EdtServices
             Activator.logError("Failed to obtain EDT's form injector", e); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /** Uses EDT's participant provider, including its Guice bindings and registered extensions. */
+    @SuppressWarnings("unchecked")
+    public static <T extends EObject> IModelObjectAdopterParticipant<T> getModelObjectAdopterParticipant(EClass type)
+    {
+        try
+        {
+            Bundle bundle = Platform.getBundle("com._1c.g5.v8.dt.md.extension"); //$NON-NLS-1$
+            if (bundle == null)
+            {
+                return null;
+            }
+            // The provider is not exported or registered as an OSGi service; use its bundle's injector.
+            Class<?> pluginClass = bundle.loadClass("com._1c.g5.v8.dt.internal.md.extension.MdExtensionPlugin"); //$NON-NLS-1$
+            Object plugin = pluginClass.getMethod("getDefault").invoke(null); //$NON-NLS-1$
+            if (plugin == null)
+            {
+                return null;
+            }
+            Injector injector = (Injector)pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
+            Class<?> providerClass = bundle.loadClass(
+                "com._1c.g5.v8.dt.internal.md.extension.adopt.ModelObjectAdopterParticipantProvider"); //$NON-NLS-1$
+            Object provider = injector.getInstance(providerClass);
+            Optional<?> participant = (Optional<?>)providerClass.getMethod("getParticipant", EClass.class) //$NON-NLS-1$
+                .invoke(provider, type);
+            return participant.isPresent() ? (IModelObjectAdopterParticipant<T>)participant.get() : null;
+        }
+        catch (Exception | LinkageError e) // NOSONAR an unavailable native participant must refuse recovery
+        {
+            Activator.logError("Failed to obtain EDT's model-object adopter participant", e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**

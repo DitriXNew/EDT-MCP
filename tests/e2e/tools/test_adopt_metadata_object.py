@@ -652,6 +652,7 @@ def _repair_adopted_form_picture(rename_owner):
                         "the adopted form must persist its common-picture reference")
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk.replace("/Form.form", "/BaseForm/Form.form")),
                         picture_fqn, "the native base snapshot must be exported under the adopted owner")
+        _assert_no_adoption_errors(form_fqn, picture_fqn)
 
         renamed_owner = "E2ERenamedAdoptOwner"
         if rename_owner:
