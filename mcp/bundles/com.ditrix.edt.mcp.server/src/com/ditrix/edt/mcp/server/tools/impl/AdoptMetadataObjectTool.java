@@ -576,8 +576,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
         boolean persisted = !dirty.isEmpty()
             && BmTransactions.forceExportToDisk(target.getProject(), new ArrayList<>(dirty));
+        String detail = String.valueOf(unwrapCauseMessage(failure));
         ToolResult result = ToolResult.error("Adoption failed for '" + source.fqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
-            + unwrapCauseMessage(failure) + ". Inspect the extension with get_metadata_objects before retrying; " //$NON-NLS-1$
+            + detail + (detail.endsWith(".") ? " " : ". ") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "Inspect the extension with get_metadata_objects before retrying; " //$NON-NLS-1$
             + "completed dependencies are reported below and cascade attribution is unavailable.") //$NON-NLS-1$
             .put("fqn", source.fqn).put(KEY_EXTENSION_PROJECT, target.getProject().getName()) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted).put(KEY_CASCADE_ATTRIBUTION, "unavailable"); //$NON-NLS-1$
@@ -1123,9 +1125,21 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             if (copy instanceof IBmObject && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID
                 && source instanceof MdObject)
             {
-                String address = MetadataNodeResolver.resolvableAddressOf((MdObject)source);
-                inTx = address == null ? null : MetadataNodeResolver.resolveAddress(
-                    MetadataScope.ofConfiguration((Configuration)root), address, YO_FALLBACK);
+                // A member's returned allocation can remain detached; EDT locates the attached member separately.
+                EObject located = adopter.getAdopted(source, target);
+                if (located != null && located.eIsProxy())
+                {
+                    located = (EObject)tx.getObjectByUri(((InternalEObject)located).eProxyURI());
+                }
+                if (located instanceof IBmObject && ((IBmObject)located).bmGetId() != IBmObject.BM_NULL_ID)
+                {
+                    inTx = tx.toTransactionObject(located);
+                    if (inTx != null && tx.getPlatformTransaction().getContainingDataStore((IBmObject)inTx)
+                        != tx.getNamespace().getPrimaryStore())
+                    {
+                        inTx = null;
+                    }
+                }
                 copy = inTx;
             }
             if (inTx == null)

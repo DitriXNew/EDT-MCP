@@ -488,7 +488,7 @@ def test_adopting_form_also_adopts_its_common_picture_on_disk():
             "projectName": PROJECT, "fqn": form_fqn,
             "extensionProjectName": TESTS_PROJECT, "includeReferencedPictures": True,
         })
-        assert_ok(adopted, "adopt the form and its common-picture dependency together")
+        assert_ok(adopted, "the first call must adopt the form and picture without a warm-up retry")
 
         # DISK FIRST: every affected top object must already be exported.
         picture_xml = read_fixture_file(TESTS_PROJECT_REL, picture_disk)
@@ -529,6 +529,66 @@ def test_adopting_form_also_adopts_its_common_picture_on_disk():
         # A timed-out tool can still be writing: never race it by restoring fixture files.
         if not calls_aborted():
             restore_extension_fixture("a form adoption with common pictures")
+
+
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
+def test_adopting_picture_form_also_adopts_new_owner_on_first_call():
+    """Run first after an EDT restart to cover a cold member lookup with a newly adopted owner."""
+    owner_name = "E2EFormOwner539"
+    owner_fqn = "Catalog." + owner_name
+    form_name = "ColdForm539"
+    form_fqn = owner_fqn + ".Form." + form_name
+    picture_name = "E2EFormOwnerPicture539"
+    picture_fqn = "CommonPicture." + picture_name
+    try:
+        for fqn in (owner_fqn, picture_fqn):
+            assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                      "seed the new form owner and picture")
+            settle_or_fail("preparing first adoption with a new owner")
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": form_fqn, "generateContent": True,
+        }), "seed the new owner's form")
+        settle_or_fail("setting the form-root picture")
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": form_fqn,
+            "properties": [{"name": "createButtonsGroupPicture", "value": picture_fqn}],
+        }), "persist a picture on the form root")
+        assert_ok(call("clean_project", {"projectName": PROJECT}), "reload the saved base form")
+        settle_or_fail("adopting a form whose owner is absent from the extension")
+        before = call("get_metadata_objects", {"projectName": TESTS_PROJECT, "metadataType": "catalogs"})
+        assert_ok(before, "read extension owners before adoption")
+        assert_not_contains(before.text, owner_name, "positive control: the owner has not been adopted")
+
+        result = call("adopt_metadata_object", {
+            "projectName": PROJECT, "fqn": form_fqn, "extensionProjectName": TESTS_PROJECT,
+            "includeReferencedPictures": True,
+        })
+        assert_ok(result, "the first adoption must attach the owner, form and picture without retry")
+        owner_xml = read_fixture_file(TESTS_PROJECT_REL, "src/Catalogs/%s/%s.mdo" % (owner_name, owner_name))
+        assert_contains(owner_xml, "<name>%s</name>" % owner_name, "the new owner must be exported")
+        assert_contains(owner_xml, _ADOPTED, "the new owner must be adopted")
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL,
+                        "src/Catalogs/%s/Forms/%s/Form.form" % (owner_name, form_name)),
+                        picture_fqn, "the adopted form must retain its picture")
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL,
+                        "src/CommonPictures/%s/%s.mdo" % (picture_name, picture_name)),
+                        _ADOPTED, "the picture must be exported as adopted")
+        payload = _structured(result, "first adoption with a new owner")
+        assert payload.get("action") == "adopted", payload
+        assert payload.get("persisted") is True, payload
+        assert payload.get("writtenProjects") == [TESTS_PROJECT], payload
+        assert _picture_dependencies(result, "new-owner dependencies") == {
+            "found": [picture_fqn], "adopted": [picture_fqn], "alreadyPresent": [], "unresolved": []}
+        details = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [owner_fqn, form_fqn],
+        })
+        assert_ok(details, "read back the newly adopted owner and form")
+        assert_contains(details.text, "**Origin:** core (adopted)", "the owner must be adopted in the model")
+        assert_contains(details.text, "# Form Structure: " + form_fqn, "the form must be present in the model")
+        _assert_no_adoption_errors(owner_fqn, form_fqn, picture_fqn)
+    finally:
+        if not calls_aborted():
+            restore_extension_fixture("first adoption of a picture form and its new owner")
 
 
 def _picture_dependencies(result, ctx):

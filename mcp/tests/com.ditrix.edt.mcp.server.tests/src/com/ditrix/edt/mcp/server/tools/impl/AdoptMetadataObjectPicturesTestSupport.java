@@ -188,6 +188,7 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         when(extensionTx.getObjectById(anyLong())).thenAnswer(inv ->
             committedObjects.containsKey(inv.getArgument(0))
                 ? committedObjects.get(inv.getArgument(0)) : extensionReadRoot);
+        when(extensionTx.toTransactionObject(any(EObject.class))).thenAnswer(inv -> inv.getArgument(0));
         when(baseModel.executeReadonlyTask(any())).thenAnswer(inv ->
             ((IBmTask<?>)inv.getArgument(0)).execute(baseTx, null));
         when(extensionModel.executeReadonlyTask(any())).thenAnswer(inv ->

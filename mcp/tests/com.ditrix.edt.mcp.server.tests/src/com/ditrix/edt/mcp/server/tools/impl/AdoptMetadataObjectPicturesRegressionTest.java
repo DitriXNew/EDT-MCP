@@ -27,6 +27,7 @@ import java.lang.reflect.Field;
 
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
@@ -44,7 +45,10 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.PictureRef;
 import com._1c.g5.v8.dt.mcore.Picture;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
@@ -55,6 +59,112 @@ import com.google.gson.JsonParser;
 /** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testDetachedFormUsesNativeLookupWhenItsOwnerIsAdoptedInTheSameWrite() throws Exception
+    {
+        assertDetachedFormWithNewOwner(false, FORM_FQN);
+    }
+
+    @Test
+    public void testDetachedRussianFormResolvesTheNativeLookupProxyBeforeCommit() throws Exception
+    {
+        goods.setName("\u0422\u043e\u0432\u0430\u0440\u044b");
+        mdForm.setName("\u0424\u043e\u0440\u043c\u0430");
+        assertDetachedFormWithNewOwner(true,
+            "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.\u0422\u043e\u0432\u0430\u0440\u044b.\u0424\u043e\u0440\u043c\u0430.\u0424\u043e\u0440\u043c\u0430");
+    }
+
+    private void assertDetachedFormWithNewOwner(boolean proxyLookup, String address) throws Exception
+    {
+        form.getItems().add(field("Logo", logo));
+        String ownerFqn = "Catalog." + goods.getName();
+        Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
+        when(((IBmObject)owner).bmIsTop()).thenReturn(true);
+        when(((IBmObject)owner).bmGetTopObject()).thenReturn((IBmObject)owner);
+        when(((IBmObject)owner).bmGetFqn()).thenReturn(ownerFqn);
+        CatalogForm attached = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(attached.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
+        when(((IBmObject)attached).bmGetId()).thenReturn(2002L);
+        when(((IBmObject)attached).bmGetTopObject()).thenReturn((IBmObject)owner);
+        CatalogForm global = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(((IBmObject)global).bmGetId()).thenReturn(2002L);
+        when(extensionTx.toTransactionObject(global)).thenReturn(attached);
+        URI uri = BmUriUtil.createContainedBmObjectUri("tests", ownerFqn, "forms/" + mdForm.getName());
+        CatalogForm proxy = MD.createCatalogForm();
+        ((InternalEObject)proxy).eSetProxyURI(uri);
+        EObject lookup = proxyLookup ? proxy : global;
+        when(extensionTx.getObjectByUri(uri)).thenReturn((IBmObject)global);
+        Configuration root = (Configuration)extensionTx.getTopObjectByFqn("Configuration");
+        // The Configuration traversal has no owner yet; the adopter sees its transaction-local member.
+        when(root.eGet(MdClassPackage.Literals.CONFIGURATION__CATALOGS)).thenReturn(new BasicEList<>());
+        int[] lookupsInsideWrite = {0};
+        when(adopter.getAdopted(mdForm, target)).thenAnswer(inv -> {
+            if (writing)
+            {
+                assertEquals(1, commits); // Only the picture has committed; owner and form have not.
+                lookupsInsideWrite[0]++;
+            }
+            return copies.containsKey(mdForm) ? lookup : null;
+        });
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            EObject candidate = ((List<EObject>)inv.getArgument(0)).get(0);
+            if (candidate != mdForm)
+            {
+                return List.of(adoptSource(candidate));
+            }
+            assertTrue(writing);
+            copies.put(goods, owner);
+            copies.put(mdForm, lookup);
+            committedObjects.put(2001L, (IBmObject)owner);
+            committedObjects.put(2002L, (IBmObject)attached);
+            associated.addAll(List.of((IBmObject)owner, (IBmObject)attached));
+            CatalogForm allocation = MD.createCatalogForm();
+            allocation.setName(mdForm.getName());
+            assertEquals(IBmObject.BM_NULL_ID, ((IBmObject)allocation).bmGetId());
+            return List.of(allocation);
+        });
+
+        JsonObject result = run(address);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("adopted", result.get("action").getAsString());
+        assertNames(result, "adopted", "CommonPicture.Logo");
+        assertEquals(1, lookupsInsideWrite[0]);
+        assertEquals(2, commits);
+        verify(extensionTx).toTransactionObject(global);
+        verify(extensionTx, never()).getObjectById(IBmObject.BM_NULL_ID);
+        verify(models).forceExport(dtExtension, List.of(ownerFqn, "Configuration"));
+    }
+
+    @Test
+    public void testMissingNativeCopyReportsASinglePeriodBeforeRecoveryAdvice() throws Exception
+    {
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of(MD.createCatalogForm()));
+        JsonObject result = run(FORM_FQN);
+        String error = result.get("error").getAsString();
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertTrue(error, error.contains("get_metadata_objects before retrying adoption. Inspect"));
+        assertFalse(error, error.contains("adoption.. Inspect"));
+        verify(adopter).getAdopted(mdForm, target);
+        verify(extensionTx, never()).getObjectById(IBmObject.BM_NULL_ID);
+    }
+
+    @Test
+    public void testDetachedResultDoesNotAcceptALookupInASecondaryStore() throws Exception
+    {
+        CatalogForm found = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(((IBmObject)found).bmGetId()).thenReturn(2002L);
+        when(extensionPlatformTx.getContainingDataStore((IBmObject)found))
+            .thenReturn(mock(IBmNamespaceDataStore.class));
+        when(adopter.getAdopted(mdForm, target)).thenReturn(found);
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of(MD.createCatalogForm()));
+        JsonObject result = run(FORM_FQN);
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertTrue(result.get("error").getAsString().contains("Adopted copy is unavailable"));
+        verify(models, never()).forceExport(any(), anyList());
+    }
+
     @Test
     public void testNativeProjectionIgnoresInheritedPictureOnAnOtherwiseEditedItem() throws Exception
     {
