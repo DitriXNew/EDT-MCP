@@ -227,8 +227,8 @@ public class GetMcpHistoryTool implements IMcpTool
             .integerProperty(KEY_BUFFER_SIZE, "The ring capacity (how many exchanges history retains).") //$NON-NLS-1$
             .objectArrayProperty(KEY_RECORDS,
                 "The page of matched records, newest first: {timestampMs, method, tool, durationMs, " //$NON-NLS-1$
-                + "status, requestChars, responseChars, (+ requestJson/responseJson when " //$NON-NLS-1$
-                + "includeBodies)}.") //$NON-NLS-1$
+                + "status, interrupted, requestChars, responseChars, optional backgroundOutcome " //$NON-NLS-1$
+                + "{status: success/error, message}, (+ requestJson/responseJson when includeBodies)}.") //$NON-NLS-1$
             .objectProperty(KEY_STATS,
                 "The aggregated per-tool statistics for the filtered set (present only when " //$NON-NLS-1$
                 + "includeStats): {summary, rows[], top3[]}.") //$NON-NLS-1$
@@ -369,7 +369,7 @@ public class GetMcpHistoryTool implements IMcpTool
         {
             return true;
         }
-        boolean isError = StatsAggregator.isErrorResponse(record.getResponseJson());
+        boolean isError = StatsAggregator.isErrorRecord(record);
         return STATUS_ERROR.equals(status) ? isError : !isError;
     }
 
@@ -394,7 +394,12 @@ public class GetMcpHistoryTool implements IMcpTool
         m.put(REC_METHOD, method != null ? method : ""); //$NON-NLS-1$
         m.put(REC_TOOL, StatsAggregator.keyOf(record));
         m.put(REC_DURATION_MS, record.getDurationMs());
-        m.put(REC_STATUS, StatsAggregator.isErrorResponse(record.getResponseJson()) ? STATUS_ERROR : STATUS_OK);
+        m.put(REC_STATUS, StatsAggregator.isErrorRecord(record) ? STATUS_ERROR : STATUS_OK);
+        m.put("interrupted", record.isInterrupted()); //$NON-NLS-1$
+        if (record.getBackgroundOutcome() != null)
+        {
+            m.put("backgroundOutcome", record.getBackgroundOutcome()); //$NON-NLS-1$
+        }
         // Report the ORIGINAL pre-truncation sizes so a large, ring-capped response is not
         // reported as ~20 000 chars (which would mis-rank the real context consumers).
         m.put(REC_REQUEST_CHARS, record.getOriginalRequestChars());
