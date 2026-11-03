@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -774,6 +775,9 @@ public final class MetadataTypeUtils
      * @param fqn a full dot-separated FQN; {@code null}, empty, a single token or a leading-dot
      *     string is returned unchanged - there is no {@code Type.Name} shape to translate, the same
      *     guard {@link #getAllFqnVariants} applies
+     * Additional-column addresses end in a table path and column name after {@code Attribute.Name.Column};
+     * every segment of that tail is a programmatic name, even when it resembles a kind token.
+     *
      * @return the all-English FQN with the case of every programmatic Name preserved
      */
     public static String toCanonicalEnglishFqn(String fqn)
@@ -782,7 +786,20 @@ public final class MetadataTypeUtils
         {
             return fqn;
         }
-        return translateStructuralSegments(fqn.split("\\.", -1), true, 0); //$NON-NLS-1$
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        for (int i = 4; i < segments.length; i += 2)
+        {
+            NestedKindInfo kind = resolveNestedKind(segments[i]);
+            NestedKindInfo parent = resolveNestedKind(segments[i - 2]);
+            if (kind != null && parent != null && "Column".equals(kind.getEnglish()) //$NON-NLS-1$
+                && "Attribute".equals(parent.getEnglish())) //$NON-NLS-1$
+            {
+                return translateStructuralSegments(Arrays.copyOf(segments, i + 1), true, 0)
+                    + (i + 1 < segments.length
+                        ? "." + String.join(".", Arrays.copyOfRange(segments, i + 1, segments.length)) : ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+        }
+        return translateStructuralSegments(segments, true, 0);
     }
 
     /**

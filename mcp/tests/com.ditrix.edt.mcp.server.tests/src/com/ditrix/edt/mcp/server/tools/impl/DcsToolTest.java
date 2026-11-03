@@ -47,6 +47,50 @@ import com.google.gson.JsonParser;
 /** Exact public-contract tests for {@link DcsTool}. */
 public class DcsToolTest
 {
+    @Test
+    public void testWriteResultWaitsForTheRecordedExportBeforeAnswering()
+    {
+        WriteScope scope = new WriteScope();
+        scope.wrote("ActualProject");
+        AtomicReference<String> disk = new AtomicReference<>("previous schema");
+        String result = DcsTool.finalizeWriteResult(scope, "**Export scheduled:** `true`", (project, budget) -> {
+            assertEquals("ActualProject", project);
+            assertTrue(budget > 0 && budget <= 60_000);
+            disk.set("new schema");
+            return com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState.DRAINED;
+        });
+        assertEquals("new schema", disk.get());
+        assertTrue(result, result.contains("**Export drained:** `true`"));
+    }
+
+    @Test
+    public void testPendingAndUnobservableExportsCannotClaimDcsWriteSuccess()
+    {
+        for (var state : Arrays.asList(
+            com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState.PENDING,
+            com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState.UNOBSERVABLE))
+        {
+            WriteScope scope = new WriteScope();
+            scope.wrote("TestConfiguration");
+            String result = DcsTool.finalizeWriteResult(scope, "**Export scheduled:** `true`",
+                (project, budget) -> state);
+            JsonObject error = JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(error.get("success").getAsBoolean());
+            assertTrue(error.get("mutationCommitted").getAsBoolean());
+            assertTrue(result, error.get("error").getAsString().contains("resync_to_disk"));
+        }
+    }
+
+    @Test
+    public void testFailedDcsRequestNeverWaitsForExports()
+    {
+        WriteScope scope = new WriteScope();
+        scope.wrote("TestConfiguration");
+        String result = DcsTool.finalizeWriteResult(scope, ToolResult.error("write failed").toJson(),
+            (project, budget) -> { throw new AssertionError("errors must not wait"); });
+        assertTrue(JsonParser.parseString(result).getAsJsonObject().get("mutationCommitted").getAsBoolean());
+    }
+
     private static final Set<String> PROPERTIES = new LinkedHashSet<>(Arrays.asList(
         "projectName", "fqn", "action", "type", "body", "expectedHash", "language", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         "format", "limit", "offset")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -74,6 +118,8 @@ public class DcsToolTest
         assertTrue(tool.getDescription().contains("get_tool_guide('dcs')")); //$NON-NLS-1$
         assertTrue(tool.getDescription().contains("expectedHash")); //$NON-NLS-1$
         assertTrue(tool.getDescription().contains("action='get'")); //$NON-NLS-1$
+        assertTrue(tool.getDescription().contains("autoFillFields=true")); //$NON-NLS-1$
+        assertTrue(tool.getDescription().contains("fields and parameters")); //$NON-NLS-1$
 
         Map<String, String> xmlGet = baseGet("Report.Sales", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
         xmlGet.put("format", "xml"); //$NON-NLS-1$ //$NON-NLS-2$

@@ -145,12 +145,17 @@ def test_confirm_deletes_member_attribute():
     poll_disk_contains(_CATALOG_MDO, "<name>%s</name>" % attr,
                        ctx="baseline: the seeded attribute must be in the owner .mdo before it is deleted")
 
+    russian_fqn = "Справочник.Catalog.Реквизит." + attr
+    preview = call("delete_metadata", {"projectName": PROJECT, "fqn": russian_fqn})
+    assert_ok(preview, "preview the member through Russian structural tokens")
+    assert preview.structured.get("fqn") == "Catalog.Catalog.Attribute." + attr, preview.structured
     r = call("delete_metadata", {
         "projectName": PROJECT,
-        "fqn": "Catalog.Catalog.Attribute." + attr,
+        "fqn": russian_fqn,
         "confirm": True,
     })
     assert_ok(r, "delete the seeded attribute")
+    assert r.structured.get("fqn") == "Catalog.Catalog.Attribute." + attr, r.structured
     assert r.structured.get("action") == "executed", "member delete must execute: %r" % (r.structured,)
     # #408: a confirmed delete states the project it wrote in, so the barrier waits for the export
     # of THAT project rather than for whatever the arguments named. The cascade participants are
@@ -483,10 +488,16 @@ def test_delete_form_field_preview_then_confirm():
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_form_attribute_confirm():
     _seed_form_attribute("DAAttr")
+    canonical = "Catalog.Catalog.Form.ItemForm.Attribute.DAAttr"
+    preview = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Справочник.Catalog.Форма.ItemForm.Реквизит.DAAttr"})
+    assert_ok(preview, "preview a form attribute through Russian tokens")
+    assert preview.structured.get("fqn") == canonical, preview.structured
     r = call("delete_metadata", {
-        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.DAAttr",
-        "confirm": True})
+        "projectName": PROJECT, "fqn": preview.structured["fqn"],
+        "confirm": True, "expectedHash": preview.structured["contentHash"]})
     assert_ok(r, "delete a form attribute (confirm)")
+    assert r.structured.get("fqn") == canonical, r.structured
     assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
     poll_disk_lacks(_FORM, "DAAttr", ctx="the deleted form attribute must be gone from the .form")
 

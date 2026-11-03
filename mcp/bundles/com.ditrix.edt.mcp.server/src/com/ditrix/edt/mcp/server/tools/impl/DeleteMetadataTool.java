@@ -1223,7 +1223,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // entries are references. Every other problem is exposed separately as a platform prohibition.
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
-            .put("fqn", fqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(fqn)) //$NON-NLS-1$
             .put(KEY_REFACTORING_TITLE, title)
             .put(KEY_ITEMS, allItems)
             .put(KEY_BLOCKING, hasBlocking);
@@ -1345,7 +1345,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "node; re-check it before relying on it."; //$NON-NLS-1$
             ToolResult result = ToolResult.success()
                 .put(McpKeys.ACTION, VAL_EXECUTED)
-                .put("fqn", fqn) //$NON-NLS-1$
+                .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(fqn)) //$NON-NLS-1$
                 .put("forced", force); //$NON-NLS-1$
             if (force)
             {
@@ -2343,7 +2343,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             Map<String, Object> item = new java.util.LinkedHashMap<>();
             item.put("operationIndex", op.index);
-            item.put("fqn", op.fqn);
+            item.put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(op.fqn));
             item.put("name", op.ref.name);
             item.put("type", target.eClass().getName());
             List<Map<String, Object>> descendants = new ArrayList<>();
@@ -2814,7 +2814,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "to apply."; //$NON-NLS-1$
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_REFACTORING_TITLE, "Delete form " + memberWord + " " + ref.name) //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_ITEMS, removed)
             .put(KEY_BLOCKING, false);
@@ -2824,7 +2824,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         return putBlockingReferences(result, Collections.emptyList())
             .put(McpKeys.MESSAGE, "Preview: deleting '" + ref.name + "' (" + data.type + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + ref.formPath + " would remove " //$NON-NLS-1$
+                + MetadataTypeUtils.toCanonicalEnglishFqn(ref.formPath) + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
                     ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
                     : "it and its " + data.descendants.size() + " contained member(s) (" //$NON-NLS-1$ //$NON-NLS-2$
@@ -2888,13 +2888,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean handler, String type, AttributeDeleteOutcome outcome, boolean persisted)
     {
         String head = "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
-            + "' (" + type + ") from " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (" + type + ") from " + MetadataTypeUtils.toCanonicalEnglishFqn(ref.formPath) //$NON-NLS-1$ //$NON-NLS-2$
             + (persisted ? PERSISTED_CLAUSE
                 : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                     + "it)."); //$NON-NLS-1$
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
-            .put("fqn", normFqn); //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)); //$NON-NLS-1$
         if (!persisted)
         {
             // The structured partial-result signal, not only the prose above.
@@ -3747,7 +3747,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // runs here — the message says so to keep the preview honest (deep scan is follow-up).
             ToolResult preview = ToolResult.success()
                 .put(McpKeys.ACTION, VAL_PREVIEW)
-                .put("fqn", normFqn) //$NON-NLS-1$
+                .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
                 .put(KEY_REFACTORING_TITLE, "Delete form " + ref.formName) //$NON-NLS-1$
                 .put(KEY_ITEMS, removed)
                 .put(KEY_BLOCKING, false);
@@ -3849,7 +3849,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                 + (persisted ? " and persisted to disk." //$NON-NLS-1$
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
@@ -4077,7 +4077,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_REFACTORING_TITLE, "Delete predefined item " + ref.itemName) //$NON-NLS-1$
             .put(KEY_ITEMS, items)
             .put(KEY_BLOCKING, wouldBlock);
@@ -4146,7 +4146,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("forced", force); //$NON-NLS-1$
         StringBuilder message =
             new StringBuilder("Deleted predefined item '" + itemName + "' from " + ref.ownerFqn()); //$NON-NLS-1$ //$NON-NLS-2$
@@ -5293,7 +5293,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_REFACTORING_TITLE, "Delete XDTO member " + ref.memberName()) //$NON-NLS-1$
             .put(KEY_ITEMS, items)
             .put(KEY_BLOCKING, false);
@@ -5428,7 +5428,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("forced", false) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "Deleted XDTO member '" + ref.memberName() + "' (" + result.kind //$NON-NLS-1$ //$NON-NLS-2$
                 + ") from " + ref.packageFqn //$NON-NLS-1$
@@ -5809,10 +5809,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          */
         List<String> scope;
 
-        /** Serializes the full, untruncated scope together with its normalized target address. */
+        /** Serializes the full scope with the canonical address returned by the preview. */
         String scopeSignature(String normFqn)
         {
-            return GsonProvider.toJson(List.of(normFqn, scope));
+            return GsonProvider.toJson(List.of(MetadataTypeUtils.toCanonicalEnglishFqn(normFqn), scope));
         }
 
         /** Counts a removed member and lists it while the list has room. */

@@ -136,7 +136,7 @@ public final class DcsSchemaContent
         return template;
     }
 
-    private static ResolveResult resolveTemplateContent(IBmTransaction transaction, BasicTemplate template,
+    static ResolveResult resolveTemplateContent(IBmTransaction transaction, BasicTemplate template,
         ITopObjectFqnGenerator generator, String fqn)
     {
         EObject content = template.getTemplate();
@@ -167,7 +167,7 @@ public final class DcsSchemaContent
         }
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
         template.setTemplate(schema);
-        String contentFqn = generator.generateExternalPropertyFqn(template,
+        String contentFqn = generator == null ? null : generator.generateExternalPropertyFqn(template,
             MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
         if (contentFqn == null || contentFqn.isEmpty())
         {
