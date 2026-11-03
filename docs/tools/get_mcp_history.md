@@ -42,7 +42,7 @@ An interrupted call creates exactly one row when its signal response is sent: `i
 - `matched` is the total number of records that passed the filters; `returned` is the size of this page (`min(matched, limit)`). To see older records, narrow the window with `untilMs` and page back.
 
 ## Bodies vs metadata
-By default each record is **metadata only**: `timestampMs`, `method`, `tool` (the resolved key), `durationMs`, `status` (`ok`/`error`), and the payload sizes `requestChars` / `responseChars`. Set `includeBodies: true` to also attach the raw `requestJson` / `responseJson` (each already capped by the recorder, with a truncation marker when it was longer). Keep bodies **off** unless you need the payloads — they are large and may carry sensitive data (see below).
+By default records contain metadata: `timestampMs`, `method`, `tool`, `durationMs`, `status` (`ok`/`error`), and full payload sizes `requestChars` / `responseChars`. `includeBodies:true` adds `requestJson` / `responseJson`, each capped at 20000 characters plus a truncation marker. Status is classified from the complete delivered response before capping and preserved on background completion; filters and statistics use that stored classification. Capped bodies may not parse as JSON. Keep bodies off unless needed; they may contain sensitive data.
 
 ## Statistics (`includeStats: true`)
 Appends a `stats` block aggregated over the **filtered** set (not just the returned page):

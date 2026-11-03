@@ -49,8 +49,9 @@ Read-only reading of the configuration model (objects, details, properties, subs
 
 ## Index — query / problems / misc (read-only)
 
-- **query** (`references/query/`): [validate_query](references/query/validate_query.md) (dialect-aware, `valid:false` ≠ failure).
+- **query** (`references/query/`): [validate_query](references/query/validate_query.md) (text or saved-module/method mode; per-query verdicts, mapped module locations and explicit skips).
 - **problems** (`references/problems/`): [get_project_errors](references/problems/get_project_errors.md), [get_problem_summary](references/problems/get_problem_summary.md), [get_check_description](references/problems/get_check_description.md) (reads `<checkId>.md` from a configurable folder; the feature is OFF by default; checkId is sanitized — dotted codes don't resolve).
+- **history**: [get_mcp_history](references/misc/get_mcp_history.md) — full-response status before body capping, stable background outcomes, malformed-name checks and manual interrupt-slot overlap.
 - **misc** (`references/misc/`): [get_edt_version](references/misc/get_edt_version.md) (TEXT, liveness probe), [get_platform_documentation](references/misc/get_platform_documentation.md), [get_markers](references/misc/get_markers.md), [get_applications](references/misc/get_applications.md).
 
 ## Index — profiling / forms / xml / translation / launch / metadata-write
@@ -61,6 +62,7 @@ Families with write/destructive/special setup. For mutating/destructive tools th
 - **xml** (`references/xml/`): [export_configuration_to_xml](references/xml/export_configuration_to_xml.md), [import_configuration_from_xml](references/xml/import_configuration_from_xml.md) (MUTATES → revert).
 - **translation** (`references/translation/`): [get_translation_project_info](references/translation/get_translation_project_info.md) (read-only), [generate_translation_strings](references/translation/generate_translation_strings.md), [translate_configuration](references/translation/translate_configuration.md) (MUTATES + external providers).
 - **launch** (`references/launch/`): [update_database](references/launch/update_database.md) (DESTRUCTIVE, exclusive infobase access), [run_yaxunit_tests](references/launch/run_yaxunit_tests.md), [debug_yaxunit_tests](references/launch/debug_yaxunit_tests.md).
+- **DCS**: [dcs](references/metadata-write/dcs.md) — empty templates, synchronous auto-fill, value forms, dictionaries and immediate on-disk export checks.
 - **metadata-write** (`references/metadata-write/`): [create_metadata](references/metadata-write/create_metadata.md) (FQN-addressed), [modify_metadata](references/metadata-write/modify_metadata.md) (set properties=[{name,value,language?}] by FQN), [write_module_source](references/metadata-write/write_module_source.md) (mutate→verify→revert), [rename_metadata_object](references/metadata-write/rename_metadata_object.md), [delete_metadata](references/metadata-write/delete_metadata.md) (FQN-addressed; CASCADE; preview→confirm→revert; explicit-request-only), [adopt_metadata_object](references/metadata-write/adopt_metadata_object.md) (adopt a base object/member into an extension; MUTATES→revert).
 
 > **Coverage:** debug + navigation, metadata-read, query, problems, misc, profiling, forms, xml, translation, launch, metadata-write = every MCP tool (62 today) has a per-tool e2e reference. Write/destructive tools document the procedure from source (mutate-then-revert / preview-then-confirm), not live destruction.

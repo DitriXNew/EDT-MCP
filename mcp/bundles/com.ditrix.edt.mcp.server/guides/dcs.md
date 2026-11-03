@@ -99,9 +99,11 @@ model is compared with the parsed schema, including counts of root data sources,
 concrete fields (including union/folder fields), schema parameters, and variants. It is also
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
 namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
-refuses and rolls back. After commit, writes queue force-export and wait for EDT's export pipeline
-off the UI thread. `Export scheduled` reports submission; `Export drained: true` confirms completion
-before the response. The response includes `xml=wholesale` and those model counts.
+refuses and rolls back. All writes await export off the UI thread, outside the BM transaction,
+within a shared 60s budget. `Export scheduled` means submission; `Export drained: true` confirms
+queue completion, not byte correctness. Pending/unobservable export returns an error with
+`mutationCommitted:true`; nothing is rolled back. Check `list_projects`, save/resync, then re-read
+before retrying. XML replacement also reports `xml=wholesale` and those model counts.
 
 ### Start with a root summary
 

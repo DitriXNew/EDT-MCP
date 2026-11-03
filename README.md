@@ -177,6 +177,9 @@ The MCP server status bar shows real-time execution status with interactive cont
 
 When a tool is executing, you can send signals to the AI agent to interrupt the MCP call:
 
+The status bar targets the latest registered call. An older overlapping call cannot clear
+that slot when it finishes; after the latest call ends, older calls are not restored.
+
 | Button | Description | When to Use |
 |--------|-------------|-------------|
 | **Cancel Operation** | Stops the MCP call and notifies agent | When you want to cancel a long-running operation |
@@ -905,6 +908,29 @@ Errors are reported the same way regardless of a tool's normal format — see th
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
 
+#### Saved-module query validation
+
+`validate_query` requires `projectName` and exactly one of `queryText` or `modulePath`.
+Use `modulePath="CommonModules/MyModule/Module.bsl"` to scan saved BSL, with optional
+case-insensitive `method="BuildQuery"` to restrict the scan. It extracts standalone
+SELECT/ВЫБРАТЬ literals, decodes continuations and escaped quotes, and returns per-literal
+verdicts in `queries` with diagnostics mapped to module lines. `skipped` reports dynamic
+concatenations and keyword-leading strings without query structure; an empty scan suggests
+`queryText`. Runtime substitutions are not reconstructed. `dcsMode` applies in either mode.
+
+#### DCS lifecycle and values
+
+Changing an empty template to `templateType=DataCompositionSchema` exports `Template.dcs`
+in that call; an empty schema supports `dcs get format="xml"`. Query data sets with
+`autoFillFields=true` fill fields and missing parameters synchronously before export.
+Explicit fields default auto-fill to false; otherwise it defaults to true.
+LocalString output values accept strings, `{kind:"string",value:...}`, and language maps;
+field and conditional `appearance` accept bare values or `{kind,value}`. Discover
+`role.periodType` and restriction dictionaries through `dcs action="options", type="field"`.
+Writes wait for export off the UI thread; `Export scheduled` is submission and
+`Export drained: true` confirms queue completion. A post-commit export failure carries
+`mutationCommitted`; check project state, resync and read back before retrying.
+
 #### DCS XML transfers
 
 `dcs` with `action="get"`, `type="schema"`, and `format="xml"` returns
@@ -921,6 +947,23 @@ all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes 
 #### Error contract
 
 Whatever a tool's normal output format above, it reports a **failure** the same way: a JSON payload `{"success": false, "error": "<message>"}` that the server delivers as a structured tool error (`isError: true`) regardless of the declared response type. The `error` field is always present (a `null` exception message is coalesced to `Unknown error`) and the message carries no redundant `Error:` prefix. A client detects failure via `isError` / `success: false` and reads `error` for the reason — no markdown parsing required. Success and purely *informational* results (for example "No references found", or a not-found accompanied by a list of valid alternatives) stay in the tool's natural format.
+
+`tools/call` with absent, null or blank `params.name` returns JSON-RPC `-32602` with a
+`tools/list` hint; a nonblank unknown name returns `-32601`.
+
+Create/modify/delete echoes, previews, batch rows, follow-up hints and write-guard
+refusals use canonical English structural FQN tokens, preserving programmatic Names.
+Form-structure headings likewise use `Catalog.X.Form.Y`. Delete scope hashes include
+the canonical address, so equivalent Russian/English spellings share a token.
+
+`export_configuration_to_xml` reports success only when `Configuration.xml` is created
+or proven rewritten by this call (newer mtime or changed size/SHA-256). A stale root
+alone does not prove export; an unproven rewrite suggests a fresh output directory.
+
+`get_mcp_history` classifies status and error statistics from the full delivered response
+before capping stored bodies at 20000 characters. A capped body may be invalid JSON;
+use the recorded status. Background completion preserves that status and updates the
+same interrupted-call row without changing its delivered response or statistics.
 
 #### Tool annotations
 

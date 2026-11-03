@@ -41,15 +41,21 @@ of `tests/e2e/SKILL.md` and `tests/TESTING.md` for the wire assertions and clean
 3. **Verify the effect the RIGHT way per `kind=`:**
    - `read` → `assert_no_diff()` + content.
    - `write` (file-write, write_module_source) → `assert_diff_contains()` (on disk).
-   - `write-metadata` (create/add/delete/rename) → **MODEL READ-BACK + on-disk structure.** Call a read tool and assert the change in the model, AND assert it landed on disk via `poll_diff_contains` of the **structural element** (`<name>X</name>`, `<catalogs>Type.X</catalogs>` — not the bare name). Metadata writes now persist to disk via forceExport (~1-2s lag → poll). The orchestrator runs `reset_fixture`+`reset_model` after these.
+   - `write-metadata` → **on-disk structure + MODEL READ-BACK.** For exports submitted by the call, assert bytes immediately BEFORE another MCP call; metadata writes and `dcs` share `WriteExportBarrier`. A drained queue is not proof of correct bytes. Poll only effects not covered by that submission (generic delete's own removed file, rename/build-external paths). Then read back the model. Use structural elements (`<name>X</name>`, `<catalogs>Type.X</catalogs>`), never bare names. The orchestrator owns fixture/model resets.
    - `action` → usually `assert_no_diff()` + status; never run a destructive happy mutation that corrupts the fixture.
    - **env-dependent** (form-render JVM flag, LanguageTool, debug no-session) → env-robust branch: real result OR a clear actionable **sentinel**.
 4. **Negative coverage is MANDATORY** (not just happy): invalid path/object, every XOR/conditional/enum, missing-required, boundaries. Assert **error QUALITY** (`assert_error_quality`): names the bad value + actionable next step. A vague/non-actionable tool error → `# AUDIT:` note + a fix-card; **do NOT weaken the test** to a bad error.
 5. **Anti-cheat (mutation thinking):** "would this test FAIL if the tool were broken?" If not, it's a CHEAT. No trivial asserts, no `assert_no_diff()`-only, no swallowed exceptions, no tolerant matching. A separate anti-cheat reviewer rules REAL/CHEAT.
 
+## Focused contract checks
+- Use `harness._post` for malformed JSON-RPC requests: missing/null/blank tool names yield `-32602`; nonblank unknown names yield `-32601`. `call()` requires a tool name and cannot express this matrix.
+- History: force an error marker beyond the recorder's 20000-character cap, then check `status:error`, error filtering and stats. Capped bodies need not parse as JSON; background completion must preserve the delivered status and single row. Interrupt-slot overlap needs a unit test and a manual status-bar check.
+- `validate_query`: cover saved whole-module/method scans in both dialects, continuation/quote coordinate mapping, dynamic/no-structure skips, empty scans, XOR inputs and missing methods. Create dedicated test modules; do not alter shared fixture modules and their search totals.
+- `dcs`: assert empty `Template.dcs` and auto-filled fields/parameters on disk immediately after writing, then read back the model/XML. Cover all LocalString forms, both appearance locations and model-derived `options type=field` dictionaries. XML export tests must verify a new/rewritten root, not just nonempty output directories.
+
 ## Don't
 - Don't add pip dependencies (stdlib only; the client is kept spec-conformant by hand on purpose).
-- Don't assert a metadata-write effect with the BARE name in the diff (it false-matches the parent's collection reference) — assert the structural element via `poll_diff_contains`, paired with a model read-back. (Metadata writes DO persist now, with a ~1-2s lag.)
+- Don't hide an early-returning writer with polling or an intervening MCP call when its own export is covered by the barrier; assert the structural bytes immediately, paired with model read-back.
 - Don't parallelize the RUN (serial only). Don't call `reset_fixture`/`reset_model` in a test (the orchestrator owns them).
 
 ## Protocol conformance (a separate gate)

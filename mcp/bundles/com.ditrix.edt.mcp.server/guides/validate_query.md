@@ -16,7 +16,7 @@ Validates 1C queries with EDT's native Xtext parser and semantic checks, reporti
 The QL parser is dialect-aware: both the English and Russian forms of keywords and table-type tokens are accepted (e.g. `SELECT ... FROM Catalog.Products` and `ВЫБРАТЬ ... ИЗ Справочник.Продукты`). Do not assume a single dialect. Metadata objects are referenced by their programmatic `Name` (not by synonym); only the type token (Catalog / Справочник) may be in either language.
 
 ## Result shape
-JSON with `validationScope` (the project and, for a linked extension, its base),
+Text mode returns JSON with `validationScope` (the project and, for a linked extension, its base),
 `validationState` (`VALID`, `INVALID`, or `PARTIAL`), `validationComplete`,
 `unresolvedSources`, `sources`, and `valid` (true only for `VALID`). `INVALID` means
 EDT proved an error; `PARTIAL` means source/field resolution could not be completed.
@@ -44,6 +44,6 @@ Literals directly concatenated with `+` on either side (including parenthesized 
 Module mode returns `queries`, `skipped`, `foundCount`, and `skippedCount`. Each entry has `method` (omitted outside methods), and 1-based module `line`/`column` at the opening quote. Validated entries carry the same shared verdict, DCS mode, source census and issues as text mode. Issue `line`/`column`/`offset` refer to the stored module; `queryLine`/`queryColumn`/`queryOffset` retain native query coordinates when supplied. Mapping accounts for continuation framing, escaped quotes and intervening physical lines. Source-census offsets remain relative to decoded QL. Skipped entries carry `reason`; unrelated strings are ignored. Counts describe extraction, never a completeness claim about runtime queries. When no candidates exist the response says `no query literal found` and points to `queryText`.
 
 ## Gotchas
-- `success:true` means the tool ran; check `valid` for whether the query itself is error-free. A successful run can still report `valid:false` with issues.
+- `success:true` means validation ran, not that queries are valid. Check the top-level verdict in text mode, or each `queries[]` verdict in module mode; module mode has no aggregate `valid`. Skips/counts do not prove coverage of runtime-generated queries.
 - For an extension project, the union scope resolves both extension-owned objects and base-configuration objects, including inherited fields of borrowed objects.
 - If QL language support is unavailable the tool returns an error rather than a validation result.
