@@ -4173,6 +4173,41 @@
   },
   {
     "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examples: get_tool_guide('open_editor').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "methodName": {
+          "type": "string"
+        },
+        "modulePath": {
+          "description": "Path from src/, e.g. CommonModules/MyModule/Module.bsl; pass exactly one of modulePath or fqn.",
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "open_editor",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": true,
       "openWorldHint": false,
       "readOnlyHint": false
