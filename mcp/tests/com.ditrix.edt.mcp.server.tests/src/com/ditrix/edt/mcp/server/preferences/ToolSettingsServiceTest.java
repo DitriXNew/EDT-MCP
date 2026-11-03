@@ -747,6 +747,59 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion18DisablesNavigationForStoredAnalysisOnlyAndPreservesOwnerEdits()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("owner_disabled", "write_module_source"), 17);
+        store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, ToolPreset.ANALYSIS_ONLY.getId());
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("owner_disabled", "write_module_source", "open_editor"), disabledTools(store));
+        assertEquals(ToolPreset.ANALYSIS_ONLY.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion18LeavesOtherProfilesAndMissingProvenanceAlone()
+    {
+        for (String presetId : new String[] {null, ToolPreset.CUSTOM.getId(), ToolPreset.CODE_REVIEW.getId(),
+            ToolPreset.DEVELOPMENT.getId(), ToolPreset.ALL_TOOLS.getId()})
+        {
+            PreferenceStore store = storedDisabledTools(Set.of("owner_disabled"), 17);
+            if (presetId != null)
+            {
+                store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, presetId);
+            }
+
+            ToolSettingsService.ensureMigratedForTest(store);
+
+            assertEquals("Profile " + presetId, Set.of("owner_disabled"), disabledTools(store));
+            assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+                store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+            assertEquals(presetId == null ? "" : presetId,
+                store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+        }
+    }
+
+    @Test
+    public void testVersion18DoesNotDisableNavigationAgainAfterDeliberateReenable()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("owner_disabled"), 17);
+        store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, ToolPreset.ANALYSIS_ONLY.getId());
+        ToolSettingsService.ensureMigratedForTest(store);
+        assertTrue(disabledTools(store).contains("open_editor"));
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(Set.of("owner_disabled")));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("owner_disabled"), disabledTools(store));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
     public void testBehavioralRatchetChecksOnlyNamesUniqueToOneMigration()
     {
         Map<Integer, Set<String>> migrations = Map.of(

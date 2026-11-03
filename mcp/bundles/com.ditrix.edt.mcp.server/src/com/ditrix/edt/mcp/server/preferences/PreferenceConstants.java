@@ -119,8 +119,9 @@ public final class PreferenceConstants
      * 15 = every stored list gains the now-default-disabled {@code get_form_screenshot}.
      * 16 = recorded read-only presets gain the destructive {@code business_process_route_map}.
      * 17 = a stored read-only profile gains {@code project_checks}.
+     * 18 = a stored Analysis Only profile gains {@code open_editor}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 17;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 18;
 
     /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$

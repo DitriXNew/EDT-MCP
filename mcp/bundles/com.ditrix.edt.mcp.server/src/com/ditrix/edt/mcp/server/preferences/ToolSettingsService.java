@@ -99,6 +99,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final Set<String> READ_ONLY_V17_ADDITIONS = Set.of("project_checks"); //$NON-NLS-1$
 
+    private static final Set<String> ANALYSIS_ONLY_V18_ADDITIONS = Set.of("open_editor"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -115,7 +117,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(14, READ_ONLY_V14_ADDITIONS),
         Map.entry(15, STORED_PROFILE_V15_ADDITIONS),
         Map.entry(16, READ_ONLY_V16_ADDITIONS),
-        Map.entry(17, READ_ONLY_V17_ADDITIONS));
+        Map.entry(17, READ_ONLY_V17_ADDITIONS),
+        Map.entry(18, ANALYSIS_ONLY_V18_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -394,6 +397,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * <p>
      * Version 17 adds project_checks to recorded read-only profiles.
      * <p>
+     * Version 18 adds open_editor to recorded Analysis Only profiles.
+     * <p>
      * Keep v1-v14 dispatch frozen. Future preset-owed steps use {@link #storedPreset} and the
      * {@link ToolPreset#isReadOnly()} / {@link ToolPreset#isNoDebug()} promises, independent of owner
      * edits. Universal default-off additions (like v1 and v3) still apply to every explicit list.
@@ -519,6 +524,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 17)
             {
                 changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V17_ADDITIONS);
+            }
+            if (storedVersion < 18)
+            {
+                changed |= storedPreset(store) == ToolPreset.ANALYSIS_ONLY
+                    && disabled.addAll(ANALYSIS_ONLY_V18_ADDITIONS);
             }
             if (changed)
             {
