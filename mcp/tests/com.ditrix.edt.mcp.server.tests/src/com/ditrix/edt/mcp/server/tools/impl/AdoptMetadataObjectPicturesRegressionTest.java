@@ -52,15 +52,105 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.Activator;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testReadoptionRepairsPicturesUsingTheRenamedAdoptedForm() throws Exception
+    {
+        assertRenamedReadoption(false, false);
+    }
+
+    @Test
+    public void testReadoptionRepairsPicturesUnderTheRenamedAdoptedOwner() throws Exception
+    {
+        assertRenamedReadoption(true, false);
+    }
+
+    @Test
+    public void testRenamedOwnerReadoptionDoesNotDependOnNativeNameLookup() throws Exception
+    {
+        when(adopter.isAdopted(mdForm, target)).thenReturn(false);
+        when(adopter.getAdopted(mdForm, target)).thenReturn(null);
+        assertRenamedReadoption(true, false);
+    }
+
+    @Test
+    public void testReadoptionRepairsPicturesUsingTheRenamedAdoptedCommonForm() throws Exception
+    {
+        assertRenamedReadoption(false, true);
+    }
+
+    private void assertRenamedReadoption(boolean renameOwner, boolean common) throws Exception
+    {
+        MdObject source = mdForm;
+        if (common)
+        {
+            CommonForm base = MD.createCommonForm();
+            base.setName("Shared");
+            base.setForm(form);
+            config.getCommonForms().add(base);
+            baseReadRoot = base;
+            source = base;
+        }
+        source.setUuid(UUID.randomUUID());
+        goods.setUuid(UUID.randomUUID());
+        String baseFqn = common ? "CommonForm.Shared" : FORM_FQN;
+        MdObject data = common ? MD.createCommonForm() : MD.createCatalogForm();
+        data.setName(renameOwner ? "Item" : "\u0424\u043e\u0440\u043c\u0430");
+        data.setObjectBelonging(ObjectBelonging.ADOPTED);
+        data.setExtendedConfigurationObject(source.getUuid());
+        Form own = FORM.createForm();
+        own.getItems().add(field("Own", logo));
+        ((BasicForm)data).setForm(own);
+        MdObject stored = common
+            ? mock(CommonForm.class, withSettings().extraInterfaces(IBmObject.class).defaultAnswer(delegatesTo(data)))
+            : mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class).defaultAnswer(delegatesTo(data)));
+        doReturn(7001L).when((IBmObject)stored).bmGetId();
+        copies.put(source, stored);
+        committedObjects.put(7001L, (IBmObject)stored);
+        extensionReadRoot = stored;
+        Configuration root = (Configuration)extensionTx.getTopObjectByFqn("Configuration");
+        Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(owner.getName()).thenReturn(renameOwner ? "RenamedGoods" : "Goods");
+        when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        when(owner.getExtendedConfigurationObject()).thenReturn(goods.getUuid());
+        when(((IBmObject)owner).bmGetId()).thenReturn(7000L);
+        if (!common)
+        {
+            when(owner.eGet(MdClassPackage.Literals.CATALOG__FORMS))
+                .thenReturn(new BasicEList<>(List.of(stored)));
+            when(root.eGet(MdClassPackage.Literals.CONFIGURATION__CATALOGS))
+                .thenReturn(new BasicEList<>(List.of(owner)));
+        }
+        String contentFqn = (common ? "CommonForm." + data.getName()
+            : "Catalog." + owner.getName() + ".Form." + data.getName()) + ".Form";
+        when(Activator.getDefault().getTopObjectFqnGenerator()
+            .generateExternalPropertyFqn(stored, MdClassPackage.Literals.BASIC_FORM__FORM)).thenReturn(contentFqn);
+        when(extensionTx.getTopObjectByFqn(baseFqn + ".Form")).thenReturn(null);
+        when(extensionTx.getTopObjectByFqn(contentFqn)).thenReturn((IBmObject)own);
+
+        JsonObject result = run(baseFqn);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("alreadyAdopted", result.get("action").getAsString());
+        assertNames(result, "found", "CommonPicture.Logo");
+        assertNames(result, "adopted", "CommonPicture.Logo");
+        assertNames(result, "unresolved");
+        assertEquals(List.of(logo), adoptedSources);
+        verify(extensionTx).getTopObjectByFqn(contentFqn);
+    }
+
     @Test
     public void testAttachedFormInExistingOwnerSucceedsWhenNativeLookupLags() throws Exception
     {

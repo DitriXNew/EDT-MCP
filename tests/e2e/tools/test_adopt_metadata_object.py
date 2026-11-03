@@ -620,6 +620,16 @@ def _seed_picture_form(form_name, picture_value):
 @e2e_test(tool="adopt_metadata_object", kind="write-metadata")
 def test_readopting_form_repairs_deleted_extension_picture():
     """Repair must resolve the existing extension form's cross-project picture reference."""
+    _repair_adopted_form_picture(False)
+
+
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
+def test_readopting_form_under_renamed_extension_owner_repairs_picture():
+    """An ID-mapped adopted owner may have a different programmatic name in the extension."""
+    _repair_adopted_form_picture(True)
+
+
+def _repair_adopted_form_picture(rename_owner):
     name = "E2ERepairAdoptedPicture"
     picture_fqn = "CommonPicture." + name
     form_name = "E2ERepairPictureForm"
@@ -639,6 +649,28 @@ def test_readopting_form_repairs_deleted_extension_picture():
                         "positive control: the extension picture must exist before deletion")
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk), picture_fqn,
                         "the adopted form must persist its common-picture reference")
+
+        renamed_owner = "E2ERenamedAdoptOwner"
+        if rename_owner:
+            assert_ok(call("rename_metadata_object", {
+                "projectName": TESTS_PROJECT, "objectFqn": "Catalog.Catalog",
+                "newName": renamed_owner, "confirm": True,
+            }), "rename only the extension's ID-mapped adopted owner")
+            poll_disk_contains_all("src/Catalogs/%s/%s.mdo" % (renamed_owner, renamed_owner),
+                                   ["<name>%s</name>" % renamed_owner, _ADOPTED,
+                                    'extendedConfigurationObject="'],
+                                   ctx="the renamed owner must retain its origin link on disk",
+                                   fixture_rel=TESTS_PROJECT_REL)
+            form_disk = "src/Catalogs/%s/Forms/%s/Form.form" % (renamed_owner, form_name)
+            poll_disk_contains_all(form_disk, [picture_fqn], fixture_rel=TESTS_PROJECT_REL,
+                                   ctx="the form content must follow the renamed extension owner")
+            renamed = call("get_metadata_details", {
+                "projectName": TESTS_PROJECT,
+                "objectFqns": ["Catalog.%s.Form.%s" % (renamed_owner, form_name)],
+            })
+            assert_ok(renamed, "read the form at its current extension address")
+            assert_contains(renamed.text, "# Form Structure: Catalog.%s.forms.%s" % (renamed_owner, form_name),
+                            "the extension model must expose the renamed owner's form")
 
         preview = call("delete_metadata", {"projectName": TESTS_PROJECT, "fqn": picture_fqn})
         assert_ok(preview, "preview deleting only the extension picture copy")
@@ -664,7 +696,7 @@ def test_readopting_form_repairs_deleted_extension_picture():
                   "reload the adopted form's cross-project picture reference before repair")
         settle_or_fail("repairing the reloaded extension form")
 
-        for option in ({}, {"includeReferencedPictures": False}):
+        for option in (() if rename_owner else ({}, {"includeReferencedPictures": False})):
             unchanged = call("adopt_metadata_object", {
                 "projectName": PROJECT, "fqn": form_fqn, "extensionProjectName": TESTS_PROJECT, **option,
             })
@@ -694,6 +726,14 @@ def test_readopting_form_repairs_deleted_extension_picture():
         })
         assert_ok(details, "read the repaired picture from the extension model")
         assert_contains(details.text, "**Origin:** core (adopted)", "the repaired model copy must be adopted")
+        if rename_owner:
+            # EDT allows this rename but validates unequal base/extension names as a separate error.
+            assert_ok(call("rename_metadata_object", {
+                "projectName": TESTS_PROJECT, "objectFqn": "Catalog." + renamed_owner,
+                "newName": "Catalog", "confirm": True,
+            }), "restore the owner's base name before checking project errors")
+            poll_disk_contains_all("src/Catalogs/Catalog/Catalog.mdo", ["<name>Catalog</name>"],
+                                   fixture_rel=TESTS_PROJECT_REL, ctx="restore the adopted owner's name")
         _assert_no_adoption_errors(form_fqn, picture_fqn)
     finally:
         if not calls_aborted():

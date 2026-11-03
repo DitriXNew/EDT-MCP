@@ -57,14 +57,19 @@ public final class FormPictureDependencies
      * @param model the model owning the source
      * @param fqn the form's metadata address, independent of any cross-project lookup proxy
      * @param extensionCopy whether the adopted form needs EDT's persisted extension projection
+     * @param source the base form whose adopted counterpart supplies the extension's current address
      * @return the dependency names
      */
-    public static Result collectPersisted(IBmModel model, String fqn, boolean extensionCopy)
+    public static Result collectPersisted(IBmModel model, String fqn, boolean extensionCopy, BasicForm source)
     {
         return BmTransactions.read(model, "adopt_metadata_object: read form pictures", (tx, monitor) -> { //$NON-NLS-1$
             IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
-            MdObject mdForm = root instanceof Configuration ? MetadataNodeResolver.resolveAddress(
-                MetadataScope.ofConfiguration((Configuration)root), fqn, false) : null;
+            MdObject mdForm = extensionCopy ? AdoptedFormLookup.find(tx, source) : null;
+            if (mdForm == null)
+            {
+                mdForm = root instanceof Configuration ? MetadataNodeResolver.resolveAddress(
+                    MetadataScope.ofConfiguration((Configuration)root), fqn, false) : null;
+            }
             ITopObjectFqnGenerator generator = Activator.getDefault().getTopObjectFqnGenerator();
             if (!(mdForm instanceof BasicForm) || generator == null)
             {

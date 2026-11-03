@@ -28,6 +28,7 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -154,5 +155,39 @@ public class AdoptedFormLookupTest
         describe(copy, MdClassPackage.Literals.COMMON_FORM, "Shared", common.getUuid());
         when(tx.getTopObjectByFqn("CommonForm.Shared")).thenReturn((IBmObject)copy);
         assertSame(copy, AdoptedFormLookup.find(tx, common));
+    }
+
+    @Test
+    public void testRenamedOwnerIsMatchedByOriginBeforeWalkingItsForms()
+    {
+        baseOwner.setUuid(UUID.randomUUID());
+        when(tx.getTopObjectByFqn("Catalog.Goods")).thenReturn(null);
+        describe(owner, MdClassPackage.Literals.CATALOG, "RenamedGoods", baseOwner.getUuid());
+        CatalogForm copy = form("RenamedItem", source.getUuid());
+        forms(copy);
+        Configuration root = mock(Configuration.class, withSettings().extraInterfaces(IBmObject.class));
+        when(root.eClass()).thenReturn(MdClassPackage.Literals.CONFIGURATION);
+        when(root.eGet(MdClassPackage.Literals.CONFIGURATION__CATALOGS)).thenReturn(new BasicEList<>(List.of(owner)));
+        when(tx.getTopObjectByFqn("Configuration")).thenReturn((IBmObject)root);
+        assertSame(copy, AdoptedFormLookup.find(tx, source));
+        when(owner.getExtendedConfigurationObject()).thenReturn(UUID.randomUUID());
+        assertNull(AdoptedFormLookup.find(tx, source));
+    }
+
+    @Test
+    public void testRenamedCommonFormMustBelongToThePrimaryStore()
+    {
+        CommonForm common = MdClassFactory.eINSTANCE.createCommonForm();
+        common.setName("Shared");
+        common.setUuid(UUID.randomUUID());
+        CommonForm copy = mock(CommonForm.class, withSettings().extraInterfaces(IBmObject.class));
+        describe(copy, MdClassPackage.Literals.COMMON_FORM, "RenamedShared", common.getUuid());
+        Configuration root = mock(Configuration.class, withSettings().extraInterfaces(IBmObject.class));
+        when(root.eClass()).thenReturn(MdClassPackage.Literals.CONFIGURATION);
+        when(root.eGet(MdClassPackage.Literals.CONFIGURATION__COMMON_FORMS)).thenReturn(new BasicEList<>(List.of(copy)));
+        when(tx.getTopObjectByFqn("Configuration")).thenReturn((IBmObject)root);
+        assertSame(copy, AdoptedFormLookup.find(tx, common));
+        when(platform.getContainingDataStore((IBmObject)copy)).thenReturn(mock(IBmNamespaceDataStore.class));
+        assertNull(AdoptedFormLookup.find(tx, common));
     }
 }

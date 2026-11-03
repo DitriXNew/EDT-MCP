@@ -342,11 +342,19 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         String refusal = null;
         try
         {
+            if (!alreadyAdopted && extensionModel != null)
+            {
+                // Native name/scope lookup can miss an ID-mapped copy after an extension rename.
+                alreadyAdopted = BmTransactions.read(extensionModel,
+                    "adopt_metadata_object: locate adopted form", (tx, monitor) -> //$NON-NLS-1$
+                        AdoptedFormLookup.find(tx, (BasicForm)source.object) != null);
+            }
             if (!alreadyAdopted)
             {
                 baseModel = requireBaseModel(ctx.project);
             }
-            FormPictureDependencies.Result pictures = readFormPictures(baseModel, source.fqn, alreadyAdopted, extensionModel);
+            FormPictureDependencies.Result pictures = FormPictureDependencies.collectPersisted(
+                alreadyAdopted ? extensionModel : baseModel, source.fqn, alreadyAdopted, (BasicForm)source.object);
             found = pictures.found;
             unresolved.addAll(pictures.unresolved);
         }
@@ -508,7 +516,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 WriteScope.recordNothingQueued();
             }
             ToolResult result;
-            if (!unresolved.isEmpty() || adopted == null)
+            if (!unresolved.isEmpty() || !alreadyAdopted && adopted == null)
             {
                 result = ToolResult.error("Adoption incomplete for '" + source.fqn //$NON-NLS-1$
                     + "'. Inspect the extension with get_metadata_details and fix unresolved references " //$NON-NLS-1$
@@ -639,13 +647,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 return root instanceof Configuration
                     && MetadataNodeResolver.resolveExisting((Configuration)root, fqn) != null;
             });
-    }
-
-    /** Resolve persisted content in the selected model, without following an adopter lookup proxy. */
-    private static FormPictureDependencies.Result readFormPictures(IBmModel baseModel, String fqn,
-        boolean alreadyAdopted, IBmModel extensionModel)
-    {
-        return FormPictureDependencies.collectPersisted(alreadyAdopted ? extensionModel : baseModel, fqn, alreadyAdopted);
     }
 
     private static IBmModel requireBaseModel(IProject project)

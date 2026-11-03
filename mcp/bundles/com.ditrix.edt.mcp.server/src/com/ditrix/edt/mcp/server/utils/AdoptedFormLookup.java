@@ -14,6 +14,7 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /** Finds an adopted form in the transaction's stored owner, without the global metadata scope. */
@@ -28,9 +29,7 @@ public final class AdoptedFormLookup
     {
         if (source instanceof CommonForm)
         {
-            IBmObject candidate = tx.getTopObjectByFqn(MetadataNodeResolver.addressOf((MdObject)source));
-            return candidate instanceof MdObject && usable(tx, source, (MdObject)candidate)
-                && matches(source, (MdObject)candidate) ? (MdObject)candidate : null;
+            return findTop(tx, (MdObject)source);
         }
         EObject baseOwner = source.eContainer();
         EStructuralFeature feature = source.eContainingFeature();
@@ -38,24 +37,52 @@ public final class AdoptedFormLookup
         {
             return null;
         }
-        String ownerFqn = MetadataNodeResolver.resolvableAddressOf((MdObject)baseOwner);
-        IBmObject storedOwner = ownerFqn == null ? null : tx.getTopObjectByFqn(ownerFqn);
-        if (!(storedOwner instanceof MdObject) || storedOwner.eClass() != baseOwner.eClass()
-            || !ExtensionServices.isAdopted((EObject)storedOwner) || !primary(tx, storedOwner))
+        MdObject storedOwner = findTop(tx, (MdObject)baseOwner);
+        if (storedOwner == null)
         {
             return null;
         }
         // ModelObjectAdopter.addChild writes this exact containment on its transaction-local owner.
-        Object contents = ((EObject)storedOwner).eGet(feature);
+        Object contents = storedOwner.eGet(feature);
         if (!(contents instanceof Iterable<?>))
         {
             return null;
         }
+        return select(tx, (MdObject)source, (Iterable<?>)contents);
+    }
+
+    private static MdObject findTop(IBmTransaction tx, MdObject source)
+    {
+        String fqn = source instanceof CommonForm ? MetadataNodeResolver.addressOf(source)
+            : MetadataNodeResolver.resolvableAddressOf(source);
+        IBmObject named = fqn == null ? null : tx.getTopObjectByFqn(fqn);
+        MdObject match = named instanceof MdObject && usable(tx, source, (MdObject)named)
+            && (((MdObject)named).getExtendedConfigurationObject() == null || matches(source, (MdObject)named))
+                ? (MdObject)named : null;
+        if (match != null && (source.getUuid() == null || match.getExtendedConfigurationObject() != null))
+        {
+            return match;
+        }
+        // A renamed ID-mapped owner/common form keeps its origin link, not its base address.
+        IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+        if (root instanceof Configuration && source.getUuid() != null)
+        {
+            Iterable<? extends MdObject> objects = MetadataTypeUtils.getObjects((Configuration)root, source.eClass().getName());
+            if (objects != null)
+            {
+                return select(tx, source, objects);
+            }
+        }
+        return match;
+    }
+
+    private static MdObject select(IBmTransaction tx, MdObject source, Iterable<?> contents)
+    {
         MdObject byId = null;
         MdObject byName = null;
         boolean ambiguousName = false;
-        UUID uuid = ((MdObject)source).getUuid();
-        for (Object item : (Iterable<?>)contents)
+        UUID uuid = source.getUuid();
+        for (Object item : contents)
         {
             if (!(item instanceof MdObject) || !usable(tx, source, (MdObject)item))
             {
@@ -71,7 +98,7 @@ public final class AdoptedFormLookup
                 }
                 byId = candidate;
             }
-            else if (link == null && sameName((MdObject)source, candidate))
+            else if (link == null && sameName(source, candidate))
             {
                 ambiguousName |= byName != null;
                 byName = candidate;
@@ -80,10 +107,10 @@ public final class AdoptedFormLookup
         return byId != null ? byId : ambiguousName ? null : byName;
     }
 
-    private static boolean usable(IBmTransaction tx, BasicForm source, MdObject candidate)
+    private static boolean usable(IBmTransaction tx, MdObject source, MdObject candidate)
     {
         return !candidate.eIsProxy() && candidate.eClass() == source.eClass()
-            && ExtensionServices.isAdopted(candidate) && primary(tx, (IBmObject)candidate);
+            && ExtensionServices.isAdopted(candidate) && candidate instanceof IBmObject && primary(tx, (IBmObject)candidate);
     }
 
     private static boolean primary(IBmTransaction tx, IBmObject object)
@@ -92,10 +119,10 @@ public final class AdoptedFormLookup
             && tx.getPlatformTransaction().getContainingDataStore(object) == tx.getNamespace().getPrimaryStore();
     }
 
-    private static boolean matches(BasicForm source, MdObject candidate)
+    private static boolean matches(MdObject source, MdObject candidate)
     {
         UUID link = candidate.getExtendedConfigurationObject();
-        return link != null ? link.equals(((MdObject)source).getUuid()) : sameName((MdObject)source, candidate);
+        return link != null ? link.equals(source.getUuid()) : sameName(source, candidate);
     }
 
     private static boolean sameName(MdObject source, MdObject candidate)
