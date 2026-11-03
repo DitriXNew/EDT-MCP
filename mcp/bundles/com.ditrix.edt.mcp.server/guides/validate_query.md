@@ -14,7 +14,19 @@ Validates 1C:Enterprise query language (QL) text in the context of a project, us
 The QL parser is dialect-aware: both the English and Russian forms of keywords and table-type tokens are accepted (e.g. `SELECT ... FROM Catalog.Products` and `ВЫБРАТЬ ... ИЗ Справочник.Продукты`). Do not assume a single dialect. Metadata objects are referenced by their programmatic `Name` (not by synonym); only the type token (Catalog / Справочник) may be in either language.
 
 ## Result shape
-JSON with `valid` (true when there are zero issues), `dcsMode`, `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
+JSON with `validationState` (`VALID`, `INVALID`, or `PARTIAL`), `validationComplete`,
+`unresolvedSources`, `sources`, and `valid` (true only for `VALID`). `INVALID` means
+EDT proved an error; `PARTIAL` means source/field resolution could not be completed.
+A missing future source is `PARTIAL`; independent proven errors still make the result
+`INVALID`. Native lookup diagnostics depending on that unresolved source are returned
+as warnings with `validationIncomplete:true` and their original `nativeSeverity`.
+Warnings and informational diagnostics alone do not invalidate a complete query.
+
+The `sources` census records native DBView resolution and computed `availableFields`
+with both `name` and `nameRu`. EDT supplies virtual-table fields, including fields
+computed from table parameters. No query is executed and no field catalogue is
+maintained by this tool. Issue `origin` distinguishes resource diagnostics from the
+native validator. The result also includes `dcsMode`, `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
 
 ## Examples
 - Plain query: `{ "projectName": "MyProj", "queryText": "SELECT Ref FROM Catalog.Products" }`.

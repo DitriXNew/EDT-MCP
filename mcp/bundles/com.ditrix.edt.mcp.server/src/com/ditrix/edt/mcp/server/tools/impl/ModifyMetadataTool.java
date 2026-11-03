@@ -84,6 +84,7 @@ import com.ditrix.edt.mcp.server.utils.AdjustableBooleanSupport;
 import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.QueryWriteValidation;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
@@ -4590,9 +4591,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
             // version, and failing to build it refuses the write whatever the user answers.
             final Version version = platformVersionOf(ctx);
+            QueryWriteValidation.Batch queryValidation = QueryWriteValidation.validate(ctx.project,
+                qt == null ? List.of() : List.of(new QueryWriteValidation.Query("queryText", qt, false)));
+            if (queryValidation.errorJson() != null) return queryValidation.errorJson();
             return gateFormRetype(() -> dynamicListRetypePreview(normFqn),
                 () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
-                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version, queryValidation));
         }
         catch (Exception e)
         {
@@ -4625,7 +4629,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String applyDynamicListQuery(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
-        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version,
+        QueryWriteValidation.Batch queryValidation)
     {
         final List<String> applied = new ArrayList<>();
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
@@ -4661,6 +4666,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        queryValidation.addTo(result);
         normReport.addTo(result);
         return result
             .put(McpKeys.MESSAGE, "Configured dynamic-list query on " + normFqn //$NON-NLS-1$

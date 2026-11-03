@@ -5847,11 +5847,29 @@
           },
           "type": "array"
         },
+        "sources": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
         "success": {
           "type": "boolean"
         },
+        "unresolvedSources": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
         "valid": {
           "type": "boolean"
+        },
+        "validationComplete": {
+          "type": "boolean"
+        },
+        "validationState": {
+          "type": "string"
         },
         "warningCount": {
           "type": "integer"

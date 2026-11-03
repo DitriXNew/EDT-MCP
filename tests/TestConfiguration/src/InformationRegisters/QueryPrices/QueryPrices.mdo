@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:InformationRegister xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="bcda793f-1209-5cba-afe3-c0b0002cf9f1">
+  <producedTypes>
+    <selectionType typeId="e8647b81-9663-553c-8d12-71192a4efa78" valueTypeId="3a69a2c2-b2f2-53ff-a32c-108f9f4a9f47"/>
+    <listType typeId="72d331cd-9854-5625-88bc-c2989c70587a" valueTypeId="27fd58dc-c63b-503d-9235-65086c80a6c4"/>
+    <managerType typeId="07dddd00-e12d-5d29-a1f4-34a5d821bc0d" valueTypeId="09a94a5e-6748-5bba-95bd-988aee41135c"/>
+    <recordSetType typeId="9a33ec2e-d5a0-5932-9646-2d62bfc876ca" valueTypeId="93a5c83d-fba3-5c66-8adc-0b785078d853"/>
+    <recordKeyType typeId="2900c98d-9577-5860-9c4d-c3fd7de3ca3a" valueTypeId="5e478bd8-5f91-567f-953e-871fe95c4ff2"/>
+    <recordType typeId="645c4e0b-c8b0-5df9-98c3-f5167bee0d49" valueTypeId="7c70d09b-7b79-5c2a-9d5e-2613bffdbe1d"/>
+    <recordManagerType typeId="3067f8c8-4a4f-548a-93f7-fc6fc221ca4d" valueTypeId="34817722-a471-508e-a402-4d244fdf9378"/>
+  </producedTypes>
+  <name>QueryPrices</name>
+  <informationRegisterPeriodicity>Second</informationRegisterPeriodicity>
+  <resources uuid="e4b96d3d-67ee-5cbe-b302-1d2d9ae95a86">
+    <name>Price</name>
+    <type>
+      <types>Number</types>
+      <numberQualifiers>
+        <precision>15</precision>
+        <scale>2</scale>
+      </numberQualifiers>
+    </type>
+  </resources>
+  <dimensions uuid="8901e96c-c94f-563b-9edb-25c3316f0307">
+    <name>Item</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+  </dimensions>
+</mdclass:InformationRegister>

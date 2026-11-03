@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:AccumulationRegister xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="02c267bd-6f86-5c80-ac8b-ed63236cf413">
+  <producedTypes>
+    <selectionType typeId="882ed085-f4de-51ca-bba3-08ad426a10b4" valueTypeId="cb3bc2e8-ad48-5beb-a324-9e0b28bfd538"/>
+    <listType typeId="f3b7916e-ec63-502d-b232-6a16c99bcfa9" valueTypeId="4ac023f6-3f0f-5c55-9f5f-6d63b1cb5af6"/>
+    <managerType typeId="7c4bd32d-4c48-525e-826d-658ea2d446d5" valueTypeId="1f7beb15-8512-5203-977a-e6102fec5ebe"/>
+    <recordSetType typeId="1cc0286b-ffd9-5ac1-863e-d98a5b9f3bfe" valueTypeId="2136a0aa-37ce-5a1e-a26d-5c3ecdacab47"/>
+    <recordKeyType typeId="1aa3a9e4-b212-5736-bcb4-b75cb5609bf0" valueTypeId="8608d3d2-9277-5b67-892a-fce90ecce9bf"/>
+    <recordType typeId="63794cbe-cfe9-582c-8f3f-cc42c54ed96e" valueTypeId="dd59fe75-6770-59cf-a96a-8bf6e01d5c7f"/>
+  </producedTypes>
+  <name>QueryStock</name>
+  <resources uuid="a4f7c905-832a-5219-bf19-05ec4e80e8f0">
+    <name>Quantity</name>
+    <type>
+      <types>Number</types>
+      <numberQualifiers>
+        <precision>15</precision>
+        <scale>2</scale>
+      </numberQualifiers>
+    </type>
+  </resources>
+  <dimensions uuid="eeed2fe5-e195-5494-9f58-e1ab072eeec5">
+    <name>Item</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+  </dimensions>
+</mdclass:AccumulationRegister>

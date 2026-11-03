@@ -4704,6 +4704,30 @@ def test_retype_of_a_defined_type_runs_the_referrer_reset():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dynamic_list_query_write_uses_shared_native_validator():
+    root = "Catalog.Catalog.Form.ItemForm.Attribute.QueryGate513"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}), "seed plain attribute")
+    wait_for_project_ready()
+    form_rel = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    poll_disk_contains(form_rel, "QueryGate513", ctx="settle seeded attribute")
+    snapshot = tree_snapshot()
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
+        {"name": "queryText", "value": "SELECT C.MissingField513 FROM Catalog.Catalog AS C"}]})
+    error = assert_error(r, "invalid custom query must be refused before attribute conversion")
+    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_tree_unchanged(snapshot, "invalid query must not convert the attribute or write the form")
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
+        {"name": "queryText", "value": "SELECT Ref AS GateValid513 FROM Catalog.Catalog"}]})
+    assert_ok(r, "valid custom query uses the shared validator")
+    assert r.structured.get("queryValidation")[0]["validationState"] == "VALID", r.structured
+    poll_disk_contains(form_rel, "GateValid513", ctx="valid query must reach Form.form")
+    read_back = call("dcs", {"projectName": PROJECT, "fqn": root + "#/queryText",
+                            "action": "get", "type": "dynamicList"})
+    assert_ok(read_back, "read back valid dynamic-list query")
+    assert "SELECT Ref AS GateValid513 FROM Catalog.Catalog" in read_back.text
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_text_template_edit_modes_guards_and_exact_line_endings():
     from harness import settle_or_fail
     from tools.test_text_templates import (

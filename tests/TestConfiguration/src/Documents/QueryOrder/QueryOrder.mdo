@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Document xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="333c9aeb-9199-55d7-93ee-c354153caff6">
+  <producedTypes>
+    <objectType typeId="868a5812-cd09-58a7-9955-98737cd7f296" valueTypeId="f2fb20aa-09f3-5c43-8a9a-ddd1b962ec52"/>
+    <refType typeId="7f57da89-33bf-527d-82b0-d9e6da9e8b42" valueTypeId="6bbaf9ed-dc3e-521f-a36e-72b9511868a4"/>
+    <selectionType typeId="9e767b6d-4b6e-5734-a449-1ad89067e70b" valueTypeId="3a32083c-6eae-5be7-84a6-bf4301b010fc"/>
+    <listType typeId="4e046e7c-7c93-5e6a-9363-cd9b3d063a41" valueTypeId="c1801839-577f-5dd8-960a-8efb27723f99"/>
+    <managerType typeId="12697f59-e7ad-562d-900b-65954f0f793d" valueTypeId="9ab2481e-4e61-53af-b4e7-256d318e74c2"/>
+  </producedTypes>
+  <name>QueryOrder</name>
+  <numberType>String</numberType>
+  <numberLength>9</numberLength>
+  <registerRecords>AccumulationRegister.QueryStock</registerRecords>
+  <tabularSections uuid="cfa6d238-5d79-5a16-8b85-cac6c883ad84">
+    <producedTypes>
+      <objectType typeId="30b99eb0-bfde-5130-b4ac-87023e743d39" valueTypeId="9a21aba5-1d85-5800-a446-89697d0c3588"/>
+      <rowType typeId="1ace2b3c-7699-5ad3-bea9-307bbe008556" valueTypeId="2b95a91a-f19c-57c5-813e-b4b56daebb75"/>
+    </producedTypes>
+    <name>Items</name>
+    <attributes uuid="959b0708-4863-55b4-86e1-5bcd0fd6cc4d">
+      <name>Quantity</name>
+      <type>
+        <types>Number</types>
+        <numberQualifiers>
+          <precision>15</precision>
+          <scale>2</scale>
+        </numberQualifiers>
+      </type>
+    </attributes>
+  </tabularSections>
+</mdclass:Document>
