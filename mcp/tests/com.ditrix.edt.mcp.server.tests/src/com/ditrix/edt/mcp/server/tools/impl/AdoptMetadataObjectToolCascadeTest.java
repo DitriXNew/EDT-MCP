@@ -9,6 +9,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,27 +22,40 @@ import static org.mockito.Mockito.withSettings;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.junit.Before;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmEngine;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmGlobalEditingContext;
 import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.bm.integration.event.IBmSyncEventListener;
+import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
+import com._1c.g5.v8.bm.core.event.BmEvent;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTopObjects;
@@ -49,18 +66,70 @@ import com.google.gson.JsonParser;
 public class AdoptMetadataObjectToolCascadeTest
 {
     private final List<IBmObject> objects = new ArrayList<>();
+    private final Map<IBmObject, String> names = new IdentityHashMap<>();
+    private final List<IBmSyncEventListener> listeners = new ArrayList<>();
+    private List<IBmObject> associated = new ArrayList<>();
+    private Runnable beforeWrite = () -> { };
+    private Runnable afterWrite = () -> { };
+    private boolean emitCommitEvent = true;
+    private boolean committed;
+    private long nextId = 100;
     private boolean reading;
+    private boolean writing;
     private IBmModel model;
     private IBmTransaction tx;
     private Configuration root;
     private IBmObject returnedCopy;
     private AdoptMetadataObjectTool.AdoptionSource source;
+    private IModelObjectAdopter adopter;
+    private IExtensionProject target;
 
     @Before
-    public void setUp()
+    public void setUp() throws Exception
     {
         tx = mock(IBmTransaction.class);
         model = mock(IBmModel.class);
+        adopter = mock(IModelObjectAdopter.class);
+        target = mock(IExtensionProject.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Base.Ext");
+        when(target.getProject()).thenReturn(project);
+        IBmEngine engine = mock(IBmEngine.class);
+        when(model.getEngine()).thenReturn(engine);
+        when(target.getAdapter(IBmModel.class)).thenReturn(model);
+        when(engine.getCurrentTransaction()).thenAnswer(inv -> writing ? tx : null);
+        IBmGlobalEditingContext global = mock(IBmGlobalEditingContext.class);
+        when(model.getGlobalContext()).thenReturn(global);
+        doAnswer(inv -> listeners.add(inv.getArgument(0))).when(model).addSyncEventListener(any());
+        doAnswer(inv -> listeners.remove(inv.getArgument(0))).when(model).removeSyncEventListener(any());
+        when(global.execute(any())).thenAnswer(inv -> {
+            beforeWrite.run();
+            IBmTask<?> task = inv.getArgument(0);
+            reading = true;
+            writing = true;
+            Object result;
+            try
+            {
+                result = task.execute(tx, null);
+            }
+            finally
+            {
+                reading = false;
+                writing = false;
+            }
+            if (emitCommitEvent)
+            {
+                fireEvent(task.getId(), associated);
+            }
+            committed = true;
+            afterWrite.run();
+            return result;
+        });
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            assertTrue("the list overload must join the active write transaction", writing);
+            assertEquals(List.of(source.object), inv.getArgument(0));
+            return List.of((EObject)returnedCopy);
+        });
         when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
             assertFalse(reading);
             reading = true;
@@ -96,6 +165,11 @@ public class AdoptMetadataObjectToolCascadeTest
     {
         T object = mock(type, withSettings().extraInterfaces(IBmObject.class));
         IBmObject bm = (IBmObject)object;
+        long id = nextId++;
+        names.put(bm, fqn);
+        when(bm.bmGetId()).thenReturn(id);
+        when(bm.bmIsTop()).thenReturn(true);
+        when(tx.getObjectById(id)).thenReturn(bm);
         when(bm.bmGetTopObject()).thenReturn(bm);
         when(bm.bmGetFqn()).thenAnswer(inv -> {
             assertTrue("FQNs must be read inside the BM transaction", reading);
@@ -112,13 +186,24 @@ public class AdoptMetadataObjectToolCascadeTest
     private AdoptMetadataObjectTool.AdoptionChanges after(Set<String> before, EObject copy)
     {
         when(tx.getObjectById(42L)).thenReturn((IBmObject)copy);
-        return AdoptMetadataObjectTool.collectChanges(model, before, (EObject)returnedCopy);
+        associated = objects.stream().filter(object -> !before.contains(names.get(object))).toList();
+        return AdoptMetadataObjectTool.adoptWithChanges(model, adopter, source.object, target).changes;
+    }
+
+    private void fireEvent(Object operationId, List<IBmObject> attached)
+    {
+        BmAssociationEvent association = new BmAssociationEvent(attached, List.of(), List.of(), Map.of());
+        BmEvent event = new BmEvent(1L, operationId, null, null, association, null, null);
+        for (IBmSyncEventListener listener : List.copyOf(listeners))
+        {
+            listener.handleSyncEvent(event);
+        }
     }
 
     private JsonObject result(AdoptMetadataObjectTool.AdoptionChanges changes, String note)
     {
         return JsonParser.parseString(AdoptMetadataObjectTool.adoptedResult(source, "Base.Ext", true,
-            note, changes.cascaded)).getAsJsonObject();
+            note, changes)).getAsJsonObject();
     }
 
     @Test
@@ -141,6 +226,158 @@ public class AdoptMetadataObjectToolCascadeTest
         verify(tx).getObjectById(42L);
         verify(returnedCopy, never()).bmGetTopObject();
         verify(model, never()).execute(any());
+    }
+
+    @Test
+    public void testConcurrentAdditionsBetweenOldSnapshotsAreNotAttributed()
+    {
+        Set<String> oldBefore = before();
+        MdObject plan = top(MdObject.class, "ExchangePlan.Branches");
+        MdObject cascade = top(MdObject.class, "Catalog.Goods");
+        IBmObject concurrentBefore = (IBmObject)top(MdObject.class, "Catalog.ConcurrentBeforeWrite");
+        IBmObject concurrentAfter = (IBmObject)top(MdObject.class, "Catalog.ConcurrentAfterCommit");
+        objects.addAll(List.of((IBmObject)plan, (IBmObject)cascade));
+        beforeWrite = () -> objects.add(concurrentBefore);
+        afterWrite = () -> {
+            objects.add(concurrentAfter);
+            fireEvent(new Object(), List.of(concurrentBefore, concurrentAfter));
+        };
+
+        var changes = after(oldBefore, plan);
+        assertEquals(List.of("Catalog.Goods"), changes.cascaded);
+        assertEquals(List.of("ExchangePlan.Branches", "Catalog.Goods", "Configuration"), changes.dirty);
+        assertEquals("[\"Catalog.Goods\"]", result(changes, null).get("cascadedObjects").toString());
+        Set<String> oldDifference = before();
+        oldDifference.removeAll(oldBefore);
+        assertTrue("the old model-wide snapshots would include both unrelated additions",
+            oldDifference.containsAll(List.of("Catalog.ConcurrentBeforeWrite", "Catalog.ConcurrentAfterCommit")));
+        assertTrue("the commit observer must be removed", listeners.isEmpty());
+    }
+
+    @Test
+    public void testMissingCommitEvidenceReturnsSuccessWithUnknownCascade() throws Exception
+    {
+        Set<String> before = before();
+        MdObject plan = top(MdObject.class, "ExchangePlan.Branches");
+        objects.add((IBmObject)plan);
+        emitCommitEvent = false;
+        WriteScope scope = new WriteScope();
+        AdoptMetadataObjectTool.AdoptionChanges[] changes = new AdoptMetadataObjectTool.AdoptionChanges[1];
+        WriteScope.runWithScope(scope, () -> changes[0] = after(before, plan));
+        assertTrue(committed);
+        assertUnavailableSuccess(changes[0], "EDT did not report", scope);
+        assertTrue(listeners.isEmpty());
+    }
+
+    @Test
+    public void testDisappearedAssociationAfterCommitReturnsSuccessWithUnknownCascade() throws Exception
+    {
+        Set<String> before = before();
+        MdObject plan = top(MdObject.class, "ExchangePlan.Branches");
+        IBmObject missing = (IBmObject)top(MdObject.class, "Catalog.Goods");
+        objects.addAll(List.of((IBmObject)plan, missing));
+        afterWrite = () -> when(tx.getObjectById(missing.bmGetId())).thenReturn(null);
+        WriteScope scope = new WriteScope();
+        AdoptMetadataObjectTool.AdoptionChanges[] changes = new AdoptMetadataObjectTool.AdoptionChanges[1];
+        WriteScope.runWithScope(scope, () -> changes[0] = after(before, plan));
+        assertTrue(committed);
+        assertUnavailableSuccess(changes[0], "disappeared after commit", scope);
+    }
+
+    @Test
+    public void testPostCommitReadFailureReturnsSuccessWithUnknownCascade() throws Exception
+    {
+        Set<String> before = before();
+        MdObject plan = top(MdObject.class, "ExchangePlan.Branches");
+        objects.add((IBmObject)plan);
+        doThrow(new IllegalStateException("model closing")).when(model).executeReadonlyTask(any());
+        WriteScope scope = new WriteScope();
+        AdoptMetadataObjectTool.AdoptionChanges[] changes = new AdoptMetadataObjectTool.AdoptionChanges[1];
+        WriteScope.runWithScope(scope, () -> changes[0] = after(before, plan));
+        assertTrue(committed);
+        assertUnavailableSuccess(changes[0], "could not be read", scope);
+    }
+
+    private void assertUnavailableSuccess(AdoptMetadataObjectTool.AdoptionChanges changes, String reason,
+        WriteScope scope) throws Exception
+    {
+        JsonObject result = result(changes, "Mapping note.");
+        assertTrue(result.get("success").getAsBoolean());
+        assertEquals("adopted", result.get("action").getAsString());
+        assertEquals("ExchangePlan.Branches", result.get("fqn").getAsString());
+        assertEquals("unavailable", result.get("cascadeAttribution").getAsString());
+        assertTrue(result.get("warning").getAsString().contains("Adoption committed"));
+        assertTrue(result.get("warning").getAsString().contains(reason));
+        assertTrue(result.get("warning").getAsString().contains("get_metadata_objects"));
+        assertTrue(result.get("warning").getAsString().contains("do not retry"));
+        assertEquals("Mapping note.", result.get("message").getAsString());
+        assertFalse(result.has("cascadedObjects"));
+        assertFalse(result.has("cascadedCount"));
+        assertTrue(changes.cascaded.isEmpty());
+        assertEquals(List.of("ExchangePlan.Branches", "Configuration"), changes.dirty);
+        assertTrue(scope.hasRecordedWrite());
+        persistAndAssertScope(changes, changes.dirty, scope);
+    }
+
+    @Test
+    public void testAdopterFailurePreservesInFlightUnknownMutationOutcome() throws Exception
+    {
+        WriteScope scope = new WriteScope();
+        doAnswer(inv -> {
+            JsonObject inFlight = JsonParser.parseString(scope.markErrorAfterRecordedWrite(
+                ToolResult.error("in-flight probe").toJson())).getAsJsonObject();
+            assertTrue(inFlight.get("mutationOutcomeUnknown").getAsBoolean());
+            assertFalse(inFlight.has("mutationCommitted"));
+            throw new CoreException(new Status(IStatus.ERROR, "test", "mid-adoption failure"));
+        }).when(adopter).adoptAndAttach(anyList(), eq(target), any());
+        assertPreCommitFailure(scope, () -> AdoptMetadataObjectTool.adoptWithChanges(model, adopter,
+            source.object, target), "mid-adoption failure");
+    }
+
+    @Test
+    public void testCopyUnavailableInsideWriteIsAPreCommitFailure()
+    {
+        Set<String> before = before();
+        MdObject plan = top(MdObject.class, "ExchangePlan.Branches");
+        objects.add((IBmObject)plan);
+        beforeWrite = () -> when(tx.getObjectById(42L)).thenReturn(null);
+        assertPreCommitFailure(new WriteScope(), () -> after(before, plan), "Adopted copy is unavailable");
+    }
+
+    private void assertPreCommitFailure(WriteScope scope, Runnable action, String message)
+    {
+        WriteScope.runWithScope(scope, () -> {
+            try
+            {
+                action.run();
+                org.junit.Assert.fail("a failing write task must not commit");
+            }
+            catch (IllegalStateException expected)
+            {
+                assertTrue(expected.getMessage(), expected.getMessage().contains(message));
+                JsonObject error = JsonParser.parseString(scope.markErrorAfterRecordedWrite(
+                    ToolResult.error(expected.getMessage()).toJson())).getAsJsonObject();
+                assertFalse(error.get("success").getAsBoolean());
+                assertTrue(error.get("mutationOutcomeUnknown").getAsBoolean());
+                assertFalse(error.has("mutationCommitted"));
+            }
+        });
+        assertFalse(committed);
+        assertFalse(scope.hasRecordedWrite());
+        assertTrue(scope.exportedTopObjects("Base.Ext").isEmpty());
+        assertTrue(listeners.isEmpty());
+    }
+
+    @Test
+    public void testSourceAdoptedBeforeOurTransactionProducesNoWrite() throws Exception
+    {
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of());
+        emitCommitEvent = false;
+        var outcome = AdoptMetadataObjectTool.adoptWithChanges(model, adopter, source.object, target);
+        org.junit.Assert.assertNull(outcome.copy);
+        assertTrue(outcome.changes.dirty.isEmpty());
+        assertTrue(outcome.changes.cascaded.isEmpty());
+        assertTrue(listeners.isEmpty());
     }
 
     @Test
@@ -240,20 +477,26 @@ public class AdoptMetadataObjectToolCascadeTest
         assertEquals("Catalog.Item099", result.getAsJsonArray("cascadedObjects").get(99).getAsString());
         assertEquals(152, changes.dirty.size());
 
-        IProject project = mock(IProject.class);
-        when(project.getName()).thenReturn("Base.Ext");
+        WriteScope scope = new WriteScope();
+        persistAndAssertScope(changes, changes.dirty, scope);
+        assertTrue(scope.exportedTopObjects("Base.Ext").contains("Catalog.Item149"));
+    }
+
+    private void persistAndAssertScope(AdoptMetadataObjectTool.AdoptionChanges changes, List<String> expected,
+        WriteScope scope) throws Exception
+    {
+        IProject project = target.getProject();
         IDtProject dtProject = mock(IDtProject.class);
         IDtProjectManager projects = mock(IDtProjectManager.class);
         IBmModelManager models = mock(IBmModelManager.class);
         when(projects.getDtProject(project)).thenReturn(dtProject);
-        when(models.forceExport(dtProject, changes.dirty)).thenReturn(true);
+        when(models.forceExport(dtProject, expected)).thenReturn(true);
         Activator activator = mock(Activator.class);
         when(activator.getDtProjectManager()).thenReturn(projects);
         when(activator.getBmModelManager()).thenReturn(models);
         Field plugin = Activator.class.getDeclaredField("plugin");
         plugin.setAccessible(true);
         Object previous = plugin.get(null);
-        WriteScope scope = new WriteScope();
         try
         {
             plugin.set(null, activator);
@@ -263,8 +506,8 @@ public class AdoptMetadataObjectToolCascadeTest
         {
             plugin.set(null, previous);
         }
-        verify(models).forceExport(dtProject, changes.dirty);
-        assertEquals(changes.dirty, scope.exportedTopObjects("Base.Ext"));
-        assertTrue(scope.exportedTopObjects("Base.Ext").contains("Catalog.Item149"));
+        verify(models).forceExport(dtProject, expected);
+        assertEquals(expected, scope.exportedTopObjects("Base.Ext"));
+        assertEquals(List.of("Base.Ext"), scope.writtenProjects());
     }
 }

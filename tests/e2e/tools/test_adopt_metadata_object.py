@@ -311,6 +311,15 @@ def test_exchange_plan_cascade_reports_and_exports_actual_added_objects():
         response = _assert_adopted(call("adopt_metadata_object", {
             "projectName": PROJECT, "fqn": plan, "extensionProjectName": TESTS_PROJECT,
         }), plan, "adopt an exchange plan with real catalog content")
+        unavailable = response.get("cascadeAttribution") == "unavailable"
+        if "cascadeAttribution" in response and not unavailable:
+            raise AssertionError("unexpected cascade attribution status: %r" % response)
+        if unavailable:
+            if "cascadedObjects" in response or "cascadedCount" in response:
+                raise AssertionError("an unknown cascade must not publish a guessed list/count: %r" % response)
+            assert_contains(response.get("warning", ""), "Adoption committed", "the write succeeded")
+            assert_contains(response.get("warning", ""), "get_metadata_objects", "the warning gives an inspection step")
+            assert_contains(response.get("warning", ""), "do not retry", "the agent must not repeat a committed write")
 
         # Disk first: adoption submits its own exports and waits before answering.
         plan_disk = read_fixture_file(TESTS_PROJECT_REL, plan_path)
@@ -329,7 +338,8 @@ def test_exchange_plan_cascade_reports_and_exports_actual_added_objects():
         })
         assert_ok(listed, "read back whether EDT actually cascaded")
         if catalog_name in listed.text:
-            if response.get("cascadedObjects") != [catalog] or response.get("cascadedCount") != 1:
+            if not unavailable and (response.get("cascadedObjects") != [catalog]
+                                    or response.get("cascadedCount") != 1):
                 raise AssertionError("EDT adopted the catalog, but the response must name it exactly: %r"
                                      % response)
             if catalog_disk is None:
@@ -359,6 +369,15 @@ def test_exchange_plan_cascade_reports_and_exports_actual_added_objects():
         details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [plan]})
         assert_ok(details, "read back the requested adopted plan")
         assert_contains(details.text, "## ExchangePlan: " + plan_name, "the model holds the requested plan")
+        again = call("adopt_metadata_object", {
+            "projectName": PROJECT, "fqn": plan, "extensionProjectName": TESTS_PROJECT,
+        })
+        assert_ok(again, "re-adopting the plan is a no-op")
+        repeated = _structured(again, "repeated adoption")
+        if repeated.get("action") != "alreadyAdopted" or repeated.get("writtenProjects") != []:
+            raise AssertionError("a repeated adoption must write nothing: %r" % repeated)
+        if any(key in repeated for key in ("cascadedObjects", "cascadedCount", "cascadeAttribution", "warning")):
+            raise AssertionError("a previous transaction's cascade must not be attributed again: %r" % repeated)
     except E2ECallTimeout:
         raise
     except BaseException:

@@ -13,15 +13,20 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -43,7 +48,6 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
-import com.ditrix.edt.mcp.server.utils.MetadataTopObjects;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
@@ -60,7 +64,7 @@ import com.google.gson.JsonObject;
  * <p>
  * The whole adopt+attach is performed by the platform service
  * {@link IModelObjectAdopter#adoptAndAttach(EObject, IExtensionProject, org.eclipse.core.runtime.IProgressMonitor)}:
- * it runs its OWN BM write task on the extension's model, creates the adopted copy with
+ * its list overload joins the tool's global-context BM write task and creates the adopted copy with
  * {@code ObjectBelonging.ADOPTED}, attaches it by generated FQN, and - only when the extension root
  * keeps mapping by IDs and the platform version is above 8.3.14 - wires the
  * {@code extendedConfigurationObject} UUID link to the base object (by-ID mapping; otherwise the copy
@@ -84,6 +88,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     private static final String KEY_CASCADED_OBJECTS = "cascadedObjects"; //$NON-NLS-1$
     private static final String KEY_CASCADED_COUNT = "cascadedCount"; //$NON-NLS-1$
+    private static final String KEY_CASCADE_ATTRIBUTION = "cascadeAttribution"; //$NON-NLS-1$
+    private static final String KEY_WARNING = "warning"; //$NON-NLS-1$
 
     /**
      * The source is resolved ({@link MetadataNodeResolver#resolveAddress}) EXACTLY, as adopt always
@@ -142,6 +148,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "owner/parent chain; sorted FQNs, capped at 100; absent when none were added") //$NON-NLS-1$
             .integerProperty(KEY_CASCADED_COUNT,
                 "Total additional top objects added, including those beyond cascadedObjects' cap; absent when zero") //$NON-NLS-1$
+            .enumProperty(KEY_CASCADE_ATTRIBUTION,
+                "Present as 'unavailable' when adoption committed but its cascade could not be determined", //$NON-NLS-1$
+                "unavailable") //$NON-NLS-1$
+            .stringProperty(KEY_WARNING,
+                "Post-commit cascade attribution warning; inspect the extension instead of retrying adoption") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE,
                 "Present when the object was already adopted, and when the adopted copy carries no " //$NON-NLS-1$
                     + "extendedConfigurationObject link, so it is mapped to the base by name rather than by ID (it " //$NON-NLS-1$
@@ -274,28 +285,29 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot inspect extension '" + extName //$NON-NLS-1$
                 + "' before adoption. Wait for the project to finish loading and retry.").toJson(); //$NON-NLS-1$
         }
-        Set<String> before = new LinkedHashSet<>(MetadataTopObjects.snapshot(extensionModel));
+        AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
+        IExtensionProject extension = target;
+        IWorkspace workspace = ResourcesPlugin.getWorkspace();
+        // EDT's adopter takes the workspace root rule. Acquire it before entering BM, in the same
+        // order as its standalone path; the list overload then joins our current write transaction.
+        workspace.run(monitor -> outcome.set(adoptWithChanges(extensionModel, adopter, source.object, extension)),
+            workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+        AdoptionWrite write = outcome.get();
+        EObject adopted = write.copy;
+        if (adopted == null)
+        {
+            WriteScope.recordNothingQueued();
+            return alreadyAdoptedResult(source, extName,
+                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, target)));
+        }
 
-        // The service runs its own BM write task on the extension's model, but exposes no rollback
-        // outcome if it throws. Record the opaque interval before entering it; the known write
-        // declaration immediately after a normal return takes precedence.
-        WriteScope.recordUndeterminable("model-object adopter may mutate before throwing", //$NON-NLS-1$
-            java.util.Collections.singletonList(extName));
-        EObject adopted = adopter.adoptAndAttach(source.object, target, new NullProgressMonitor());
-
-        // projectName is the BASE configuration by contract; the write lands in the EXTENSION.
-        // Stated here rather than left to the export submission below, because that submission is
-        // skipped when nothing came back dirty - and a write with no export of its own is still a
-        // write in this project, not a call that wrote nowhere.
-        WriteScope.recordWrite(target.getProject());
-
-        AdoptionChanges changes = collectChanges(extensionModel, before, adopted);
+        AdoptionChanges changes = write.changes;
         // The global-context commit also schedules EDT's cascade exports; explicitly submit every
         // added metadata TOP here so WriteScope/history and the export barrier share the full set.
         boolean persisted = changes.persistToDisk(target.getProject());
 
         // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
-        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted), changes.cascaded);
+        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted), changes);
     }
 
     /**
@@ -401,6 +413,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote,
         List<String> cascaded)
     {
+        return adoptedResult(source, extName, persisted, mappingNote,
+            new AdoptionChanges(Collections.emptyList(), cascaded));
+    }
+
+    /** A committed write stays successful even when its additional scope could not be read. */
+    static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote,
+        AdoptionChanges changes)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
             .put("fqn", source.fqn) //$NON-NLS-1$
@@ -411,10 +431,15 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             result.put(McpKeys.MESSAGE, mappingNote);
         }
-        if (!cascaded.isEmpty())
+        if (changes.warning != null)
         {
-            result.put(KEY_CASCADED_OBJECTS, cascaded.subList(0, Math.min(cascaded.size(), Pagination.DEFAULT_LIMIT)))
-                .put(KEY_CASCADED_COUNT, cascaded.size());
+            result.put(KEY_CASCADE_ATTRIBUTION, "unavailable").put(KEY_WARNING, changes.warning); //$NON-NLS-1$
+        }
+        else if (!changes.cascaded.isEmpty())
+        {
+            result.put(KEY_CASCADED_OBJECTS, changes.cascaded.subList(0,
+                Math.min(changes.cascaded.size(), Pagination.DEFAULT_LIMIT)))
+                .put(KEY_CASCADED_COUNT, changes.cascaded.size());
         }
         return result.toJson();
     }
@@ -685,34 +710,125 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         return message;
     }
 
-    /** Measure after adoption, resolving the returned object in the extension's read transaction. */
-    static AdoptionChanges collectChanges(IBmModel model, Set<String> before, EObject adopted)
+    /** Adopt in one global write and attribute only the objects attached by that task's commit event. */
+    static AdoptionWrite adoptWithChanges(IBmModel model, IModelObjectAdopter adopter, EObject source,
+        IExtensionProject target)
     {
-        long adoptedId = adopted instanceof IBmObject ? ((IBmObject)adopted).bmGetId() : 0;
-        return BmTransactions.read(model, "adopt_metadata_object: measure additions", (tx, monitor) -> { //$NON-NLS-1$
+        AtomicReference<Set<Long>> associatedIds = new AtomicReference<>();
+        List<String> requested = new ArrayList<>();
+        EObject adopted = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
+            requested.clear(); // A deadlock retry executes the task again.
+            IBmModel adoptingModel = target.getAdapter(IBmModel.class);
+            if (adoptingModel == null || adoptingModel.getEngine().getCurrentTransaction() != tx)
+            {
+                throw new IllegalStateException("EDT's adopter cannot join the extension write transaction. " //$NON-NLS-1$
+                    + "Wait for the project to finish loading and retry adoption."); //$NON-NLS-1$
+            }
             IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
             if (!(root instanceof Configuration))
             {
                 throw new IllegalStateException("Extension configuration is unavailable; inspect the extension " //$NON-NLS-1$
                     + "with get_metadata_objects before retrying adoption."); //$NON-NLS-1$
             }
-            EObject copy = adopted instanceof IBmObject ? (EObject)tx.getObjectById(adoptedId) : null;
-            if (copy == null)
+            List<EObject> copies;
+            WriteScope.recordUndeterminable("model-object adopter may mutate before throwing", //$NON-NLS-1$
+                Collections.singletonList(target.getProject().getName()));
+            try
+            {
+                copies = adopter.adoptAndAttach(Collections.singletonList(source), target, new NullProgressMonitor());
+            }
+            catch (CoreException e)
+            {
+                throw new IllegalStateException("Adoption failed; inspect the extension with get_metadata_objects " //$NON-NLS-1$
+                    + "before retrying: " + e.getMessage(), e); //$NON-NLS-1$
+            }
+            if (copies.isEmpty())
+            {
+                return null; // Another writer adopted the source before this transaction started.
+            }
+            EObject copy = copies.get(0);
+            EObject inTx = copy instanceof IBmObject ? (EObject)tx.getObjectById(((IBmObject)copy).bmGetId()) : null;
+            if (inTx == null)
             {
                 throw new IllegalStateException("Adopted copy is unavailable; inspect the extension with " //$NON-NLS-1$
                     + "get_metadata_objects before retrying adoption."); //$NON-NLS-1$
             }
-            List<String> requested = dirtyFqns(copy, (Configuration)root);
-            Set<String> added = new LinkedHashSet<>(MetadataTopObjects.fqns(tx));
-            added.removeAll(before);
-            List<String> cascaded = added.stream().filter(fqn -> !requested.contains(fqn))
-                .sorted().collect(Collectors.toList());
-            Set<String> dirty = new LinkedHashSet<>(requested);
-            dirty.remove(root.bmGetFqn());
-            dirty.addAll(added);
-            dirty.add(root.bmGetFqn());
-            return new AdoptionChanges(new ArrayList<>(dirty), cascaded);
+            requested.addAll(dirtyFqns(inTx, (Configuration)root));
+            return copy;
+        }, event -> {
+            Set<Long> ids = new LinkedHashSet<>();
+            BmAssociationEvent association = event.getAssociationEvent();
+            if (association != null)
+            {
+                for (IBmObject object : association.getAssociated())
+                {
+                    if (object instanceof MdObject)
+                    {
+                        ids.add(object.bmGetId());
+                    }
+                }
+            }
+            associatedIds.set(ids);
         });
+        if (adopted == null)
+        {
+            return new AdoptionWrite(null, new AdoptionChanges(Collections.emptyList(), Collections.emptyList()));
+        }
+        WriteScope.recordWrite(target.getProject());
+        Set<Long> ids = associatedIds.get();
+        if (ids == null)
+        {
+            return new AdoptionWrite(adopted, AdoptionChanges.unavailable(requested,
+                "EDT did not report its transaction additions")); //$NON-NLS-1$
+        }
+        AdoptionChanges changes;
+        try
+        {
+            changes = BmTransactions.read(model, "adopt_metadata_object: read committed additions", //$NON-NLS-1$
+            (tx, monitor) -> {
+                Set<String> added = new LinkedHashSet<>();
+                for (long id : ids)
+                {
+                    IBmObject object = tx.getObjectById(id);
+                    if (object == null)
+                    {
+                        return AdoptionChanges.unavailable(requested,
+                            "an adopted object disappeared after commit"); //$NON-NLS-1$
+                    }
+                    if (object instanceof MdObject && object.bmIsTop())
+                    {
+                        added.add(object.bmGetFqn());
+                    }
+                }
+                List<String> cascaded = added.stream().filter(fqn -> !requested.contains(fqn))
+                    .sorted().collect(Collectors.toList());
+                Set<String> dirty = new LinkedHashSet<>(requested);
+                String configurationFqn = requested.get(requested.size() - 1);
+                dirty.remove(configurationFqn);
+                dirty.addAll(added);
+                dirty.add(configurationFqn);
+                return new AdoptionChanges(new ArrayList<>(dirty), cascaded);
+            });
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logInfo("adopt_metadata_object: could not read committed additions: " + e); //$NON-NLS-1$
+            changes = AdoptionChanges.unavailable(requested, "the committed additions could not be read"); //$NON-NLS-1$
+        }
+        return new AdoptionWrite(adopted, changes);
+    }
+
+    /** Result of the committed adoption, with detached FQNs for response and export. */
+    static final class AdoptionWrite
+    {
+        final EObject copy;
+        final AdoptionChanges changes;
+
+        AdoptionWrite(EObject copy, AdoptionChanges changes)
+        {
+            this.copy = copy;
+            this.changes = changes;
+        }
     }
 
     /** Detached FQNs only: response caps never limit the export/history scope. */
@@ -720,11 +836,25 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     {
         final List<String> dirty;
         final List<String> cascaded;
+        final String warning;
 
         AdoptionChanges(List<String> dirty, List<String> cascaded)
         {
+            this(dirty, cascaded, null);
+        }
+
+        private AdoptionChanges(List<String> dirty, List<String> cascaded, String warning)
+        {
             this.dirty = dirty;
             this.cascaded = cascaded;
+            this.warning = warning;
+        }
+
+        static AdoptionChanges unavailable(List<String> requested, String reason)
+        {
+            return new AdoptionChanges(new ArrayList<>(requested), Collections.emptyList(),
+                "Adoption committed; " + reason //$NON-NLS-1$
+                    + ". Inspect the extension with get_metadata_objects; do not retry adoption."); //$NON-NLS-1$
         }
 
         boolean persistToDisk(IProject project)

@@ -14,13 +14,20 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.core.event.BmEvent;
 import com._1c.g5.v8.bm.integration.IBmGlobalEditingContext;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.bm.integration.event.IBmSyncEventListener;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
@@ -37,6 +44,64 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
  */
 public class BmTransactionsTest
 {
+    @Test
+    public void testCommitObserverAcceptsOnlyItsOwnTaskAndIsRemoved()
+    {
+        IBmModel model = mock(IBmModel.class);
+        IBmGlobalEditingContext global = mock(IBmGlobalEditingContext.class);
+        when(model.getGlobalContext()).thenReturn(global);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        AtomicReference<IBmSyncEventListener> listener = new AtomicReference<>();
+        doAnswer(inv -> {
+            listener.set(inv.getArgument(0));
+            return null;
+        }).when(model).addSyncEventListener(any());
+        List<BmEvent> observed = new ArrayList<>();
+        when(global.execute(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            Object result = task.execute(tx, null);
+            listener.get().handleSyncEvent(new BmEvent(1L, new Object(), null, null, null, null, null));
+            BmEvent own = new BmEvent(2L, task.getId(), null, null, null, null, null);
+            listener.get().handleSyncEvent(own);
+            assertEquals(List.of(own), observed);
+            return result;
+        });
+        String result = BmTransactions.writeInGlobalContext(model, "ObservedWrite", (t, pm) -> {
+            assertSame(tx, t);
+            return "committed";
+        }, observed::add);
+        assertEquals("committed", result);
+        assertEquals(1, observed.size());
+        verify(model).removeSyncEventListener(listener.get());
+        verify(model, never()).execute(any());
+    }
+
+    @Test
+    public void testCommitObserverIsRemovedWhenWriteThrows()
+    {
+        IBmModel model = mock(IBmModel.class);
+        IBmGlobalEditingContext global = mock(IBmGlobalEditingContext.class);
+        when(model.getGlobalContext()).thenReturn(global);
+        when(global.execute(any())).thenThrow(new IllegalStateException("rollback"));
+        AtomicReference<IBmSyncEventListener> listener = new AtomicReference<>();
+        doAnswer(inv -> {
+            listener.set(inv.getArgument(0));
+            return null;
+        }).when(model).addSyncEventListener(any());
+        List<BmEvent> observed = new ArrayList<>();
+        try
+        {
+            BmTransactions.writeInGlobalContext(model, "FailedWrite", (tx, pm) -> null, observed::add);
+            org.junit.Assert.fail("the write must propagate its failure");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertEquals("rollback", expected.getMessage());
+        }
+        assertTrue(observed.isEmpty());
+        verify(model).removeSyncEventListener(listener.get());
+    }
+
     @Test
     public void testReadRunsInReadonlyTaskAndReturnsResult()
     {
