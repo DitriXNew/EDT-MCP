@@ -18,7 +18,6 @@ import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
@@ -287,7 +286,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
         AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
         IExtensionProject extension = target;
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
+        IWorkspace workspace = ctx.project.getWorkspace();
         // EDT's adopter takes the workspace root rule. Acquire it before entering BM, in the same
         // order as its standalone path; the list overload then joins our current write transaction.
         workspace.run(monitor -> outcome.set(adoptWithChanges(extensionModel, adopter, source.object, extension)),
