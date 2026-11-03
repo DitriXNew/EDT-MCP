@@ -4853,3 +4853,30 @@ def test_text_template_edit_modes_guards_and_exact_line_endings():
         written({"mode": "replace", "text": "", "expectedHash": _hash(text)}, "")
     finally:
         _cleanup(owner, root)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_role_rights_success_matches_output_schema():
+    """The Role success survives call() validation and writes the requested right."""
+    name = "E2ESchemaRole863"
+    fqn = "Role." + name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed schema role")
+    wait_for_project_ready()
+    rights_file = "src/Roles/%s/Rights.rights" % name
+    ns = {"r": "http://v8.1c.ru/8.2/roles"}
+    before = ET.fromstring(read_disk(rights_file))
+    assert before.find("r:object[r:name='Catalog.Catalog']", ns) is None
+
+    result = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                  "rights": [{"object": "Catalog.Catalog", "right": "Read", "value": "set"}]})
+    assert_ok(result, "Role rights success must pass its advertised outputSchema")
+    assert result.structured["applied"] == {"rights": 1, "templates": 0, "roleProperties": 0}, result.structured
+    assert result.structured["persisted"] is True, result.structured
+    written = ET.fromstring(read_disk(rights_file))
+    cell = written.find("r:object[r:name='Catalog.Catalog']/r:right[r:name='Read']/r:value", ns)
+    assert cell is not None and cell.text == "true", read_disk(rights_file)
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "language": "en"})
+    assert_ok(details, "read back authored Role right")
+    assert_contains(details.text, "| Catalog.Catalog | Read | allowed |", "authored Role right")
+    # The runner resets this in-test role and its rights resource after the test.

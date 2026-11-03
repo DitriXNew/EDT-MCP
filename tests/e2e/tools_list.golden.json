@@ -4541,10 +4541,33 @@
           "type": "string"
         },
         "applied": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "properties": {
+                "rights": {
+                  "type": "integer"
+                },
+                "roleProperties": {
+                  "type": "integer"
+                },
+                "templates": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rights",
+                "templates",
+                "roleProperties"
+              ],
+              "type": "object"
+            }
+          ]
         },
         "commands": {
           "type": "object"

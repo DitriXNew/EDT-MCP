@@ -18,6 +18,7 @@ def fresh_harness():
     spec = importlib.util.spec_from_file_location("read_only_transport_harness", HARNESS_PATH)
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
+    harness._OUTPUT_SCHEMAS = {}  # These transport tests use an empty mocked catalogue.
     harness._BASELINE_INVENTORY = []
     harness.wait_for_project_ready = mock.Mock(return_value=True)
     harness.all_fixtures_status = mock.Mock(return_value="")
