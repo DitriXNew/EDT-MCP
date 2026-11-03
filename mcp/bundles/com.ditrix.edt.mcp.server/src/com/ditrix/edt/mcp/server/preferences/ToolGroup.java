@@ -64,7 +64,7 @@ public enum ToolGroup
 
     BSL_CODE("bslCode", "BSL Code", //$NON-NLS-1$ //$NON-NLS-2$
         "Module source reading/writing, structure, search, call hierarchy, navigation, and forms", //$NON-NLS-1$
-        "read_module_source", "write_module_source", "get_module_structure", "list_modules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "open_editor", "read_module_source", "write_module_source", "get_module_structure", "list_modules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "search_in_code", "read_method_source", "get_method_call_hierarchy", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_outgoing_structures", "go_to_definition", "get_symbol_info", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_form_layout_snapshot", //$NON-NLS-1$

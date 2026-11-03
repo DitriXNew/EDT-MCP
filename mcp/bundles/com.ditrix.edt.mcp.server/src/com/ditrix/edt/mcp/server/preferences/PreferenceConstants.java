@@ -13,6 +13,10 @@ import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleCodec;
  */
 public final class PreferenceConstants
 {
+    /** Explicit opt-in for MCP calls that open editors in the EDT workbench. */
+    public static final String PREF_ALLOW_UI_NAVIGATION = "mcpAllowUiNavigation";
+    public static final boolean DEFAULT_ALLOW_UI_NAVIGATION = false;
+
     /** MCP server port */
     public static final String PREF_PORT = "mcpServerPort"; //$NON-NLS-1$
     
@@ -116,8 +120,9 @@ public final class PreferenceConstants
      * 16 = recorded read-only presets gain the destructive {@code business_process_route_map}.
      * 17 = a stored read-only profile gains {@code project_checks}.
      * 18 = recorded read-only profiles gain {@code infobase_extensions}.
+     * 19 = a stored Analysis Only profile gains {@code open_editor}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 18;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 19;
 
     /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$

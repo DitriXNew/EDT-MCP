@@ -15,6 +15,8 @@ import org.eclipse.osgi.util.NLS;
  * runtime (Platform NL) - no manual locale handling.
  */
 public class Messages extends NLS {
+    public static String GeneralTab_AllowUiNavigation; // NOSONAR Eclipse NLS field
+    public static String GeneralTab_AllowUiNavigation_Tooltip; // NOSONAR Eclipse NLS field
 
     private static final String BUNDLE_NAME = "com.ditrix.edt.mcp.server.preferences.messages"; //$NON-NLS-1$
 
