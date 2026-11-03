@@ -802,6 +802,16 @@
         "expectedNotExists": {
           "type": "boolean"
         },
+        "formType": {
+          "enum": [
+            "OBJECT",
+            "LIST",
+            "CHOICE",
+            "RECORD",
+            "RECORD_SET"
+          ],
+          "type": "string"
+        },
         "fqn": {
           "type": "string"
         },
