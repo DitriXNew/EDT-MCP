@@ -119,18 +119,78 @@ public class MetadataNodeResolverExternalDataSourceTest
         }
     }
 
-    @Test public void formOnlyAndCubeDimensionPathsStayOutsideTheGrammar()
+    @Test public void cubeChildrenResolveCreateAndRoundTripThroughTheSameGrammar()
     {
-        assertNotNull(MetadataNodeResolver.resolveExisting(f.config, CUBE));
-        assertNull(MetadataNodeResolver.resolveForCreate(f.config, CUBE + ".Dimension.D"));
-        assertNull(MetadataNodeResolver.resolveForCreate(f.config, CUBE + ".Resource.R"));
-        assertNull(MetadataNodeResolver.resolveForCreate(f.config, CUBE + ".DimensionTable.D"));
+        for (String fqn : List.of(DIMENSION_TABLE, DIMENSION_FIELD, DIMENSION, RESOURCE))
+        {
+            var node = MetadataNodeResolver.resolveExisting(f.config, fqn);
+            assertNotNull(fqn, node);
+            assertEquals(fqn, MetadataNodeResolver.resolvableAddressOf(node.object));
+            var target = MetadataNodeResolver.resolveForCreate(f.config, fqn + "New");
+            assertNotNull(fqn, target);
+            assertSame(node.owner, target.owner);
+            assertSame(node.feature, target.feature);
+            assertSame(node.object.eClass(), target.elementType);
+            assertSame(f.eds, target.topObject);
+            assertSame(node.owner, MetadataNodeResolver.resolveOwnerInTx(f.eds, fqn.split("\\.")));
+        }
+        assertSame(f.dimensionField, MetadataNodeResolver.resolveExisting(f.config,
+            RU_EDS + ".Eds." + RU_CUBE + ".C." + RU_DIMENSION_TABLE + ".DT." + RU_FIELD + ".DF").object);
+        assertEquals("DimensionTable", MetadataTypeUtils.resolveNestedKind(RU_DIMENSION_TABLE).getEnglish());
+        for (String kind : List.of("DimensionTable", "Dimension", "Resource"))
+        {
+            for (String alias : MetadataTypeUtils.nestedKindAliases(kind))
+            {
+                assertNotNull(alias, MetadataNodeResolver.resolveExisting(f.config,
+                    CUBE + "." + alias + "." + (kind.equals("DimensionTable") ? "DT" : kind.substring(0, 1))));
+            }
+        }
+    }
+
+    @Test public void cubeKindsAndDimensionTableFieldsArePublishedAccurately()
+    {
+        assertEquals(List.of("Dimension", "Resource", "Command", "Template", "DimensionTable"),
+            MetadataNodeResolver.childKindsFor(f.cube));
+        assertEquals(List.of("Command", "Template", "Field"), MetadataNodeResolver.childKindsFor(f.dimensionTable));
+        f.dimensionTable.getSynonym().put("en", "Dimension table label");
+        assertNull(MetadataNodeResolver.resolveExisting(f.config, CUBE + ".DimensionTable.Dimension table label"));
+    }
+
+    @Test public void russianProgrammaticNamesResolveInBothDialectsButSynonymsDoNot()
+    {
+        String name = "\u0414\u0430\u043d\u043d\u044b\u0435";
+        f.dimensionTable.setName(name);
+        f.dimensionTable.getSynonym().put("en", "Visible label");
+        String english = CUBE + ".DimensionTable." + name + ".Field.DF";
+        String russian = RU_EDS + ".Eds." + RU_CUBE + ".C." + RU_DIMENSION_TABLE + "." + name + "." + RU_FIELD + ".DF";
+        assertSame(f.dimensionField, MetadataNodeResolver.resolveExisting(f.config, english).object);
+        assertSame(f.dimensionField, MetadataNodeResolver.resolveExisting(f.config, russian).object);
+        assertEquals(english, MetadataNodeResolver.resolvableAddressOf(f.dimensionField));
+        assertNull(MetadataNodeResolver.resolveExisting(f.config, CUBE + ".DimensionTable.Visible label.Field.DF"));
+    }
+
+    @Test public void formOnlyPathsStayOutsideTheGrammar()
+    {
         assertNull(MetadataNodeResolver.resolveForCreate(f.config, TABLE + ".Form.F"));
         assertNull(MetadataNodeResolver.resolveForCreate(f.config, "Catalog.P.Field.F"));
-        assertFalse(MetadataNodeResolver.childKindsFor(f.cube).contains("Dimension"));
-        var dimension = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createDimension();
-        dimension.setName("D");
-        f.cube.getDimensions().add(dimension);
-        assertNull(MetadataNodeResolver.resolvableAddressOf(dimension));
+        assertNull(MetadataNodeResolver.resolveForCreate(f.config, DIMENSION_TABLE + ".Form.F"));
+    }
+
+    @Test public void fieldAliasRejectsDerivedMcoreFieldsButKeepsMetadataFields()
+    {
+        for (var owner : List.of(MdClassPackage.Literals.CATALOG, MdClassPackage.Literals.CATALOG_TABULAR_SECTION))
+        {
+            var derived = (org.eclipse.emf.ecore.EReference)owner.getEStructuralFeature("fields");
+            assertNotNull(owner.getName(), derived);
+            assertFalse(MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(derived.getEReferenceType()));
+            for (String alias : MetadataTypeUtils.nestedKindAliases("Field"))
+            {
+                assertNull(owner.getName() + "." + alias, MetadataNodeResolver.childFeature(owner, alias));
+                assertSame(MdClassPackage.Literals.TABLE__TABLE_FIELDS,
+                    MetadataNodeResolver.childFeature(MdClassPackage.Literals.TABLE, alias));
+                assertSame(MdClassPackage.Literals.DIMENSION_TABLE__FIELDS,
+                    MetadataNodeResolver.childFeature(MdClassPackage.Literals.DIMENSION_TABLE, alias));
+            }
+        }
     }
 }

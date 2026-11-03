@@ -1412,3 +1412,43 @@ def test_top_level_subsystem_preview_and_confirm_cascade_to_all_descendants():
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_nested_subsystem_preview_and_force_confirm_cascade_to_all_descendants():
     _exercise_subsystem_parent_cascade(True)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_external_data_source_cube_members_825():
+    eds = "ExternalDataSource.E2E825Delete"
+    cube = eds + ".Cube.C"
+    table = cube + ".DimensionTable.DT"
+    field = table + ".Field.F"
+    dimension = cube + ".Dimension.D"
+    resource = cube + ".Resource.R"
+    base = "src/ExternalDataSources/E2E825Delete/Cubes/C/"
+    for fqn in [eds, cube, table, field, dimension, resource]:
+        assert wait_for_project_ready(), "indexing before create " + fqn
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    for fqn, path, needle in [
+        (field, base + "DimensionTables/DT/DT.mdo", "<name>F</name>"),
+        (dimension, base + "C.mdo", "<name>D</name>"),
+        (resource, base + "C.mdo", "<name>R</name>"),
+        (table, base + "C.mdo", "<dimensionTables>" + table + "</dimensionTables>"),
+    ]:
+        assert wait_for_project_ready(), "indexing before delete preview " + fqn
+        before = read_disk(path)
+        assert_contains(before, needle, "present before delete")
+        requested = fqn.replace(".DimensionTable.", ".ТаблицаИзмерения.").replace(".Field.", ".Поле.")
+        preview = call("delete_metadata", {"projectName": PROJECT, "fqn": requested})
+        assert_ok(preview, "preview " + fqn)
+        assert read_disk(path) == before, "preview must preserve the registering file"
+        present = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+        assert_ok(present)
+        assert_not_contains(present.text, "## Errors", "preview preserves the node")
+        assert wait_for_project_ready(), "indexing before delete confirm " + fqn
+        deleted = call("delete_metadata", {"projectName": PROJECT, "fqn": requested, "confirm": True})
+        assert_ok(deleted, "delete " + fqn)
+        assert deleted.structured.get("persisted") is not False, deleted.structured
+        assert_not_contains(read_disk(path), needle, "immediate registering-file export")
+        gone = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+        assert_ok(gone)
+        assert_contains(gone.text, "## Errors", "confirmed delete removes the addressed node")
+        assert_contains(gone.text, "not found", "the missing-node read must name its failure")
+    poll_disk_path_gone(base + "DimensionTables/DT")

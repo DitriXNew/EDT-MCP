@@ -1657,13 +1657,13 @@ public class GetProjectErrorsToolTest
 
     /**
      * Features whose kinds are legal only DEEPER in an address: {@code methods} hangs off an
-     * HTTPService URLTemplate, {@code parameters} off a WebService Operation and {@code tableFields}
-     * off an EDS Table, so none may have
+     * HTTPService URLTemplate, {@code parameters} off a WebService Operation, {@code tableFields}
+     * off an EDS Table and {@code dimensionTables} off an EDS Cube, so none may have
      * a first-step owner. Named explicitly so a new kind that resolves to nothing is a failure
      * rather than another silent zero.
      */
     private static final Set<String> DEEPER_ONLY_FEATURES =
-        new HashSet<>(Arrays.asList("methods", "parameters", "tableFields")); //$NON-NLS-1$ //$NON-NLS-2$
+        new HashSet<>(Arrays.asList("methods", "parameters", "tableFields", "dimensionTables")); //$NON-NLS-1$ //$NON-NLS-2$
 
 
     @Test
@@ -1674,7 +1674,8 @@ public class GetProjectErrorsToolTest
         // the catalogue publishes their tokens.
         for (String address : new String[] {
             "HTTPService.Service.Method.Get",        // Method belongs to a URLTemplate //$NON-NLS-1$
-            "WebService.Service.Parameter.Value"})   // Parameter belongs to an Operation //$NON-NLS-1$
+            "WebService.Service.Parameter.Value",   // Parameter belongs to an Operation //$NON-NLS-1$
+            "ExternalDataSource.Source.DimensionTable.T"}) // DimensionTable belongs to a Cube //$NON-NLS-1$
         {
             assertFalse("legal only deeper, so not a valid first step: " + address, //$NON-NLS-1$
                 GetProjectErrorsTool.possibleAddressShape(address));
@@ -1684,6 +1685,10 @@ public class GetProjectErrorsToolTest
             "HTTPService.Service.URLTemplate.Root.Method.Get")); //$NON-NLS-1$
         assertTrue(GetProjectErrorsTool.possibleAddressShape(
             "WebService.Service.Operation.Calc.Parameter.Value")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "ExternalDataSource.Source.Cube.C.DimensionTable.T")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "ExternalDataSource.Source.Cube.C.DimensionTable.T.Field.F")); //$NON-NLS-1$
     }
 
 

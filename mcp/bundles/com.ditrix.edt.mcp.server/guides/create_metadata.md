@@ -174,12 +174,15 @@ Describe an external data source by hand with these addresses (English or Russia
 - `ExternalDataSource.E.Table.T` (`ВнешнийИсточникДанных.E.Таблица.T`).
 - `ExternalDataSource.E.Table.T.Field.F` (`...Таблица.T.Поле.F`).
 - `ExternalDataSource.E.Function.Fn` (`...Функция.Fn`).
-- `ExternalDataSource.E.Cube.C` (`...Куб.C`): create and delete only.
+- `ExternalDataSource.E.Cube.C` (`...Куб.C`).
+- `ExternalDataSource.E.Cube.C.DimensionTable.DT` (`...Куб.C.ТаблицаИзмерения.DT`).
+- `ExternalDataSource.E.Cube.C.DimensionTable.DT.Field.F` (`...ТаблицаИзмерения.DT.Поле.F`).
+- `ExternalDataSource.E.Cube.C.Dimension.D` / `...Cube.C.Resource.R` (`...Измерение.D` / `...Ресурс.R`).
 - Existing `Command` and `Template` kinds also work below a Table.
 
 This DESCRIBES the structure. Connecting to the DBMS and importing its schema stays in EDT's External Data Source wizard.
 
-Creation takes only `synonym` (with optional `language`) and `comment` for Table, Field and Function; `templateType` applies only to a Template. Set other properties with a second `modify_metadata` call. A new Table/Field has an empty `nameInDataSource`; supply it with that call. Function has `expressionInDataSource`, not `nameInDataSource`.
+Creation takes only `synonym` (with optional `language`) and `comment` for these nodes; `templateType` applies only to a Template. Set other properties with a second `modify_metadata` call. A new Table/Field has an empty `nameInDataSource`; supply it with that call. Function has `expressionInDataSource`, not `nameInDataSource`.
 
 For example, create `ExternalDataSource.E.Table.T`, then call `modify_metadata` with that FQN and `properties:[{name:"nameInDataSource",value:"dbo.t"}]`. Create `...Table.T.Field.F`, then modify that field's `nameInDataSource` and `type` as needed. Results use the canonical stored address, including for Russian tokens.
 
@@ -195,7 +198,11 @@ Tables are separate files: `src/ExternalDataSources/E/Tables/T/T.mdo`, registere
 
 Role `rights[].object` can address these tables and fields. Orphan-rights cleanup judges their addresses present or absent and removes a right only when its address is proven absent; a list holding an unresolved reference, a case-only match, a stale reference or a model that is not ready leaves the right in place. Membership content (subsystem content, catalog owners, register records), exchange-plan content and common-attribute content refuse an EDS member address before writing: `<surface> does not support ExternalDataSource members. Use the EDT designer for this operation; ...`.
 
-Boundaries: no Table forms, Cube DimensionTable/dimensions/resources, `rename_metadata_object` or `adopt_metadata_object` on EDS members (use the EDT designer), EDS member listing through `get_metadata_objects` (#447), or `ExternalDataSourceTableRef` value types. Use the addresses above for direct structure editing.
+A dimension table is another separate top object: `src/ExternalDataSources/E/Cubes/C/DimensionTables/DT/DT.mdo`. The Cube registers it in `dimensionTables`, and the table records `parentCube`. Its fields serialize as `fields` in that file, while ordinary Table fields serialize as `tableFields`. Cube dimensions and resources serialize inline as `dimensions` and `resources` in the Cube's file. Creation uses EDT's parent-aware initializers: a Cube dimension starts with an empty type description, a resource with `String(10)`, and a dimension table field with `String(10)` and `allowNull=true`. Set the required source-specific values and dimension types with `modify_metadata`.
+
+Creating a separate Table, Cube or DimensionTable queues its own file, its registering parent's file and Configuration for export. Creating or modifying a contained member exports its actual file owner. To check persistence, inspect the new object's `.mdo`, its parent's registration and the source's entry in `src/Configuration/Configuration.mdo`, then run `clean_project`, wait for readiness and read the address with `get_metadata_details(assignable:true)`.
+
+Boundaries: no EDS Table/Cube/DimensionTable forms, `rename_metadata_object` or `adopt_metadata_object` on EDS members (use the EDT designer), EDS member listing through `get_metadata_objects` (#447), or `ExternalDataSourceTableRef` value types. Use the addresses above for direct structure editing.
 
 ## Additional columns
 

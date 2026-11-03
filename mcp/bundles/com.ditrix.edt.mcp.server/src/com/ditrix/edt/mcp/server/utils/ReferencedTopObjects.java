@@ -24,7 +24,8 @@ public final class ReferencedTopObjects
 {
     /** Both directions are serialized; these references are not EMF opposites. */
     public static final Map<String, String> BACK_REFERENCE_BY_COLLECTION = Map.of(
-        "tables", "parentDataSource", "cubes", "parentDataSource"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "tables", "parentDataSource", "cubes", "parentDataSource", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "dimensionTables", "parentCube"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private ReferencedTopObjects()
     {
@@ -111,17 +112,21 @@ public final class ReferencedTopObjects
         return fileOwner;
     }
 
-    /** The folder of each supported referenced top class: {@code Tables/<T>/} and {@code Cubes/<C>/}. */
+    /** The folder of a supported referenced top class. */
     public static String folderFor(EClass type)
     {
         if ("Table".equals(type.getName())) //$NON-NLS-1$
         {
             return "Tables"; //$NON-NLS-1$
         }
-        return "Cube".equals(type.getName()) ? "Cubes" : null; //$NON-NLS-1$ //$NON-NLS-2$
+        if ("Cube".equals(type.getName())) //$NON-NLS-1$
+        {
+            return "Cubes"; //$NON-NLS-1$
+        }
+        return "DimensionTable".equals(type.getName()) ? "DimensionTables" : null; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Project-relative file of an EDS Table/Cube, or null for any other address. */
+    /** Project-relative file of an EDS referenced top object, or null for any other address. */
     public static String mdoPath(String fqn)
     {
         if (fqn == null)
@@ -129,16 +134,28 @@ public final class ReferencedTopObjects
             return null;
         }
         String[] p = MetadataTypeUtils.normalizeFqn(fqn).split("\\.", -1); //$NON-NLS-1$
-        if (p.length != 4 || !"ExternalDataSource".equals(p[0])) //$NON-NLS-1$
+        if (p.length < 4 || !MetadataNodeResolver.isValidArity(p.length) || !"ExternalDataSource".equals(p[0])) //$NON-NLS-1$
         {
             return null;
         }
-        String feature = MetadataNodeResolver.featureNameForKind(p[2]);
-        String kind = feature == null ? null : MetadataNodeResolver.kindTokenForFeature(feature);
-        Object type = kind == null ? null : MdClassPackage.eINSTANCE.getEClassifier(kind);
-        String folder = type instanceof EClass ? folderFor((EClass)type) : null;
-        return folder == null ? null : "src/ExternalDataSources/" + p[1] + '/' + folder //$NON-NLS-1$
-            + '/' + p[3] + '/' + p[3] + ".mdo"; //$NON-NLS-1$
+        EClass ownerType = MdClassPackage.Literals.EXTERNAL_DATA_SOURCE;
+        StringBuilder path = new StringBuilder("src/ExternalDataSources/").append(p[1]); //$NON-NLS-1$
+        for (int i = 2; i < p.length; i += 2)
+        {
+            EReference feature = MetadataNodeResolver.childFeature(ownerType, p[i]);
+            if (!isReferencedTopCollection(feature))
+            {
+                return null;
+            }
+            ownerType = feature.getEReferenceType();
+            String folder = folderFor(ownerType);
+            if (folder == null)
+            {
+                return null;
+            }
+            path.append('/').append(folder).append('/').append(p[i + 1]);
+        }
+        return path.append('/').append(p[p.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
     }
 
     /** Explicit boundary for operations whose member refactoring has not been verified for EDS. */
