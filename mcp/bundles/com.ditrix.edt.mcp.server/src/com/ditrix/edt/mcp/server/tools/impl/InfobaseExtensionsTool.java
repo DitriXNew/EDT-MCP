@@ -73,7 +73,7 @@ public class InfobaseExtensionsTool implements IMcpTool
     public String getOutputSchema()
     {
         return JsonSchemaBuilder.object()
-            .booleanProperty("success", "Whether the requested operation succeeded.")
+            .booleanProperty("success", "Whether the requested operation succeeded.", true)
             .stringProperty(McpKeys.PROJECT_NAME, "Resolved project.")
             .stringProperty(McpKeys.APPLICATION_ID, "Resolved target application ID.")
             .stringProperty(McpKeys.ACTION, "Requested operation.")

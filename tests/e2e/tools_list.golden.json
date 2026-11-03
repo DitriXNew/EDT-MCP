@@ -3536,7 +3536,9 @@
           "type": "string"
         }
       },
-      "required": [],
+      "required": [
+        "success"
+      ],
       "type": "object"
     }
   },
