@@ -58,6 +58,11 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧭 **Command Interface** - Read and edit a subsystem section's (or the main section's) command interface: command visibility, common and per role, placement into panel groups, and order within a group
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
+Optional [guided workflows](docs/guided-workflows.md) expose project health through
+an MCP prompt, project problems and guides through resource templates, and argument
+completion. Enable with `EDT_MCP_GUIDED_WORKFLOWS=true` at EDT launch. Completion is
+for prompt/resource-template arguments; it does not autocomplete ordinary tool arguments.
+
 ## Installation
 
 ### From Update Site
