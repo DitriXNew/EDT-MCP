@@ -40,7 +40,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 8. **Golden** — a new tool changes `tools/list`; regenerate and commit: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, then `git add tests/e2e/tools_list.golden.json`.
 
-9. **README + tool docs** — bump the tool COUNT (two places), add the tool to its group table, to the flat tool table, and to the detailed section (parameters must match the schema). Generate its `docs/tools/<name>.md` page and index entry (`edt-mcp-ready-to-deploy` step 6) — `ToolDocsRatchetTest` and `docs/validate_agent_skills.py` fail without them.
+9. **README + tool docs** — update counts and preference-group membership; write a concise README usage overview with the target, defaults and required gates. The generator preserves these overviews while refreshing toolset membership and links. Generate `docs/tools/<name>.md` and its index entry (`edt-mcp-ready-to-deploy` step 6); `ToolDocsRatchetTest` and `docs/validate_agent_skills.py` require them.
 
 10. **Full contour** (don't say "done" without it): `bash source/compile.sh` (compile + unit tests + every ratchet) → adversarial **Opus review** → redeploy to the dev EDT copy (`edt-redeploy.ps1`; the signal is the log line `MCP server UP on 8765`) → **live validation** against `:8765` → commit. A freshly deployed tool is NOT in this session's MCP deferred list — to check it live, call it through the e2e harness client (`python` → `harness.initialize(); harness.call("<name>", {...})`) or `Invoke-RestMethod`, not the tool's MCP wrapper. See `edt-mcp-build-test` and the dev-loop memory.
 
@@ -48,7 +48,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 - **`((IBmObject)x).bmGetFqn()` is valid ONLY on a TOP object** — for export use `bmGetTopObject().bmGetFqn()`; for a member echo canonicalize its addressed FQN instead of calling `bmGetFqn()` on the member.
 - Model writes happen on the UI thread (the write base does this; a bare `IMcpTool` must wrap in `Display.syncExec` itself).
 - `forceExportToDisk` wants the TOP FQN; a member change exports the parent top + (for a new top) the `Configuration` FQN.
-- Cyrillic in string literals/regexes goes through `\uXXXX` (Tycho non-UTF-8 safety); surface text is English only.
+- Escape Cyrillic with `\uXXXX` in regexes only. Keep real 1C/BSL/type/name data as Cyrillic in other strings and comments; surface prose is English only.
 
 ## Readiness checklist
 - [ ] Class in `tools/impl/`, NAME snake_case, parameters lowerCamelCase, every parameter in the schema

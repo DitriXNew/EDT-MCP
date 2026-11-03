@@ -5,7 +5,7 @@ Use a ready disposable configuration. Writes mutate the model and disk; let the 
 ## Empty-template lifecycle
 
 ```text
-create_metadata(projectName="TestConfiguration", fqn="CommonTemplate.QueryProbe", templateType="TextDocument")
+create_metadata(projectName="TestConfiguration", fqn="CommonTemplate.QueryProbe", properties=[{name:"templateType",value:"TextDocument"}])
 modify_metadata(projectName="TestConfiguration", fqn="CommonTemplate.QueryProbe", properties=[{name:"templateType",value:"DataCompositionSchema"}])
 dcs(projectName="TestConfiguration", fqn="CommonTemplate.QueryProbe", action="get", type="schema", format="xml")
 ```
