@@ -32,6 +32,15 @@
         "action": {
           "type": "string"
         },
+        "cascadedCount": {
+          "type": "integer"
+        },
+        "cascadedObjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "extensionProject": {
           "type": "string"
         },
