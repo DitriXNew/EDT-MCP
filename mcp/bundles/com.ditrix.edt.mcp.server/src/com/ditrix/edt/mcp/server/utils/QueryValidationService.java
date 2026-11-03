@@ -31,6 +31,7 @@ import org.eclipse.xtext.validation.IResourceValidator;
 import org.eclipse.xtext.validation.Issue;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.metadata.dbview.DbViewElement;
 import com._1c.g5.v8.dt.metadata.dbview.Table;
@@ -71,8 +72,7 @@ public class QueryValidationService
                     ? Result.unavailable(dcsMode, "BM model is unavailable for project '" + project.getName()
                         + "'. Check list_projects, wait for project loading and retry.")
                     : BmTransactions.read(model, "ValidateQuery", (tx, monitor) ->
-                        new Result(validateOnDisplay(project, v8Project, queryText, dcsMode),
-                            validationScope(project))));
+                        validateOnDisplay(project, v8Project, queryText, dcsMode)));
             }
             catch (RuntimeException e)
             {
@@ -99,14 +99,17 @@ public class QueryValidationService
         else Display.getDefault().syncExec(work);
     }
 
-    private static String validationScope(IProject project)
+    private static String validationScope(QlDcsResource resource, IV8Project v8Project)
     {
-        String scope = "Project '" + project.getName() + "'";
-        if (ExtensionOriginUtils.isExtensionProject(project))
+        String scope = "Project '" + resource.getDtProject().getName() + "'";
+        if (v8Project instanceof IExtensionProject extension)
         {
-            IProject base = ExtensionOriginUtils.resolveBaseProject(project);
-            return scope + " (extension" + (base == null ? ")"
-                : " + base configuration '" + base.getName() + "')");
+            if (!resource.isParentScopeAware()) return scope + " (extension; parent scope disabled)";
+            // EDT's parent-scope flag and parent handle do not certify loaded base metadata.
+            IProject base = extension.getParentProject();
+            return scope + (base == null ? " (extension; base scope unavailable)"
+                : " (extension; base configuration '" + base.getName()
+                    + "' requested, availability not verified)");
         }
         return scope;
     }
@@ -137,11 +140,12 @@ public class QueryValidationService
             ql.setParentScopeAware(true);
             ql.addOptions(QlDcsResource.DCS_VALIDATION_MODE_OPTION, dcsMode);
             ql.setPreComputeAnnounceAlias(dcsMode);
+            String scope = validationScope(ql, v8Project);
             try (var input = new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)))
             {
                 resource.load(input, null);
             }
-            return inspect(resource, validator, computer, dcsMode);
+            return new Result(inspect(resource, validator, computer, dcsMode), scope);
         }
         catch (Exception e)
         {

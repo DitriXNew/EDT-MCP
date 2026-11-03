@@ -95,8 +95,9 @@ def test_extension_union_scope_resolves_extension_owned_object():
     assert r.structured.get("issues") == [], \
         "the extension-owned object must produce no issues: %r" % (r.structured,)
     assert r.structured.get("validationScope") == \
-        "Project '%s' (extension + base configuration '%s')" % (TESTS_PROJECT, PROJECT), \
-        "validation must name the extension and base scope: %r" % (r.structured,)
+        ("Project '%s' (extension; base configuration '%s' requested, availability not verified)"
+         % (TESTS_PROJECT, PROJECT)), \
+        "validation must qualify the requested base scope: %r" % (r.structured,)
     assert_no_diff("validate_query is read-only; nothing may change on disk")
     assert_no_diff_rel(FIXTURE_REL_BY_PROJECT[TESTS_PROJECT])
 

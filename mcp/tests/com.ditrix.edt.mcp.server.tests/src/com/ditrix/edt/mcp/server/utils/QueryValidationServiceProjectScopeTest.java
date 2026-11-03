@@ -17,6 +17,7 @@ import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.resource.impl.ResourceSetImpl;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
+import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.ui.resource.IResourceSetProvider;
 import org.eclipse.xtext.validation.IResourceValidator;
 import org.junit.After;
@@ -27,6 +28,7 @@ import org.osgi.framework.FrameworkUtil;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
@@ -52,6 +54,10 @@ public class QueryValidationServiceProjectScopeTest
     private IExtensionProject extension;
     private IV8ProjectManager v8Manager;
     private IBmModelManager models;
+    private IResourceServiceProvider provider;
+    private IResourceValidator validator;
+    private Runnable afterLoad = () -> { };
+    private boolean enableParentScope = true;
     private boolean reading;
     private final List<TestQlResource> loaded = new ArrayList<>();
     private final ResourceSet resources = new ResourceSetImpl();
@@ -73,10 +79,14 @@ public class QueryValidationServiceProjectScopeTest
         project = mock(IProject.class);
         when(project.getName()).thenReturn("MyExt");
         dtProject = mock(IDtProject.class);
+        when(dtProject.getName()).thenReturn("MyExt");
         extension = mock(IExtensionProject.class);
         when(extension.getDtProject()).thenReturn(dtProject);
         IProject base = mock(IProject.class);
         when(base.getName()).thenReturn("Base");
+        IConfigurationProject baseProject = mock(IConfigurationProject.class);
+        when(baseProject.getProject()).thenReturn(base);
+        when(extension.getParent()).thenReturn(baseProject);
         when(extension.getParentProject()).thenReturn(base);
         IDtProjectManager dtManager = mock(IDtProjectManager.class);
         v8Manager = mock(IV8ProjectManager.class);
@@ -108,19 +118,20 @@ public class QueryValidationServiceProjectScopeTest
                 assertTrue("Loading must run inside the BM read boundary", reading);
                 assertSame("EDT must resolve the requested own index before parsing",
                     dtProject, lookup.getDtProject(resource));
-                assertTrue(resource.isParentScopeAware());
+                assertEquals(enableParentScope, resource.isParentScopeAware());
                 var table = QlFactory.eINSTANCE.createSinglePartQuerySchemaTable();
                 table.setTableName("Catalog.tests_ExtOnly");
                 var source = QlFactory.eINSTANCE.createQuerySchemaTable();
                 source.setTable(table);
                 resource.getContents().add(source);
+                afterLoad.run();
             };
             loaded.add(resource);
             return resource;
         });
-        IResourceServiceProvider provider = mock(IResourceServiceProvider.class);
+        provider = mock(IResourceServiceProvider.class);
         IResourceSetProvider sets = mock(IResourceSetProvider.class);
-        IResourceValidator validator = mock(IResourceValidator.class);
+        validator = mock(IResourceValidator.class);
         var computer = mock(IDynamicDbViewFieldComputer.class);
         when(provider.get(IResourceSetProvider.class)).thenReturn(sets);
         when(provider.get(IResourceValidator.class)).thenReturn(validator);
@@ -162,7 +173,7 @@ public class QueryValidationServiceProjectScopeTest
             TestQlResource resource = loaded.get(loaded.size() - 1);
             assertEquals(dcsMode, resource.getOptions().get(QlDcsResource.DCS_VALIDATION_MODE_OPTION));
             assertEquals(dcsMode, resource.preComputeAnnounceAlias());
-            assertEquals("Project 'MyExt' (extension + base configuration 'Base')",
+            assertEquals("Project 'MyExt' (extension; base configuration 'Base' requested, availability not verified)",
                 result.values().get("validationScope"));
             assertTrue(result.values().get("sources").toString().contains("ExtValue"));
         }
@@ -199,6 +210,99 @@ public class QueryValidationServiceProjectScopeTest
     }
 
     @Test
+    public void unavailableQlServicesDoNotAdvertiseValidationScope()
+    {
+        when(provider.get(IResourceValidator.class)).thenReturn(null);
+        assertUnavailableWithoutScope(service.validate(project, QUERY, false));
+        assertTrue(loaded.isEmpty());
+    }
+
+    @Test
+    public void unavailableQlLanguageDoesNotAdvertiseValidationScope()
+    {
+        IResourceServiceProvider.Registry.INSTANCE.getExtensionToFactoryMap().put("qldcs",
+            (IResourceServiceProvider.Provider)(uri, contentType) -> null);
+        assertUnavailableWithoutScope(service.validate(project, QUERY, false));
+        assertTrue(loaded.isEmpty());
+    }
+
+    @Test
+    public void unexpectedResourceTypeDoesNotAdvertiseValidationScope()
+    {
+        resources.getResourceFactoryRegistry().getExtensionToFactoryMap().put("qldcs",
+            (Resource.Factory)uri -> {
+                XtextResource resource = new XtextResource();
+                resource.setURI(uri);
+                return resource;
+            });
+        assertUnavailableWithoutScope(service.validate(project, QUERY, false));
+        assertTrue(loaded.isEmpty());
+        assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void failedResourceLoadDoesNotAdvertiseValidationScope()
+    {
+        afterLoad = () -> { throw new IllegalStateException("metadata is still loading"); };
+        assertUnavailableWithoutScope(service.validate(project, QUERY, true));
+        verify(validator, never()).validate(any(), any(), any());
+        assertTrue(loaded.get(0).unloaded);
+        assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void failedNativeValidationDoesNotAdvertiseValidationScope()
+    {
+        doThrow(new IllegalStateException("index unavailable")).when(validator).validate(any(), any(), any());
+        assertUnavailableWithoutScope(service.validate(project, QUERY, false));
+        assertTrue(loaded.get(0).unloaded);
+        assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void parentHandleWithoutBaseMetadataOnlyReportsRequestedScope()
+    {
+        assertNull("A parent workspace handle does not establish loaded base metadata",
+            extension.getParent().getConfiguration());
+        var result = service.validate(project, QUERY, false);
+        assertTrue(result.toJson(), result.available());
+        assertEquals("Project 'MyExt' (extension; base configuration 'Base' requested, availability not verified)",
+            result.values().get("validationScope"));
+    }
+
+    @Test
+    public void disabledResourceParentScopeDoesNotAdvertiseTheBase()
+    {
+        enableParentScope = false;
+        var result = service.validate(project, QUERY, false);
+        assertTrue(result.toJson(), result.available());
+        assertEquals("Project 'MyExt' (extension; parent scope disabled)", result.values().get("validationScope"));
+    }
+
+    @Test
+    public void scopeUsesTheBoundProjectAndParentAtLoadTime()
+    {
+        when(dtProject.getName()).thenReturn("BoundExt");
+        afterLoad = () -> {
+            IProject otherBase = mock(IProject.class);
+            when(otherBase.getName()).thenReturn("OtherBase");
+            when(extension.getParentProject()).thenReturn(otherBase);
+        };
+        var result = service.validate(project, QUERY, false);
+        assertTrue(result.toJson(), result.available());
+        assertEquals("Project 'BoundExt' (extension; base configuration 'Base' requested, availability not verified)",
+            result.values().get("validationScope"));
+    }
+
+    private static void assertUnavailableWithoutScope(QueryValidationService.Result result)
+    {
+        assertFalse(result.toJson(), result.available());
+        assertEquals(QueryValidationService.State.PARTIAL, result.state());
+        assertFalse(result.values().containsKey("validationScope"));
+        assertFalse(JsonParser.parseString(result.toJson()).getAsJsonObject().has("validationScope"));
+    }
+
+    @Test
     public void dcsAndDynamicListPreWriteGatesUseTheBoundSharedValidator()
     {
         var dcs = JsonParser.parseString("{\"query\":\"" + QUERY + "\"}").getAsJsonObject();
@@ -215,14 +319,15 @@ public class QueryValidationServiceProjectScopeTest
         {
             assertEquals("VALID", result.get("validationState"));
             assertEquals(true, result.get("validationComplete"));
-            assertEquals("Project 'MyExt' (extension + base configuration 'Base')", result.get("validationScope"));
+            assertEquals("Project 'MyExt' (extension; base configuration 'Base' requested, availability not verified)",
+                result.get("validationScope"));
         }
         assertEquals(2, loaded.size());
         assertTrue(resources.getResources().isEmpty());
     }
 
     /** Real EMF resource lifecycle and project storage; substitutes only parser and UI cache. */
-    private static final class TestQlResource extends QlDcsResource
+    private final class TestQlResource extends QlDcsResource
     {
         private boolean parentScope;
         private boolean unloaded;
@@ -230,7 +335,7 @@ public class QueryValidationServiceProjectScopeTest
         private Runnable onLoad = () -> { };
 
         @Override
-        public void setParentScopeAware(boolean value) { parentScope = value; }
+        public void setParentScopeAware(boolean value) { parentScope = value && enableParentScope; }
 
         @Override
         public boolean isParentScopeAware() { return parentScope; }
