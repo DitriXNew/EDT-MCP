@@ -12,6 +12,8 @@ JSON: `applications` - each with `id`, `name`, `type`, `updateState` (e.g. UPDAT
 
 `updateState` is a cached infobase-equality comparison that EDT refreshes asynchronously. Immediately after `update_database` it can still show the pre-update value; use that call's `stateAfter` as the authoritative post-update answer.
 
+EDT can infer the effective default when there is only one application. A resolved `defaultApplicationId` therefore does not prove an explicit project default was stored.
+
 ## Notes & gotchas
 - Use `defaultApplicationId` when you just want "the" application; otherwise pick by `name`/`type`. Branch on `defaultApplication`, not on whether `defaultApplicationId` is there: `unknown` means the lookup never concluded, so pick from `applications` by `name`/`type` (or retry) instead of reading it as "this project has none".
 - `updateState: UNKNOWN` (with `updateStateError`) means the state could NOT be read - it is not a claim either way; re-run once EDT is responsive rather than treating it as up to date.

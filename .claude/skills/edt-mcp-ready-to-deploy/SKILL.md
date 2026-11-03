@@ -32,6 +32,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
      | `ToolSettingsServiceTest` (read-only preset growth) | a writer joins a group the read-only presets disable | register the preset migration the test names |
      | `MessagesParityTest` | a preferences key exists in one locale file only | add it to every `messages*.properties` |
      | `ProjectContextAdoptionRatchetTest` | a new `ResourcesPlugin.getWorkspace()` in `tools/impl` | resolve through `ProjectContext` |
+     | `ToolImplementationPackageRatchetTest` | a production top-level class in `tools/impl` or a subpackage does not implement `IMcpTool`, directly or by inheritance | move helpers to `utils/` and abstract bases to `tools/base/` |
      | e2e runner `test_fixture_hygiene` | fixture objects were added on purpose | `EDT_MCP_UPDATE_FIXTURE_DECLARATIONS=1 python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`, commit the pin |
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
@@ -46,6 +47,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 5. **Live redeploy (Tier 2)** — redeploy the freshly built bundle to the non-elevated dev EDT copy (`edt-redeploy.ps1`; signal `MCP server UP on 8765`, exit 1 ≠ failure). **Anti-stale:** confirm the DEPLOYED jar contains your change (`unzip -p <jar> path/Class.class | grep <literal>`). Wait for both projects `ready`. If EDT wedges → kill + `-clean` relaunch.
 
 6. **Golden + tool docs** — if `tools/list` changed (new tool / description / schema / annotations), regenerate and commit the golden (`EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter tools_list`); the golden snapshot test must pass. A description, schema or GUIDE change also needs its `docs/tools/<tool>.md` page regenerated: `python docs/generate_tool_docs.py --port <port>` against a server running THIS branch's build, then commit only the pages of the tools the branch changed (plus the indexes for a new tool). Never generate pages from an integration build that holds several branches: a page embeds the whole guide, so it would carry the other branches' text.
+   - Without a live server, regenerate only changed pages from `ToolDocsRatchetTest.pageText(tool)` using a temporary write mode, remove that mode completely, and rerun the ratchet. Never hand-edit generated pages. Guide-only changes do not change the tools/list golden.
 
 7. **Full e2e (Tier 3)** — `python tests/e2e/run_all.py --project TestConfiguration` → all pass (a handful of env-gated skips are normal), **fixture clean: True**. (`edt-mcp-e2e-testing`.)
 
