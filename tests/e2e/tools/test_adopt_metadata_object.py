@@ -657,6 +657,13 @@ def test_readoption_reads_extension_item_form_instead_of_base_only_picture():
         assert_contains(read_disk(form_disk), picture_fqn, "the base must contain the new reference")
         assert_not_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk), picture_fqn,
                             "positive control: the extension copy has no such reference")
+        inherited = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [form_fqn + ".Field.Description"],
+            "assignable": True,
+        })
+        assert_ok(inherited, "read the merged extension model before filtering inherited pictures")
+        assert_contains(inherited.text, picture_fqn,
+                        "positive control: the merged model exposes the inherited base-only picture")
 
         again = call("adopt_metadata_object", {
             "projectName": PROJECT, "fqn": form_fqn, "extensionProjectName": TESTS_PROJECT, "includeReferencedPictures": True,
@@ -675,7 +682,8 @@ def test_readoption_reads_extension_item_form_instead_of_base_only_picture():
             "assignable": True,
         })
         assert_ok(details, "read back the extension field's own picture property")
-        assert_not_contains(details.text, picture_fqn, "the extension model must keep its own picture value")
+        assert_contains(details.text, picture_fqn,
+                        "read-only dependency discovery must preserve the merged model's inherited value")
     finally:
         if not calls_aborted():
             restore_extension_fixture("a base-only picture during ItemForm re-adoption")
@@ -733,14 +741,28 @@ def test_common_form_without_pictures_has_empty_dependencies():
             "includeReferencedPictures": True,
         })
         assert_ok(result, "adopt a common form with the explicit picture option")
+        payload = _structured(result, "common form adoption")
+        assert payload.get("action") == "adopted", payload
+        assert payload.get("fqn") == fqn, payload
+        assert payload.get("extensionProject") == TESTS_PROJECT, payload
+        assert payload.get("objectBelonging") == "ADOPTED", payload
+        assert payload.get("persisted") is True, payload
         xml = read_fixture_file(TESTS_PROJECT_REL, "src/CommonForms/%s/%s.mdo" % (name, name))
         assert_contains(xml, "<name>%s</name>" % name, "common form must be persisted")
         assert_contains(xml, _ADOPTED, "common form must be marked adopted")
         assert _picture_dependencies(result, "empty common form") == {
             "found": [], "adopted": [], "alreadyPresent": [], "unresolved": []}
+        listing = call("get_metadata_objects", {
+            "projectName": TESTS_PROJECT, "metadataType": "commonForms",
+        })
+        assert_ok(listing, "read the common form's origin from the metadata listing")
+        rows = [line for line in listing.text.splitlines() if line.startswith("| " + name + " |")]
+        assert len(rows) == 1, listing.text
+        assert_contains(rows[0], "| core (adopted) |", "common form model belonging")
         details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [fqn]})
         assert_ok(details, "read back the adopted common form")
-        assert_contains(details.text, "**Origin:** core (adopted)", "common form model belonging")
+        assert_contains(details.text, "# Form Structure: " + fqn,
+                        "the adopted common form must be readable through the form-structure view")
     finally:
         if not calls_aborted():
             restore_extension_fixture("common form adoption with picture option")

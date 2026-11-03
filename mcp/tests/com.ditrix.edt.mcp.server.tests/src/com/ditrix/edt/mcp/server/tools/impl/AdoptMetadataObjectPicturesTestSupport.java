@@ -63,6 +63,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.Picture;
 import com._1c.g5.v8.dt.mcore.PictureRef;
@@ -127,6 +128,8 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
     protected boolean workspaceRule;
     protected boolean emitCommitEvent = true;
     protected EObject persistedExtensionContent;
+    protected IFormExtensionService formExtensions = mock(IFormExtensionService.class);
+    protected boolean seedExtensionSnapshot = true;
     protected final IBmPlatformTransaction extensionPlatformTx = mock(IBmPlatformTransaction.class);
     protected final IBmNamespaceDataStore extensionStore = mock(IBmNamespaceDataStore.class);
 
@@ -309,13 +312,16 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         // OSGi's signed interfaces cannot host Mockito-generated classes in this runtime.
         ServiceReference<IModelObjectAdopter> reference = osgiProxy(ServiceReference.class,
             (proxy, method, args) -> proxyObjectMethod(proxy, method.getName(), args));
+        ServiceReference<IFormExtensionService> formReference = osgiProxy(ServiceReference.class,
+            (proxy, method, args) -> proxyObjectMethod(proxy, method.getName(), args));
         BundleContext context = osgiProxy(BundleContext.class, (proxy, method, args) -> {
             switch (method.getName())
             {
             case "getServiceReferences": //$NON-NLS-1$
-                return args[0] == IModelObjectAdopter.class ? List.of(reference) : List.of();
+                return args[0] == IModelObjectAdopter.class ? List.of(reference)
+                    : args[0] == IFormExtensionService.class && formExtensions != null ? List.of(formReference) : List.of();
             case "getService": //$NON-NLS-1$
-                return adopter;
+                return args[0] == formReference ? formExtensions : adopter;
             case "ungetService": //$NON-NLS-1$
                 return true;
             default:
@@ -384,6 +390,13 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         if (extensionReadRoot instanceof MdObject && ((MdObject)extensionReadRoot).getName() == null)
         {
             ((MdObject)extensionReadRoot).setName(mdForm.getName());
+        }
+        EObject extensionContent = persistedExtensionContent != null ? persistedExtensionContent
+            : extensionReadRoot instanceof BasicForm ? ((BasicForm)extensionReadRoot).getForm() : null;
+        if (seedExtensionSnapshot && extensionContent instanceof Form && !extensionContent.eIsProxy()
+            && ((Form)extensionContent).getBaseForm() == null)
+        {
+            ((Form)extensionContent).setBaseForm(FORM.createForm());
         }
         scope = new WriteScope();
         String[] response = {null};

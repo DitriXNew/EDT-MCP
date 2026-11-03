@@ -41,6 +41,17 @@ import com.google.gson.JsonPrimitive;
 public class PictureValueBuilderTest
 {
     @Test
+    public void testNativeExportProxyRetainsOnlyCommonPictureAddresses()
+    {
+        assertEquals("CommonPicture.\u041b\u043e\u0433\u043e", PictureValueBuilder.commonPictureFqn(
+            URI.createURI("unresolved:/CommonPicture.\u041b\u043e\u0433\u043e")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/StdPicture.Change")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/StdExtPicture.Change")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/CommonPicture.")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/CommonPicture.Logo/other")));
+    }
+
+    @Test
     public void testStoredCommonPictureAddressUsesNameAndBmProxyIdentity()
     {
         CommonPicture picture = MdClassFactory.eINSTANCE.createCommonPicture();

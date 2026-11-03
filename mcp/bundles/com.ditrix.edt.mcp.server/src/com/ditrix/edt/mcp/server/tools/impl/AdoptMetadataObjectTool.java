@@ -635,7 +635,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     private static FormPictureDependencies.Result readFormPictures(IBmModel baseModel, String fqn,
         boolean alreadyAdopted, IBmModel extensionModel)
     {
-        return FormPictureDependencies.collectPersisted(alreadyAdopted ? extensionModel : baseModel, fqn);
+        return FormPictureDependencies.collectPersisted(alreadyAdopted ? extensionModel : baseModel, fqn, alreadyAdopted);
     }
 
     private static IBmModel requireBaseModel(IProject project)

@@ -13,15 +13,19 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.List;
+import java.lang.reflect.Field;
 
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
@@ -30,7 +34,12 @@ import org.junit.Test;
 import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmNamespaceDataStore;
+import com._1c.g5.v8.dt.core.naming.ISymbolicNameService;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.model.InputFieldExtInfo;
+import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.PictureRef;
 import com._1c.g5.v8.dt.mcore.Picture;
@@ -46,6 +55,181 @@ import com.google.gson.JsonParser;
 /** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testNativeProjectionIgnoresInheritedPictureOnAnOtherwiseEditedItem() throws Exception
+    {
+        Form live = FORM.createForm();
+        FormField merged = field("Description", logo);
+        merged.getUserChangedProperties().put("visible", Boolean.TRUE);
+        live.getItems().add(merged);
+        Form snapshot = FORM.createForm();
+        snapshot.getItems().add(field("Description", null));
+        live.setBaseForm(snapshot);
+        useNativeProjection(live);
+
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found");
+        assertNames(result, "adopted");
+        assertTrue(adoptedSources.isEmpty());
+        verify(models, never()).forceExport(any(), anyList());
+        assertEquals(logo, ((PictureRef)merged.getHeaderPicture()).getPicture());
+        assertTrue(scope.statedNothingQueued());
+    }
+
+    @Test
+    public void testNativeProjectionKeepsAnOwnPictureOverride() throws Exception
+    {
+        Form live = FORM.createForm();
+        FormField own = field("Description", logo);
+        own.getUserChangedProperties().put("headerPicture", Boolean.TRUE);
+        live.getItems().add(own);
+        Form snapshot = FORM.createForm();
+        snapshot.getItems().add(field("Description", null));
+        live.setBaseForm(snapshot);
+        useNativeProjection(live);
+
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found", "CommonPicture.Logo");
+        assertNames(result, "adopted", "CommonPicture.Logo");
+        assertEquals(List.of(logo), adoptedSources);
+    }
+
+    @Test
+    public void testNativeProjectionKeepsAnExplicitlyClearedPictureEmpty() throws Exception
+    {
+        Form live = FORM.createForm();
+        FormField own = field("Description", null);
+        own.setHeaderPicture(null);
+        own.getUserChangedProperties().put("headerPicture", Boolean.TRUE);
+        live.getItems().add(own);
+        Form snapshot = FORM.createForm();
+        snapshot.getItems().add(field("Description", logo));
+        live.setBaseForm(snapshot);
+        useNativeProjection(live);
+
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found");
+        assertNames(result, "adopted");
+        assertTrue(adoptedSources.isEmpty());
+    }
+
+    @Test
+    public void testNativeProjectionRepairsTheSavedPictureInsteadOfTheNewInheritedValue() throws Exception
+    {
+        CommonPicture newer = picture("NewBasePicture");
+        Form live = FORM.createForm();
+        live.getItems().add(field("Description", newer));
+        Form snapshot = FORM.createForm();
+        snapshot.getItems().add(field("Description", logo));
+        live.setBaseForm(snapshot);
+        useNativeProjection(live);
+
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found", "CommonPicture.Logo");
+        assertNames(result, "adopted", "CommonPicture.Logo");
+        assertEquals(List.of(logo), adoptedSources);
+    }
+
+    @Test
+    public void testNativeProjectionKeepsPicturesOnNewExtensionItems() throws Exception
+    {
+        Form live = FORM.createForm();
+        live.getItems().add(field("ExtensionOnly", logo));
+        live.setBaseForm(FORM.createForm());
+        useNativeProjection(live);
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found", "CommonPicture.Logo");
+        assertNames(result, "adopted", "CommonPicture.Logo");
+    }
+
+    @Test
+    public void testNativeProjectionUsesTheItemFlagsForExtInfoPictures() throws Exception
+    {
+        assertExtInfoProjection(true);
+    }
+
+    @Test
+    public void testNativeProjectionIgnoresInheritedExtInfoPictures() throws Exception
+    {
+        assertExtInfoProjection(false);
+    }
+
+    private void assertExtInfoProjection(boolean own) throws Exception
+    {
+        Form live = FORM.createForm();
+        FormField merged = field("Description", null);
+        InputFieldExtInfo info = FORM.createInputFieldExtInfo();
+        info.setPicture(ref(logo));
+        merged.setExtInfo(info);
+        if (own)
+        {
+            merged.getUserChangedProperties().put("picture", Boolean.TRUE);
+        }
+        live.getItems().add(merged);
+        Form snapshot = FORM.createForm();
+        FormField saved = field("Description", null);
+        saved.setExtInfo(FORM.createInputFieldExtInfo());
+        snapshot.getItems().add(saved);
+        live.setBaseForm(snapshot);
+        useNativeProjection(live);
+
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertNames(result, "found", own ? new String[] {"CommonPicture.Logo"} : new String[0]);
+        assertNames(result, "adopted", own ? new String[] {"CommonPicture.Logo"} : new String[0]);
+    }
+
+    @Test
+    public void testMissingBaseSnapshotRefusesBeforeReadingMergedPictures() throws Exception
+    {
+        copies.put(mdForm, mdForm);
+        extensionReadRoot = mdForm;
+        form.getItems().add(field("Inherited", logo));
+        seedExtensionSnapshot = false;
+        assertRefusal(run(FORM_FQN), "BaseForm", "clean_project");
+    }
+
+    @Test
+    public void testUnavailableProjectionServiceRefusesBeforeReadingMergedPictures() throws Exception
+    {
+        copies.put(mdForm, mdForm);
+        extensionReadRoot = mdForm;
+        form.getItems().add(field("Inherited", logo));
+        formExtensions = null;
+        assertRefusal(run(FORM_FQN), "export service", "clean_project");
+    }
+
+    private void useNativeProjection(Form live) throws Exception
+    {
+        Class<?> type = Platform.getBundle("com._1c.g5.v8.dt.form").loadClass(
+            "com._1c.g5.v8.dt.internal.form.service.extension.FormExtensionService");
+        formExtensions = (IFormExtensionService)type.getConstructor().newInstance();
+        IV8ProjectManager projects = mock(IV8ProjectManager.class);
+        when(projects.getProject(any(EObject.class))).thenReturn(target);
+        Field manager = type.getDeclaredField("v8ProjectManager");
+        manager.setAccessible(true);
+        manager.set(formExtensions, projects);
+        ISymbolicNameService names = mock(ISymbolicNameService.class);
+        when(names.generateSymbolicName(any(), any(), any())).thenAnswer(inv ->
+            inv.getArgument(0) instanceof CommonPicture
+                ? "CommonPicture." + ((CommonPicture)inv.getArgument(0)).getName() : null);
+        Field symbolic = type.getDeclaredField("symbolicNameService");
+        symbolic.setAccessible(true);
+        symbolic.set(formExtensions, names);
+        Form storedContent = mock(Form.class, delegatesTo(live));
+        doReturn(FORM_FQN + ".Form").when(storedContent).bmGetFqn();
+        CatalogForm stored = MD.createCatalogForm();
+        stored.setForm(live);
+        extensionReadRoot = stored;
+        persistedExtensionContent = storedContent;
+        copies.put(mdForm, stored);
+    }
+
     @Test
     public void testDetachedAdopterResultNeverBecomesAStore255Lookup() throws Exception
     {

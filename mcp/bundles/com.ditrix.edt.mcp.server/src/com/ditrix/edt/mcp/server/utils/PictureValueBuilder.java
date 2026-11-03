@@ -82,9 +82,15 @@ public final class PictureValueBuilder
         return name == null || name.isEmpty() ? null : COMMON_PREFIX + name;
     }
 
-    /** A persisted BM proxy retains the configuration picture's FQN even when unresolved. */
+    /** BM references and EDT's detached export proxies retain the configuration picture's FQN. */
     static String commonPictureFqn(URI proxyUri)
     {
+        if (proxyUri != null && "unresolved".equals(proxyUri.scheme()) //$NON-NLS-1$
+            && proxyUri.segmentCount() == 1 && proxyUri.fragment() == null && proxyUri.query() == null)
+        {
+            String fqn = proxyUri.lastSegment();
+            return fqn.startsWith(COMMON_PREFIX) && fqn.length() > COMMON_PREFIX.length() ? fqn : null;
+        }
         if (proxyUri != null && BmUriUtil.isBmUri(proxyUri)
             && proxyUri.path() != null && !proxyUri.path().isEmpty())
         {

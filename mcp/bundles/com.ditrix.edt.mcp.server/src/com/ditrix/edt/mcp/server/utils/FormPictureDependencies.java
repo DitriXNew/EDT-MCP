@@ -12,11 +12,15 @@ import java.util.Set;
 
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
@@ -52,9 +56,10 @@ public final class FormPictureDependencies
      *
      * @param model the model owning the source
      * @param fqn the form's metadata address, independent of any cross-project lookup proxy
+     * @param extensionCopy whether the adopted form needs EDT's persisted extension projection
      * @return the dependency names
      */
-    public static Result collectPersisted(IBmModel model, String fqn)
+    public static Result collectPersisted(IBmModel model, String fqn, boolean extensionCopy)
     {
         return BmTransactions.read(model, "adopt_metadata_object: read form pictures", (tx, monitor) -> { //$NON-NLS-1$
             IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
@@ -82,9 +87,53 @@ public final class FormPictureDependencies
             Set<String> found = new LinkedHashSet<>();
             Set<String> unresolved = new LinkedHashSet<>();
             collectPictures(mdForm, found, unresolved);
-            collectPictures(content, found, unresolved);
+            collectPictures(extensionCopy ? extensionContent(content) : content, found, unresolved);
             return new Result(found, unresolved);
         });
+    }
+
+    private static EObject extensionContent(EObject content)
+    {
+        if (!(content instanceof Form))
+        {
+            throw new IllegalStateException("The adopted content is not a managed form. " //$NON-NLS-1$
+                + "Inspect it with get_metadata_details before retrying."); //$NON-NLS-1$
+        }
+        Form form = (Form)content;
+        Form snapshot = form.getBaseForm();
+        IFormExtensionService extensions = ExtensionServices.formExtensionService();
+        if (snapshot == null || snapshot.eIsProxy() || extensions == null)
+        {
+            throw new IllegalStateException("The adopted form's BaseForm snapshot or EDT form export service " //$NON-NLS-1$
+                + "is unavailable. Reload the extension with clean_project and retry."); //$NON-NLS-1$
+        }
+        // FormExporter uses this projection to replace inherited live values with saved snapshot values.
+        EcoreUtil.Copier copier = new EcoreUtil.Copier(true, true)
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            protected void copyContainment(EReference reference, EObject source, EObject copy)
+            {
+                if (!reference.isTransient() && !reference.isDerived())
+                {
+                    super.copyContainment(reference, source, copy);
+                }
+            }
+
+            @Override
+            protected void copyReference(EReference reference, EObject source, EObject copy)
+            {
+                if (!reference.isTransient() && !reference.isDerived())
+                {
+                    super.copyReference(reference, source, copy);
+                }
+            }
+        };
+        Form own = (Form)copier.copy(form);
+        copier.copyReferences();
+        extensions.filterExtensionBelongingObject(own, form);
+        return own;
     }
 
     /**
