@@ -6,10 +6,18 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.*;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.jface.text.Document;
+import org.eclipse.ui.IEditorInput;
+import org.eclipse.ui.texteditor.IDocumentProvider;
+import org.eclipse.ui.texteditor.ITextEditor;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -22,6 +30,147 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 public class EditorNavigationTest
 {
+    private static final String MODULE = "CommonModules/Calc/Module.bsl";
+
+    private static IFile diskFile(String content) throws Exception
+    {
+        IFile file = mock(IFile.class);
+        when(file.getContents()).thenAnswer(invocation ->
+            new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
+        when(file.getCharset()).thenReturn("UTF-8");
+        return file;
+    }
+
+    private static ITextEditor editor(Document document)
+    {
+        ITextEditor editor = mock(ITextEditor.class);
+        IEditorInput input = mock(IEditorInput.class);
+        IDocumentProvider provider = mock(IDocumentProvider.class);
+        when(editor.getEditorInput()).thenReturn(input);
+        when(editor.getDocumentProvider()).thenReturn(provider);
+        when(provider.getDocument(input)).thenReturn(document);
+        return editor;
+    }
+
+    @Test
+    public void unsavedEnglishMethodIsNavigable() throws Exception
+    {
+        assertUnsavedMethod("Procedure NewMethod()\nEndProcedure", "newmethod");
+    }
+
+    @Test
+    public void unsavedRussianMethodIsNavigable() throws Exception
+    {
+        assertUnsavedMethod("\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430 \u0420\u0430\u0441\u0447\u0435\u0442()\n"
+            + "\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b", "\u0440\u0430\u0441\u0447\u0435\u0442");
+    }
+
+    private static void assertUnsavedMethod(String method, String name) throws Exception
+    {
+        String saved = "// saved";
+        Document document = new Document(saved);
+        document.replace(document.getLength(), 0, "\n" + method);
+        ITextEditor editor = editor(document);
+        IFile file = diskFile(saved);
+        EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, null, name),
+            file, openedFile -> { assertSame(file, openedFile); return editor; });
+        verify(editor).selectAndReveal(saved.length() + 1, 0);
+        verify(file, never()).getContents();
+    }
+
+    @Test
+    public void unsavedAdditionalLineIsNavigable() throws Exception
+    {
+        Document document = new Document("// saved");
+        document.replace(document.getLength(), 0, "\n// unsaved");
+        ITextEditor editor = editor(document);
+        EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, 2, null),
+            diskFile("// saved"), openedFile -> editor);
+        verify(editor).selectAndReveal(9, 0);
+    }
+
+    @Test
+    public void savedTrailingEmptyLineIsNavigable() throws Exception
+    {
+        for (String delimiter : List.of("\n", "\r\n", "\r"))
+        {
+            String saved = "// saved" + delimiter;
+            Document document = new Document(saved);
+            assertEquals(2, document.getNumberOfLines());
+            assertEquals(saved.length(), document.getLineOffset(1));
+            IFile file = diskFile(saved);
+            assertEquals("Disk line reader omits the final empty document line", 1,
+                BslModuleUtils.readFileLines(file).size());
+            ITextEditor editor = editor(document);
+            EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, 2, null),
+                file, openedFile -> editor);
+            verify(editor).selectAndReveal(saved.length(), 0);
+        }
+    }
+
+    @Test
+    public void savedLineStillNavigates() throws Exception
+    {
+        ITextEditor editor = editor(new Document("// saved"));
+        EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, 1, null),
+            diskFile("// saved"), openedFile -> editor);
+        verify(editor).selectAndReveal(0, 0);
+    }
+
+    @Test
+    public void methodMovedUpInShorterDocumentIsNavigable() throws Exception
+    {
+        String method = "Procedure Existing()\nEndProcedure";
+        Document document = new Document(method);
+        ITextEditor editor = editor(document);
+        EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, null, "Existing"),
+            diskFile("// removed\n// removed\n" + method), openedFile -> editor);
+        verify(editor).selectAndReveal(0, 0);
+    }
+
+    @Test
+    public void lineOnlyOnDiskIsRejected() throws Exception
+    {
+        ITextEditor editor = editor(new Document("// live"));
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, 2, null),
+                diskFile("// saved\n// removed"), openedFile -> editor));
+        assertTrue(error.getMessage().contains("Invalid line '2'"));
+        verify(editor, never()).selectAndReveal(anyInt(), anyInt());
+    }
+
+    @Test
+    public void methodOnlyOnDiskIsRejected() throws Exception
+    {
+        ITextEditor editor = editor(new Document("// removed"));
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+            () -> EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, null, "Old"),
+                diskFile("Procedure Old()\nEndProcedure"), openedFile -> editor));
+        assertTrue(error.getMessage().contains("Method 'Old' not found"));
+        verify(editor, never()).selectAndReveal(anyInt(), anyInt());
+    }
+
+    @Test
+    public void emptyDocumentDefaultsToFirstLine() throws Exception
+    {
+        ITextEditor editor = editor(new Document(""));
+        EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, null, null),
+            diskFile(""), openedFile -> editor);
+        verify(editor).selectAndReveal(0, 0);
+    }
+
+    @Test
+    public void unavailableDocumentHasActionableError() throws Exception
+    {
+        ITextEditor editor = editor(null);
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+            () -> EditorNavigation.openModule(new EditorNavigation.Request("Project", null, MODULE, 1, null),
+                diskFile("// saved"), openedFile -> editor));
+        assertTrue(error.getMessage().contains(MODULE));
+        assertTrue(error.getMessage().contains("Reopen its BSL editor"));
+        verify(editor, never()).selectAndReveal(anyInt(), anyInt());
+    }
+
     private static Catalog catalog(Configuration configuration, String name)
     {
         Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();

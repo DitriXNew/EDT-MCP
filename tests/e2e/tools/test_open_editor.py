@@ -11,6 +11,7 @@ import os
 from harness import (
     E2ESkip, PROJECT, call, e2e_test, assert_ok, assert_error,
     assert_error_quality, assert_contains, assert_no_diff,
+    read_disk,
 )
 
 
@@ -77,6 +78,25 @@ def test_open_editor_opted_in_opens_supported_targets():
         assert_ok(result, "open EDT editor")
         assert_contains(result.text, "status: opened", "completed native editor opening")
         assert_contains(result.text, target.get("fqn") or target["modulePath"], "requested target")
+    assert_no_diff()
+
+
+@e2e_test(tool="open_editor", kind="action")
+def test_open_editor_opted_in_accepts_trailing_empty_line():
+    _require_opt_in()
+    source = read_disk("src/" + MODULE)
+    assert source.endswith("\n"), "Calc fixture must end with a newline"
+    final_line = source.count("\n") + 1
+    result = call("open_editor", {
+        "projectName": PROJECT, "modulePath": MODULE, "line": final_line,
+    })
+    assert_ok(result, "navigate to the final empty editor line")
+    assert_contains(result.text, "status: opened", "completed native editor opening")
+    assert_contains(result.text, MODULE, "requested module")
+    error = assert_error(call("open_editor", {
+        "projectName": PROJECT, "modulePath": MODULE, "line": final_line + 1,
+    }), "line beyond the editor document")
+    assert_error_quality(error, names=[str(final_line + 1)], suggests=["read_module_source"])
     assert_no_diff()
 
 

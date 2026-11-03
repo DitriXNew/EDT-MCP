@@ -67,6 +67,11 @@ public final class EditorNavigation
         boolean openMetadata(MdObject object);
     }
 
+    interface ModuleEditors
+    {
+        IEditorPart open(IFile file) throws Exception;
+    }
+
     private EditorNavigation()
     {
     }
@@ -113,24 +118,10 @@ public final class EditorNavigation
                 throw new IllegalArgumentException("BSL module '" + request.modulePath() + "' not found in project '"
                     + request.projectName() + "'. Use list_modules to select a modulePath in this project.");
             }
-            int line = resolveLine(BslModuleUtils.readFileLines(file), request.line(), request.methodName());
-            requireActive(active);
-            IEditorPart editor = IDE.openEditor(page, file, true);
-            if (!(editor instanceof ITextEditor))
-            {
-                throw new IllegalStateException("EDT did not provide a text editor for '" + request.modulePath()
-                    + "'. Check its BSL editor association in EDT.");
-            }
-            ITextEditor textEditor = (ITextEditor)editor;
-            IDocument document = textEditor.getDocumentProvider().getDocument(textEditor.getEditorInput());
-            if (document == null || line > document.getNumberOfLines())
-            {
-                throw new IllegalStateException("The open document differs from the module on disk. "
-                    + "Save the editor and retry open_editor.");
-            }
-            line = resolveLine(List.of(document.get().split("\\r\\n|\\n|\\r", -1)),
-                request.line(), request.methodName());
-            textEditor.selectAndReveal(document.getLineOffset(line - 1), 0);
+            openModule(request, file, module -> {
+                requireActive(active);
+                return IDE.openEditor(page, module, true);
+            });
             return;
         }
         IBmModelManager manager = Activator.getDefault().getBmModelManager();
@@ -152,6 +143,26 @@ public final class EditorNavigation
             });
             return null;
         });
+    }
+
+    static void openModule(Request request, IFile file, ModuleEditors editors) throws Exception
+    {
+        IEditorPart editor = editors.open(file);
+        if (!(editor instanceof ITextEditor))
+        {
+            throw new IllegalStateException("EDT did not provide a text editor for '" + request.modulePath()
+                + "'. Check its BSL editor association in EDT.");
+        }
+        ITextEditor textEditor = (ITextEditor)editor;
+        IDocument document = textEditor.getDocumentProvider().getDocument(textEditor.getEditorInput());
+        if (document == null)
+        {
+            throw new IllegalStateException("EDT did not provide a document for '" + request.modulePath()
+                + "'. Reopen its BSL editor and retry open_editor.");
+        }
+        int line = resolveLine(List.of(document.get().split("\\r\\n|\\n|\\r", -1)),
+            request.line(), request.methodName());
+        textEditor.selectAndReveal(document.getLineOffset(line - 1), 0);
     }
 
     private static void requireActive(BooleanSupplier active)
