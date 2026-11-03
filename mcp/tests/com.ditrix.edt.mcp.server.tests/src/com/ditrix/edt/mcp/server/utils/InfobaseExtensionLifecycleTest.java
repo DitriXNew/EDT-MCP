@@ -9,6 +9,8 @@ import static org.junit.Assert.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -430,9 +432,51 @@ public class InfobaseExtensionLifecycleTest
     {
         Fake backend = new Fake();
         JsonObject result = json(execute(previewed(request("install", true), backend), backend,
-            preview -> { backend.states = List.of(OLD); return true; }, () -> fail("stale write"), () -> fail("stale write")));
+            preview -> { backend.states = List.of(OLD); return true; }, () -> {}, () -> fail("stale write")));
         assertFalse(result.get("success").getAsBoolean());
         assertEquals(List.of("read", "read"), backend.calls);
+    }
+
+    @Test public void changedInventoryDuringAdmissionIsRejectedBeforeMutation() throws Exception
+    {
+        Extension replacement = new Extension("Runtime", "9", true, true, true, "replacement");
+        for (String action : List.of("uninstall", "install", "update"))
+        {
+            Fake backend = new Fake();
+            backend.states = "install".equals(action) ? List.of(OTHER) : List.of(OLD, OTHER);
+            Request confirm = previewed(request(action, true), backend);
+            AtomicInteger mutations = new AtomicInteger();
+            JsonObject result = json(execute(confirm, backend, preview -> true, () -> {
+                backend.calls.add("guard");
+                backend.states = List.of(replacement, OTHER);
+            }, mutations::incrementAndGet));
+            assertFalse(action + ": " + result, result.get("success").getAsBoolean());
+            assertTrue(result.get("error").getAsString().contains("fresh preview"));
+            assertEquals(0, mutations.get());
+            assertEquals(List.of(replacement, OTHER), backend.states);
+            assertEquals(List.of("read", "guard", "read"), backend.calls);
+        }
+    }
+
+    @Test public void stagingPreservesPrivateFileIdentityAndPermissions() throws Exception
+    {
+        Path source = request("install", false).cfePath();
+        Path staged = Files.createTempFile(folder.getRoot().toPath(), "private-", ".cfe");
+        Path alias = staged.resolveSibling(staged.getFileName() + ".alias");
+        Files.createLink(alias, staged);
+        boolean posix = Files.getFileAttributeView(staged, PosixFileAttributeView.class) != null;
+        if (posix)
+        {
+            Files.setPosixFilePermissions(source, PosixFilePermissions.fromString("rw-rw-rw-"));
+            assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(staged));
+        }
+        InfobaseExtensionLifecycle.stageCfe(source, staged);
+        assertTrue("Staging replaced the private file instead of writing into it", Files.isSameFile(alias, staged));
+        assertEquals("CFE fixture", Files.readString(alias));
+        if (posix)
+        {
+            assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(staged));
+        }
     }
 
     @Test public void changedOtherExtensionFailsVerification() throws Exception

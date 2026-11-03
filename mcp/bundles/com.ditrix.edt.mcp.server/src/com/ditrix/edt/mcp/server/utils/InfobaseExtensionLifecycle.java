@@ -155,7 +155,7 @@ public final class InfobaseExtensionLifecycle
             if (!uninstall)
             {
                 staged = Files.createTempFile("edt-mcp-extension-", ".cfe");
-                Files.copy(request.cfePath(), staged, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                stageCfe(request.cfePath(), staged);
             }
             String current = previewContent(request, target, before, safe, protection, staged);
             if (!request.confirm())
@@ -185,12 +185,12 @@ public final class InfobaseExtensionLifecycle
             {
                 return ToolResult.error("Extension operation was not approved; nothing was changed. Request consent and retry.");
             }
-            // Consent can wait: a GUI change must not turn an install into an overwrite.
+            guard.check();
+            // Consent and admission checks can wait; recheck immediately before mutation.
             if (!before.equals(checked(backend.read())))
             {
-                return ToolResult.error("Installed extensions changed while awaiting consent; request a fresh preview before retrying.");
+                return ToolResult.error("Installed extensions changed while awaiting consent or admission checks; request a fresh preview before retrying.");
             }
-            guard.check();
             mutationEntered.run();
             try
             {
@@ -262,6 +262,16 @@ public final class InfobaseExtensionLifecycle
                     com.ditrix.edt.mcp.server.Activator.logWarning("Could not remove staged .cfe file: " + staged);
                 }
             }
+        }
+    }
+
+    static void stageCfe(Path source, Path staged) throws java.io.IOException
+    {
+        // Preserve the private file's identity and permissions instead of replacing it.
+        try (var output = Files.newOutputStream(staged, java.nio.file.StandardOpenOption.WRITE,
+            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING))
+        {
+            Files.copy(source, output);
         }
     }
 
