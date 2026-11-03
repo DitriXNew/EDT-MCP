@@ -12,7 +12,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.preferences.InstanceScope;
-import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -195,14 +194,9 @@ public final class ApplicationSupport
     /** Read the stored explicit choice; EDT's effective-default getter can clear it or infer a sole app. */
     public static String getStoredDefaultApplicationId(IProject project)
     {
-        return storedApplicationDefaults().get(project.getName(), null);
-    }
-
-    /** The same EDT node used for reading and observing explicit application choices. */
-    static IEclipsePreferences storedApplicationDefaults()
-    {
-        return (IEclipsePreferences)InstanceScope.INSTANCE
-            .getNode("com.e1c.g5.dt.applications").node("applicationDefaults").node("applications"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return InstanceScope.INSTANCE
+            .getNode("com.e1c.g5.dt.applications").node("applicationDefaults").node("applications") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .get(project.getName(), null);
     }
 
     /**

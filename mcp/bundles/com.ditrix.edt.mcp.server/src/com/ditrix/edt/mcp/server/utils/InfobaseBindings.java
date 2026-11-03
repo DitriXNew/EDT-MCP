@@ -10,9 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.concurrent.TimeUnit;
@@ -21,12 +19,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
-import org.eclipse.debug.core.ILaunchConfigurationListener;
-import org.eclipse.debug.core.ILaunchManager;
-import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.e1c.g5.dt.applications.IApplication;
@@ -35,7 +29,8 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Protects workspace bindings from EDT's synthetic DELETED events on launcher reload. */
+/** Restores EDT's clear-only resets and keeps differing non-null choices; concurrent manual clears are restored too.
+ * Explicit setDefault wins for the target project's default. */
 public final class InfobaseBindings
 {
     private static final ReentrantLock OPERATIONS = new ReentrantLock();
@@ -44,63 +39,13 @@ public final class InfobaseBindings
     private final Map<IProject, String> defaults = new LinkedHashMap<>();
     private final Map<ILaunchConfiguration, LaunchBinding> launches = new LinkedHashMap<>();
     private final Map<ApplicationKey, UUID> registrations = new LinkedHashMap<>();
-    private final Changes changes = new Changes();
     private String captureFailure;
     private boolean workspace;
     private IProject[] projects;
     private ILaunchConfiguration[] configurations;
-    private ILaunchManager launchManager;
-    private IEclipsePreferences defaultPreferences;
 
     private record LaunchBinding(String project, String applicationId) { }
     private record ApplicationKey(String project, String applicationId) { }
-
-    private final class Changes implements AutoCloseable
-    {
-        private final Set<String> defaultsChanged = ConcurrentHashMap.newKeySet();
-        private final Set<ILaunchConfiguration> launchesChanged = ConcurrentHashMap.newKeySet();
-        private final IEclipsePreferences.IPreferenceChangeListener defaultListener = event -> {
-            if (!InfobaseMutationCoordinator.isMutationThread()) { defaultsChanged.add(event.getKey()); }
-        };
-        private final ILaunchConfigurationListener launchListener = new ILaunchConfigurationListener() {
-            @Override public void launchConfigurationAdded(ILaunchConfiguration configuration) { }
-            @Override public void launchConfigurationRemoved(ILaunchConfiguration configuration)
-            {
-                launchConfigurationChanged(configuration);
-            }
-            @Override public void launchConfigurationChanged(ILaunchConfiguration configuration)
-            {
-                if (!InfobaseMutationCoordinator.isMutationThread())
-                {
-                    ILaunchConfiguration original = configuration instanceof ILaunchConfigurationWorkingCopy copy
-                        ? copy.getOriginal() : configuration;
-                    if (original != null) { launchesChanged.add(original); }
-                }
-            }
-        };
-        private boolean defaultsSubscribed;
-        private boolean launchesSubscribed;
-
-        void subscribe()
-        {
-            if (defaultPreferences != null)
-            {
-                defaultPreferences.addPreferenceChangeListener(defaultListener);
-                defaultsSubscribed = true;
-            }
-            if (launchManager != null)
-            {
-                launchManager.addLaunchConfigurationListener(launchListener);
-                launchesSubscribed = true;
-            }
-        }
-
-        @Override public void close()
-        {
-            if (defaultsSubscribed) { defaultPreferences.removePreferenceChangeListener(defaultListener); }
-            if (launchesSubscribed) { launchManager.removeLaunchConfigurationListener(launchListener); }
-        }
-    }
 
     /** Native creation jobs can outlive their caller, just like credential workers. */
     public static void mutate(IProgressMonitor monitor, BoundedJob.IBoundedWork operation) throws Exception
@@ -138,17 +83,6 @@ public final class InfobaseBindings
         return bindings;
     }
 
-    /** Listener-service seam for mocked EDT launch notifications. */
-    public static InfobaseBindings capture(IApplicationManager manager, IProject[] projects,
-            ILaunchConfiguration[] configurations, Function<IProject, String> defaultId,
-            ILaunchManager launchManager, IEclipsePreferences defaultPreferences)
-    {
-        var bindings = capture(manager, projects, configurations, defaultId);
-        bindings.launchManager = launchManager;
-        bindings.defaultPreferences = defaultPreferences;
-        return bindings;
-    }
-
     private void snapshot()
     {
         try
@@ -161,11 +95,8 @@ public final class InfobaseBindings
                     throw new IllegalStateException("Eclipse launch manager is unavailable"); //$NON-NLS-1$
                 }
                 projects = ProjectContext.allProjects();
-                defaultPreferences = ApplicationSupport.storedApplicationDefaults();
-                launchManager = debug.getLaunchManager();
-                configurations = launchManager.getLaunchConfigurations();
+                configurations = debug.getLaunchManager().getLaunchConfigurations();
             }
-            changes.subscribe();
             for (IProject project : projects)
             {
                 if (project.isOpen())
@@ -247,8 +178,7 @@ public final class InfobaseBindings
         }
         finally
         {
-            try { changes.close(); }
-            finally { if (locked) { OPERATIONS.unlock(); } }
+            if (locked) { OPERATIONS.unlock(); }
         }
     }
 
@@ -327,7 +257,7 @@ public final class InfobaseBindings
             CredentialWriteControl admission)
     {
         String changedId = text(json, "applicationId"); //$NON-NLS-1$
-        boolean succeeded = json.has("success") && json.get("success").getAsBoolean(); //$NON-NLS-1$ //$NON-NLS-2$
+        boolean succeeded = json.get("success").getAsBoolean(); //$NON-NLS-1$
         var preserved = new ArrayList<Object>();
         var restored = new ArrayList<Object>();
         var unrestored = new ArrayList<Object>();
@@ -346,33 +276,23 @@ public final class InfobaseBindings
                     continue;
                 }
                 String current = defaultId.apply(project);
-                if (Objects.equals(expected, current))
+                if (Objects.equals(expected, current)) { preserved.add(binding); continue; }
+                if (!explicit && current != null) { recordKeptBinding(binding, current, preserved); continue; }
+                IApplication application = expected == null ? null : application(project, expected);
+                write(admission, () -> {
+                    if (!project.isOpen()) { throw new IllegalStateException("Project closed before restoration"); } //$NON-NLS-1$
+                    if (explicit || defaultId.apply(project) == null)
+                    {
+                        manager.setDefaultApplication(project, application);
+                    }
+                });
+                String observed = defaultId.apply(project);
+                if (!explicit && observed != null && !Objects.equals(expected, observed))
                 {
-                    preserved.add(binding);
+                    recordKeptBinding(binding, observed, preserved);
                     continue;
                 }
-                if (changes.defaultsChanged.contains(project.getName()))
-                {
-                    throw new IllegalStateException("Default edited during the operation; newer choice, including a clear, kept"); //$NON-NLS-1$
-                }
-                if (current != null && (!explicit || !Objects.equals(current, entry.getValue())))
-                {
-                    throw new IllegalStateException("Default changed to a different application; newer choice kept"); //$NON-NLS-1$
-                }
-                IApplication application = expected == null ? null : application(project, expected);
-                if (!Objects.equals(current, defaultId.apply(project)))
-                {
-                    throw new IllegalStateException("Default changed during restoration"); //$NON-NLS-1$
-                }
-                write(admission, () -> {
-                    if (!project.isOpen() || changes.defaultsChanged.contains(project.getName())
-                        || !Objects.equals(current, defaultId.apply(project)))
-                    {
-                        throw new IllegalStateException("Project or default changed before restoration"); //$NON-NLS-1$
-                    }
-                    manager.setDefaultApplication(project, application);
-                });
-                if (!Objects.equals(expected, defaultId.apply(project)))
+                if (!Objects.equals(expected, observed))
                 {
                     throw new IllegalStateException("EDT did not retain the default after restoring it"); //$NON-NLS-1$
                 }
@@ -380,8 +300,9 @@ public final class InfobaseBindings
             }
             catch (Exception failure)
             {
-                unrestored.add(failedBinding(binding, failure, () -> defaultId.apply(project),
-                    isDeletionTarget(json, projectName, project.getName(), expected, deleting)));
+                var failed = failedBinding(binding, failure, () -> defaultId.apply(project),
+                    isDeletionTarget(json, projectName, project.getName(), expected, deleting));
+                if (explicit || !keepObservedNewerBinding(failed, preserved)) { unrestored.add(failed); }
             }
         }
         for (var entry : launches.entrySet())
@@ -402,33 +323,32 @@ public final class InfobaseBindings
                     throw new IllegalStateException("Launch configuration was removed or moved to another project"); //$NON-NLS-1$
                 }
                 String current = configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null);
-                if (Objects.equals(before.applicationId(), current))
-                {
-                    preserved.add(binding);
-                    continue;
-                }
-                if (current != null || changes.launchesChanged.contains(configuration))
-                {
-                    throw new IllegalStateException("Application binding edited during the operation; newer choice, including a clear, kept"); //$NON-NLS-1$
-                }
-                if (before.applicationId() != null)
-                {
-                    application(project(before.project()), before.applicationId());
-                }
+                if (Objects.equals(before.applicationId(), current)) { preserved.add(binding); continue; }
+                if (current != null) { recordKeptBinding(binding, current, preserved); continue; }
+                if (before.applicationId() != null) { application(project(before.project()), before.applicationId()); }
                 var copy = configuration.getWorkingCopy();
                 write(admission, () -> {
-                    if (!configuration.exists() || changes.launchesChanged.contains(configuration)
-                        || !Objects.equals(before.project(), copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null))
-                        || !Objects.equals(before.project(), configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null))
-                        || configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null) != null
-                        || copy.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null) != null)
+                    if (!configuration.exists() || !Objects.equals(before.project(),
+                        copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null))
+                        || !Objects.equals(before.project(), configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)))
                     {
-                        throw new IllegalStateException("Launch binding changed before restoration"); //$NON-NLS-1$
+                        throw new IllegalStateException("Launch configuration changed before restoration"); //$NON-NLS-1$
+                    }
+                    if (configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null) != null) { return; }
+                    if (copy.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null) != null)
+                    {
+                        throw new IllegalStateException("Working-copy application binding changed before restoration"); //$NON-NLS-1$
                     }
                     copy.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, before.applicationId());
                     copy.doSave();
                 });
-                if (!Objects.equals(before.applicationId(), configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null)))
+                String observed = configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null);
+                if (observed != null && !Objects.equals(before.applicationId(), observed))
+                {
+                    recordKeptBinding(binding, observed, preserved);
+                    continue;
+                }
+                if (!Objects.equals(before.applicationId(), observed))
                 {
                     throw new IllegalStateException("EDT did not retain the launch binding after restoring it"); //$NON-NLS-1$
                 }
@@ -436,9 +356,10 @@ public final class InfobaseBindings
             }
             catch (Exception failure)
             {
-                unrestored.add(failedBinding(binding, failure,
+                var failed = failedBinding(binding, failure,
                     () -> configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null),
-                    isDeletionTarget(json, projectName, before.project(), before.applicationId(), deleting)));
+                    isDeletionTarget(json, projectName, before.project(), before.applicationId(), deleting));
+                if (!keepObservedNewerBinding(failed, preserved)) { unrestored.add(failed); }
             }
         }
         return report(json, preserved, restored, unrestored, removed);
@@ -452,9 +373,9 @@ public final class InfobaseBindings
             write(admission, () -> {
                 if (deletedId.equals(defaultId.apply(project)))
                 {
-                    if (!project.isOpen() || changes.defaultsChanged.contains(project.getName()))
+                    if (!project.isOpen())
                     {
-                        throw new IllegalStateException("Project or default edited before deletion cleanup"); //$NON-NLS-1$
+                        throw new IllegalStateException("Project closed before deletion cleanup"); //$NON-NLS-1$
                     }
                     manager.setDefaultApplication(project, null);
                 }
@@ -483,8 +404,7 @@ public final class InfobaseBindings
                 }
                 if (before.applicationId().equals(configuration.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null)))
                 {
-                    if (changes.launchesChanged.contains(configuration)
-                        || !before.applicationId().equals(copy.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null)))
+                    if (!before.applicationId().equals(copy.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String)null)))
                     {
                         throw new IllegalStateException("Launch binding edited before deletion cleanup"); //$NON-NLS-1$
                     }
@@ -513,10 +433,29 @@ public final class InfobaseBindings
         if (observed == null) { removed.add(binding); }
         else
         {
-            binding.put("previousApplicationId", binding.get("applicationId")); //$NON-NLS-1$ //$NON-NLS-2$
-            binding.put("applicationId", observed); //$NON-NLS-1$
-            preserved.add(binding);
+            recordKeptBinding(binding, observed, preserved);
         }
+    }
+
+    private static void recordKeptBinding(Map<String, Object> binding, String observed, List<Object> preserved)
+    {
+        binding.put("previousApplicationId", binding.get("applicationId")); //$NON-NLS-1$ //$NON-NLS-2$
+        binding.put("applicationId", observed); //$NON-NLS-1$
+        binding.put("observedApplicationId", observed); //$NON-NLS-1$
+        binding.put("reason", "Newer non-null application choice kept"); //$NON-NLS-1$ //$NON-NLS-2$
+        preserved.add(binding);
+    }
+
+    private static boolean keepObservedNewerBinding(Map<String, Object> failed, List<Object> preserved)
+    {
+        if (failed.get("observedApplicationId") instanceof String observed && !observed.isEmpty() //$NON-NLS-1$
+            && !Objects.equals(failed.get("applicationId"), observed)) //$NON-NLS-1$
+        {
+            failed.remove("requiredAction"); //$NON-NLS-1$
+            recordKeptBinding(failed, observed, preserved);
+            return true;
+        }
+        return false;
     }
 
     private IProject project(String name)
@@ -539,10 +478,11 @@ public final class InfobaseBindings
     private boolean isDeletionTarget(JsonObject json, String operationProject, String bindingProject, String id,
             boolean deleting)
     {
-        if (!deleting || id == null || !"deleted".equals(text(json, "action"))) { return false; } //$NON-NLS-1$ //$NON-NLS-2$
+        if (!deleting || id == null || !json.get("success").getAsBoolean() || !"deleted".equals(text(json, "action"))) { return false; } //$NON-NLS-1$ //$NON-NLS-2$
         if (Objects.equals(operationProject, bindingProject) && id.equals(text(json, "applicationId"))) { return true; } //$NON-NLS-1$
         UUID registration = registrations.get(new ApplicationKey(bindingProject, id));
-        return registration != null && registration.toString().equals(text(json, "registrationId")); //$NON-NLS-1$
+        return booleanField(json, "deleteRegistration") && json.get("deleteRegistration").getAsBoolean() //$NON-NLS-1$ //$NON-NLS-2$
+            && registration != null && registration.toString().equals(text(json, "registrationId")); //$NON-NLS-1$
     }
 
     private static JsonObject decodeOperationResult(String raw)

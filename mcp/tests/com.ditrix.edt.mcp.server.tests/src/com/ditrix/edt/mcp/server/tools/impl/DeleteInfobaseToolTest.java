@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -50,6 +51,61 @@ import com.google.gson.JsonParser;
  */
 public class DeleteInfobaseToolTest
 {
+    @Test
+    public void partialDeregistrationPreservesOtherProjectsSharingTheUuid() throws Exception
+    {
+        for (boolean resetOther : new boolean[] {false, true})
+        {
+            var target = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            var other = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("base");
+            when(((IInfobaseApplication)target.prior).getInfobase()).thenReturn(ref);
+            when(((IInfobaseApplication)other.prior).getInfobase()).thenReturn(ref);
+            when(other.project.getName()).thenReturn("other");
+            when(other.configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+            when(other.copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+            when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.of(other.prior));
+            org.mockito.Mockito.doAnswer(call -> {
+                IApplication application = call.getArgument(1);
+                other.defaultId.set(application == null ? null : application.getId());
+                return null;
+            }).when(target.manager).setDefaultApplication(org.mockito.ArgumentMatchers.eq(other.project),
+                org.mockito.ArgumentMatchers.any());
+            var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+            when(infobases.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            when(infobases.findInfobaseByUuid(ref.getUuid())).thenReturn(Optional.of(ref));
+            var tool = new DeleteInfobaseTool() {
+                @Override protected void clearRegistrationCredentials(InfobaseReference reference,
+                        com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+                {
+                    guard.run(current -> { throw new IllegalStateException("secure storage unavailable"); });
+                }
+            };
+            var snapshot = com.ditrix.edt.mcp.server.utils.InfobaseBindings.capture(target.manager,
+                new IProject[] {target.project, other.project},
+                new org.eclipse.debug.core.ILaunchConfiguration[] {target.configuration, other.configuration},
+                project -> project == target.project ? target.defaultId.get() : other.defaultId.get());
+            var result = parse(snapshot.run(() -> {
+                target.reset();
+                if (resetOther) { other.reset(); }
+                return tool.deregisterFileInfobase(infobases, ref,
+                    new DeleteInfobaseTool.IbIdentity("project", "prior", "base"),
+                    new DeleteInfobaseTool.DbFileOutcome(false, null, false,
+                        DeleteInfobaseTool.SharedDatabase.NOT_SHARED), true, () -> { });
+            }, "project", false, true));
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            assertFalse(result.get("deleteRegistration").getAsBoolean());
+            assertEquals(ref.getUuid().toString(), result.get("registrationId").getAsString());
+            assertNull(target.defaultId.get());
+            assertNull(target.launchId.get());
+            assertEquals("prior", other.defaultId.get());
+            assertEquals("prior", other.launchId.get());
+            assertEquals(2, result.getAsJsonArray("removedBindings").size());
+            assertEquals(resetOther ? 2 : 0, result.getAsJsonArray("restoredBindings").size());
+            org.mockito.Mockito.verify(infobases, org.mockito.Mockito.never()).delete(org.mockito.ArgumentMatchers.any());
+        }
+    }
+
     @Test
     public void registrationDeletionResultExcludesTheCapturedBoundApplication() throws Exception
     {

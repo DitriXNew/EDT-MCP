@@ -82,13 +82,13 @@ public final class ApplicationDefaultChange
         return apply(application, contextGuard, false);
     }
 
-    /** A launcher save reports every infobase deleted, clearing the previous explicit choice. */
+    /** Applies the caller's explicit setDefault request after the infobase write. */
     public String applyAfterInfobaseWrite(IApplication application, Runnable contextGuard)
     {
         return apply(application, contextGuard, true);
     }
 
-    private String apply(IApplication application, Runnable contextGuard, boolean allowReset)
+    private String apply(IApplication application, Runnable contextGuard, boolean explicitDefault)
     {
         if (!captured)
         {
@@ -105,7 +105,7 @@ public final class ApplicationDefaultChange
             {
                 return " setDefault was not applied: the stored default could not be verified; set it manually."; //$NON-NLS-1$
             }
-            if (!Objects.equals(previousId, current) && !(allowReset && current == null))
+            if (!explicitDefault && !Objects.equals(previousId, current))
             {
                 return " setDefault was not applied: the default changed during creation; the newer choice was kept."; //$NON-NLS-1$
             }

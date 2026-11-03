@@ -53,12 +53,6 @@ final class InfobaseMutationCoordinator
         }
     }
 
-    /** EDT preference and launch notifications are synchronous on the native writer's thread. */
-    static boolean isMutationThread()
-    {
-        return LOCK.isHeldByCurrentThread();
-    }
-
     static final class Lease implements AutoCloseable
     {
         @Override
