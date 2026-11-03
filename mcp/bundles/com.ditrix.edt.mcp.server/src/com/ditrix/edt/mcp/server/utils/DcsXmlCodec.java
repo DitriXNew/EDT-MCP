@@ -95,8 +95,7 @@ public final class DcsXmlCodec
     {
         if (schema == null)
         {
-            return XmlResult.failure("The DCS schema is empty and cannot be serialized as XML. " //$NON-NLS-1$
-                + "Create schema content first, then retry format='xml'."); //$NON-NLS-1$
+            schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchema();
         }
         try (ByteArrayOutputStream output = new ByteArrayOutputStream())
         {

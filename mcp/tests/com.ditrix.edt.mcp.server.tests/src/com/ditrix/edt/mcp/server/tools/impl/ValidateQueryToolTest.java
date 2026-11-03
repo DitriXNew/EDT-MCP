@@ -85,7 +85,9 @@ public class ValidateQueryToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"queryText\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"dcsMode\"")); //$NON-NLS-1$
-        assertTrue(schema.contains("\"required\":[\"projectName\",\"queryText\"]")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"modulePath\""));
+        assertTrue(schema.contains("\"method\""));
+        assertTrue(schema.contains("\"required\":[\"projectName\"]")); //$NON-NLS-1$
     }
 
     @Test
@@ -130,7 +132,7 @@ public class ValidateQueryToolTest
 
         assertNotNull(result);
         assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
-        assertTrue(result.contains("queryText is required")); //$NON-NLS-1$
+        assertTrue(result.contains("exactly one of queryText or modulePath")); //$NON-NLS-1$
     }
 
     @Test
@@ -177,6 +179,55 @@ public class ValidateQueryToolTest
         String result = new ValidateQueryTool().execute(null);
         assertNotNull(result);
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void rejectsBothInputModesBeforeProjectResolution()
+    {
+        for (String query : new String[] { "SELECT 1", "" })
+        {
+            String result = new ValidateQueryTool().execute(Map.of("projectName", "AnyProject", "queryText", query,
+                "modulePath", "CommonModules/Calc/Module.bsl"));
+            assertTrue(result.contains("\"success\":false"));
+            assertTrue(result.contains("exactly one of queryText or modulePath"));
+            assertTrue(result.contains("list_modules"));
+        }
+    }
+
+    @Test
+    public void rejectsMethodWithoutModulePathEvenWithQueryText()
+    {
+        for (Map<String, String> params : java.util.List.of(
+            Map.of("projectName", "AnyProject", "method", "Queries"),
+            Map.of("projectName", "AnyProject", "method", "Запросы", "queryText", "SELECT 1")))
+        {
+            String result = new ValidateQueryTool().execute(params);
+            assertTrue(result.contains("\"success\":false"));
+            assertTrue(result.contains("method requires modulePath"));
+            assertTrue(result.contains("list_modules"));
+        }
+    }
+
+    @Test
+    public void rejectsBlankMethodAndModulePath()
+    {
+        String result = new ValidateQueryTool().execute(Map.of("projectName", "AnyProject", "method", " ",
+            "modulePath", "CommonModules/Calc/Module.bsl"));
+        assertTrue(result.contains("method must be a non-blank"));
+        assertTrue(result.contains("get_module_structure"));
+        result = new ValidateQueryTool().execute(Map.of("projectName", "AnyProject", "modulePath", " "));
+        assertTrue(result.contains("exactly one of queryText or modulePath"));
+    }
+
+    @Test
+    public void compactSchemaKeepsConditionalContracts()
+    {
+        var schema = com.ditrix.edt.mcp.server.protocol.InputSchemaCompactor.compact("validate_query",
+            com.google.gson.JsonParser.parseString(new ValidateQueryTool().getInputSchema()));
+        var properties = schema.getAsJsonObject().getAsJsonObject("properties");
+        assertTrue(properties.getAsJsonObject("queryText").get("description").getAsString().contains("exactly one"));
+        assertTrue(properties.getAsJsonObject("method").get("description").getAsString().contains("only with modulePath"));
+        assertTrue(properties.getAsJsonObject("modulePath").get("description").getAsString().contains("CommonModules/"));
     }
 
 }

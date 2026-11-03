@@ -28,6 +28,78 @@ import com.google.gson.JsonParser;
 public class CreateInfobaseRegistrationTest
 {
     @Test
+    public void launcherWritesAndDuplicateRefusalsPreserveDefaultsAndLaunchBindings() throws Exception
+    {
+        for (boolean register : new boolean[] {false, true})
+        {
+            for (int outcome : new int[] {0, 1, 2, 3})
+            {
+                if (!register && outcome == 2) { continue; }
+                var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+                state.failDefault = outcome == 1;
+                boolean setDefault = outcome == 3;
+                var infobases = recordingInfobases();
+                var associations = mock(IInfobaseAssociationManager.class);
+                var file = Files.createTempDirectory("mcp-binding-preservation");
+                Files.createFile(file.resolve("1Cv8.1CD"));
+                var context = BranchContexts.toContext("feat/bindings");
+                var fresh = mock(IInfobaseApplication.class);
+                var type = mock(IApplicationType.class);
+                when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase");
+                when(fresh.getType()).thenReturn(type);
+                when(fresh.getId()).thenReturn("fresh");
+                when(state.manager.getApplication(state.project, "fresh")).thenReturn(java.util.Optional.of(fresh));
+                when(state.manager.getApplications(state.project)).thenReturn(List.of(fresh));
+                doAnswer(call -> { when(fresh.getInfobase()).thenReturn(call.getArgument(1)); return null; })
+                    .when(associations).associate(eq(state.project), any(), any());
+                doAnswer(call -> { state.reset(); return null; }).when(infobases).reload(any());
+                if (outcome == 2)
+                {
+                    when(infobases.getAll()).thenReturn(List.of(new InfobaseTarget(file, null).reference("existing")));
+                }
+                var tool = new CreateInfobaseTool()
+                {
+                    @Override
+                    com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(IApplicationManager manager)
+                    {
+                        return state.snapshot();
+                    }
+
+                    @Override
+                    com.ditrix.edt.mcp.server.utils.ApplicationDefaultChange captureDefaultChange(
+                            IApplicationManager manager, IProject project)
+                    {
+                        return com.ditrix.edt.mcp.server.utils.ApplicationDefaultChange.capture(manager, project, state.defaultId::get);
+                    }
+
+                    @Override
+                    String createNewInfobase(InfobaseReference reference, String platform, String name, java.nio.file.Path directory)
+                    {
+                        return com.ditrix.edt.mcp.server.utils.InfobaseRegistration.add(infobases, reference);
+                    }
+                };
+                try
+                {
+                    var result = JsonParser.parseString(tool.prepareInfobase(
+                        CreateInfobaseTool.CreateContext.of(state.project, state.manager, infobases, associations),
+                        context, "project", new InfobaseTarget(file, null), "fresh", null, setDefault,
+                        register, new CreateInfobaseTool.Credentials(null, null, null), () -> context)).getAsJsonObject();
+                    assertEquals(result.toString(), outcome == 0 || setDefault, result.get("success").getAsBoolean());
+                    assertEquals(outcome == 1 ? null : setDefault ? "fresh" : "prior", state.defaultId.get());
+                    assertEquals("prior", state.launchId.get());
+                    assertEquals(outcome == 1 ? 1 : 0, result.getAsJsonArray("unrestoredBindings").size());
+                    if (outcome == 2) { assertTrue(result.get("error").getAsString().contains("already registered")); }
+                }
+                finally
+                {
+                    Files.delete(file.resolve("1Cv8.1CD"));
+                    Files.delete(file);
+                }
+            }
+        }
+    }
+
+    @Test
     public void fileAndServerShareNamingCredentialsBeforeAssociationAndReadBack() throws Exception
     {
         var file = Files.createTempDirectory("mcp-registration"); //$NON-NLS-1$

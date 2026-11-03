@@ -98,7 +98,7 @@ def test_rename_contained_dynamic_list_preview_and_confirm_keep_the_query_change
     assert all(row["skippable"] == "yes" for row in query_rows), \
         "attached contained targets must have verifiable identities"
     assert_not_contains(preview.text, form + ".Form", "content FQNs must not appear in the preview")
-    _assert_addressable(form, "# Form Structure: " + source + ".forms.ListForm")
+    _assert_addressable(form, "# Form Structure: " + source + ".Form.ListForm")
     assert _query_texts(read_disk(original_rel)).count(query) == 1, \
         "preview must preserve the original query"
 

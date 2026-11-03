@@ -39,6 +39,8 @@ Use `JsonUtils.parseIntegralInt` for exact integer validation and render whole t
 - JSON fields use one style (don't mix camelCase/snake_case in similar responses).
 - Ordering responses report observed model order and moves, not the planned permutation; check optional autosort policy before manual-order writes. Governed responses share `autosort:{plugin,governs,setting,order,effect,userAction}` plus the same plain message; omit the block when inactive. `setting` is a human scope; `userAction` asks the user through verified EDT UI labels and forbids agent preference changes.
 - not-found — one semantics: an empty list for "list", an error for "get a specific one". Don't mix null/empty/error.
+- Mutation reports must follow read-back: a successful native call or deletion identity alone does not prove the resulting state. Infobase writers share `InfobaseBindings` and report `preservedBindings`, `restoredBindings`, `removedBindings`, and `unrestoredBindings`; incomplete recovery is an error. Claim removal only after observing the old binding gone. UUID-wide cleanup requires confirmed global deregistration; partial dissociation remains project-scoped.
+- Infobase recovery keeps differing non-null choices and restores cleared bindings; manual clears during the call are restored too. Do not infer user intent from preference/launch listeners. Explicit `setDefault=true` wins for the target project's default.
 
 ### Response format policy (Markdown vs JSON)
 

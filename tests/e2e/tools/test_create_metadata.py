@@ -710,6 +710,8 @@ def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
         "fqn": "Справочник.Catalog.Реквизит." + attr,
     })
     assert_ok(r, "create a Russian-named attribute through the Russian tokens")
+    assert r.structured.get("fqn") == "Catalog.Catalog.Attribute." + attr, r.structured
+    assert_contains(r.structured.get("message") or "", "Created Catalog.Catalog.Attribute." + attr)
     assert r.structured.get("kind") == "CatalogAttribute", \
         "kind must be the concrete catalog-attribute EClass: %r" % (r.structured,)
     mdo = poll_disk_contains("src/Catalogs/Catalog/Catalog.mdo", "<name>%s</name>" % attr,
@@ -722,6 +724,34 @@ def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
     row = next((cells for cells in rows if len(cells) >= 3 and cells[0] == attr), None)
     assert row is not None, "the attributes table must list %s:\n%s" % (attr, details.text[:1500])
     assert row[2] == "String", "MODEL read-back: the new attribute's Type cell must be String, got %r" % (row,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_member_success_addresses_are_canonical_in_both_languages():
+    for prefix, attr in (("Catalog.Catalog.Attribute.", "Echo664En"),
+                         ("Справочник.Catalog.Реквизит.", "Форма664Ru")):
+        address = prefix + attr
+        canonical = "Catalog.Catalog.Attribute." + attr
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": address})
+        assert_ok(created, "create the member through " + address)
+        assert created.structured.get("fqn") == canonical, created.structured
+        assert_contains(created.structured.get("message") or "", "Created " + canonical)
+        path = "src/Catalogs/Catalog/Catalog.mdo"
+        poll_disk_contains(path, "<name>" + attr + "</name>", ctx="created member must be on disk")
+        wait_for_project_ready()
+        modified = call("modify_metadata", {"projectName": PROJECT, "fqn": address,
+                        "properties": [{"name": "comment", "value": "canonical echo 664"}]})
+        assert_ok(modified, "modify the member through " + address)
+        assert modified.structured.get("fqn") == canonical, modified.structured
+        assert_contains(modified.structured.get("message") or "", "Modified " + canonical)
+        wait_for_project_ready()
+        preview = call("delete_metadata", {"projectName": PROJECT, "fqn": address})
+        assert_ok(preview, "preview the member through " + address)
+        assert preview.structured.get("fqn") == canonical, preview.structured
+        deleted = call("delete_metadata", {"projectName": PROJECT, "fqn": address, "confirm": True})
+        assert_ok(deleted, "delete the member through " + address)
+        assert deleted.structured.get("fqn") == canonical, deleted.structured
+        assert_not_contains(read_disk(path), "<name>" + attr + "</name>", "member must be gone on return")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -1810,6 +1840,7 @@ def test_create_form_attribute_russian_token():
         "projectName": PROJECT,
         "fqn": "Catalog.Catalog.Форма.ItemForm.Реквизит." + attr})
     assert_ok(r, "create a form attribute via Russian form/kind tokens")
+    assert r.structured.get("fqn") == "Catalog.Catalog.Form.ItemForm.Attribute." + attr, r.structured
     poll_diff_contains(attr, ctx="the Russian-token form attribute must land on disk")
 
 
@@ -1861,6 +1892,8 @@ def test_create_attribute_column_russian_token():
         "projectName": PROJECT,
         "fqn": "Catalog.Catalog.Form.ItemForm.Реквизит." + attr + ".Колонка." + col})
     assert_ok(r, "create a column via the Russian Колонка token")
+    assert r.structured.get("fqn") == (
+        "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col), r.structured
     poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
                        ctx="the Russian-token column must land on disk")
 
@@ -2711,9 +2744,7 @@ def test_created_form_command_says_its_action_is_unbound_and_quotes_the_binding_
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_created_form_command_names_the_same_named_procedure_the_module_already_has():
     _write_item_form_module()
-    # Russian FORM and KIND tokens: the address the message quotes back keeps them, while its leading
-    # TYPE token comes back canonical English, as in structured.fqn - and it has to work as an
-    # address all the same.
+    # Russian TYPE/FORM/KIND input: both the result and its next-call address use English tokens.
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Справочник.Catalog.Форма.ItemForm.Команда.ProcAct"})
     assert_ok(r, "create a command named like an existing procedure, through Russian tokens")
@@ -2735,9 +2766,9 @@ def test_created_form_command_names_the_same_named_procedure_the_module_already_
     assert_not_contains(message, "write_module_source",
                         "the procedure exists, so writing it again must not be advised")
     address = _quoted_action_address(r.structured, "the procedure hint")
-    if address != "Catalog.Catalog.Форма.ItemForm.Команда.ProcAct.Handler.Action":
-        _fail("the quoted address must keep the caller's FORM / KIND tokens behind the canonical TYPE "
-              "token: %r" % address)
+    assert r.structured.get("fqn") == "Catalog.Catalog.Form.ItemForm.Command.ProcAct", r.structured
+    if address != "Catalog.Catalog.Form.ItemForm.Command.ProcAct.Handler.Action":
+        _fail("the quoted address must use canonical English TYPE / KIND tokens: %r" % address)
     owners = _QUOTED_REVALIDATION.findall(message)
     if owners != ["Catalog.Catalog"]:
         _fail("the hint must name the form's owner to revalidate, as the object's own FQN: %r in %r"

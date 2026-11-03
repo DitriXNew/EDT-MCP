@@ -618,7 +618,7 @@ with `python docs/generate_tool_docs.py`.
 | [`go_to_definition`](docs/tools/go_to_definition.md) | Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition'). |
 | [`open_editor`](docs/tools/open_editor.md) | Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examp… |
 | [`read_method_source`](docs/tools/read_method_source.md) | Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source'). |
-| [`validate_query`](docs/tools/validate_query.md) | Check a 1C query for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query'). |
+| [`validate_query`](docs/tools/validate_query.md) | Check a 1C query or stored BSL query literals for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query'). |
 | [`write_module_source`](docs/tools/write_module_source.md) | Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source'). |
 
 ### Debug
@@ -1041,6 +1041,15 @@ calls from hanging on it, the server **auto-cancels that dialog while a tool is 
 MCP-triggered connect fails fast with a hint to `set_infobase_credentials` instead of blocking forever
 (issue #194). Store the credentials once with `set_infobase_credentials` and the connect no longer
 needs the dialog.
+
+`create_infobase`, `set_infobase_credentials`, and `delete_infobase` preserve existing
+project defaults and RuntimeClient application selections, restoring bindings EDT clears.
+Their binding report distinguishes preserved, restored, removed, and unrestored entries;
+incomplete recovery is an error. Newer non-null selections are kept; a manual clear during
+the call is restored. `setDefault=true` explicitly selects the new application. For file/cluster
+infobases, global deregistration clears bindings to the removed UUID across projects;
+`deleteRegistration=false` only dissociates the target project. Inspect `get_applications` and
+`list_configurations` before retrying an operation with unresolved binding recovery.
 
 The auto-cancel is **activity-scoped**: it fires only while an MCP tool is in flight (plus a short grace
 window for the asynchronous read-back that follows a tool). So when the **MCP server is idle**, you can

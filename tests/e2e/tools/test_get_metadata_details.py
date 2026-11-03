@@ -306,11 +306,23 @@ def test_common_form_fqn_renders_structure():
     # A CommonForm FQN (2-part) also renders its structure (no mutation: pure read of an existing form).
     r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["CommonForm.Form"]})
     assert_ok(r, "get_metadata_details on a CommonForm FQN")
-    assert_contains(r.text, "Form Structure", "a CommonForm FQN must render the form structure")
+    assert_contains(r.text, "# Form Structure: CommonForm.Form\n", "a CommonForm header keeps its canonical FQN")
     assert_contains(r.text, "## Items", "must render the Items section")
     # The enriched renderer (FormStructureReader.render) always emits the Event handlers section
     # header, even for a form that declares no handlers (empty-section convention).
     assert_contains(r.text, "Event handlers", "the enriched structure must add an Event handlers section")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_owned_form_headers_use_canonical_fqns_in_both_languages():
+    for fqn in ("Catalog.Catalog.Form.ItemForm", "Справочник.Catalog.Форма.ItemForm"):
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+        assert_ok(r, "owned form addressed in either language")
+        assert_contains(r.text, "# Form Structure: Catalog.Catalog.Form.ItemForm\n",
+                        "owned form header must use the canonical Form kind")
+        assert_not_contains(r.text, "# Form Structure: Catalog.Catalog.forms.",
+                            "internal EMF collection names must not leak into the header")
+    assert_no_diff("form header formatting is read-only")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

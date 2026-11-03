@@ -25,8 +25,7 @@ import com.google.gson.JsonParser;
  * <p>It never records anything and never mutates its input: it takes a
  * {@code List<McpCallRecord>} snapshot (typically a copy of the recorder's ring
  * buffer) and produces a {@link StatsResult}. The single accumulation scan is
- * O(n) over the snapshot (per-record JSON parsing is bounded by the recorder's
- * per-record size cap); only the small distinct-key set is sorted afterwards.
+ * O(n) over the snapshot; only the small distinct-key set is sorted afterwards.
  *
  * <p><b>Cross-slice contract.</b> This aggregator consumes {@code McpCallRecord}
  * (authored in a sibling slice) through the following read-only surface:
@@ -43,11 +42,8 @@ import com.google.gson.JsonParser;
  *     body is not undercounted</li>
  * <li>{@code long getDurationMs()} &mdash; wall-clock duration of the call</li>
  * </ul>
- * The error/OK status is <i>not</i> read from the record: this class owns its own
- * classifier ({@link #isErrorResponse(String)}) so the outcome always matches the
- * protocol handler contract (a JSON-RPC top-level {@code error}, or a tool result
- * with {@code isError:true} / {@code success:false}) rather than any substring
- * heuristic.
+ * Error/OK status comes from the record's classification of the complete response,
+ * using {@link #isErrorResponse(String)} before the recorder caps the body.
  *
  * <p>There is deliberately <b>no project dimension</b> in this v1 aggregator.
  */
@@ -266,10 +262,10 @@ public final class StatsAggregator
         }
     }
 
-    /** Signals remain errors even if the stored response was too large to retain as valid JSON. */
+    /** Uses the captured status even when the stored response is no longer valid JSON. */
     public static boolean isErrorRecord(McpCallRecord record)
     {
-        return record != null && (record.isInterrupted() || isErrorResponse(record.getResponseJson()));
+        return record != null && record.isError();
     }
 
     /**

@@ -22,6 +22,22 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class ApplicationDefaultChangeTest
 {
     @Test
+    public void explicitInfobaseDefaultWinsOverConcurrentClearsAndSelections() throws Exception
+    {
+        for (String concurrent : new String[] {null, "newer-choice"})
+        {
+            var state = new InfobaseBindingsTest.State();
+            var next = mock(IApplication.class);
+            when(next.getId()).thenReturn("next");
+            var change = ApplicationDefaultChange.capture(state.manager, state.project, state.defaultId::get);
+            state.defaultId.set(concurrent);
+            assertNull(change.applyAfterInfobaseWrite(next, () -> { }));
+            assertEquals("next", state.defaultId.get());
+            verify(state.manager).setDefaultApplication(state.project, next);
+        }
+    }
+
+    @Test
     public void productionObserverReadsTheExplicitPreferenceAndWritesOnlyThroughTheManager() throws Exception
     {
         var project = mock(IProject.class);

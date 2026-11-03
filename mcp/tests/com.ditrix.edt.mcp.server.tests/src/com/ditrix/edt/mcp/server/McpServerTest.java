@@ -12,6 +12,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assert.assertSame;
+import static org.mockito.Mockito.*;
 
 import java.io.IOException;
 
@@ -27,6 +29,37 @@ import com.ditrix.edt.mcp.server.transport.HttpTransport;
 public class McpServerTest
 {
     private static final int PORT = 8765;
+
+    @Test
+    public void activeCallKeepsStatusBarInterruptEnabledAfterOlderNameIsCleared()
+    {
+        McpServer server = new McpServer();
+        ActiveToolCall active = mock(ActiveToolCall.class);
+        when(active.getToolName()).thenReturn("newer_call");
+        when(active.getElapsedSeconds()).thenReturn(7L);
+        server.setActiveToolCall(active);
+        server.setCurrentToolName(null);
+        assertTrue("The status-bar menu must still offer interruption", server.isToolExecuting());
+        assertEquals("newer_call", server.getCurrentToolName());
+        assertEquals(7L, server.getToolExecutionSeconds());
+    }
+
+    @Test
+    public void signalCleanupKeepsCallRegisteredDuringSignalDelivery()
+    {
+        McpServer server = new McpServer();
+        ActiveToolCall first = mock(ActiveToolCall.class);
+        ActiveToolCall second = mock(ActiveToolCall.class);
+        UserSignal signal = new UserSignal(UserSignal.SignalType.CANCEL, "Stop waiting");
+        when(first.sendSignalResponse(signal)).thenAnswer(invocation -> {
+            server.setActiveToolCall(second);
+            return true;
+        });
+        server.setActiveToolCall(first);
+        assertTrue(server.interruptToolCall(signal));
+        assertSame("Signal delivery must only clear its own call", second, server.getActiveToolCall());
+        verify(second, never()).sendSignalResponse(signal);
+    }
 
     @Test
     public void testRemoteAccessWithNoTokenIsRefused()

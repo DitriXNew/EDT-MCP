@@ -1015,12 +1015,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, action)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("kind", result.eClassName) //$NON-NLS-1$
             .put("name", result.name) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted)
             .put(KEY_APPLIED, result.applied)
-            .put(McpKeys.MESSAGE, verb + normFqn + (result.applied.isEmpty() ? "" //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, verb + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + (result.applied.isEmpty() ? "" //$NON-NLS-1$
                 : " (" + String.join(", ", result.applied) + ")")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
@@ -1157,12 +1157,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(project, canonicalOwnerFqnHolder[0]);
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("kind", createdKindHolder[0]) //$NON-NLS-1$
             .put("name", itemName) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
-        return result.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
+        return result.put(McpKeys.MESSAGE, "Created " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)).toJson(); //$NON-NLS-1$
     }
 
     private String validateInsertBeforeWrite(String projectName, String fqn, int position)
@@ -2280,7 +2280,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("kind", kind) //$NON-NLS-1$
             .put("name", name) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted);
@@ -2353,12 +2353,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     static String formMemberCreatedMessage(FormElementWriter.Kind kind, String fqn, String name,
         FormModuleLook look)
     {
-        String created = "Created " + fqn; //$NON-NLS-1$
+        String created = "Created " + MetadataTypeUtils.toCanonicalEnglishFqn(fqn); //$NON-NLS-1$
         if (kind != FormElementWriter.Kind.COMMAND)
         {
             return created;
         }
-        String action = "'" + fqn + ".Handler.Action'"; //$NON-NLS-1$ //$NON-NLS-2$
+        String action = "'" + MetadataTypeUtils.toCanonicalEnglishFqn(fqn) + ".Handler.Action'"; //$NON-NLS-1$ //$NON-NLS-2$
         String unbound = created + ". The command has no action yet, so a button bound to it does nothing"; //$NON-NLS-1$
         BslModuleUtils.TextMethod sameNamed = look != null ? look.sameNamed : null;
         if (sameNamed == null || !sameNamed.found)
@@ -3033,7 +3033,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put("kind", "Form") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", formName) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted)
@@ -3052,9 +3052,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
         }
         normReport.addTo(result);
-        return result.put(McpKeys.MESSAGE, "Created form " + normFqn //$NON-NLS-1$
+        return result.put(McpKeys.MESSAGE, "Created form " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) //$NON-NLS-1$
             + ". Add structure with create_metadata on a form-member FQN " //$NON-NLS-1$
-            + "(e.g. " + normFqn + ".Attribute.<Name>).").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            + "(e.g. " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + ".Attribute.<Name>).").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -3299,7 +3299,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String buildHandlerResult(HandlerResultInfo info)
     {
         String location = info.ref.isItemLevel()
-            ? info.ref.formPath + "." + info.ref.itemName : info.ref.formPath; //$NON-NLS-1$
+            ? MetadataTypeUtils.toCanonicalEnglishFqn(info.ref.formPath) + "." + info.ref.itemName
+            : MetadataTypeUtils.toCanonicalEnglishFqn(info.ref.formPath); //$NON-NLS-1$
         String effectiveProc =
             (info.fProc == null || info.fProc.isEmpty()) ? info.eventName : info.fProc;
         String message;
@@ -3315,7 +3316,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", info.normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(info.normFqn)) //$NON-NLS-1$
             .put("kind", info.createdKind != null ? info.createdKind : "EventHandler") //$NON-NLS-1$ //$NON-NLS-2$
             .put("name", info.eventName) //$NON-NLS-1$
             .put(KEY_PERSISTED, info.persisted)
@@ -3694,7 +3695,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
-            .put("fqn", info.fqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(info.fqn)) //$NON-NLS-1$
             .put("kind", info.kind != null ? info.kind.getName() : null) //$NON-NLS-1$
             .put("name", info.name) //$NON-NLS-1$
             .put(KEY_PERSISTED, info.persisted);
@@ -3723,7 +3724,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         info.normReport.addTo(result);
         return result
-            .put(McpKeys.MESSAGE, "Created " + info.fqn) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Created " + MetadataTypeUtils.toCanonicalEnglishFqn(info.fqn)) //$NON-NLS-1$
             .toJson();
     }
 

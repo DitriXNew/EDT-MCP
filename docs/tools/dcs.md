@@ -1,6 +1,6 @@
 # dcs
 
-Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.
+Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters in this call. Writes wait for disk export. Call get_tool_guide('dcs') for body shapes.
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -17,17 +17,18 @@ Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, f
 | offset | — | integer | Zero-based item or character offset for get/options pagination. |
 
 ## Guide
-`dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
-configuration as one root plus an optional fragment. It supports `get`, `upsert`,
-`update`, `replace` and `remove`; the action table below defines the valid root/layer
-combinations.
+`dcs` addresses a schema or form-backed root plus an optional fragment. The action and
+body tables define supported operations. Dynamic-list `listSettings` shares the report
+settings writer.
 
-Authoring covers the schema layer (data sources, query/object/union data sets, fields and field folders,
-parameters, calculated fields, total fields, data-set links), the settings layer (default
-settings, named variants, structure groups, tables, charts, selection, filters, order, conditional
-appearance, user fields, and data/output parameter values), and dynamic lists — their
-ext-info scalars, schema-style fields/calculated fields/parameters, and `listSettings`,
-which goes through the same settings implementation as a report variant.
+Changing an empty MCP template to `templateType=DataCompositionSchema` immediately
+exports `Templates/<name>/Template.dcs`. An empty schema also supports `get format=xml`.
+For a submitted query or `autoFillFields` flag, an enabled query data set fills fields
+and missing parameters synchronously using EDT's designer routines, then exports them
+in this call. With no explicit fields, auto-fill defaults to true; explicit fields
+default it to false. Set `autoFillFields:false` to author fields/parameters yourself.
+Existing parameter defaults are preserved. A fill failure refuses the whole write;
+resolve the query sources or use explicit fields/parameters with auto-fill disabled.
 
 Nested data sets are deliberately excluded from the typed authoring surface. `get` renders
 existing ones and their addresses read-only; carry a schema containing them through the lossless
@@ -60,27 +61,13 @@ Use `format:"xml"` only with `action:"get"`, `type:"schema"`, and a bare schema 
 without a `#/...` fragment:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales",
-  "action": "get",
-  "type": "schema",
-  "format": "xml"
-}
+{"projectName":"MyProject","fqn":"Report.Sales","action":"get","type":"schema","format":"xml"}
 ```
 
 The response is a JSON page envelope:
 
 ```json
-{
-  "success": true,
-  "totalChars": 134118,
-  "offset": 0,
-  "hasMore": true,
-  "nextOffset": 40000,
-  "hash": "0123456789abcdef0123",
-  "xml": "<?xml version=..."
-}
+{"success":true,"totalChars":134118,"offset":0,"hasMore":true,"nextOffset":40000,"hash":"0123456789abcdef0123","xml":"<?xml version=..."}
 ```
 
 `xml` is a character chunk of the complete `DataCompositionSchema` XML produced by EDT's
@@ -118,14 +105,7 @@ To import it, read the destination root once in the default `md` format to obtai
 destination's current hash, then replace it:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.SalesCopy",
-  "action": "replace",
-  "type": "schema",
-  "expectedHash": "<hash from the destination schema get>",
-  "body": {"xml": "<DataCompositionSchema ...>...</DataCompositionSchema>"}
-}
+{"projectName":"MyProject","fqn":"Report.SalesCopy","action":"replace","type":"schema","expectedHash":"<hash from the destination schema get>","body":{"xml":"<DataCompositionSchema ...>...</DataCompositionSchema>"}}
 ```
 
 Send the reassembled WHOLE document in that one `replace`; `body.xml` is not chunked and
@@ -138,22 +118,16 @@ model is compared with the parsed schema, including counts of root data sources,
 concrete fields (including union/folder fields), schema parameters, and variants. It is also
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
 namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
-refuses the call and rolls back the transaction. After commit, the normal DCS force-export path
-schedules an asynchronous `Template.dcs` export. `Export scheduled: true` does not mean the file
-has finished writing when the call returns. The success response includes `xml=wholesale` and
-those model counts.
+refuses and rolls back. After commit, writes queue force-export and wait for EDT's export pipeline
+off the UI thread. `Export scheduled` reports submission; `Export drained: true` confirms completion
+before the response. The response includes `xml=wholesale` and those model counts.
 
 ### Start with a root summary
 
 Use the root's matching type and omit `body` and `expectedHash`:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales",
-  "action": "get",
-  "type": "schema"
-}
+{"projectName":"MyProject","fqn":"Report.Sales","action":"get","type":"schema"}
 ```
 
 Supported roots are:
@@ -214,12 +188,7 @@ Catalog.Products.Form.ListForm.Attribute.List#/listSettings/order/items/0
 For example, a data-set drill-down is:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales#/dataSets/Sales",
-  "action": "get",
-  "type": "dataSet"
-}
+{"projectName":"MyProject","fqn":"Report.Sales#/dataSets/Sales","action":"get","type":"dataSet"}
 ```
 
 It renders the complete data-set properties, full query in a fenced block, complete
@@ -237,14 +206,7 @@ collection.
 At a bare root, pass a collection type to page that collection:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales",
-  "action": "get",
-  "type": "dataSet",
-  "limit": 50,
-  "offset": 0
-}
+{"projectName":"MyProject","fqn":"Report.Sales","action":"get","type":"dataSet","limit":50,"offset":0}
 ```
 
 For collection and root-summary pages, `limit` is an item count that defaults to 100 and
@@ -383,7 +345,7 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 | `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. An exact `replace` of a structure item builds it from the `kind` in the body, so a grouping, a table and a chart can be exchanged at the same index. |
 | `chart` | `{kind?:"chart", name?, use?, id?, points?, series?, selection?, conditionalAppearance?, outputParameters?, pointsViewMode?, pointsUserSettingID?, pointsUserSettingPresentation?, seriesViewMode?, seriesUserSettingID?, seriesUserSettingPresentation?, ...HolderScaffold}`. `points` (the categories) and `series` hold group items and recurse like `grouping`; `selection` holds the measures. Addressing, `id` and the exact `replace` work as for `table`; a body appended without `kind:"chart"` is a grouping. Every chart of the schema is checked against the state a write leaves it in, so the same `type='schema'` call may declare the resource a chart measures: a point or series must group by a data-set field, calculated field or user field, or by an attribute of a data-set or calculated field (`<field>.<attribute>`), that its use restriction allows; a measure must be a resource (`totalFields`), a user field with a total expression or aggregate, a `totalFields` resource's percent field such as `Amount.OverallPercent`, or `{kind:"auto"}`; a chart needs at least one measure. Paths compare case-insensitively; the user-field folder and percent terms are accepted in English or Russian, and while an auto-fill query data set exists any unlisted field is accepted as a point or series. A write that leaves more broken references of some role and field in a settings tree (the default settings or one variant) than that tree had is refused with the choices and nothing is written, including a schema edit that breaks an unchanged chart; a problem that was already there in the same tree does not block an unrelated edit, and a switched-off chart, point, series or measure (`use:false` or a non-Enabled `groupState`, also through its structure group, axis group or folder) is not judged, and a switched-off user field is not available; a lossless `xml` replacement is copied as it is and not judged. `outputParameters` takes the platform chart catalogue (`ChartType`, `Title`, ...; `action='options'`, `type='chart'` lists it). Dynamic-list `listSettings` refuse a new or changed chart and offer no chart options. |
 | `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
-| `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. An output parameter takes one typed `value`; only data parameters accept a `values` array. The current platform output catalogues declare no value-list parameters. Platform-enum values accept either a bare literal string or `{kind:'string',value:'<literal>'}`; other shapes are refused with the allowed literals. A localized-text value such as `Title` takes a string or a `{"<languageCode>": "text"}` map, and `{}` writes the empty localized text EDT stores for a cleared title; the same holds for the `Format` and `Text` appearance keys. The `ChartType.ScaleColor` output parameter refuses `{color:'auto'}` because EDT cannot reload it; pass an explicit RGB color or omit the parameter. |
+| `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. An output parameter takes one typed `value`; only data parameters accept a `values` array. The current platform output catalogues declare no value-list parameters. Platform-enum values accept either a bare literal string or `{kind:'string',value:'<literal>'}`; other shapes are refused with the allowed literals. A localized-text value such as `Title` takes a string, `{kind:"string",value:"text"}`, or a `{"<languageCode>": "text"}` map, and `{}` writes the empty localized text EDT stores for a cleared title; the same holds for the `Format` and `Text` appearance keys. The `ChartType.ScaleColor` output parameter refuses `{color:'auto'}` because EDT cannot reload it; pass an explicit RGB color or omit the parameter. |
 | `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, additionalProperties?:{"Name":ValueSpec, ...}, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. `additionalProperties` is the platform `Structure`; `upsert`/`update` merge named entries and `replace` is authoritative. Value kinds outside the documented `ValueSpec` set are refused rather than discarded. Never use settings scaffold fields to store invented MCP IDs. |
 
 `HolderScaffold` means `viewMode?`, `userSettingID?`, and
@@ -405,91 +367,46 @@ rejected; the error names the bad value and lists every allowed platform literal
 
 ### Settings examples
 
+LocalString output values accept a bare string, a string ValueSpec, or the same
+language map as `title` (codes must be declared); `{}` clears localized text:
+
+```json
+{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/outputParameters","action":"upsert","type":"outputParameter","body":{"items":[{"parameter":{"kind":"parameter","value":"Title"},"value":{"kind":"string","value":"Sales"}}]}}
+```
+
+The same `value` may be `"Sales"` or `{"en":"Sales","ru":"Продажи"}`.
+Both field and conditional `appearance` use one parser: bare values and `{kind,value}`
+are accepted, including Boolean, Number, string/LocalString, enum, color and font:
+
+```json
+{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/conditionalAppearance","action":"upsert","type":"conditionalAppearance","body":{"items":[{"appearance":{"Text":"Highlighted","MarkNegatives":{"kind":"boolean","value":true},"TextColor":{"kind":"color","value":{"red":255,"green":0,"blue":0}}}}]}}
+```
+
+`options type=field` derives dictionaries from the EDT model. Restriction keys are
+Boolean flags, not enums; enum dictionaries include `role.periodType`:
+Other role enums that require the XML channel are marked `XML only`.
+
+```json
+{"projectName":"MyProject","fqn":"Report.Sales#/dataSets/Sales/fields","action":"upsert","type":"field","body":{"dataPath":"Period","role":{"periodType":"Main","periodNumber":1,"dimension":true},"useRestriction":{"field":false,"condition":false,"group":false,"order":true}}}
+```
+
 Create a variant with nested structure, selection, an AND/OR filter, and order:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales",
-  "action": "upsert",
-  "type": "variant",
-  "body": {
-    "name": "ManagerView",
-    "presentation": {"en": "Manager view"},
-    "settings": {
-      "items": [{
-        "name": "CustomerGroup",
-        "groupFields": {"items": [{
-          "field": {"kind": "field", "value": "Customer"},
-          "groupType": "Items",
-          "use": true
-        }]},
-        "items": [{"name": "PeriodGroup", "groupFields": {"items": [{
-          "field": {"kind": "field", "value": "Period"},
-          "groupType": "Items"
-        }]}}]
-      }],
-      "selection": {
-        "viewMode": "Normal",
-        "userSettingID": "selection",
-        "items": [{"field": {"kind": "field", "value": "Customer"}, "use": true}]
-      },
-      "filter": {"viewMode": "Normal", "userSettingID": "filter", "items": [{
-        "kind": "group", "groupType": "AndGroup", "items": [
-          {"left": {"kind": "field", "value": "Quantity"},
-           "comparisonType": "Greater", "right": [{"kind": "number", "value": 0}]},
-          {"kind": "group", "groupType": "OrGroup", "items": [
-            {"left": {"kind": "field", "value": "Status"},
-             "comparisonType": "Equal", "right": [{"kind": "string", "value": "Open"}]}
-          ]}
-        ]
-      }]},
-      "order": {"viewMode": "Normal", "userSettingID": "order", "items": [
-        {"field": {"kind": "field", "value": "Customer"}, "orderType": "Asc"}
-      ]}
-    }
-  }
-}
+{"projectName":"MyProject","fqn":"Report.Sales","action":"upsert","type":"variant","body":{"name":"ManagerView","presentation":{"en":"Manager view"},"settings":{"items":[{"name":"CustomerGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Customer"},"groupType":"Items","use":true}]},"items":[{"name":"PeriodGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Period"},"groupType":"Items"}]}}]}],"selection":{"viewMode":"Normal","userSettingID":"selection","items":[{"field":{"kind":"field","value":"Customer"},"use":true}]},"filter":{"viewMode":"Normal","userSettingID":"filter","items":[{"kind":"group","groupType":"AndGroup","items":[{"left":{"kind":"field","value":"Quantity"},"comparisonType":"Greater","right":[{"kind":"number","value":0}]},{"kind":"group","groupType":"OrGroup","items":[{"left":{"kind":"field","value":"Status"},"comparisonType":"Equal","right":[{"kind":"string","value":"Open"}]}]}]}]},"order":{"viewMode":"Normal","userSettingID":"order","items":[{"field":{"kind":"field","value":"Customer"},"orderType":"Asc"}]}}}}
 ```
 
 To change the nested OR condition, first run `get`, then use its root hash and exact
 index address:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Report.Sales#/variants/ManagerView/settings/filter/items/0/items/1/items/0",
-  "action": "update",
-  "type": "filter",
-  "expectedHash": "<20-character hash from get>",
-  "body": {"kind": "item", "right": [{"kind": "string", "value": "Closed"}]}
-}
+{"projectName":"MyProject","fqn":"Report.Sales#/variants/ManagerView/settings/filter/items/0/items/1/items/0","action":"update","type":"filter","expectedHash":"<20-character hash from get>","body":{"kind":"item","right":[{"kind":"string","value":"Closed"}]}}
 ```
 
 Configure a dynamic list and reproduce empty settings holders in the same call:
 
 ```json
-{
-  "projectName": "MyProject",
-  "fqn": "Catalog.Products.Form.ListForm.Attribute.List",
-  "action": "upsert",
-  "type": "dynamicList",
-  "body": {
-    "queryText": "SELECT Ref, Description FROM Catalog.Products",
-    "customQuery": true,
-    "dynamicDataRead": true,
-    "autoSaveUserSettings": true,
-    "fields": [{"dataPath": "Ref"}, {"dataPath": "Description"}],
-    "listSettings": {
-      "selection": {"items": [], "viewMode": "Normal", "userSettingID": "selection"},
-      "filter": {"items": [], "viewMode": "Normal", "userSettingID": "filter"},
-      "order": {"items": [], "viewMode": "Normal", "userSettingID": "order"},
-      "conditionalAppearance": {
-        "items": [], "viewMode": "Normal", "userSettingID": "appearance"
-      }
-    }
-  }
-}
+{"projectName":"MyProject","fqn":"Catalog.Products.Form.ListForm.Attribute.List","action":"upsert","type":"dynamicList","body":{"queryText":"SELECT Ref, Description FROM Catalog.Products","customQuery":true,"dynamicDataRead":true,"autoSaveUserSettings":true,"fields":[{"dataPath":"Ref"},{"dataPath":"Description"}],"listSettings":{"selection":{"items":[],"viewMode":"Normal","userSettingID":"selection"},"filter":{"items":[],"viewMode":"Normal","userSettingID":"filter"},"order":{"items":[],"viewMode":"Normal","userSettingID":"order"},"conditionalAppearance":{"items":[],"viewMode":"Normal","userSettingID":"appearance"}}}}
 ```
 
 Converting a plain form attribute is destructive. The existing consent gate, dynamic-list
@@ -505,39 +422,31 @@ tool separately force-exports it as
 
 ### Hash and the get-edit-verify loop
 
-Every successful `get` carries a short structural `hash`. It is a within-session stale
-tree guard, not a cross-EDT-version content identifier.
-
-1. Call `get` for the root, collection, or node and copy both the canonical address and
-   root `hash`.
-2. Prepare one mutation call. Pass that hash as `expectedHash` whenever the target uses
-   an index; `replace` and `remove` always require it.
-3. The server recomputes the hash inside the write
-   transaction. If it changed, do not guess the new index: re-run `get`, inspect the new
-   addresses, and rebuild the mutation.
-4. Call `get` again and verify the intended node plus the new hash.
+`get` returns a structural `hash`, valid within this session, not across EDT versions.
+Copy its canonical address and root hash; pass `expectedHash` for indexed edits and
+always for `replace`/`remove`. The write transaction rechecks it. On mismatch, get fresh
+addresses and rebuild the edit; never guess an index. Read back the result and new hash.
 
 ### Bilingual rules
 
-- Only metadata type tokens in an FQN may be English or Russian. Object, template,
-  form, attribute, field, and data-set names are programmatic `Name` values, never
-  synonyms.
-- `language` and localized presentation-map keys are language codes declared by the
-  project, not language object names. Matching is case-insensitive but output uses the
-  configuration's declared spelling. An undeclared code is rejected with the declared
-  list. Omit `language` to use the project's default code.
-- `language` selects localized values and presentations only; stored appearance and output
-  parameter names always follow the configuration's default language code.
-- Query text and DCS expressions are preserved exactly. They are not synonym-resolved,
-  normalized, or translated; both 1C query-language dialects remain valid data.
-- A write into a language the configuration DECLARES but does not itself use reports
-  `localeUnusedInConfiguration: true (<codes>)` in the result. It is not an error -
-  the text will display - but the configuration's own synonym has no text in that
-  language, so it may be a single-language build or one that is not supported yet. **Ask the
-  user before translating further** rather than continuing to write into it.
+- FQN type tokens accept English/Russian; all object/member names are programmatic
+  `Name` values, never synonyms.
+- `language` and presentation-map keys are declared language codes, not language names.
+  Matching ignores case; output uses declared spelling. Unknown codes are refused with
+  the declared list. Omitted `language` uses the default code. Parameter names always
+  follow the configuration default, independently of presentation language.
+- Queries and expressions remain verbatim in either 1C dialect; no translation or
+  synonym resolution occurs.
+- `localeUnusedInConfiguration: true (<codes>)` means the code is declared but absent
+  from the configuration's own synonym. Text displays, but the configuration may not
+  support that language. **Ask the user before translating further**.
 
 ## Vendor support
-A configuration on vendor support can lock objects. A write to a data composition schema, a form's dynamic-list query or its conditional appearance is refused when the object that owns it is locked by its support rule; nothing is written. Reading is never refused. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support: EDT applies support only to a configuration's own (native) root, never inside an extension, which is why an extension is the way to change a supported configuration.
+A vendor support lock on the owner refuses schema, dynamic-list query, and conditional
+appearance writes without mutation; reads remain available. An unavailable support check
+also refuses writes. The error names the owner. Use `adopt_metadata_object` in an extension,
+or have the user allow changes in EDT support settings; the server never changes them.
+Support applies only to native configuration roots, never extensions or external projects.
 
 
 ## Query validation before writes

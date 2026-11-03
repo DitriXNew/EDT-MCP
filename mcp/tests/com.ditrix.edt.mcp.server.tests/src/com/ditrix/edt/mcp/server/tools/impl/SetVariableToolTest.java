@@ -9,13 +9,22 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.*;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.Test;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.MultiStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.debug.core.DebugException;
+import org.eclipse.debug.core.model.IStackFrame;
+import org.eclipse.debug.core.model.IVariable;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link SetVariableTool}.
@@ -31,6 +40,62 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class SetVariableToolTest
 {
+    @Test
+    public void testSetFailurePrefersStatusExceptionMessage() throws Exception
+    {
+        IStatus status = new Status(IStatus.ERROR, "test", "Generic debug failure",
+            new IllegalStateException("Variable expired; call wait_for_break again."));
+        assertEquals("Variable expired; call wait_for_break again.", setFailure(status));
+    }
+
+    @Test
+    public void testSetFailureFallsBackToStatusMessage() throws Exception
+    {
+        assertEquals("Refresh the suspended frame and retry.",
+            setFailure(new Status(IStatus.ERROR, "test", "Refresh the suspended frame and retry.")));
+    }
+
+    @Test
+    public void testSetFailureUsesStatusChildren() throws Exception
+    {
+        MultiStatus status = new MultiStatus("test", 0, "Generic debug failure", null);
+        status.add(new Status(IStatus.ERROR, "test", "Variable expired; call wait_for_break again."));
+        assertEquals("Variable expired; call wait_for_break again.", setFailure(status));
+    }
+
+    @Test
+    public void testTextlessSetFailureNamesTypeAndSeverity() throws Exception
+    {
+        String message = setFailure(new Status(IStatus.ERROR, "test", ""));
+        assertTrue(message, message.contains("DebugException"));
+        assertTrue(message, message.contains("ERROR"));
+    }
+
+    private String setFailure(IStatus status) throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IStackFrame frame = mock(IStackFrame.class);
+        IVariable variable = mock(IVariable.class);
+        when(frame.getVariables()).thenReturn(new IVariable[] {variable});
+        when(variable.getName()).thenReturn("Counter");
+        when(variable.supportsValueModification()).thenReturn(true);
+        when(variable.verifyValue("42")).thenReturn(true);
+        doThrow(new DebugException(status)).when(variable).setValue("42");
+        registry.clear();
+        try
+        {
+            long frameRef = registry.registerFrame(frame, "set-variable-test");
+            String result = new SetVariableTool().execute(Map.of("frameRef", Long.toString(frameRef),
+                "variableName", "Counter", "value", "42"));
+            verify(variable).setValue("42");
+            return JsonParser.parseString(result).getAsJsonObject().get("error").getAsString();
+        }
+        finally
+        {
+            registry.clear();
+        }
+    }
+
     @Test
     public void testName()
     {

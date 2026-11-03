@@ -17,7 +17,8 @@ package com.ditrix.edt.mcp.server.history;
  * <p>The {@code requestJson} / {@code responseJson} payloads may already have been
  * truncated (with a trailing truncation marker) by {@link McpCallHistory} to keep
  * the in-memory ring bounded; this class stores whatever text it is given verbatim
- * and never inspects or mutates it. Because a stored body may be capped, the record
+ * without mutating it. The recorder supplies the error classification before capping.
+ * Because a stored body may be capped, the record
  * ALSO carries {@link #getOriginalRequestChars()} / {@link #getOriginalResponseChars()}
  * &mdash; the true character counts of the payloads <em>before</em> truncation &mdash;
  * so the context-usage statistics measure the real size a large response contributed
@@ -56,6 +57,7 @@ public final class McpCallRecord
     private final int originalResponseChars;
 
     private final boolean interrupted;
+    private final boolean error;
     private final BackgroundOutcome backgroundOutcome;
 
     /**
@@ -77,12 +79,12 @@ public final class McpCallRecord
         String responseJson, long durationMs, int originalRequestChars, int originalResponseChars)
     {
         this(timestampMs, method, toolName, requestJson, responseJson, durationMs,
-            originalRequestChars, originalResponseChars, false, null);
+            originalRequestChars, originalResponseChars, false, StatsAggregator.isErrorResponse(responseJson), null);
     }
 
     McpCallRecord(long timestampMs, String method, String toolName, String requestJson,
         String responseJson, long durationMs, int originalRequestChars, int originalResponseChars,
-        boolean interrupted, BackgroundOutcome backgroundOutcome)
+        boolean interrupted, boolean error, BackgroundOutcome backgroundOutcome)
     {
         this.timestampMs = timestampMs;
         this.method = method;
@@ -93,12 +95,19 @@ public final class McpCallRecord
         this.originalRequestChars = originalRequestChars;
         this.originalResponseChars = originalResponseChars;
         this.interrupted = interrupted;
+        this.error = interrupted || error;
         this.backgroundOutcome = backgroundOutcome;
     }
 
     public boolean isInterrupted()
     {
         return interrupted;
+    }
+
+    /** Whether the delivered response failed, classified before its body was capped. */
+    public boolean isError()
+    {
+        return error;
     }
 
     public BackgroundOutcome getBackgroundOutcome()
@@ -109,7 +118,7 @@ public final class McpCallRecord
     McpCallRecord withBackgroundOutcome(BackgroundOutcome outcome)
     {
         return new McpCallRecord(timestampMs, method, toolName, requestJson, responseJson,
-            durationMs, originalRequestChars, originalResponseChars, interrupted, outcome);
+            durationMs, originalRequestChars, originalResponseChars, interrupted, error, outcome);
     }
 
     /**

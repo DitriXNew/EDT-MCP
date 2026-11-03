@@ -126,6 +126,8 @@ public final class InputSchemaCompactor
     private static Map<String, Set<String>> buildKeepList()
     {
         Map<String, Set<String>> keep = new HashMap<>();
+        // XOR input modes and the method's conditional scope must survive schema compaction.
+        keep.put("validate_query", asSet("queryText", "method"));
         // Level address shape and conditional mode semantics cannot be expressed by these scalar schemas.
         keep.put("sort_metadata", asSet("fqn", "mode", "recursive", "items", "direction", "positions"));
         // The only statement anywhere that a 'task' marker means TODO/FIXME/XXX/HACK.
