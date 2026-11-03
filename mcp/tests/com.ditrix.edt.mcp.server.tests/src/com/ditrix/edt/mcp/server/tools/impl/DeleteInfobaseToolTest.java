@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -50,6 +51,201 @@ import com.google.gson.JsonParser;
  */
 public class DeleteInfobaseToolTest
 {
+    @Test
+    public void applicationDeletionClearsSharedFileBindingsLeftByEdt() throws Exception
+    {
+        assertApplicationDeletionClearsSharedFileBindings(false);
+    }
+
+    @Test
+    public void applicationDeletionExcludesSharedFileBindingsClearedByEdt() throws Exception
+    {
+        assertApplicationDeletionClearsSharedFileBindings(true);
+    }
+
+    private void assertApplicationDeletionClearsSharedFileBindings(boolean reset) throws Exception
+    {
+        var target = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var other = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var factory = com._1c.g5.v8.dt.platform.services.model.ModelFactory.eINSTANCE;
+        var connection = factory.createFileConnectionString();
+        connection.setFile("C:/bases/shared");
+        var ref = factory.createInfobaseReference();
+        ref.setUuid(java.util.UUID.randomUUID());
+        ref.setName("shared");
+        ref.setConnectionString(connection);
+        when(((IInfobaseApplication)target.prior).getInfobase()).thenReturn(ref);
+        when(target.prior.getName()).thenReturn("shared");
+        when(((IInfobaseApplication)other.prior).getInfobase()).thenReturn(ref);
+        when(other.project.getName()).thenReturn("other");
+        when(other.configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+        when(other.copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+        when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.of(other.prior));
+        org.mockito.Mockito.doAnswer(call -> {
+            IApplication application = call.getArgument(1);
+            other.defaultId.set(application == null ? null : application.getId());
+            return null;
+        }).when(target.manager).setDefaultApplication(org.mockito.ArgumentMatchers.eq(other.project),
+            org.mockito.ArgumentMatchers.any());
+        var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+        var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+        var context = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/bindings");
+        var tool = new DeleteInfobaseTool() {
+            @Override String checkDestructiveConsent(String name, String subtitle) { return null; }
+
+            @Override com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(IApplicationManager manager)
+            {
+                return com.ditrix.edt.mcp.server.utils.InfobaseBindings.capture(manager,
+                    new IProject[] {target.project, other.project},
+                    new org.eclipse.debug.core.ILaunchConfiguration[] {target.configuration, other.configuration},
+                    project -> project == target.project ? target.defaultId.get() : other.defaultId.get());
+            }
+
+            @Override String deregisterFileInfobase(
+                    com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager manager,
+                    InfobaseReference captured, IbIdentity id, DbFileOutcome db, boolean remove, Runnable guard)
+            {
+                assertTrue(remove);
+                assertEquals(ref.getUuid(), captured.getUuid());
+                when(target.manager.getApplication(target.project, "prior")).thenReturn(Optional.empty());
+                when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.empty());
+                if (reset) { target.reset(); other.reset(); }
+                return null; // Simulate confirmed launcher removal through the existing service seam.
+            }
+        };
+        var result = parse(tool.deleteInfobase(
+            DeleteInfobaseTool.DeleteContext.of(target.project, target.manager, associations, infobases),
+            "project", "prior", null, null, true, false, true, () -> context));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(ref.getUuid().toString(), result.get("registrationId").getAsString());
+        assertNull(result.toString(), target.defaultId.get());
+        assertNull(result.toString(), target.launchId.get());
+        assertNull(result.toString(), other.defaultId.get());
+        assertNull(result.toString(), other.launchId.get());
+        assertEquals(4, result.getAsJsonArray("removedBindings").size());
+        assertEquals(0, result.getAsJsonArray("restoredBindings").size());
+        assertEquals(0, result.getAsJsonArray("unrestoredBindings").size());
+        org.mockito.Mockito.verify(associations).dissociate(target.project, ref, context);
+    }
+
+    @Test
+    public void partialDeregistrationPreservesOtherProjectsSharingTheUuid() throws Exception
+    {
+        for (boolean resetOther : new boolean[] {false, true})
+        {
+            var target = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            var other = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("base");
+            when(((IInfobaseApplication)target.prior).getInfobase()).thenReturn(ref);
+            when(((IInfobaseApplication)other.prior).getInfobase()).thenReturn(ref);
+            when(other.project.getName()).thenReturn("other");
+            when(other.configuration.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+            when(other.copy.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, (String)null)).thenReturn("other");
+            when(target.manager.getApplication(other.project, "prior")).thenReturn(Optional.of(other.prior));
+            org.mockito.Mockito.doAnswer(call -> {
+                IApplication application = call.getArgument(1);
+                other.defaultId.set(application == null ? null : application.getId());
+                return null;
+            }).when(target.manager).setDefaultApplication(org.mockito.ArgumentMatchers.eq(other.project),
+                org.mockito.ArgumentMatchers.any());
+            var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+            when(infobases.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            when(infobases.findInfobaseByUuid(ref.getUuid())).thenReturn(Optional.of(ref));
+            var tool = new DeleteInfobaseTool() {
+                @Override protected void clearRegistrationCredentials(InfobaseReference reference,
+                        com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+                {
+                    guard.run(current -> { throw new IllegalStateException("secure storage unavailable"); });
+                }
+            };
+            var snapshot = com.ditrix.edt.mcp.server.utils.InfobaseBindings.capture(target.manager,
+                new IProject[] {target.project, other.project},
+                new org.eclipse.debug.core.ILaunchConfiguration[] {target.configuration, other.configuration},
+                project -> project == target.project ? target.defaultId.get() : other.defaultId.get());
+            var result = parse(snapshot.run(() -> {
+                target.reset();
+                if (resetOther) { other.reset(); }
+                return tool.deregisterFileInfobase(infobases, ref,
+                    new DeleteInfobaseTool.IbIdentity("project", "prior", "base"),
+                    new DeleteInfobaseTool.DbFileOutcome(false, null, false,
+                        DeleteInfobaseTool.SharedDatabase.NOT_SHARED), true, () -> { });
+            }, "project", false, true));
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            assertFalse(result.get("deleteRegistration").getAsBoolean());
+            assertEquals(ref.getUuid().toString(), result.get("registrationId").getAsString());
+            assertNull(target.defaultId.get());
+            assertNull(target.launchId.get());
+            assertEquals("prior", other.defaultId.get());
+            assertEquals("prior", other.launchId.get());
+            assertEquals(2, result.getAsJsonArray("removedBindings").size());
+            assertEquals(resetOther ? 2 : 0, result.getAsJsonArray("restoredBindings").size());
+            org.mockito.Mockito.verify(infobases, org.mockito.Mockito.never()).delete(org.mockito.ArgumentMatchers.any());
+        }
+    }
+
+    @Test
+    public void registrationDeletionResultExcludesTheCapturedBoundApplication() throws Exception
+    {
+        var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+        var reference = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("base");
+        when(((IInfobaseApplication)state.prior).getInfobase()).thenReturn(reference);
+        var result = JsonParser.parseString(state.snapshot().run(() -> {
+            when(state.manager.getApplication(state.project, "prior")).thenReturn(Optional.empty());
+            return DeleteInfobaseTool.registrationResult("project", "base", reference.getUuid(), true).toJson();
+        }, "project", false, true)).getAsJsonObject();
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertFalse("registration cleanup keeps its existing response identity", result.has("applicationId"));
+        assertEquals(2, result.getAsJsonArray("removedBindings").size());
+        assertEquals(0, result.getAsJsonArray("unrestoredBindings").size());
+        assertNull(state.defaultId.get());
+        assertNull(state.launchId.get());
+        org.mockito.Mockito.verify(state.manager).setDefaultApplication(state.project, null);
+        org.mockito.Mockito.verify(state.copy).doSave();
+    }
+
+    @Test
+    public void deletingNonDefaultInfobasePreservesOtherBindingsOrReportsFailure() throws Exception
+    {
+        for (boolean failRestore : new boolean[] {false, true})
+        {
+            var state = new com.ditrix.edt.mcp.server.utils.InfobaseBindingsTest.State();
+            state.failDefault = failRestore;
+            var app = mock(IInfobaseApplication.class);
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("temporary");
+            when(app.getInfobase()).thenReturn(ref);
+            when(app.getId()).thenReturn("non-default");
+            when(app.getName()).thenReturn("temporary");
+            when(state.manager.getApplication(state.project, "non-default")).thenReturn(Optional.of(app));
+            var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+            var context = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/bindings");
+            org.mockito.Mockito.doAnswer(call -> { state.reset(); return null; })
+                .when(associations).dissociate(state.project, ref, context);
+            var tool = new DeleteInfobaseTool()
+            {
+                @Override
+                String checkDestructiveConsent(String targetName, String subtitle)
+                {
+                    return null;
+                }
+
+                @Override
+                com.ditrix.edt.mcp.server.utils.InfobaseBindings captureBindings(IApplicationManager manager)
+                {
+                    return state.snapshot();
+                }
+            };
+            var result = JsonParser.parseString(tool.deleteInfobase(
+                DeleteInfobaseTool.DeleteContext.of(state.project, state.manager, associations, null),
+                "project", "non-default", null, null, false, false, true, () -> context)).getAsJsonObject();
+            assertEquals(result.toString(), !failRestore, result.get("success").getAsBoolean());
+            assertEquals(failRestore ? null : "prior", state.defaultId.get());
+            assertEquals("prior", state.launchId.get());
+            assertEquals(failRestore ? 1 : 0, result.getAsJsonArray("unrestoredBindings").size());
+            assertEquals("non-default", result.get("applicationId").getAsString());
+            org.mockito.Mockito.verify(associations).dissociate(state.project, ref, context);
+        }
+    }
+
     @Test
     public void unavailableAssociationContextDoesNotBlockStandaloneDispatch() throws Exception
     {
@@ -845,19 +1041,19 @@ public class DeleteInfobaseToolTest
     {
         // One assertion per branch databaseResultNote can take - the serialized payload, because
         // that is what a client reads. A record or a sentence proves nothing about the wire.
-        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(false, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
-        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, null, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
-        JsonObject shared = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject shared = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.SHARED)));
-        JsonObject unknown = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject unknown = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.UNKNOWN)));
-        JsonObject deleteFailed = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject deleteFailed = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
 
@@ -878,7 +1074,7 @@ public class DeleteInfobaseToolTest
     {
         // The over-correction guard for the delete side: a reason always attached would make
         // "kept" meaningless, and would contradict databaseFilesDeleted=true in the same payload.
-        JsonObject deleted = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+        JsonObject deleted = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
             new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, true,
                 DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
 
@@ -902,7 +1098,7 @@ public class DeleteInfobaseToolTest
                     for (boolean deleted : new boolean[] { true, false })
                     {
                         JsonObject payload =
-                            parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+                            parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true, null,
                                 new DeleteInfobaseTool.DbFileOutcome(requested, dir, deleted,
                                     state)));
                         boolean reportedDeleted =

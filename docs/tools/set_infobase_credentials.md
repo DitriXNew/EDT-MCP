@@ -41,7 +41,7 @@ So a call targeting by `projectName` + `applicationId` configures the agent **on
 Identify the application the same way as `update_database`:
 
 - **`launchConfigurationName`** (preferred) — the exact runtime-client config name from `list_configurations`; the project + applicationId are derived from it. **This is the only shape that also configures the launched client** (see the table above).
-- or **`projectName` + `applicationId`** — `applicationId` comes from `get_applications`. Configures the **agent only**; no launch configuration is touched, so the client's own settings stay whatever they were.
+- or **`projectName` + `applicationId`** — `applicationId` comes from `get_applications`. Configures **agent credentials only**; client credentials stay unchanged. Application bindings cleared by EDT can still be restored.
 
 ## What the client half writes
 
@@ -106,6 +106,12 @@ If a bounded call returns `mutationPending=true`, a native credential or launch-
 - **`success: true` does NOT mean the launch will stop asking** — check `clientConfigured`. Storing the agent's credentials and then hitting the client's "Infobase access" dialog on the next `run_yaxunit_tests` is issue #359; the fix is to target by `launchConfigurationName`, not to retry.
 - **The client half is per launch configuration.** Several configurations against the same infobase each need their own call (or their own edit in the launch dialog) — the agent-side settings are shared, the client-side attributes are not.
 - These are connection credentials, not a permission grant: the user's rights inside the infobase are unchanged.
+
+## Application bindings
+
+The operation verifies existing project defaults and RuntimeClient application selections and restores values EDT cleared. This applies to both addressing forms, including writes that fail. Differing non-null choices are kept; manual clears during the call are restored too. Client credential edits do not prevent restoring its application selection.
+
+`preservedBindings`, `restoredBindings`, `removedBindings`, and `unrestoredBindings` report binding recovery separately from credential storage and `clientConfigured`. A non-empty `unrestoredBindings` makes the response an error even if credentials were stored. Inspect EDT's Applications/Run Configurations, `get_applications`, and `list_configurations` before retrying; wait for any pending native write before completing recovery.
 
 ## Which side gets configured
 

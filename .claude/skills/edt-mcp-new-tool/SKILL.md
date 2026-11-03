@@ -11,7 +11,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 ## Steps
 
-1. **Class** in `tools/impl/XxxTool.java`: `implements IMcpTool` (read/action) or **`extends AbstractMetadataWriteTool`** for a tool that MUTATES the model — the base runs `executeOnUiThread(params)` on the UI thread (model mutation is safe only there), gives `resolveProjectAndConfig(projectName)` + `unwrapCauseMessage(e)` + default `getResponseType()=JSON`. `tools/impl/` holds the tool only (utilities/bases → `utils/`, `tools/base/`). Declare `public static final String NAME = "xxx";` (snake_case: `get_`/`list_`/`create_`/`adopt_`…).
+1. **Class** in `tools/impl/XxxTool.java`: `implements IMcpTool` (read/action) or **`extends AbstractMetadataWriteTool`** for a tool that MUTATES the model — the base runs `executeOnUiThread(params)` on the UI thread (model mutation is safe only there), gives `resolveProjectAndConfig(projectName)` + `unwrapCauseMessage(e)` + default `getResponseType()=JSON`. `tools/impl/` holds the tool only (utilities/bases → `utils/`, `tools/base/`); `ToolImplementationPackageRatchetTest` checks every production top-level class there, including subpackages and unregistered classes, and accepts inherited `IMcpTool` implementations. Declare `public static final String NAME = "xxx";` (snake_case: `get_`/`list_`/`create_`/`adopt_`…).
 
 2. **IMcpTool surface**:
    - `getName()` → `NAME`.

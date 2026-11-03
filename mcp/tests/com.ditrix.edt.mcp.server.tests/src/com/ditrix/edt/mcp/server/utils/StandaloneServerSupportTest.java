@@ -13,6 +13,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -23,6 +24,10 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.BundleException;
+import org.osgi.framework.ServiceReference;
 
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport.RegistryCleanup;
 
@@ -47,6 +52,97 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport.RegistryCleanup;
  */
 public class StandaloneServerSupportTest
 {
+    @Test
+    public void sharedServiceLookupKeepsActiveAndLazyStartupCases() throws Exception
+    {
+        for (boolean needsStart : new boolean[] {false, true})
+        {
+            var bundle = mock(TestBundle.class);
+            var context = mock(TestBundleContext.class);
+            var reference = mock(TestServiceReference.class);
+            var service = new Object();
+            if (needsStart) { when(bundle.getBundleContext()).thenReturn(null, context); }
+            else { when(bundle.getBundleContext()).thenReturn(context); }
+            doReturn(reference).when(context).getServiceReference(
+                "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.IStandaloneServerService");
+            doReturn(service).when(context).getService(reference);
+            assertSame(service, acquireFrom(bundle));
+            verify(bundle, times(needsStart ? 1 : 0)).start(Bundle.START_TRANSIENT);
+            verify(bundle, times(needsStart ? 2 : 1)).getBundleContext();
+            verify(context).getService(reference);
+        }
+    }
+
+    @Test
+    public void missingBundleContextAndServiceRegistrationRemainUnavailable() throws Exception
+    {
+        assertNull(acquireFrom(null));
+        var inactive = mock(TestBundle.class);
+        assertNull(acquireFrom(inactive));
+        verify(inactive).start(Bundle.START_TRANSIENT);
+        verify(inactive, times(2)).getBundleContext();
+        var active = mock(TestBundle.class);
+        var context = mock(TestBundleContext.class);
+        when(active.getBundleContext()).thenReturn(context);
+        assertNull(acquireFrom(active));
+        verify(active, never()).start(anyInt());
+        verify(context, never()).getService(any());
+    }
+
+    @Test
+    public void serviceAndStartupFailuresKeepTheUnavailableResult() throws Exception
+    {
+        var bundle = mock(TestBundle.class);
+        doThrow(new BundleException("startup refused")).when(bundle).start(Bundle.START_TRANSIENT);
+        assertNull(acquireFrom(bundle));
+        verify(bundle, times(1)).getBundleContext();
+        var active = mock(TestBundle.class);
+        var context = mock(TestBundleContext.class);
+        when(active.getBundleContext()).thenReturn(context);
+        when(context.getServiceReference(anyString())).thenThrow(new IllegalStateException("registry unavailable"));
+        assertNull(acquireFrom(active));
+        assertNull(StandaloneServerSupport.acquireService("create_infobase", "startup failed", id -> {
+            throw new NoClassDefFoundError("feature unavailable");
+        }));
+    }
+
+    @Test
+    public void sharedMethodLookupKeepsInheritedPublicMethodsAndExactArity()
+    {
+        var inherited = StandaloneServerSupport.findMethod(LookupChild.class, "call", 1);
+        assertNotNull(inherited);
+        assertEquals(LookupParent.class, inherited.getDeclaringClass());
+        assertEquals(0, StandaloneServerSupport.findMethod(LookupChild.class, "call", 0).getParameterCount());
+        assertNull(StandaloneServerSupport.findMethod(LookupChild.class, "call", 2));
+        assertNull(StandaloneServerSupport.findMethod(LookupChild.class, "privateCall", 0));
+        assertNull(StandaloneServerSupport.findMethod(LookupChild.class, "absent", 0));
+    }
+
+    // Local interfaces keep Mockito's generated classes in the test bundle's class loader.
+    public interface TestBundle extends Bundle { }
+    public interface TestBundleContext extends BundleContext { }
+    public interface TestServiceReference extends ServiceReference<Object> { }
+
+    private static Object acquireFrom(Bundle bundle)
+    {
+        return StandaloneServerSupport.acquireService("create_infobase",
+            "create_infobase: could not start standalone-server bundle", id -> {
+                assertEquals("com.e1c.g5.v8.dt.platform.standaloneserver.wst.core", id);
+                return bundle;
+            });
+    }
+
+    public static class LookupParent
+    {
+        public void call(String value) { }
+    }
+
+    public static class LookupChild extends LookupParent
+    {
+        public void call() { }
+        @SuppressWarnings("unused") private void privateCall() { }
+    }
+
     private static final IProgressMonitor MONITOR = new NullProgressMonitor();
 
     // ==================== RegistryCleanup enum ====================

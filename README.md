@@ -1039,6 +1039,15 @@ MCP-triggered connect fails fast with a hint to `set_infobase_credentials` inste
 (issue #194). Store the credentials once with `set_infobase_credentials` and the connect no longer
 needs the dialog.
 
+`create_infobase`, `set_infobase_credentials`, and `delete_infobase` preserve existing
+project defaults and RuntimeClient application selections, restoring bindings EDT clears.
+Their binding report distinguishes preserved, restored, removed, and unrestored entries;
+incomplete recovery is an error. Newer non-null selections are kept; a manual clear during
+the call is restored. `setDefault=true` explicitly selects the new application. For file/cluster
+infobases, global deregistration clears bindings to the removed UUID across projects;
+`deleteRegistration=false` only dissociates the target project. Inspect `get_applications` and
+`list_configurations` before retrying an operation with unresolved binding recovery.
+
 The auto-cancel is **activity-scoped**: it fires only while an MCP tool is in flight (plus a short grace
 window for the asynchronous read-back that follows a tool). So when the **MCP server is idle**, you can
 open EDT's **"Configure Infobase access"** dialog **by hand in the GUI** and use it normally — the
