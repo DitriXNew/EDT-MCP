@@ -384,9 +384,7 @@ public class DeleteMetadataToolTest
     public void testForceIsOptionalAndDistinctFromConfirm()
     {
         String schema = new DeleteMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue(requiredIdx >= 0);
-        String tail = schema.substring(requiredIdx);
+        String tail = JsonParser.parseString(schema).getAsJsonObject().getAsJsonArray("required").toString();
         assertFalse("force must not be required", tail.contains("\"force\"")); //$NON-NLS-1$ //$NON-NLS-2$
         // force is the reference-override; confirm is the preview gate — both are declared and distinct.
         assertTrue(schema.contains("\"force\"")); //$NON-NLS-1$
@@ -489,21 +487,22 @@ public class DeleteMetadataToolTest
     @Test
     public void testRequiredParameters()
     {
-        String schema = new DeleteMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
-        String tail = schema.substring(requiredIdx);
+        JsonObject schema = JsonParser.parseString(new DeleteMetadataTool().getInputSchema()).getAsJsonObject();
+        String tail = schema.getAsJsonArray("required").toString();
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("fqn must be required", tail.contains("\"fqn\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("fqn is conditional on operations being absent", tail.contains("\"fqn\""));
+        assertEquals(2, schema.getAsJsonArray("oneOf").size());
+        assertEquals("fqn", schema.getAsJsonArray("oneOf").get(0).getAsJsonObject()
+            .getAsJsonArray("required").get(0).getAsString());
+        assertEquals("operations", schema.getAsJsonArray("oneOf").get(1).getAsJsonObject()
+            .getAsJsonArray("required").get(0).getAsString());
     }
 
     @Test
     public void testConfirmIsOptional()
     {
         String schema = new DeleteMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
-        assertTrue(requiredIdx >= 0);
-        String tail = schema.substring(requiredIdx);
+        String tail = JsonParser.parseString(schema).getAsJsonObject().getAsJsonArray("required").toString();
         assertFalse("confirm must not be required", tail.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

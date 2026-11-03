@@ -21,6 +21,18 @@ Run this when a piece of work is finished — it is the gate that proves the who
    - Changed metadata/code resolution → a bilingual case (English `Name`, Russian `Name`, synonym). (`edt-mcp-bilingual`.)
 
 3. **Build + unit (Tier 1)** — `bash source/compile.sh` → **BUILD SUCCESS** + every ratchet green (`BuiltInToolTestCoverageTest`, `ToolContractConsistencyTest`, e2e coverage ratchet). Toolchain isn't on PATH — pass `--java-home`/`--maven-home`.
+   - **Run the FULL unit suite before pushing, on top of current master** (merge `origin/master` first). A targeted `-Dtest=` run and a green live stand both miss the build ratchets that new work trips most often:
+
+     | Ratchet | Trips when | Fix |
+     |---|---|---|
+     | `ToolDocsRatchetTest` | a tool's description, schema or guide changed | regenerate `docs/tools/<tool>.md` (step 6) |
+     | `GuideOutputSizeTest`, `ModifyMetadataGuideHeadroomTest` | a guide renders over the `get_tool_guide` cap or eats the merge headroom | condense existing prose so the PR is NET-NEUTRAL on that guide — parallel PRs add to the same guide (`edt-mcp-tool-descriptions`) |
+     | `SchemaExecuteParamParityTest` | a declared parameter is not read in `execute()` by its literal name | read it by its declared name |
+     | `ToolPreset*Test` | a registered tool belongs to no `ToolGroup` | add it to its group (`edt-mcp-new-tool`) |
+     | `ToolSettingsServiceTest` (read-only preset growth) | a writer joins a group the read-only presets disable | register the preset migration the test names |
+     | `MessagesParityTest` | a preferences key exists in one locale file only | add it to every `messages*.properties` |
+     | `ProjectContextAdoptionRatchetTest` | a new `ResourcesPlugin.getWorkspace()` in `tools/impl` | resolve through `ProjectContext` |
+     | e2e runner `test_fixture_hygiene` | fixture objects were added on purpose | `EDT_MCP_UPDATE_FIXTURE_DECLARATIONS=1 python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`, commit the pin |
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
    - **Touched the target platform, or a call into an EDT/platform API? Also compile against the older EDTs, once per installation — each with its own flags:**
@@ -33,7 +45,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 
 5. **Live redeploy (Tier 2)** — redeploy the freshly built bundle to the non-elevated dev EDT copy (`edt-redeploy.ps1`; signal `MCP server UP on 8765`, exit 1 ≠ failure). **Anti-stale:** confirm the DEPLOYED jar contains your change (`unzip -p <jar> path/Class.class | grep <literal>`). Wait for both projects `ready`. If EDT wedges → kill + `-clean` relaunch.
 
-6. **Golden** — if `tools/list` changed (new tool / description / schema / annotations), regenerate and commit the golden (`EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter tools_list`); the golden snapshot test must pass.
+6. **Golden + tool docs** — if `tools/list` changed (new tool / description / schema / annotations), regenerate and commit the golden (`EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter tools_list`); the golden snapshot test must pass. A description, schema or GUIDE change also needs its `docs/tools/<tool>.md` page regenerated: `python docs/generate_tool_docs.py --port <port>` against a server running THIS branch's build, then commit only the pages of the tools the branch changed (plus the indexes for a new tool). Never generate pages from an integration build that holds several branches: a page embeds the whole guide, so it would carry the other branches' text.
 
 7. **Full e2e (Tier 3)** — `python tests/e2e/run_all.py --project TestConfiguration` → all pass (a handful of env-gated skips are normal), **fixture clean: True**. (`edt-mcp-e2e-testing`.)
 
@@ -43,16 +55,16 @@ Run this when a piece of work is finished — it is the gate that proves the who
 
 9. **Clean git tree** — `git status` clean: no stray files, no leftover fixture churn (the e2e run reverts its fixtures; if not, sync them). The diff should read as exactly the intended change.
 
-10. **Commit** — adversarially review the diff, then commit **locally** on the working branch. Do NOT push or merge unless explicitly asked.
+10. **Commit** — adversarially review the diff, then commit on the working branch. Pushing, the draft PR and the merge follow the PR rules in CLAUDE.md ("For agents": draft → merge gate → squash-merge).
 
 ## Quick "definition of done"
 - [ ] No stray Cyrillic / English surface / lowerCamelCase / `ToolResult.error` / tx boundary
 - [ ] Unit `XxxToolTest` + e2e `test_<tool>.py` (+ bilingual case if resolution changed)
-- [ ] `compile.sh` BUILD SUCCESS + ratchets green; `docs/validate_agent_skills.py` clean
+- [ ] `compile.sh` BUILD SUCCESS (FULL suite, on top of current master) + ratchets green; `docs/validate_agent_skills.py` clean
 - [ ] `verify-oldest-platform.sh` green on BOTH local installs — 2026.1 (defaults) and 2026.2.0 (`--ee JavaSE-25 --keep-svg`) (only if the target platform or a platform API call changed)
 - [ ] README count + tables + detail updated
 - [ ] Redeployed live; deployed jar verified (anti-stale); projects `ready`
-- [ ] Golden regenerated + committed (if `tools/list` changed)
+- [ ] Golden regenerated + committed (if `tools/list` changed); `docs/tools/<tool>.md` regenerated for every tool whose description/schema/guide changed
 - [ ] Full e2e green + fixture clean
 - [ ] Conformance: no new failures vs `tests/conformance/baseline.yml`
 - [ ] `git status` clean; diff reviewed; committed locally (no push unless asked)

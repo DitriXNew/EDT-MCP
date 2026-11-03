@@ -8,13 +8,16 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.core.event.BmEvent;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.event.IBmSyncEventListener;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
@@ -136,6 +139,33 @@ public final class BmTransactions
         // Same contract as write: the boundary committed once execute() returned.
         WriteScope.recordMutationCommitted();
         return result;
+    }
+
+    /**
+     * Global-context write with its own synchronous commit event. The task's unique operation ID
+     * excludes other writers' events; the observer must only capture identities, without model reads.
+     */
+    public static <T> T writeInGlobalContext(IBmModel model, String taskName, BmOperation<T> operation,
+        Consumer<BmEvent> onCommit)
+    {
+        AbstractBmTask<T> task = task(taskName, operation);
+        IBmSyncEventListener listener = event -> {
+            if (event.getOperationId() == task.getId())
+            {
+                onCommit.accept(event);
+            }
+        };
+        model.addSyncEventListener(listener);
+        try
+        {
+            T result = model.getGlobalContext().execute(task);
+            WriteScope.recordMutationCommitted();
+            return result;
+        }
+        finally
+        {
+            model.removeSyncEventListener(listener);
+        }
     }
 
     /** The BM task wrapping {@code operation}, shared by both write paths. */

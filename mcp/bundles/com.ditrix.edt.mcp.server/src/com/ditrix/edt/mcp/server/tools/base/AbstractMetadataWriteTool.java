@@ -222,6 +222,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     @Override
     public final String execute(Map<String, String> params)
     {
+        String validationError = validateRequest(params);
+        if (validationError != null)
+        {
+            return validationError;
+        }
         String preUiError = beforeUiThreadOrError(params);
         if (preUiError != null)
         {
@@ -394,6 +399,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return false;
     }
 
+    /** Allows a tool with multiple request modes to opt into the shared marker report per call. */
+    protected boolean reportsWrittenObjectMarkers(Map<String, String> params)
+    {
+        return reportsWrittenObjectMarkers();
+    }
+
     /** @return the validation budget of the marker report; overridden only by tests */
     protected long markerDeadlineMs()
     {
@@ -415,7 +426,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     private String attachWrittenObjectMarkers(Map<String, String> params, WriteScope.Verdict verdict,
         WriteScope scope, String result)
     {
-        if (!reportsWrittenObjectMarkers())
+        if (!reportsWrittenObjectMarkers(params))
         {
             return result;
         }
@@ -693,6 +704,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * @return an error message, or {@code null} to continue
      */
     protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        return null;
+    }
+
+    /** Returns a ready error JSON for input refused before project access, or null. */
+    protected String validateRequest(Map<String, String> params)
     {
         return null;
     }
