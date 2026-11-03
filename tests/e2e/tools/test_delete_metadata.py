@@ -328,6 +328,126 @@ def test_preview_accepts_explicit_timeout_and_clamps_out_of_range_value():
 _FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 
 
+def _batch_operations(*members):
+    return [{"action": "delete", "fqn": "Catalog.Catalog.Form.ItemForm." + member}
+            for member in members]
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_preflight_reports_two_typos_with_zero_writes():
+    settle_or_fail("batch preflight")
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "operations": _batch_operations("Command.BatchTypoOne", "Command.BatchTypoTwo"),
+        "confirm": True, "atomic": True,
+    })
+    assert_error(r, "two independent missing batch targets")
+    data = r.structured
+    assert data["reason"] == "invalidBatch", data
+    assert [entry["operationIndex"] for entry in data["errors"]] == [0, 1], data
+    for entry, name in zip(data["errors"], ["BatchTypoOne", "BatchTypoTwo"]):
+        assert entry["reason"] == "invalidNow", entry
+        assert_error_quality(entry["error"], names=[name], suggests=["get_metadata_details"])
+    assert data["applied"] == [] and data["committed"] is False, data
+    assert data["persistenceState"] == "unchanged", data
+    assert "mutationCommitted" not in data and "mutationOutcomeUnknown" not in data, data
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_unknown_fields_refused_before_mutation():
+    operations = _batch_operations("Group.FormCommandBar", "Command.Anything")
+    operations[1]["unknownOperationField"] = True
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "operations": operations,
+        "unknownTopLevelField": True, "confirm": True,
+    })
+    assert_error(r, "unknown batch parameters")
+    data = r.structured
+    assert len(data["errors"]) == 2, data
+    errors = " ".join(entry["error"] for entry in data["errors"])
+    assert_error_quality(errors, names=["unknownTopLevelField", "unknownOperationField"],
+                         suggests=["Use only action and fqn"])
+    assert data["applied"] == [] and data["committed"] is False, data
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_rejects_unsupported_modes_and_create_modify_chain():
+    operations = _batch_operations("Command.A", "Command.A")
+    operations[0]["action"] = "create"
+    operations[1]["action"] = "modify"
+    r = call("delete_metadata", {"projectName": PROJECT, "operations": operations, "confirm": True})
+    assert_error(r, "unsupported dependency chain")
+    assert len(r.structured["errors"]) == 2, r.structured
+    assert r.structured["applied"] == [], r.structured
+    for entry in r.structured["errors"]:
+        assert entry["reason"] == "unsupportedBatch", entry
+        assert_error_quality(entry["error"], names=["action"], suggests=["create_metadata", "modify_metadata"])
+    for extra in ({"atomic": False}, {"force": True}, {"timeout": 600}, {"continueOnError": True},
+                  {"fqn": "Catalog.Catalog"}):
+        r = call("delete_metadata", {"projectName": PROJECT, "operations": _batch_operations("Command.A"),
+                                     "confirm": True, **extra})
+        assert_error(r, "unsupported batch mode %r" % extra)
+        assert r.structured["applied"] == [] and r.structured["committed"] is False, r.structured
+        assert r.structured["errors"], r.structured
+        errors = " ".join(entry["error"] for entry in r.structured["errors"])
+        assert_error_quality(errors, names=list(extra),
+                             suggests=["Omit" if "atomic" in extra or "force" in extra else "Pass operations"])
+    assert_no_diff()
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_batch_preview_then_confirm_deletes_group_and_commands_once():
+    members = ["Group.BatchGroup", "Command.BatchFirst", "Command.BatchSecond", "Command.BatchKeep"]
+    for member in members:
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm." + member}), "seed " + member)
+        wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration.BatchChild",
+        "properties": [{"name": "parent", "value": "BatchGroup"}]}), "seed contained child")
+    settle_or_fail("batch delete")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchKeep", "BatchChild"]:
+        assert_contains(read_disk(_FORM), "<name>%s</name>" % name, "positive disk control " + name)
+    before = tree_snapshot()
+    operations = _batch_operations(*members[:3])
+    preview = call("delete_metadata", {"projectName": PROJECT, "operations": operations, "atomic": True})
+    assert_ok(preview, "batch preview")
+    assert preview.structured["action"] == "preview", preview.structured
+    assert preview.structured["applied"] == [] and preview.structured["committed"] is False, preview.structured
+    assert preview.structured["items"][0]["descendants"][0]["name"] == "BatchChild", preview.structured
+    assert_no_marker_fields(preview.structured, "batch preview")
+    assert_tree_unchanged(before, "batch preview must not mutate the seeded tree")
+    readback = call("get_metadata_details", {"projectName": PROJECT,
+                                             "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(readback, "preview model unchanged")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_contains(readback.text, name, "preview keeps " + name)
+    result = call("delete_metadata", {"projectName": PROJECT, "operations": operations,
+                                      "atomic": True, "confirm": True})
+    assert_ok(result, "confirmed single-form batch")
+    # Disk FIRST: the batch itself submits and awaits this form export.
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_disk_lacks(_FORM, "<name>%s</name>" % name, ctx="batch removes " + name)
+    assert_contains(read_disk(_FORM), "<name>BatchKeep</name>", "unselected command survives")
+    data = result.structured
+    assert data["action"] == "executed" and data["applied"] == [0, 1, 2], data
+    assert data["committed"] is True and data["rollbackPerformed"] is False, data
+    assert data["exportSubmitted"] is True, data
+    assert data["writtenProjects"] == [PROJECT], data
+    assert data["persistenceState"] == "exportDrainedBytesUnverified", data
+    assert isinstance(data["markersIncomplete"], bool), data
+    assert isinstance(data["markerCount"], int) and isinstance(data["markers"], list), data
+    assert "Do not repeat" in data["safeRetry"], data
+    readback = call("get_metadata_details", {"projectName": PROJECT,
+                                             "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(readback, "batch model read-back")
+    for name in ["BatchGroup", "BatchFirst", "BatchSecond", "BatchChild"]:
+        assert_not_contains(readback.text, name, "batch removed " + name)
+    assert_contains(readback.text, "BatchKeep", "unselected command survives in model")
+
+
 def _seed_form_attribute(attr):
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
