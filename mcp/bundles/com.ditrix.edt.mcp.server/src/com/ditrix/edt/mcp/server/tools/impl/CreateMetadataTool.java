@@ -31,7 +31,9 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.generator.FormType;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -61,7 +63,9 @@ import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormGenerationSupport;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.FormValueTypePolicy;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -113,8 +117,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Schema / param key: register the new form as the owner's default form. */
     private static final String KEY_SET_AS_DEFAULT = "setAsDefault"; //$NON-NLS-1$
 
-    /** Schema / param key: seed the new object form's main Object attribute. */
+    /** Schema / param key: generate content for the selected form purpose. */
     private static final String KEY_GENERATE_CONTENT = "generateContent"; //$NON-NLS-1$
+    private static final String KEY_FORM_TYPE = "formType"; //$NON-NLS-1$
 
     /** Schema / param key: the owner attribute names to render as bound fields on a generated form. */
     private static final String KEY_OBJECT_FIELDS = "objectFields"; //$NON-NLS-1$
@@ -240,19 +245,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "stores a compliant name. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
                 "Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the " //$NON-NLS-1$
-                + "new form as the owner's default object form (default: false). Ignored for other " //$NON-NLS-1$
+                + "new form as the owner's default for formType (default: false). Ignored for other " //$NON-NLS-1$
                 + "create kinds.") //$NON-NLS-1$
+            .enumProperty(KEY_FORM_TYPE,
+                "Owned form purpose. Default: LIST for registers, OBJECT for other owners. "
+                + "Use RECORD only for an independent InformationRegister. Names do not determine purpose.",
+                "OBJECT", "LIST", "CHOICE", "RECORD", "RECORD_SET")
             .booleanProperty(KEY_GENERATE_CONTENT,
-                "Form OBJECT create only (FQN 'Type.Object.Form.FormName'), and only for an OBJECT-form " //$NON-NLS-1$
-                + "owner: Catalog / Document / ChartOfCharacteristicTypes / ChartOfAccounts / " //$NON-NLS-1$
-                + "ChartOfCalculationTypes / ExchangePlan / BusinessProcess / Task / Report / " //$NON-NLS-1$
-                + "DataProcessor. When true, seeds the new form with the main Object attribute (type " //$NON-NLS-1$
-                + "'<Type>Object.<Name>', main + savedData + view/edit) like the designer's 'New form' " //$NON-NLS-1$
-                + "wizard - so agents never need to edit the .form outside MCP. Default: false (an empty " //$NON-NLS-1$
-                + "form). Ignored (no seeding) for a register / Constant / other non-object owner and " //$NON-NLS-1$
-                + "for other create kinds - the result then echoes generateContent=false.") //$NON-NLS-1$
+                "Owned form create only (FQN 'Type.Object.Form.FormName'). Default false (empty form). "
+                + "Generate content for formType; unsupported owner/purpose combinations are rejected. "
+                + "LIST, CHOICE, RECORD and RECORD_SET use the EDT New form wizard generator.")
             .stringArrayProperty(KEY_OBJECT_FIELDS,
-                "Form OBJECT create only, and only with generateContent=true: the owner attribute names " //$NON-NLS-1$
+                "Owned form create with formType=OBJECT and generateContent=true only: the owner attribute names " //$NON-NLS-1$
                 + "to render as bound input fields (dataPath 'Object.<name>'), like the designer's " //$NON-NLS-1$
                 + "checked attribute list. Omitted -> the kind defaults (documents: Number, Date; " //$NON-NLS-1$
                 + "catalogs: Code, Description; other object kinds: none). An explicit non-empty list -> " //$NON-NLS-1$
@@ -340,10 +344,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_TARGET_NAMESPACE,
                 "XDTO namespace written, when an XDTOPackage was created") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
-                "Whether the new form was registered as the owner's default object form " //$NON-NLS-1$
+                "Whether the new form was registered as the owner's default for its purpose " //$NON-NLS-1$
                 + "(form-object create only)") //$NON-NLS-1$
             .booleanProperty(KEY_GENERATE_CONTENT,
-                "Whether the new form was seeded with the main Object attribute " //$NON-NLS-1$
+                "Whether content was generated for the new form's purpose " //$NON-NLS-1$
                 + "(form-object create only)") //$NON-NLS-1$
             .stringProperty(KEY_CALL_TYPE,
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
@@ -391,6 +395,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // dedicated branch: form members live on the editable Form content model (a cross-model hop),
         // not the mdclass tree, and take 'title'/'parent' properties rather than synonym/comment.
         String normFqn = normalizeLeafName(MetadataTypeUtils.normalizeFqn(fqn), normReport);
+        if ((JsonUtils.extractBooleanArgument(params, KEY_GENERATE_CONTENT, false)
+            || JsonUtils.extractStringArgument(params, KEY_FORM_TYPE) != null)
+            && FormElementWriter.parseFormObjectCreate(normFqn) == null)
+        {
+            return ToolResult.error("generateContent=true and formType require an owned form FQN "
+                + "('Type.Object.Form.FormName'); '" + fqn
+                + "' is not one. Omit these options or create an owned form.").toJson();
+        }
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         // callType is meaningful ONLY for a form event handler FQN; reject it loudly elsewhere rather
         // than silently dropping the interception intent.
@@ -541,7 +553,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (isReferencedTopTarget(target))
         {
             return createReferencedTopObject(project, projectName, target, props, synonymLanguage,
-                localesMissing, localeUnused, normReport);
+                localesMissing, localeUnused, normReport, ((IBmObject)config).bmGetFqn());
         }
         if (target.topLevel)
         {
@@ -1678,7 +1690,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Create and attach a separate file, then register it with its owner in both directions. */
     private String createReferencedTopObject(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract
         Props props, String synonymLanguage, List<String> localesMissing, boolean localeUnused,
-        MdNameNormalizer.Report normReport)
+        MdNameNormalizer.Report normReport, String configFqn)
     {
         if (!(target.owner instanceof IBmObject))
         {
@@ -1726,7 +1738,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Error creating referenced top object", e); //$NON-NLS-1$
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
-        boolean persisted = BmTransactions.forceExportToDisk(project, List.of(childFqn[0], parentFqn[0]));
+        List<String> exportFqns = dirtyFqns(childFqn[0], configFqn);
+        exportFqns.add(parentFqn[0]);
+        boolean persisted = BmTransactions.forceExportToDisk(project, exportFqns);
         return success(new SuccessInfo(childFqn[0], target.elementType, target.childName, persisted, props,
             synonymLanguage, localesMissing, localeUnused, null, normReport));
     }
@@ -2550,6 +2564,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
+            if ((kind == FormElementWriter.Kind.PARAMETER || kind == FormElementWriter.Kind.ATTRIBUTE)
+                && ("valueType".equalsIgnoreCase(pName) || "type".equalsIgnoreCase(pName))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return ToolResult.error(FormValueTypePolicy.creationRefusal(prop.get(KEY_VALUE),
+                    kind == FormElementWriter.Kind.PARAMETER)).toJson();
+            }
             // A COLUMN accepts only a title. Its owner comes from the FQN, it is not a visual item so
             // it nests under nothing, and it binds to nothing - every other property would be parsed,
             // stored and then never applied by createColumn, reporting success for a discarded
@@ -2696,14 +2716,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // DocumentObject.Invoice); resolve the owner type token to its canonical English singular so the
         // token matches regardless of the FQN's (bilingual) type spelling.
         final String ownerEnglishType = MetadataTypeUtils.toEnglishSingular(ref.ownerType);
-        // generateContent only applies to an object-form owner (Catalog / Document / ChartOf* /
-        // ExchangePlan / BusinessProcess / Task / Report / DataProcessor) whose object form carries a
-        // main Object attribute of type <Type>Object.<Name>. For a record-based owner (registers),
-        // Constant, etc. there is no such attribute, so the seed is a no-op - reflect that in the result
-        // (echo generateContent=false) so the caller learns the seed was not applicable (issue #208).
-        final boolean effectiveGenerateContent =
-            generateContent && MetadataTypeBuilder.hasObjectFormMainAttribute(ownerEnglishType);
-        final boolean fGenerateContent = effectiveGenerateContent;
+        final boolean fGenerateContent = generateContent;
+        final String requestedFormType = JsonUtils.extractStringArgument(params, KEY_FORM_TYPE);
         // The bound object fields ride along to createForm, which resolves an omitted (null) list to the
         // per-kind defaults; ignored downstream when the seed itself does not apply. #208.
         final List<String> fObjectFields = objectFields;
@@ -2721,9 +2735,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                 }
+                FormType formType = FormGenerationSupport.resolveType(requestedFormType, ownerEnglishType);
+                FormGenerationSupport.validate((MdObject)txOwner, ownerEnglishType, formType,
+                    fGenerateContent, fSetAsDefault, fObjectFields);
                 return FormElementWriter.createForm(tx, (MdObject)txOwner, formName, synonymLanguage,
                     synonym, comment, fSetAsDefault, svc.mdFactory, svc.formFactory, svc.fqnGenerator,
-                    svc.version, russianAutoNames, fGenerateContent, ownerEnglishType, fObjectFields);
+                    svc.version, russianAutoNames, fGenerateContent && formType == FormType.OBJECT,
+                    ownerEnglishType, fObjectFields, formType,
+                    fGenerateContent && formType != FormType.OBJECT
+                        ? (formOwner, mdForm) -> FormGenerationSupport.generate(formOwner, mdForm, formType,
+                            svc.v8Project, ctx.scope.resolveLanguageCode(null)) : null);
             });
         }
         catch (Exception e)
@@ -2750,7 +2771,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         // The form is NEW, so its synonym map carries exactly the locale just written (issue #298).
         return buildFormObjectResult(normFqn, formName, persisted, setAsDefault,
-            effectiveGenerateContent, props, synonymLanguage,
+            generateContent, props, synonymLanguage,
             synonymLanguage == null ? null
                 : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage)),
             ctx.scope.isDeclaredButUnused(synonymLanguage), normReport);
@@ -2790,6 +2811,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         ITopObjectFqnGenerator fqnGenerator;
         IBmModel bmModel;
         Version version;
+        IV8Project v8Project;
         /** Non-null when resolution failed: a JSON error to return verbatim. */
         String error;
 
@@ -2829,6 +2851,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return svc;
         }
         svc.version = v8Project.getVersion();
+        svc.v8Project = v8Project;
         svc.bmModel = bmModelManager.getModel(project);
         if (svc.bmModel == null)
         {
@@ -3248,6 +3271,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         EReference typeFeature = mandatoryTypeFeature(member.eClass());
         if (typeFeature == null || member.eGet(typeFeature) != null)
         {
+            return;
+        }
+        // CubeInitializer starts a dimension with an empty type description.
+        if (MdClassPackage.Literals.DIMENSION.isSuperTypeOf(member.eClass()))
+        {
+            member.eSet(typeFeature, McoreFactory.eINSTANCE.createTypeDescription());
             return;
         }
         MetadataTypeBuilder.Result built = MetadataTypeBuilder.buildWithProvider(

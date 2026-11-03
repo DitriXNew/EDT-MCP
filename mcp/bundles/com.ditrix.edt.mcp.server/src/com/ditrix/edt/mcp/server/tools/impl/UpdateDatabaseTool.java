@@ -1761,8 +1761,8 @@ public class UpdateDatabaseTool implements IMcpTool
      * an EDT-side failure, not something the MCP call causes — the EDT GUI's "Update database
      * configuration" fails the same way on the same project.
      * <p>
-     * Detection is MARKER-FIRST (issue #382): the whole chain is searched for the {@code InternalInfo}
-     * marker before anything else, and only a chain without it falls back to reporting a
+     * A server-reported load cancellation is diagnosed before validation hints. Otherwise the
+     * whole chain is searched for the {@code InternalInfo} marker, and a chain without it reports a
      * {@code ConfigurationLoadException} GENERICALLY — surfacing the platform's own message and
      * asserting no cause. The previous single pass treated the exception TYPE as proof of the
      * InternalInfo limitation, so every unrelated load failure (a malformed form attribute, for one)
@@ -1776,11 +1776,23 @@ public class UpdateDatabaseTool implements IMcpTool
      * directly.
      *
      * @param e the application exception
-     * @return the InternalInfo hint, the generic configuration-load hint, or an empty string
+     * @return a cancellation, InternalInfo or generic configuration-load hint, or an empty string
      */
     static String describeInternalInfoHint(ApplicationException e)
     {
-        // TWO passes, and the marker pass goes FIRST. The InternalInfo limitation is identified by its
+        Throwable loadFailure = findInChain(e,
+            current -> current.getClass().getSimpleName().contains("ConfigurationLoadException")); //$NON-NLS-1$
+        if (loadFailure != null && findInChain(loadFailure,
+            current -> String.valueOf(current.getMessage()).contains("Command execution cancelled")) != null) //$NON-NLS-1$
+        {
+            return " The platform server reported that the configuration load was cancelled; " //$NON-NLS-1$
+                + "the cancellation initiator is unknown. This does not establish an XML validation " //$NON-NLS-1$
+                + "error or whether the infobase was partially changed. Do not retry blindly. " //$NON-NLS-1$
+                + "Check the infobase state in EDT and get_mcp_history (includeBodies=true) for " //$NON-NLS-1$
+                + "the completed call, and inspect the EDT and platform server logs before " //$NON-NLS-1$
+                + "retrying or launching a client on the same infobase."; //$NON-NLS-1$
+        }
+        // After cancellation, the InternalInfo limitation is identified by its
         // MARKER, never by the exception type alone: a configuration load can fail for entirely
         // different reasons (a malformed form attribute, say - issue #382), and answering every
         // ConfigurationLoadException with "the InternalInfo node is missing" states a cause that is not
@@ -1798,8 +1810,6 @@ public class UpdateDatabaseTool implements IMcpTool
                 + "CLI (export_configuration_to_xml, then 1cv8 DESIGNER /LoadConfigFromFiles " //$NON-NLS-1$
                 + "<dir> /UpdateDBCfg), or try a newer EDT release."; //$NON-NLS-1$
         }
-        Throwable loadFailure = findInChain(e,
-            current -> current.getClass().getSimpleName().contains("ConfigurationLoadException")); //$NON-NLS-1$
         if (loadFailure != null)
         {
             String reported = loadFailure.getMessage();
@@ -1808,9 +1818,8 @@ public class UpdateDatabaseTool implements IMcpTool
             // nothing at all, so promising that it "names the offending object" would be another
             // invented certainty of exactly the kind this method was fixed to stop making (#382).
             boolean hasMessage = reported != null && !reported.isEmpty();
-            return " The platform rejected the configuration XML EDT generated for the load" //$NON-NLS-1$
+            return " The platform's configuration load failed" //$NON-NLS-1$
                 + (hasMessage ? ": " + reported : ".") //$NON-NLS-1$ //$NON-NLS-2$
-                + " The load stops at the first thing it cannot read." //$NON-NLS-1$
                 // Only point at the platform's message when there IS one - the exception can carry
                 // none, and telling the caller to inspect "whatever the message names" would then
                 // send them after nothing.

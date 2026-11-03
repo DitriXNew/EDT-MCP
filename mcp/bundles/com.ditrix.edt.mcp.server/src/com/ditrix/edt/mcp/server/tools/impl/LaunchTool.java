@@ -797,12 +797,16 @@ public class LaunchTool implements IMcpTool
                 }
 
                 stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
+                StandaloneServerStateRecovery.StartClaim startClaim;
                 try
                 {
                     StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
                         lookup.application(), lookup.server(), resolvedId, manager, monitor,
                         () -> stage.set(StandalonePreparationStage.STALE_STOP),
                         () -> staleServerStopped.set(true));
+                    stage.set(StandalonePreparationStage.START_CLAIM);
+                    startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
+                        context.project(), resolvedId, monitor);
                 }
                 catch (ApplicationException failure)
                 {
@@ -810,10 +814,6 @@ public class LaunchTool implements IMcpTool
                         failure.getMessage(), staleServerStopped.get()));
                     return;
                 }
-                stage.set(StandalonePreparationStage.START_CLAIM);
-                StandaloneServerStateRecovery.StartClaim startClaim =
-                    StandaloneServerStateRecovery.claimStartWithinBound(context.project(),
-                        resolvedId, monitor);
                 if (startClaim == null)
                 {
                     String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$

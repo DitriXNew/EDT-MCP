@@ -84,6 +84,7 @@ import com.ditrix.edt.mcp.server.utils.AdjustableBooleanSupport;
 import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.QueryWriteValidation;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
@@ -99,6 +100,7 @@ import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.FormValueTypePolicy;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -121,7 +123,6 @@ import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
-import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -407,8 +408,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
                 + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash " //$NON-NLS-1$
-                + "with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to " //$NON-NLS-1$
+                "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, " //$NON-NLS-1$
+                + "overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; " //$NON-NLS-1$
+                + "only replace creates a missing file. Replacing an existing file requires expectedHash or " //$NON-NLS-1$
+                + "expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
@@ -2025,6 +2028,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "' no longer exists; re-read get_metadata_details.").toJson());
                 }
                 BasicTemplate current = (BasicTemplate)object;
+                String locked = VendorSupportGuard.refusalFor(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
+                if (locked != null)
+                {
+                    throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                }
+                EObject owner = current.eContainer();
+                if (owner instanceof MdObject && !(owner instanceof Configuration))
+                {
+                    locked = VendorSupportGuard.refusalFor(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
+                    if (locked != null)
+                    {
+                        throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                    }
+                }
                 String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
                 if (error != null)
                 {
@@ -2039,14 +2056,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         .toJson());
                 }
                 IFile file = TemplateContentSupport.contentFile(ctx.project, current);
-                error = TemplateContentSupport.writeText(current, file, templateSpec, files);
-                if (error != null)
+                TemplateContentSupport.TextWriteResult written =
+                    TemplateContentSupport.writeTextResult(current, file, templateSpec, files);
+                if (written.error() != null)
                 {
-                    throw new TemplateWriteException(error);
+                    throw new TemplateWriteException(written.error());
                 }
                 TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
                     writeCtx.dtProject, writeCtx.fqnGenerator, file);
-                return ContentHash.of(templateSpec.get("text").getAsString());
+                return written.contentHash();
             });
             files.commit();
         }
@@ -4573,9 +4591,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
             // version, and failing to build it refuses the write whatever the user answers.
             final Version version = platformVersionOf(ctx);
+            QueryWriteValidation.Batch queryValidation = QueryWriteValidation.validate(ctx.project,
+                qt == null ? List.of() : List.of(new QueryWriteValidation.Query("queryText", qt, false)));
+            if (queryValidation.errorJson() != null) return queryValidation.errorJson();
             return gateFormRetype(() -> dynamicListRetypePreview(normFqn),
                 () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
-                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version, queryValidation));
         }
         catch (Exception e)
         {
@@ -4608,7 +4629,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String applyDynamicListQuery(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
-        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version,
+        QueryWriteValidation.Batch queryValidation)
     {
         final List<String> applied = new ArrayList<>();
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
@@ -4644,6 +4666,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        queryValidation.addTo(result);
         normReport.addTo(result);
         return result
             .put(McpKeys.MESSAGE, "Configured dynamic-list query on " + normFqn //$NON-NLS-1$
@@ -6989,7 +7012,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         MetadataTypeBuilder.TypeTarget typeTarget = typeTargetForFeature(ctx.typeTarget, info.feature);
-        MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
+        MetadataTypeBuilder.Result tr = buildTypeDescription(prop.get(KEY_VALUE), ctx.config,
             ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
@@ -7002,8 +7025,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             return ToolResult.error(message).toJson();
         }
+        FormValueTypePolicy.Problem problem = info.feature == target.eClass().getEStructuralFeature("valueType") //$NON-NLS-1$
+            ? FormValueTypePolicy.check(target, tr.typeDescription) : null;
+        if (problem != null)
+        {
+            return ToolResult.error(problem.message()).toJson();
+        }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
+    }
+
+    /** Platform dependency seam; preparation and its guards remain shared with the live writer. */
+    protected MetadataTypeBuilder.Result buildTypeDescription(JsonElement spec, Configuration config,
+        MetadataScope scope, Version version, boolean extension, MetadataTypeBuilder.TypeTarget target)
+    {
+        return MetadataTypeBuilder.build(spec, config, scope, version, extension, target);
     }
 
     /**

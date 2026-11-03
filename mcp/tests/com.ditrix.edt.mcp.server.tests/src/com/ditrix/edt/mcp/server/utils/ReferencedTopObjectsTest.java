@@ -29,7 +29,7 @@ public class ReferencedTopObjectsTest
     @Test public void onlySupportedReferenceCollectionsAreTopObjects() throws Exception
     {
         for (EReference ref : new EReference[] { MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__TABLES,
-            MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__CUBES })
+            MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__CUBES, MdClassPackage.Literals.CUBE__DIMENSION_TABLES })
         {
             assertEquals(true, invoke("isReferencedTopCollection", new Class<?>[] { EReference.class }, ref));
         }
@@ -62,6 +62,26 @@ public class ReferencedTopObjectsTest
             f.eds, MdClassPackage.Literals.EXTERNAL_DATA_SOURCE__CUBES, f.cube);
         assertTrue(f.eds.getCubes().contains(f.cube));
         assertSame(f.eds, f.cube.getParentDataSource());
+    }
+
+    @Test public void dimensionTableLinksBothDirectionsAndOwnsItsFieldsFile()
+    {
+        var f = new ExternalDataSourceFixtures();
+        f.cube.getDimensionTables().clear();
+        f.dimensionTable.setParentCube(null);
+        ReferencedTopObjects.link(f.cube, MdClassPackage.Literals.CUBE__DIMENSION_TABLES, f.dimensionTable);
+        assertEquals(java.util.List.of(f.dimensionTable), f.cube.getDimensionTables());
+        assertSame(f.cube, f.dimensionTable.getParentCube());
+        assertEquals(DIMENSION_TABLE, MetadataNodeResolver.resolvableAddressOf(f.dimensionTable));
+        assertEquals(DIMENSION_TABLE, ReferencedTopObjects.fileOwnerFqn(DIMENSION_FIELD));
+        assertEquals(CUBE, ReferencedTopObjects.fileOwnerFqn(DIMENSION));
+        assertEquals(CUBE, ReferencedTopObjects.fileOwnerFqn(RESOURCE));
+        assertEquals("src/ExternalDataSources/Eds/Cubes/C/DimensionTables/DT/DT.mdo",
+            ReferencedTopObjects.mdoPath(DIMENSION_TABLE));
+        assertEquals(ReferencedTopObjects.mdoPath(DIMENSION_TABLE), ReferencedTopObjects.mdoPath(
+            RU_EDS + ".Eds." + RU_CUBE + ".C." + RU_DIMENSION_TABLE + ".DT"));
+        assertNull(ReferencedTopObjects.mdoPath(DIMENSION_FIELD));
+        assertNull(ReferencedTopObjects.mdoPath(TABLE + ".DimensionTable.Bad"));
     }
 
     @Test public void attachPrecedesLinkAndDefaultReferences() throws Exception

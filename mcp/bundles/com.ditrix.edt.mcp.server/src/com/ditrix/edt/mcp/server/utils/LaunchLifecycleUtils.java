@@ -41,10 +41,9 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.derived.IDerivedDataManager;
-import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
-import com._1c.g5.v8.dt.core.platform.IDtProject;
-import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProject;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
@@ -630,9 +629,9 @@ public final class LaunchLifecycleUtils
     {
         private final ReentrantLock lock = new ReentrantLock();
 
-        private LaunchLock()
+        LaunchLock()
         {
-            // Instantiated only by lockFor.
+            // Independent recovery guards reuse the same acquisition protocol.
         }
 
         /**
@@ -1109,27 +1108,7 @@ public final class LaunchLifecycleUtils
     {
         try
         {
-            if (Activator.getDefault() == null)
-            {
-                return false;
-            }
-            IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-            if (dtProjectManager == null)
-            {
-                return false;
-            }
-            IDtProject dtProject = dtProjectManager.getDtProject(project);
-            if (dtProject == null)
-            {
-                return false;
-            }
-            IDerivedDataManagerProvider ddProvider =
-                Activator.getDefault().getDerivedDataManagerProvider();
-            if (ddProvider == null)
-            {
-                return false;
-            }
-            IDerivedDataManager ddManager = ddProvider.get(dtProject);
+            IDerivedDataManager ddManager = BuildUtils.resolveDerivedDataManager(project);
             if (ddManager == null)
             {
                 return false;
@@ -1149,64 +1128,18 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Selective variant of {@link #recomputeAndSettle}: consults
-     * {@link PreLaunchChangeTracker} to partition {@code projects} into dirty and
-     * clean subsets, then applies the expensive {@code recomputeAll()} only to
-     * dirty projects while giving clean projects the cheap
-     * {@link BuildUtils#waitForDerivedData} pass only.
+     * Takes the persistent fingerprint/generation snapshot, then drains EDT's existing
+     * incremental contexts. POST_CHANGE registers changed resources directly with the derived-data
+     * manager even with auto-build disabled; waiting processes those contexts and their dependent
+     * segments without enrolling unrelated forms. No explicit segment ids are needed.
      *
-     * <p>This is the fix for the performance regression: on a large configuration,
-     * unconditional {@code recomputeAll()} for every project on every
-     * {@code run_yaxunit_tests} call costs 2–8 minutes. After a successful prepare,
-     * the content state that was prepared is recorded ON THE PROJECT — so no
-     * recompute happens until the sources actually differ from it, not merely until
-     * the plugin is restarted. The stale-{@code .cfe} safety guarantee is preserved:
-     * a project is dirty whenever its content differs from the prepared state (or
-     * none was ever recorded), and whenever the workspace listener observes a
-     * non-derived file change in it.
+     * <p>Only dirty extensions retain the full recompute required to regenerate their .cfe.
+     * Unchanged projects retain the persisted-fingerprint fast path across EDT restarts.
+     * The caller marks the snapshot prepared only after the infobase update succeeds.
      *
-     * <h3>Ordering-race fix</h3>
-     * <p>The snapshot ({@link PreLaunchChangeTracker#snapshot}) is taken BEFORE the
-     * recompute begins and returned to the caller. The caller passes it to
-     * {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)} only
-     * on success paths, so a file change that arrives DURING the recompute increments
-     * the generation counter in {@code PreLaunchChangeTracker} to a value higher
-     * than the snapshot; the subsequent conditional remove in {@code markPrepared}
-     * fails, the project remains dirty for the next launch, and the unfinished
-     * content state is not recorded as prepared.
-     *
-     * <p>This method does NOT call {@code markPrepared} itself — that is the
-     * caller's ({@link #prepareForFreshLaunch}) responsibility, and only on the
-     * success returns.
-     *
-     * <p>Sequence:
-     * <ol>
-     *   <li>Take the snapshot (dirty verdict + content fingerprint + generation)
-     *       BEFORE scheduling any recompute.</li>
-     *   <li>Partition scope: dirty (per {@link PrepareSnapshot#isDirty}) vs.
-     *       clean.</li>
-     *   <li>Dirty projects: {@link #recomputeAndSettle(Collection)} — full
-     *       forced recompute + workspace build drain + per-project derived-data
-     *       wait.</li>
-     *   <li>Clean projects: {@link BuildUtils#waitForDerivedData} only (returns
-     *       immediately when nothing is pending — the pre-regression fast path).
-     *       No {@code waitForBuildJobs} here: the workspace build was already
-     *       drained by the dirty-project phase (or by EDT's own incremental builds
-     *       if there were no dirty projects at all, in which case nothing pending
-     *       means nothing to wait on).</li>
-     * </ol>
-     *
-     * <p>The log lines produced by this method ("Pre-launch: N project(s) changed
-     * since last prepared launch → forced recompute: [names]; M unchanged →
-     * skipped" or "all N project(s) up-to-date — skipping recompute") are the
-     * primary evidence that the optimisation is in effect.
-     *
-     * @param projects scope after {@link #resolveUpdateScope} has been applied
-     *            (may be {@code null} or empty — returns empty snapshot)
-     * @return the snapshot taken before the recompute; pass it to
-     *         {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)}
-     *         on the success path (the caller, not this method, is responsible for
-     *         that call so {@code markPrepared} is only invoked on genuine successes)
+     * @param projects the resolved update scope
+     * @return the snapshot captured before any preparation work
+     * @throws IllegalStateException if preparation cannot prove derived-data completion
      */
     public static PrepareSnapshot recomputeAndSettleIfDirty(Collection<IProject> projects)
     {
@@ -1220,8 +1153,8 @@ public final class LaunchLifecycleUtils
      * the stage it is entering to {@code phaseSink}.
      *
      * <p>The sink is fed from HERE, not from the caller, because this is where the gate decides.
-     * {@link #PHASE_RECOMPUTE} is published inside the dirty branch and {@link #PHASE_SETTLE}
-     * inside the clean one, so a label can only name work this call is really about to do. A
+     * {@link #PHASE_RECOMPUTE} is published only for dirty extensions and {@link #PHASE_SETTLE}
+     * for the incremental drain, so a label can only name work this call is really about to do. A
      * caller publishing "recompute" before handing the scope over would be guessing, and it
      * guessed wrong for every unchanged project — the whole of #310.
      *
@@ -1243,62 +1176,80 @@ public final class LaunchLifecycleUtils
             return snapshot;
         }
 
-        List<IProject> dirty = new ArrayList<>();
-        List<IProject> clean = new ArrayList<>();
+        List<IProject> open = new ArrayList<>();
+        List<IProject> fullRecompute = new ArrayList<>();
         for (IProject project : projects)
         {
             if (project == null || !project.exists() || !project.isOpen())
             {
                 continue;
             }
+            if (!snapshot.hasSynchronizedSources(project))
+            {
+                throw preparationIncomplete(project);
+            }
+            open.add(project);
             if (snapshot.isDirty(project))
             {
-                dirty.add(project);
-            }
-            else
-            {
-                clean.add(project);
+                IV8Project v8Project = ExtensionOriginUtils.resolveV8Project(project);
+                if (v8Project instanceof IExtensionProject)
+                {
+                    fullRecompute.add(project);
+                }
+                else if (!(v8Project instanceof IConfigurationProject))
+                {
+                    // An unavailable project kind cannot prove an extension's .cfe is fresh.
+                    throw preparationIncomplete(project);
+                }
             }
         }
 
-        if (!dirty.isEmpty())
+        boolean changed = open.stream().anyMatch(snapshot::isDirty);
+        if (!changed)
         {
-            String dirtyNames = dirty.stream().map(IProject::getName)
-                .collect(Collectors.joining(", ")); //$NON-NLS-1$
-            Activator.logInfo("Pre-launch: " + dirty.size() //$NON-NLS-1$
-                + " project(s) changed since last prepared launch -> forced recompute: [" //$NON-NLS-1$
-                + dirtyNames + "]; " + clean.size() + " unchanged -> skipped"); //$NON-NLS-1$ //$NON-NLS-2$
-            // The label is published HERE, after the gate said yes and before the work starts:
-            // a recompute is genuinely about to run. Published any earlier it would be a
-            // prediction, and on an unchanged scope a false one.
-            phaseSink.accept(PHASE_RECOMPUTE);
-            // Full recompute+settle for the dirty subset.
-            recomputeAndSettle(dirty);
+            Activator.logInfo("Pre-launch: all " + open.size() //$NON-NLS-1$
+                + " project(s) up-to-date — skipping recompute"); //$NON-NLS-1$
         }
         else
         {
-            Activator.logInfo("Pre-launch: all " + projects.size() //$NON-NLS-1$
-                + " project(s) up-to-date — skipping recompute"); //$NON-NLS-1$
+            Activator.logInfo("Pre-launch: draining incremental derived data; forced recompute only for extensions: [" //$NON-NLS-1$
+                + fullRecompute.stream().map(IProject::getName).collect(Collectors.joining(", ")) + "]"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        // Cheap derived-data drain for clean projects (no recomputeAll, returns
-        // immediately when nothing pending — the pre-regression fast path).
-        if (!clean.isEmpty())
+        if (!fullRecompute.isEmpty())
         {
-            // Its own label: leaving the reader on "check-changes" would name a stage that is
-            // over, and leaving them on "recompute" would name one that never ran.
+            phaseSink.accept(PHASE_RECOMPUTE);
+            for (IProject project : fullRecompute)
+            {
+                if (!forceRecompute(project))
+                {
+                    throw preparationIncomplete(project);
+                }
+            }
+        }
+        if (!open.isEmpty())
+        {
             phaseSink.accept(PHASE_SETTLE);
+            BuildUtils.waitForBuildJobs(new NullProgressMonitor());
         }
-        for (IProject project : clean)
+        for (IProject project : open)
         {
-            BuildUtils.waitForDerivedData(project);
+            if (!BuildUtils.awaitDerivedData(project))
+            {
+                throw preparationIncomplete(project);
+            }
         }
 
-        // NOTE: markPrepared is intentionally NOT called here. The caller
-        // (prepareForFreshLaunch) calls PreLaunchChangeTracker.markPrepared(all, snapshot)
-        // only on the success paths so that a failed or aborted prepare never
-        // records its content state as prepared.
         return snapshot;
+    }
+
+    private static IllegalStateException preparationIncomplete(IProject project)
+    {
+        PreLaunchChangeTracker.markDirty(project.getName());
+        return new IllegalStateException("Pre-launch derived data did not complete for project '" //$NON-NLS-1$
+            + project.getName() + "' (source synchronization, project services or computations). " //$NON-NLS-1$
+            + "The infobase was not updated. Wait for EDT's project computations to finish and retry; " //$NON-NLS-1$
+            + "check the EDT log if the project remains busy."); //$NON-NLS-1$
     }
 
     /**
@@ -3115,8 +3066,7 @@ public final class LaunchLifecycleUtils
 
     /**
      * Final stage of {@link #prepareForFreshLaunch} after the terminate passes: runs the change
-     * gate over the scope and forces a derived-data recompute of the projects it finds changed
-     * (the rest get the cheap drain), then either defers the DB update to the launch
+     * gate over the scope and drains incremental derived data (forcing only dirty extensions), then either defers the DB update to the launch
      * delegate (standalone-server applications) or runs {@link #updateApplicationIfNeeded}
      * and gates on it, marking the scope prepared on the success paths only. Returns the
      * SAME {@link PreLaunchResult} (ok / error, with the supplied {@code terminated} count)
@@ -3129,28 +3079,18 @@ public final class LaunchLifecycleUtils
             IApplicationManager appManager, String updateScope, ExternalInfobaseChangesPolicy policy,
             int terminated, Consumer<String> phaseSink)
     {
-        // Selectively force a derived-data recompute of projects that have
-        // had file changes since the last successful prepare (dirty projects).
-        // Clean projects get only a cheap derived-data drain. Without the
-        // forced recompute for dirty projects, an extension (.cfe) edited just
-        // before the launch is never regenerated (the derived-data wait no-ops
-        // when nothing is scheduled) and appManager.update() consumes the
-        // stale export artifact — so the first test run executes the old
-        // extension, missing freshly added tests. updateScope narrows the
-        // project scope FIRST; the dirty filter is applied within that scope.
-        //
-        // The snapshot is taken INSIDE recomputeAndSettleIfDirty, BEFORE the
-        // recompute begins. We receive it back so we can pass it to
-        // markPrepared on the success paths — a change arriving DURING the
-        // recompute bumps the generation counter; the conditional remove in
-        // markPrepared then fails and the project stays dirty (stale-.cfe fix).
-        //
-        // What this call enters is the CHANGE GATE, not the recompute: resolving the scope,
-        // syncing each project with disk and fingerprinting it. Whether a recompute follows is
-        // decided one call deeper, so the label for the recompute is published there.
+        // Snapshot before draining so changes during preparation cannot certify later content.
         phaseSink.accept(PHASE_CHECK_CHANGES);
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
-        PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects, phaseSink);
+        PrepareSnapshot prepareSnapshot;
+        try
+        {
+            prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects, phaseSink);
+        }
+        catch (IllegalStateException e)
+        {
+            return new PreLaunchResult(false, terminated, e.getMessage());
+        }
 
         // A STANDALONE-SERVER application (literal
         // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
@@ -3443,10 +3383,8 @@ public final class LaunchLifecycleUtils
     // Existing-CLIENT-session layer. Moved here from
     // LaunchTool so EVERY tool that spawns a 1C client (launch, the YAXUnit
     // debug path) shares ONE detect+terminate policy: a session counts as an existing
-    // CLIENT session only with ≥1 live CLIENT-typed thread (the type-aware
-    // discriminator, DebugServerTargetSupport.findFirstLiveClientThread), so a
-    // debug-mode standalone server — whose live thread is typed SERVER — never
-    // short-circuits a client launch and is NEVER terminated.
+    // CLIENT session only with ≥1 live CLIENT-typed thread on a target not owned
+    // by a standalone-server launch (DebugServerTargetSupport.findFirstLiveClientThread).
     // ==================================================================================
 
     /** Max wait (ms) for a non-interactive terminate to take effect — mirrors the
@@ -3477,7 +3415,8 @@ public final class LaunchLifecycleUtils
      *       target at all (the already-running guard); the thread-type gate
      *       does not apply because there is no debug target to inspect.</li>
      * </ul>
-     * A DEBUG launch/target whose live threads are all server-typed (a debug-mode
+     * A target owned by a standalone-server launch is excluded even with live client
+     * threads. A DEBUG launch/target whose live threads are all server-typed (a debug-mode
      * standalone server carries a live thread typed {@code SERVER}) — or that has no
      * live thread at all (profiling/idle server target) — is NEVER a client session:
      * it must not short-circuit the client (the client proceeds and attaches) and
@@ -3883,8 +3822,8 @@ public final class LaunchLifecycleUtils
      * Each found CLIENT session is terminated non-interactively
      * ({@link #terminateExistingSessionAndWait} /
      * {@link #terminateExistingLaunchAndWait}: terminate + {@code forgetApplication}
-     * + ≤3s wait). A debug-mode standalone server session — live thread typed
-     * {@code SERVER} — is NEVER matched and NEVER terminated.
+     * + ≤3s wait). A target owned by a standalone-server launch is NEVER matched
+     * or terminated, including when it retains live CLIENT-typed threads.
      * A launch OWNED by another MCP tool ({@link #registerOwnedLaunch} — e.g. a
      * concurrent {@code run_yaxunit_tests} RUN launch of the same application) is
      * never terminated by the {@code ILaunchManager}-sourced sweep either: it is
@@ -3984,7 +3923,8 @@ public final class LaunchLifecycleUtils
      * whose owning {@link ILaunch} is MCP-owned ({@link #registerOwnedLaunch}) is SKIPPED
      * (managed by its own tool), closing the gap where a concurrent MCP DEBUG session on the
      * same infobase was silently terminated; any other (UI-started / foreign) client is
-     * terminated. Returns whether termination was CONFIRMED, not merely attempted.
+     * terminated after rechecking the shared client discriminator. Returns whether
+     * termination was CONFIRMED, not merely attempted.
      *
      * <p>Package-visible so the owned-vs-foreign decision is unit-testable without a live
      * target manager.
@@ -3997,7 +3937,7 @@ public final class LaunchLifecycleUtils
      */
     static boolean sweepTargetManagerSession(IDebugTarget existing, String delegateAppId)
     {
-        if (existing == null)
+        if (DebugServerTargetSupport.findFirstLiveClientThread(existing) == null)
         {
             return false;
         }

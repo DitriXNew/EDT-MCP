@@ -1,12 +1,14 @@
 # delete_metadata
 
-Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling, but never vendor support: a delete touching an object whose support rule forbids changes is refused. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: nothing else blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a button's command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').
+Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling, but never vendor support: a delete touching an object whose support rule forbids changes is refused. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: nothing else blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a button's command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Use operations for atomic deletes of members of one form; preview the complete batch before confirming. Parameters and examples: get_tool_guide('delete_metadata').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required). |
-| fqn | yes | string | Full-name FQN of the node to delete (required), e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name, not the synonym). |
+| fqn | — | string | Full-name FQN of the node to delete (provide fqn OR operations), e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (type / kind tokens may be English or Russian; the Name parts are the programmatic Name, not the synonym). |
+| operations | — | array | Atomic batch of {action:'delete', fqn:'...'} operations on ONE form's items, commands, parameters or handlers. Call without confirm to preview, then confirm=true. Attributes/columns, force=true and timeout are unsupported; unknown fields are refused. |
+| atomic | — | boolean | Batch only: must be true (default). Model all-or-nothing; disk export is separate. |
 | confirm | — | boolean | true = execute the deletion; default false = preview only. |
 | force | — | boolean | true = delete despite incoming references the refactoring cannot auto-clean or platform prohibitions (only the incoming references are left dangling); never overrides a vendor-support lock. Default false = on confirm=true either condition BLOCKS deletion and is listed under its own output fields (independent of 'confirm', which is the preview gate). |
 | timeout | — | integer | How long to wait for the UI-thread delete work, in seconds (default 420, clamped to 60..3600). On expiry the call fails, but EDT may still finish a confirm=true delete, so verify the model before retrying. Does not cover the pre-flight cascade settle (a separate 60s bound). |
@@ -43,17 +45,49 @@ After a forced md-refactoring delete, the tool waits for export and reads the re
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
-- `fqn` (required) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member (e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - an attribute / tabular section / dimension / resource / enum value / command / template / recalculation / type-specific child - can be deleted by its FQN.
+- `fqn` (required unless `operations` is provided) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member (e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - an attribute / tabular section / dimension / resource / enum value / command / template / recalculation / type-specific child - can be deleted by its FQN.
+- `operations` (alternative to `fqn`) - 1..100 `{action: "delete", fqn: "..."}` objects addressing members of ONE form. See the atomic batch contract below.
+- `atomic` (batch only, default true) - must be true. Non-atomic execution is not supported.
 - `confirm` (optional, default false) - false previews, true applies.
 - `force` (optional, default false) - on confirm=true, delete despite blocking incoming references or platform prohibitions. Incoming references are left dangling; prohibitions are overridden - except a vendor-support lock, which is never overridden. Does nothing in preview.
 - `timeout` (optional, default 420) - how long to wait for the UI-thread delete work, in seconds, clamped to 60..3600. It does NOT cover the pre-flight cascade settle, which has its own separate 60s bound. Raise it for a very large configuration; the default can also be changed in Preferences > MCP Server > Tools > `delete_metadata`.
 
 ## Timeout, and what the model is left in
+This section describes single-`fqn` calls. A batch rejects `timeout` and waits for its UI work to finish; an HTTP client disconnect does not cancel EDT work. Inspect the form before retrying a disconnected call.
+
 The delete work runs on EDT's UI thread and cannot be preempted, so `timeout` bounds only how long the CALL waits - it does not stop work that has started. The pre-flight cascade settle runs first on the caller thread under its existing separate 60s bound and is not counted against `timeout`.
 
 - If the delete never STARTED (the deadline elapsed while its UI-thread work was still queued and cancelling it kept it from starting), NOTHING was deleted, the model is untouched, and no check or cleanup is needed. Retry when EDT's job scheduler is less busy or raise `timeout`.
 - A PREVIEW (`confirm` omitted / false) never writes on any branch. If it times out, nothing was deleted and the model is unchanged; EDT may still finish computing that preview, but there is no mutation to inspect or clean up.
 - Once a `confirm=true` call has started, a timeout or interruption stops only the wait. EDT may still finish the delete, and the target or part of its reference-cleanup cascade may already be applied. The error carries `mutationOutcomeUnknown:true` (or `mutationCommitted:true` when a write was already observed), which is the structural signal to automated callers that a re-read is mandatory. Before retrying, call `get_metadata_details` on the target FQN; for a top-level target, also call `get_metadata_objects` for its metadata type. Do not assume anything was undone, and do not repeat the delete until those calls establish whether the target remains.
+
+## Atomic single-form batch
+
+Use `operations` instead of `fqn` to delete a group and related form commands with one model write and one form export:
+
+```json
+{
+  "projectName": "ERP2",
+  "operations": [
+    {"action": "delete", "fqn": "Document.Transfer.Form.Main.Group.Indicators"},
+    {"action": "delete", "fqn": "Document.Transfer.Form.Main.Command.TransferMaterials"},
+    {"action": "delete", "fqn": "Document.Transfer.Form.Main.Command.WriteOffWork"}
+  ],
+  "atomic": true
+}
+```
+
+Preview the complete batch, then repeat with `confirm:true` to apply it. The existing destructive-consent gate covers all targets and their contained descendants. The form is loaded once per read/write boundary; the whole scope is rechecked after consent and before the first removal. Any change to that scope refuses the write. Identical/overlapping targets are refused with `dependsOnPriorOperation`; keep only the containing target or remove the duplicate.
+
+The supported subset is form items (including groups and their descendants), commands, parameters and handlers in one form. Attribute/column deletes, whole-form/top-object deletes, multiple forms, create/modify actions, `atomic:false`, `force:true`, `timeout`, `continueOnError` and unknown top-level/operation fields are refused before any mutation. Type/kind tokens use the same bilingual resolvers as a single delete; Name parts remain programmatic identifiers. This v1 does not support a `create A -> modify A` dependency chain; it refuses that batch without executing either item.
+
+Whole-request preflight returns all independent input/target errors under `errors`, with zero-based `operationIndex` (`-1` means the request), `reason` and actionable `error`. It returns `applied:[]`, `committed:false`, `persistenceState:"unchanged"`; nothing is changed. Each target and its removal scope are checked again inside the one BM write transaction. A failure of operation N escapes that task, rolling back earlier removals: the response names `failedOperationIndex`, its exact reason, `rollbackPerformed:true`, `applied:[]` and the unchanged remaining state.
+
+A completed model commit returns all operation indexes under `applied`, `committed:true`, `rollbackPerformed:false`, and `items` including the contained removal scope. Model atomicity does not imply atomic disk export. `exportSubmitted` only says the export was queued; `persistenceState` distinguishes `exportNotSubmitted`, `exportUnobservable` and `exportDrainedBytesUnverified`. Even a drained queue does not prove the bytes: inspect `Form.form` and read the form back. The shared written-object marker report (`markersIncomplete`, optional `markersIncompleteReason`, `markerCount`, `markers`) follows the export barrier, just as for create/modify.
+
+An export-barrier refusal preserves `applied`, `committed`, `items`, `remainingState` and `safeRetry`, adds `mutationCommitted:true`, and reports `persistenceState:"unconfirmed"`. Never repeat applied operations blindly. An opaque commit/export exception carries `mutationOutcomeUnknown:true` and `possibleApplied` (or the stronger known `mutationCommitted:true` and `applied`); inspect every target and disk before retrying. External cross-references retain the existing single-member semantics: they are not rewritten; deleting a command may leave a surviving button's reference broken. Re-check form details and markers.
+
+Mixed create/modify/delete transactions, non-atomic continuation and cross-container atomicity remain future scope. Build-progress diagnostics belong to #336 and are not changed here.
 
 The 420s default uses the same evidence as rename: both operations run through the same md-refactoring/UI-thread machinery, whose worst measured legitimate completion took 301s while EDT waited out its own derived-data timeout. Lowering the bound risks reporting failure while a healthy destructive cascade continues in the background; raise it only when the workspace legitimately needs longer.
 
@@ -93,6 +127,8 @@ An owned FORM object, a FORM member and an XDTO package member are removed from 
 Only the owner's own pointers are cleaned: deleting an owned form clears the default-form settings that named it.
 
 ## External data source members
+
+Cube members use `...Cube.C.DimensionTable.DT(.Field.F)`, `...Cube.C.Dimension.D` and `...Cube.C.Resource.R` (including Russian tokens). DimensionTable registration is checked in the Cube's `.mdo`; its fields are checked in `Cubes/C/DimensionTables/DT/DT.mdo` under `fields`. Dimensions and resources are checked inline in the Cube's file.
 
 Use `ExternalDataSource.E.Table.T`, `...Table.T.Field.F`, `ExternalDataSource.E.Function.Fn` or `...Cube.C` (Russian tokens also work). The delete runs EDT's delete refactoring on that node, also for a source that still has Tables or Cubes, then exports the file that registers the node: the source's `.mdo` for a Table, Cube or Function, the Table's `.mdo` for a Field. Deleting a Table removes its `<tables>` line from the source's `.mdo` and its `Tables/T/` folder; deleting a source that still has Tables and Cubes removes the whole `src/ExternalDataSources/E/` directory, child files included. A forced delete then checks that file as described above. See the create_metadata guide, "External data source structure", for defaults, layout and boundaries.
 

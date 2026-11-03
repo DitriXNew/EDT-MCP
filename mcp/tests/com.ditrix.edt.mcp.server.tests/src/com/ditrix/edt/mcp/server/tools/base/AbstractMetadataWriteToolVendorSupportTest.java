@@ -100,6 +100,37 @@ public class AbstractMetadataWriteToolVendorSupportTest
     }
 
     @Test
+    public void testMemberRefusalsNormalizeLeadingTypeAndPreserveCallerMemberTokens()
+    {
+        var attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        attribute.setName("Weight");
+        locked.getAttributes().add(attribute);
+        when(support.canEdit(locked, EditingMode.DIRECT)).thenReturn(false);
+        when(support.canEdit(attribute, EditingMode.DIRECT)).thenReturn(false);
+        when(support.canDelete(attribute, EditingMode.DIRECT)).thenReturn(false);
+        String ruCatalog = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a";
+        String ruAttribute = "\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442";
+
+        for (var intent : List.of(VendorSupportGuard.Intent.CREATE, VendorSupportGuard.Intent.MODIFY,
+            VendorSupportGuard.Intent.DELETE))
+        {
+            String name = intent == VendorSupportGuard.Intent.CREATE ? "New" : "Weight";
+            String canonical = "Catalog.Locked.Attribute." + name;
+            String normalizedRussian = "Catalog.Locked." + ruAttribute + "." + name;
+            String russian = ruCatalog + ".Locked." + ruAttribute + "." + name;
+            IntentTool tool = new IntentTool(intent);
+            String englishError = tool.vendorSupportRefusal(scope, canonical);
+            String russianError = tool.vendorSupportRefusal(scope, russian);
+            assertRefusal(englishError, "'" + canonical + "' cannot be ");
+            assertRefusal(russianError, "'" + normalizedRussian + "' cannot be ");
+            assertEquals(tool.vendorSupportRefusal(scope, normalizedRussian), russianError);
+            assertTrue(russianError, russianError.contains("Locked"));
+            assertFalse(russianError, russianError.contains(ruCatalog));
+            assertTrue(russianError, russianError.contains(ruAttribute));
+        }
+    }
+
+    @Test
     public void testAToolWithoutAnIntentIsNeverChecked()
     {
         when(support.canEdit(locked, EditingMode.DIRECT)).thenReturn(false);

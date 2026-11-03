@@ -58,6 +58,11 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧭 **Command Interface** - Read and edit a subsystem section's (or the main section's) command interface: command visibility, common and per role, placement into panel groups, and order within a group
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
+Optional [guided workflows](docs/guided-workflows.md) expose project health through
+an MCP prompt, project problems and guides through resource templates, and argument
+completion. Enable with `EDT_MCP_GUIDED_WORKFLOWS=true` at EDT launch. Completion is
+for prompt/resource-template arguments; it does not autocomplete ordinary tool arguments.
+
 ## Installation
 
 ### From Update Site
@@ -537,6 +542,12 @@ bridge is its only route.
 
 Running more than one EDT instance at once? [`edt-mcp-proxy`](proxy/) is a standalone router that exposes a single, stable MCP endpoint on `:8764` and forwards each call to the right EDT-MCP instance by `projectName`, discovering live instances in the background. It ships as `edt-mcp-proxy-<version>.jar` alongside the plugin archive in every [release](https://github.com/DitriXNew/EDT-MCP/releases). See [proxy/README.md](proxy/README.md) for setup, CLI options and configuration.
 
+For duplicate project names, the proxy reports `workspacePath` in `list_projects` and
+`router_status`; pass that exact value alongside `projectName` to select the intended
+workspace. Backend ports and starting the proxy still require the documented setup;
+automatic port fallback and automatic proxy startup are pending the migration and
+distribution decisions described in the proxy README.
+
 ## Available Tools
 
 The full per-tool reference lives in **[docs/tools/](docs/tools/)** — one page per
@@ -580,7 +591,7 @@ with `python docs/generate_tool_docs.py`.
 | [`create_metadata`](docs/tools/create_metadata.md) | Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata'). |
 | [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first;… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Paramete… |
-| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object acr… |
+| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object/member by FQN, or atomically delete members of one form with `operations`; preview before confirming. |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture'). |
 | [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties'). |
 | [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content'). |
@@ -704,7 +715,7 @@ with `python docs/generate_tool_docs.py`.
 | [`get_mcp_history`](docs/tools/get_mcp_history.md) | Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. Parameters and examples: get_tool_guide('get_mcp_history'). |
 | [`get_platform_documentation`](docs/tools/get_platform_documentation.md) | Look up a built-in 1C type or global function in the platform documentation. Returns headers and member names by default - pass responseFormat='detailed' for… |
 | [`get_problem_summary`](docs/tools/get_problem_summary.md) | See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary'). |
-| [`get_project_errors`](docs/tools/get_project_errors.md) | Find detailed validation errors and warnings in an EDT project. Parameters and examples: get_tool_guide('get_project_errors'). |
+| [`get_project_errors`](docs/tools/get_project_errors.md) | Find validation errors and warnings; detailed output includes saved text ranges, and exact-address calls return structured problem rows. |
 | [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Create an EDT project from exported 1C configuration XML files. Use platformVersion for the new project's runtime, derived from the dump by default (xmlVersi… |
 | [`import_project_from_file`](docs/tools/import_project_from_file.md) | Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report)… |
 | [`infobase_sessions`](docs/tools/infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its… |
@@ -818,10 +829,26 @@ is still RUNNING. A comparison nobody comes back to is reclaimed by an idle TTL 
 minutes as part of answering the next launch, so a forgotten one delays the next comparison
 rather than blocking it until EDT restarts.
 
+## Text templates
+
+Read a TextDocument template with `get_metadata_details` using
+`objectFqns:["DataProcessor.Invoices.Template.Contract"]` (or `CommonTemplate.Name`).
+The result includes exact text and a stable `contentHash`. Edit it through
+`modify_metadata.template`: `{oldText:"unique match", text:"replacement"}` performs
+one literal search replacement by default; `mode:"append"` adds exact text;
+`mode:"replace"` replaces all text and alone can create a missing Template.txt.
+Replacing an existing file requires `expectedHash`, `expectedSource`, or
+`overwrite:true`; supplied guards are always checked. Existing text-only payloads
+must add the explicit replacement mode and a guard or overwrite. EDT encoding,
+BOM and line endings are preserved, with vendor support enforced on the template.
+See the `modify_metadata` tool guide for the payload rules.
+
 ## XDTO Packages
 
 1C XDTO packages (`XDTOPackage`) can be authored end-to-end through MCP, down to their
 package-local structure, without hand-editing XML:
+
+- **`create_metadata`** generates owned list, choice, record, and record-set forms through EDT with `generateContent=true` and `formType`. Registers default to `LIST`; `setAsDefault` assigns the matching model slot. Unsupported generation requests return an actionable error.
 
 - **`create_metadata`** / **`modify_metadata`** / **`delete_metadata`** address XDTO
   package members by FQN, layered on top of the existing top-level `XDTOPackage.<Name>`
@@ -862,9 +889,9 @@ An action/confirmation/status result with **none** of these returns **Markdown**
 
 Which tool families stay JSON, and why:
 
-- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
+- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*. `delete_metadata` also accepts `operations: [{action: "delete", fqn: "..."}]` instead of `fqn` for 1..100 members of one form: preview, then `confirm:true`. Its batch mode uses one model transaction/export, aggregates preflight errors with zero applied writes, and preserves committed operation indexes on export refusals. `atomic` defaults to true; false is refused. Attributes/columns, multiple containers, create/modify actions, `force:true`, `timeout` and unknown fields are unsupported. Disk-export state and written-object markers remain separate from model atomicity. See the [batch contract](mcp/bundles/com.ditrix.edt.mcp.server/guides/delete_metadata.md#atomic-single-form-batch).
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
-- **`validate_query`** — returns the error **line/column** *(b)*;
+- **`validate_query`** — returns the error **line/column** *(b)*; complete native DBView validation reports `VALID`, `INVALID`, or `PARTIAL`; query-bearing DCS/DynamicList writes share this validator and refuse proven errors before mutation.
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
 - **`clean_project`** / **`update_database`** / **`infobase_sessions`** — return machine-readable status whose JSON shape is asserted by e2e *(d-like contract)*.
 

@@ -10,6 +10,10 @@ and nothing rewrites the button.
 reset: kind="write-metadata" for the tests that mutate, "read" for the rest.
 """
 
+import os
+import re
+import xml.etree.ElementTree as ET
+
 from harness import (
     call,
     assert_ok,
@@ -20,9 +24,78 @@ from harness import (
     wait_for_project_ready,
     e2e_test,
     PROJECT,
+    PROJECT_DIR,
 )
 
 FORM = "Catalog.Catalog.Form.ItemForm"
+
+
+@e2e_test(tool="validate_form_model", kind="write-metadata")
+def test_arbitrary_and_typed_parameters_pass_the_type_picker_validation():
+    fqn = FORM + ".Parameter.E2EValidateParameterType"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "declare an arbitrary parameter")
+    poll_diff_contains("<name>E2EValidateParameterType</name>", ctx="untyped parameter reaches disk")
+    arbitrary = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
+    assert_ok(arbitrary, "validate the arbitrary parameter")
+    assert arbitrary.structured.get("valid") is True, arbitrary.structured
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String"}]}}],
+    }), "select a type offered by EDT")
+    xml = read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
+    parameter = next(node for node in ET.fromstring(xml).findall("parameters")
+                     if node.findtext("name") == "E2EValidateParameterType")
+    assert parameter.findtext("valueType/types") == "String", "typed parameter must persist"
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [fqn], "assignable": True,
+    })
+    assert_ok(details, "read back the typed parameter")
+    assert "String" in details.text, details.text
+    typed = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
+    assert_ok(typed, "validate the typed parameter")
+    assert typed.structured.get("valid") is True, typed.structured
+
+
+@e2e_test(tool="validate_form_model", kind="write-metadata")
+def test_existing_form_parameter_with_array_type_is_an_error():
+    name = "E2ELegacyArrayParameter"
+    fqn = FORM + ".Parameter." + name
+    path = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "seed the parameter before importing its legacy invalid type")
+    poll_diff_contains("<name>%s</name>" % name, ctx="seed parameter reaches disk")
+    wait_for_project_ready()
+
+    # Seed a legacy file directly: the guarded MCP writers must refuse this state.
+    xml = read_disk(path)
+    name_at = xml.index("<name>%s</name>" % name)
+    start = xml.rfind("<parameters", 0, name_at)
+    end = xml.index("</parameters>", name_at) + len("</parameters>")
+    assert start >= 0, "the named parameter must exist in the serialized form"
+    legacy, count = re.subn(r"<valueType\s*/>|<valueType>.*?</valueType>",
+                           "<valueType><types>Array</types></valueType>",
+                           xml[start:end], count=1, flags=re.S)
+    assert count == 1, "replace exactly the seeded parameter's type"
+    with open(os.path.join(PROJECT_DIR, path), "w", encoding="utf-8", newline="") as stream:
+        stream.write(xml[:start] + legacy + xml[end:])
+    assert_ok(call("clean_project", {"projectName": PROJECT}), "reload the legacy form from disk")
+    wait_for_project_ready()
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [fqn], "assignable": True,
+    })
+    assert_ok(details, "confirm that EDT loaded the legacy Array type")
+    assert "Array" in details.text, details.text
+    result = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
+    assert_ok(result, "audit the legacy form")
+    assert result.structured.get("valid") is False, result.structured
+    assert result.structured.get("errors", 0) >= 1, result.structured
+    findings = [f for f in _findings(result) if f.get("code") == "invalid-form-value-type"
+                and f.get("path") == "Parameter." + name]
+    assert len(findings) == 1, _findings(result)
+    assert findings[0].get("severity") == "error", findings
+    assert "Array" in findings[0].get("message", ""), findings
+    assert "without a type" in findings[0].get("message", ""), findings
 
 
 def _findings(result):

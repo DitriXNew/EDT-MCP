@@ -15,6 +15,11 @@ public final class ExternalDataSourceFixtures
     public static final String FIELD = TABLE + ".Field.F";
     public static final String FUNCTION = EDS + ".Function.Fn";
     public static final String CUBE = EDS + ".Cube.C";
+    public static final String DIMENSION_TABLE = CUBE + ".DimensionTable.DT";
+    public static final String DIMENSION_FIELD = DIMENSION_TABLE + ".Field.DF";
+    public static final String DIMENSION = CUBE + ".Dimension.D";
+    public static final String RESOURCE = CUBE + ".Resource.R";
+    public static final String RU_DIMENSION_TABLE = "\u0422\u0430\u0431\u043b\u0438\u0446\u0430\u0418\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f";
     public static final String RU_EDS = "\u0412\u043d\u0435\u0448\u043d\u0438\u0439\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0414\u0430\u043d\u043d\u044b\u0445";
     public static final String RU_TABLE = "\u0422\u0430\u0431\u043b\u0438\u0446\u0430";
     public static final String RU_FIELD = "\u041f\u043e\u043b\u0435";
@@ -27,6 +32,10 @@ public final class ExternalDataSourceFixtures
     public final com._1c.g5.v8.dt.metadata.mdclass.Function function =
         named(MdClassFactory.eINSTANCE.createFunction(), "Fn");
     public final Cube cube = named(MdClassFactory.eINSTANCE.createCube(), "C");
+    public final DimensionTable dimensionTable = named(MdClassFactory.eINSTANCE.createDimensionTable(), "DT");
+    public final Field dimensionField = named(MdClassFactory.eINSTANCE.createField(), "DF");
+    public final Dimension dimension = named(MdClassFactory.eINSTANCE.createDimension(), "D");
+    public final Resource resource = named(MdClassFactory.eINSTANCE.createResource(), "R");
 
     public ExternalDataSourceFixtures()
     {
@@ -37,6 +46,11 @@ public final class ExternalDataSourceFixtures
         eds.getFunctions().add(function);
         eds.getCubes().add(cube);
         cube.setParentDataSource(eds);
+        cube.getDimensionTables().add(dimensionTable);
+        dimensionTable.setParentCube(cube);
+        dimensionTable.getFields().add(dimensionField);
+        cube.getDimensions().add(dimension);
+        cube.getResources().add(resource);
     }
 
     public MetadataScope scope()

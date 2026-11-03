@@ -16,6 +16,7 @@ tests/ExternalObjects/src/ExternalReports/ExtReport/ExtReport.mdo:ExtReport
 tests/SupportedConfiguration/.project:SupportedConfiguration
 tests/SupportedConfiguration/.project:org.eclipse.xtext.ui.shared.xtextBuilder
 tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Locked
+tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Text826
 tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Weight
 tests/SupportedConfiguration/src/Catalogs/Open/Open.mdo:Note
 tests/SupportedConfiguration/src/Catalogs/Open/Open.mdo:Open
@@ -37,6 +38,9 @@ tests/SupportedConfiguration/src/Roles/OpenRole/Rights.rights:Catalog.Open
 tests/SupportedConfiguration/src/Roles/OpenRole/Rights.rights:Read
 tests/TestConfiguration/.project:TestConfiguration
 tests/TestConfiguration/.project:org.eclipse.xtext.ui.shared.xtextBuilder
+tests/TestConfiguration/src/AccumulationRegisters/QueryStock/QueryStock.mdo:Item
+tests/TestConfiguration/src/AccumulationRegisters/QueryStock/QueryStock.mdo:Quantity
+tests/TestConfiguration/src/AccumulationRegisters/QueryStock/QueryStock.mdo:QueryStock
 tests/TestConfiguration/src/Catalogs/Catalog/Catalog.mdo:Attribute
 tests/TestConfiguration/src/Catalogs/Catalog/Catalog.mdo:Catalog
 tests/TestConfiguration/src/Catalogs/Catalog/Catalog.mdo:Invoice
@@ -83,7 +87,13 @@ tests/TestConfiguration/src/CommonModules/Вычисление/Вычислен�
 tests/TestConfiguration/src/CommonTemplates/PrintForm/PrintForm.mdo:PrintForm
 tests/TestConfiguration/src/Configuration/Configuration.mdo:English
 tests/TestConfiguration/src/Configuration/Configuration.mdo:TestConfiguration
+tests/TestConfiguration/src/Documents/QueryOrder/QueryOrder.mdo:Items
+tests/TestConfiguration/src/Documents/QueryOrder/QueryOrder.mdo:Quantity
+tests/TestConfiguration/src/Documents/QueryOrder/QueryOrder.mdo:QueryOrder
 tests/TestConfiguration/src/HTTPServices/ProbeService/ProbeService.mdo:ProbeService
+tests/TestConfiguration/src/InformationRegisters/QueryPrices/QueryPrices.mdo:Item
+tests/TestConfiguration/src/InformationRegisters/QueryPrices/QueryPrices.mdo:Price
+tests/TestConfiguration/src/InformationRegisters/QueryPrices/QueryPrices.mdo:QueryPrices
 tests/TestConfiguration/src/SessionParameters/SessionParameter/SessionParameter.mdo:SessionParameter
 tests/TestConfiguration/src/Subsystems/Subsystem/Subsystem.mdo:Subsystem
 tests/tests/.project:TestConfiguration.tests

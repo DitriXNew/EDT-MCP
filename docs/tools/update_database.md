@@ -107,15 +107,17 @@ JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCR
 
 ## Long-running updates and client timeouts
 
-On a large configuration (thousands of objects) `update_database` can run **5–25 minutes**. Many MCP clients apply their own call timeout (e.g. 120 s) well short of that — the client gives up waiting, but that is purely a client-side timeout: it does **not** cancel the underlying EDT update job, which keeps running in EDT to completion (success or failure) regardless of whether anyone is still listening for the response.
+On a large configuration (thousands of objects) `update_database` can run **5–25 minutes**. Many MCP clients apply their own call timeout (e.g. 120 s) well short of that. The MCP transport does not cancel the update's progress monitor or interrupt its execution thread when the client times out or disconnects. This isolates execution from the connection; it does not guarantee that EDT or the platform server will finish successfully. Keep EDT running while the operation is in progress.
 
-If your client times out before the response arrives, do not assume the update failed or retry blindly (a retry while the first update is still running fails with "Application is currently being updated" or races the exclusive lock). Instead, retrieve the real outcome afterwards with `get_mcp_history`:
+Treat a client timeout as an **unknown outcome**. Do not retry blindly, launch another client on the same infobase, stop its server, or terminate its Designer agent while the update may still be running. Retrieve the observed outcome afterwards with `get_mcp_history`:
 
 ```
-get_mcp_history(tool="update_database", limit=1)
+get_mcp_history(tool="update_database", limit=10, includeBodies=true)
 ```
 
-This returns the recorded call, including its final `status` and `durationMs`, once the update has actually finished — even though the original call's own response was lost to the client-side timeout. Prefer raising the client's call timeout for this tool (well above the 5–25 minute range) over polling `get_mcp_history` in a loop.
+Match the call by its request body and time window: the most recent entry may belong to another update. A completed call is recorded with its final `status`, `durationMs`, and response even when response delivery fails. An absent entry does not prove that nothing happened: execution may still be running, recording may be disabled, or the entry may have been evicted. Check the infobase state in EDT and the EDT/platform logs before retrying if no matching completion is available. Prefer raising the client's call timeout for this tool (well above the 5–25 minute range) when possible.
+
+`Command execution cancelled (ConfigurationLoadException)` means that the platform server reported cancellation of the configuration load. It does not identify who initiated cancellation, prove that the client timeout caused it, or establish that the XML was invalid. Inspect the infobase state and logs before retrying; a cancelled load does not establish that no database changes were made. `update_database` currently returns no `jobId` for `get_job_status` polling.
 
 ## Known EDT limitation: missing InternalInfo node
 

@@ -18,6 +18,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_tree_unchanged,
+    tree_snapshot,
     assert_not_contains,
     assert_ok,
     call,
@@ -217,6 +219,19 @@ def _xml_structure(xml):
     return node(root)
 
 
+def _poll_dcs_xml_structure(rel_path, expected_xml, ctx=""):
+    """Return the exported snapshot once its complete XML structure matches the model."""
+    expected = _xml_structure(expected_xml)
+
+    def matches(text):
+        try:
+            return _xml_structure(text) == expected
+        except ET.ParseError:
+            return False  # The asynchronous export may be between truncation and completion.
+
+    return poll_disk_contains_all(rel_path, [], ctx=ctx, check=matches)
+
+
 def _read_all_xml(fqn, limit=None):
     """Read every JSON-envelope page and enforce the transfer invariants."""
     offset = 0
@@ -340,6 +355,98 @@ def _read_all_text_value(fqn, target_type, *, limit):
         following = int(next_offset.group(1))
         assert following > offset, "a non-final composite page must make progress"
         offset = following
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_xml_replace_keeps_four_parameters_and_followup_dataset_write_in_model_and_disk():
+    source = _seed_report("E2EDcs664Source")
+    period_name = "СтандартныйПериод"
+    parameter_names = [period_name, "НачалоПериода", "КонецПериода", "Дата"]
+    period = {"kind": "standardPeriod", "value": {"variant": "ThisYear"}}
+    fields = [{"dataPath": "F%d" % i, "field": "F%d" % i} for i in range(14)]
+    fields[0].update({"role": {"periodNumber": 1, "periodType": "Main"},
+                      "useRestriction": {"field": True},
+                      "attributeUseRestriction": {"condition": True},
+                      "appearance": {"Format": "NFD=2"}})
+    query = "SELECT " + ", ".join("%d AS F%d" % (i, i) for i in range(14))
+    source_before = _get(source, "schema")
+    assert_ok(source_before)
+    authored = _write(source, "replace", "schema", {
+        "dataSources": [{"name": "Main", "type": "Local"}],
+        "dataSets": [{"name": "DataSet1", "dataSource": "Main", "query": query, "autoFillFields": False,
+                      "fields": fields}],
+        "parameters": [
+            {"name": period_name, "values": [period]},
+            {"name": parameter_names[1], "expression": "&" + period_name + ".StartDate"},
+            {"name": parameter_names[2], "expression": "&" + period_name + ".EndDate"},
+            {"name": parameter_names[3]},
+        ],
+        "variants": [{"name": "Main", "presentation": "Main", "settings": {
+            "dataParameters": {"items": [{"parameter": {"kind": "parameter", "value": period_name},
+                                           "value": period, "use": True}]},
+            "outputParameters": {"items": [{"parameter": {"kind": "parameter", "value": "Title"},
+                                             "value": "Issue 664 title", "use": True}]},
+            "conditionalAppearance": {"items": [{"appearance": {"Format": "NFD=2"}}]},
+        }}],
+    }, expectedHash=_hash(source_before))
+    assert_ok(authored, "seed the four-parameter XML import fixture")
+    source_xml, _ = _read_all_xml(source)
+    ns = {"d": "http://v8.1c.ru/8.1/data-composition-system/schema"}
+    source_document = ET.fromstring(source_xml)
+    source_parameters = source_document.findall("d:parameter", ns)
+    assert [item.findtext("d:name", namespaces=ns) for item in source_parameters] == parameter_names
+    assert len(source_document.findall("d:dataSet/d:field", ns)) == 14
+    assert "ThisYear" in source_xml
+
+    target_name = "E2EDcs664Target"
+    target = _seed_report(target_name)
+    target_path = _poll_report_dcs(target_name, ctx="seed the existing XML replacement target")
+    for attempt in range(2):
+        before = _get(target, "schema")
+        assert_ok(before)
+        replaced = _write(target, "replace", "schema", {"xml": source_xml}, expectedHash=_hash(before))
+        assert_ok(replaced, "replace the attached schema, pass %d" % attempt)
+        assert_contains(replaced.text,
+                        "xml=wholesale, dataSources=1, dataSets=1, fields=14, parameters=4, variants=1")
+        disk = _poll_dcs_xml_structure(target_path, source_xml,
+                                       ctx="the scheduled XML replacement must reach disk")
+        assert _xml_structure(disk) == _xml_structure(source_xml), \
+            "the scheduled export must retain the complete imported schema"
+        parameters = _get(target, "parameter")
+        assert_ok(parameters)
+        for name in parameter_names:
+            assert_contains(parameters.text, name)
+        model_xml, _ = _read_all_xml(target)
+        assert _xml_structure(model_xml) == _xml_structure(source_xml), \
+            "the attached model must retain every parameter, field role, appearance and variant value"
+
+    updated = _write(target + "#/dataSets/DataSet1", "update", "dataSet", {"query": query + "\n"})
+    assert_ok(updated, "the write after XML replacement must use a healthy model")
+    model_after_update, _ = _read_all_xml(target)
+    assert ET.fromstring(model_after_update).findtext("d:dataSet/d:query", namespaces=ns) == query + "\n", \
+        "the model must contain the following data-set update"
+    exported_after_update = _poll_dcs_xml_structure(
+        target_path, model_after_update, ctx="the scheduled data-set update must reach disk")
+    disk_after_update = ET.fromstring(exported_after_update)
+    assert [ET.tostring(p) for p in disk_after_update.findall("d:parameter", ns)] == [
+        ET.tostring(p) for p in source_parameters], "the following write must not erase imported parameters"
+    assert _xml_structure(model_after_update) == _xml_structure(exported_after_update)
+
+    before_refusal = exported_after_update
+    current = _get(target, "schema")
+    assert_ok(current)
+    opening, closing = source_xml.rsplit("</", 1)
+    lossy_xml = opening + "<Issue664Unsupported>must survive</Issue664Unsupported></" + closing
+    refused = _write(target, "replace", "schema", {"xml": lossy_xml}, expectedHash=_hash(current))
+    message = assert_error(refused, "refuse an XML member EDT cannot retain")
+    assert_error_quality(message, names=["Issue664Unsupported"], suggests=["nothing was written", "retry"])
+    after_refusal_disk = poll_disk_contains_all(
+        target_path, [], check=lambda text: text == before_refusal,
+        ctx="the refused XML import must leave the completed export unchanged")
+    assert after_refusal_disk == before_refusal, "refused import must roll back and leave disk unchanged"
+    after_refusal = _get(target, "schema")
+    assert_ok(after_refusal)
+    assert _hash(after_refusal) == _hash(current), "refused import must leave the model unchanged"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -3474,3 +3581,81 @@ def test_unknown_action_is_a_clean_non_mutating_error():
     assert_error_quality(error, names=["merge"], suggests=["get", "upsert"],
                          ctx="unknown actions name the supported alternatives")
     assert_no_diff("a rejected unknown action must not change the project")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_query_gate_refuses_invalid_dataset_before_mutation_and_reads_back_valid_query():
+    report_name = "E2EQueryGate513"
+    root = _seed_report(report_name)
+    address = root + "#/dataSets/DataSet1"
+    before = _get(address, "dataSet")
+    assert_ok(before, "read dataset before refused query")
+    disk = _poll_report_dcs(report_name, ctx="settle seeded schema before refusal")
+    original_disk = read_disk(disk)
+    snapshot = tree_snapshot()
+    invalid = _write(address, "update", "dataSet", {
+        "query": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
+    })
+    error = assert_error(invalid, "invalid dataset query must be refused before BM mutation")
+    assert_error_quality(error, names=["query"], suggests=["validate_query"])
+    assert not invalid.structured.get("mutationCommitted"), invalid.structured
+    assert_tree_unchanged(snapshot, "refused query must preserve fixture bytes")
+    after = _get(address, "dataSet")
+    assert_ok(after, "read dataset after refused query")
+    assert after.text == before.text, "refusal must leave the model and its hash unchanged"
+    assert read_disk(disk) == original_disk, "refusal must leave Template.dcs unchanged"
+    query = "SELECT C.Ref AS GateValid513 FROM Catalog.Catalog AS C"
+    saved = _write(address, "update", "dataSet", {"query": query})
+    assert_ok(saved, "save authoritative valid dataset query")
+    assert "**Query validation:** `VALID`" in saved.text, saved.text
+    poll_disk_contains(disk, "GateValid513", ctx="valid dataset query must persist")
+    assert _read_all_fenced_scalar(address + "/query", "dataSet", limit=None) == query
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dynamic_list_query_gate_refuses_invalid_and_reports_partial_forward_authoring():
+    root = _seed_dynamic_list("QueryGate513")
+    before = _get(root + "#/queryText", "dynamicList")
+    assert_ok(before, "read dynamic-list query before refusal")
+    form_rel = "src/Catalogs/E2EDcsListQueryGate513/Forms/ListForm/Form.form"
+    poll_disk_contains(form_rel, "SELECT Ref", ctx="settle seeded form before refusal")
+    original = read_disk(form_rel)
+    snapshot = tree_snapshot()
+    invalid = _write(root, "upsert", "dynamicList", {
+        "queryText": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
+    })
+    error = assert_error(invalid, "invalid dynamic-list query must be refused before mutation")
+    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_tree_unchanged(snapshot, "refused dynamic-list query must preserve fixture bytes")
+    after = _get(root + "#/queryText", "dynamicList")
+    assert_ok(after, "read dynamic list after refusal")
+    assert after.text == before.text, "refusal must preserve the model query and hash"
+    assert read_disk(form_rel) == original
+    valid_query = "SELECT Ref, Description AS GateValid513 FROM Catalog.Catalog"
+    saved = _write(root, "upsert", "dynamicList", {"queryText": valid_query})
+    assert_ok(saved, "valid dynamic-list query")
+    assert "**Query validation:** `VALID`" in saved.text
+    poll_disk_contains(form_rel, "GateValid513", ctx="valid dynamic-list query must persist")
+    assert _read_all_fenced_scalar(root + "#/queryText", "dynamicList", limit=None) == valid_query
+    future_query = "SELECT F.Ref FROM Catalog.Future513 AS F"
+    partial = _write(root, "upsert", "dynamicList", {"queryText": future_query})
+    assert_ok(partial, "forward authoring permits unresolved query sources")
+    assert "**Query validation:** `PARTIAL`" in partial.text
+    assert "validationComplete=false" in partial.text
+    poll_disk_contains(form_rel, "Future513", ctx="forward-authored query must persist")
+    assert _read_all_fenced_scalar(root + "#/queryText", "dynamicList", limit=None) == future_query
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dataset_future_source_is_saved_with_explicit_partial_notice():
+    report_name = "E2EQueryPartial513"
+    root = _seed_report(report_name)
+    address = root + "#/dataSets/DataSet1"
+    query = "SELECT F.Ref FROM Catalog.Future513 AS F"
+    saved = _write(address, "update", "dataSet", {"query": query})
+    assert_ok(saved, "forward-authored dataset")
+    assert "**Query validation:** `PARTIAL`" in saved.text
+    assert "validationComplete=false" in saved.text
+    disk = _poll_report_dcs(report_name, ctx="forward-authored dataset")
+    poll_disk_contains(disk, "Future513", ctx="partial query must persist with an honest result")
+    assert _read_all_fenced_scalar(address + "/query", "dataSet", limit=None) == query

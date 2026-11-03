@@ -20,5 +20,13 @@ public class GetProjectErrorsExternalDataSourceTest
         assertEquals(false, method.invoke(null, "Catalog.P.TabularSection.T.Field.X"));
         assertEquals(false, method.invoke(null, "Catalog.P.Field.X"));
         assertEquals(true, method.invoke(null, "Catalog.P.TabularSection.T.Attribute.X"));
+        assertEquals(true, method.invoke(null, "ExternalDataSource.E.Cube.C.DimensionTable.T.Field.F"));
+        assertEquals(true, method.invoke(null, "ExternalDataSource.E.Cube.C.Dimension.D"));
+        assertEquals(true, method.invoke(null, "ExternalDataSource.E.Cube.C.Resource.R"));
+        assertEquals(false, method.invoke(null, "ExternalDataSource.E.DimensionTable.T"));
+        assertEquals(false, method.invoke(null, "ExternalDataSource.E.Table.T.Dimension.D"));
+        assertEquals(true, method.invoke(null, "ExternalDataSource.E.Cube.C."
+            + com.ditrix.edt.mcp.server.utils.ExternalDataSourceFixtures.RU_DIMENSION_TABLE + ".T."
+            + com.ditrix.edt.mcp.server.utils.ExternalDataSourceFixtures.RU_FIELD + ".F"));
     }
 }

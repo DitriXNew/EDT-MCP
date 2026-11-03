@@ -58,6 +58,8 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `empty-handler-name` | error | A binding - an event handler, or one entry of a command action - names no BSL procedure. |
 | `unresolved-event-reference` | error | A binding carries no event reference, or one that does not resolve. |
 | `foreign-event-reference` | error | A binding names an event published by another platform type, not by this element. |
+| `invalid-form-value-type` | error | A parameter or attribute contains a type EDT's type picker does not offer. For arrays or structures, declare the member without a type (arbitrary, `<valueType/>`). |
+| `unavailable-form-value-types` | error | EDT's type picker could not be consulted. Wait for indexing and retry; restart EDT if it persists. |
 
 ### What it deliberately does NOT check
 

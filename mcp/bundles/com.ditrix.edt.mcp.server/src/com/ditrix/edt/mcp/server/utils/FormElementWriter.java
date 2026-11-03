@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -51,6 +52,7 @@ import com._1c.g5.v8.dt.form.model.DataPath;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormAttributeColumn;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.generator.FormType;
 import com._1c.g5.v8.dt.form.model.PropertyInfo;
 import com._1c.g5.v8.dt.form.service.FormIdentifierService;
 import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
@@ -1503,6 +1505,19 @@ public final class FormElementWriter
         ITopObjectFqnGenerator fqnGenerator, Version version, boolean russianAutoNames,
         boolean generateContent, String ownerEnglishType, List<String> objectFields)
     {
+        return createForm(tx, owner, formName, synonymLanguage, synonym, comment, setAsDefault,
+            mdFactory, formFactory, fqnGenerator, version, russianAutoNames, generateContent,
+            ownerEnglishType, objectFields, FormType.OBJECT, null);
+    }
+
+    /** Creates content through the wizard generator while retaining the shared BM attachment/export path. */
+    public static String createForm(IBmTransaction tx, MdObject owner, String formName,
+        String synonymLanguage, String synonym, String comment, boolean setAsDefault,
+        IModelObjectFactory mdFactory, IModelObjectFactory formFactory, ITopObjectFqnGenerator fqnGenerator,
+        Version version, boolean russianAutoNames, boolean generateContent, String ownerEnglishType,
+        List<String> objectFields, FormType formType,
+        BiFunction<MdObject, BasicForm, EObject> generator)
+    {
         EStructuralFeature formsFeature = owner.eClass().getEStructuralFeature(KEY_FORMS);
         if (formsFeature == null || !(formsFeature.getEType() instanceof EClass))
         {
@@ -1564,16 +1579,15 @@ public final class FormElementWriter
         // renderable build if the factory is unavailable. When generateContent, the form is seeded with
         // the main Object attribute (type <ownerEnglishType>Object.<ownerName>) like the designer, plus
         // a bound input field per resolved object field (dataPath Object.<name>).
-        EObject content = createContentForm(formFactory, owner, version, russianAutoNames,
-            generateContent, ownerEnglishType, resolvedFields);
+        addToList(owner, KEY_FORMS, mdForm);
+        EObject content = generator == null
+            ? createContentForm(formFactory, owner, version, russianAutoNames,
+                generateContent, ownerEnglishType, resolvedFields)
+            : generator.apply(owner, mdForm);
 
         // (3) Link MD-form <-> content form (both directions, by feature - no typed form API).
         mdForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
         setSingleReference(content, FEATURE_MD_FORM, mdForm);
-
-        // (4) Add the MD-form to the owner's forms collection BEFORE generating the content FQN, so the
-        // MD-form has a resolvable parent chain (owner -> configuration) and therefore a resolvable FQN.
-        addToList(owner, KEY_FORMS, mdForm);
 
         // (5) Register the content form as a BM top object under the canonical external-property FQN.
         String contentFqn = fqnGenerator.generateExternalPropertyFqn(mdForm,
@@ -1597,7 +1611,14 @@ public final class FormElementWriter
         // (7) Optionally set as the owner's default object form.
         if (setAsDefault)
         {
-            setDefaultObjectForm(owner, mdForm);
+            if (formType == FormType.OBJECT)
+            {
+                setDefaultObjectForm(owner, mdForm);
+            }
+            else
+            {
+                FormGenerationSupport.setDefault(owner, mdForm, formType);
+            }
         }
         return contentFqn;
     }
