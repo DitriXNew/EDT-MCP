@@ -69,6 +69,16 @@ def _assert_readback_unchanged(before, context):
                            % (context, before[:500], after[:500]))
 
 
+def _assert_module_disk_text(expected, context):
+    actual = read_disk("src/" + MODULE)
+    # The module keeps its BOM; it is not part of the BSL text being compared.
+    if actual.startswith("\ufeff"):
+        actual = actual[1:]
+    if actual != expected:
+        raise E2EAssertion("%s: unexpected saved module\nexpected: %r\nactual: %r"
+                           % (context, expected, actual))
+
+
 def _assert_order(text, parts, context):
     previous = -1
     for part in parts:
@@ -459,7 +469,15 @@ def test_insert_before_lands_before_anchor_documentation_and_annotation():
         "source": "Procedure AddedBefore() Export\nEndProcedure\n",
     })
     assert_ok(result, "insertBefore happy path")
+    expected = _TARGETED_SEED.replace(
+        "// anchor documentation",
+        "Procedure AddedBefore() Export\nEndProcedure\n\n// anchor documentation",
+    )
+    _assert_module_disk_text(expected, "insertBefore separates both junctions")
+    assert_diff_contains("Procedure AddedBefore() Export", "insertBefore persists the method")
     module = _read_module_text()
+    assert_contains(module, "EndProcedure\n\nProcedure AddedBefore() Export\nEndProcedure\n\n"
+                    "// anchor documentation", "insertBefore read-back includes both separators")
     _assert_order(module, (
         "Procedure AddedBefore() Export", "EndProcedure",
         "// anchor documentation", "&AtServer", "Procedure Target() Export",
@@ -477,11 +495,78 @@ def test_insert_after_uses_real_terminator_not_endprocedureresult():
         "source": "Function AddedAfter() Export\n\tReturn 9;\nEndFunction\n",
     })
     assert_ok(result, "insertAfter happy path")
+    expected = _TARGETED_SEED.replace(
+        "Function Last() Export",
+        "Function AddedAfter() Export\n\tReturn 9;\nEndFunction\n\nFunction Last() Export",
+    )
+    _assert_module_disk_text(expected, "insertAfter separates both junctions")
+    assert_diff_contains("Function AddedAfter() Export", "insertAfter persists the method")
     module = _read_module_text()
+    assert_contains(module, "EndProcedure\n\nFunction AddedAfter() Export\n\tReturn 9;\n"
+                    "EndFunction\n\nFunction Last() Export",
+                    "insertAfter read-back includes both separators")
     _assert_order(module, (
         "EndProcedureResult = 1;", "Value = 1;", "EndProcedure",
         "Function AddedAfter() Export", "EndFunction", "Function Last() Export",
     ), "insertAfter must land after the complete Target method")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insert_modes_collapse_existing_and_source_padding():
+    first = "Procedure First() Export\nEndProcedure\n"
+    target = "// target documentation\n&AtServer\nProcedure Target() Export\nEndProcedure\n"
+    added = "// added documentation\nProcedure Added() Export\n\nEndProcedure\n"
+    expected = first + "\n" + added + "\n" + target
+    for mode, anchor in (("insertBefore", "Target"), ("insertAfter", "First")):
+        for padding in ("", "\n\n\n"):
+            token = _seed_targeted(first + padding + target)
+            result = call("write_module_source", {
+                "projectName": PROJECT, "modulePath": MODULE, "mode": mode,
+                "methodName": anchor, "expectedHash": token,
+                "source": "\n \t\n" + added + "\n\n",
+            })
+            assert_ok(result, mode + " with surrounding blank lines")
+            _assert_module_disk_text(expected, mode + " normalizes only junctions")
+            assert_diff_contains("Procedure Added() Export", mode + " persists the method")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insert_modes_do_not_pad_module_edges():
+    target = "// target documentation\nProcedure Target() Export\nEndProcedure\n"
+    added = "Procedure Added() Export\nEndProcedure\n"
+    cases = (
+        ("insertBefore", "\n\n" + target, added + "\n" + target),
+        ("insertAfter", target + "\n\n", target + "\n" + added),
+    )
+    for mode, original, expected in cases:
+        token = _seed_targeted(original)
+        result = call("write_module_source", {
+            "projectName": PROJECT, "modulePath": MODULE, "mode": mode,
+            "methodName": "Target", "expectedHash": token,
+            "source": "\n\n" + added + "\n\n",
+        })
+        assert_ok(result, mode + " at a module edge")
+        _assert_module_disk_text(expected, mode + " has no outer blank lines")
+        assert_diff_contains("Procedure Added() Export", mode + " persists at the module edge")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insert_modes_keep_region_and_method_preambles():
+    head, tail = "#Region Methods\n", "#EndRegion\n"
+    target = "// target documentation\n&AtServer\nProcedure Target() Export\nEndProcedure\n"
+    added = "// added documentation\nProcedure Added() Export\nEndProcedure\n"
+    for mode, expected in (
+        ("insertBefore", head + "\n" + added + "\n" + target + tail),
+        ("insertAfter", head + target + "\n" + added + "\n" + tail),
+    ):
+        token = _seed_targeted(head + target + tail)
+        result = call("write_module_source", {
+            "projectName": PROJECT, "modulePath": MODULE, "mode": mode,
+            "methodName": "Target", "expectedHash": token, "source": added,
+        })
+        assert_ok(result, mode + " inside a region")
+        _assert_module_disk_text(expected, mode + " preserves directives and documentation")
+        assert_diff_contains("Procedure Added() Export", mode + " persists inside the region")
 
 
 @e2e_test(tool="write_module_source", kind="write-metadata")
