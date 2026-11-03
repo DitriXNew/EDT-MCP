@@ -32,6 +32,21 @@
         "action": {
           "type": "string"
         },
+        "cascadeAttribution": {
+          "enum": [
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        "cascadedCount": {
+          "type": "integer"
+        },
+        "cascadedObjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "extensionProject": {
           "type": "string"
         },
@@ -49,6 +64,9 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "warning": {
+          "type": "string"
         },
         "writtenProjects": {
           "items": {
