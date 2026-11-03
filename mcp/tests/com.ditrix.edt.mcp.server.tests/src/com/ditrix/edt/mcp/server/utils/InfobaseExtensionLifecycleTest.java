@@ -14,7 +14,9 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 import org.junit.Rule;
@@ -514,6 +516,67 @@ public class InfobaseExtensionLifecycleTest
         assertEquals("CFE fixture", backend.loadedContent);
         assertNotEquals(request.cfePath(), backend.loadedPath);
         assertFalse(Files.exists(backend.loadedPath));
+    }
+
+    @Test public void stagedBytesChangedAfterConsentAreRejectedBeforeLoad() throws Exception
+    {
+        for (String action : List.of("install", "update"))
+        {
+            Fake backend = new Fake();
+            backend.states = "install".equals(action) ? List.of(OTHER) : List.of(OLD, OTHER);
+            List<Extension> before = backend.states;
+            Request original = request(action, true);
+            String content = "CFE-" + UUID.randomUUID();
+            Files.writeString(original.cfePath(), content);
+            Request confirm = previewed(original, backend);
+            AtomicInteger guards = new AtomicInteger();
+            AtomicInteger mutations = new AtomicInteger();
+            AtomicReference<Path> tampered = new AtomicReference<>();
+            JsonObject result = json(execute(confirm, backend, preview -> true, () -> {
+                if (guards.incrementAndGet() == 1)
+                {
+                    Path staged = stagedCopyContaining(content);
+                    Files.writeString(staged, "changed after consent");
+                    tampered.set(staged);
+                }
+            }, mutations::incrementAndGet));
+            assertFalse(action + ": " + result + "; loaded bytes=" + backend.loadedContent,
+                result.get("success").getAsBoolean());
+            assertTrue(result.get("error").getAsString().contains("Staged .cfe bytes changed"));
+            assertTrue(result.get("error").getAsString().contains("nothing was changed"));
+            assertFalse(result.has("mutationOutcomeUnknown"));
+            assertEquals(0, mutations.get());
+            assertNull(backend.loadedPath);
+            assertEquals(before, backend.states);
+            assertEquals(List.of("read", "read"), backend.calls);
+            assertNotNull(tampered.get());
+            assertFalse(Files.exists(tampered.get()));
+        }
+    }
+
+    private static Path stagedCopyContaining(String content) throws Exception
+    {
+        // Match this invocation's unique payload; never alter another worker's staged file.
+        try (var candidates = Files.newDirectoryStream(Path.of(System.getProperty("java.io.tmpdir")),
+            "edt-mcp-extension-*.cfe"))
+        {
+            for (Path candidate : candidates)
+            {
+                try
+                {
+                    if (Files.isReadable(candidate) && Files.size(candidate) == content.length()
+                        && Files.readString(candidate).equals(content))
+                    {
+                        return candidate;
+                    }
+                }
+                catch (java.nio.file.NoSuchFileException e)
+                {
+                    // Another worker finished while the temporary directory was being scanned.
+                }
+            }
+        }
+        throw new AssertionError("This invocation's staged .cfe was not found");
     }
 
     @Test public void platformFailureRetainsItsCauseAndRereadsActualState() throws Exception

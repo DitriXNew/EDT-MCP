@@ -71,7 +71,9 @@ Uninstall can permanently delete extension data. Recovery requires a backup; rei
 does not restore deleted data. File-name inference, standalone flag-only edits and automatic
 session termination are outside this initial contract.
 
-Preview and confirmed install/update calls fingerprint a private temporary copy; confirmation loads
+Preview and confirmed install/update calls fingerprint a worker-owned temporary copy; confirmation loads
 only a copy whose digest matches the preview snapshot. The copy is captured before consent, so changing
 the source file while the consent dialog is open cannot substitute the bytes sent to Designer.
 The copy remains owned by the worker until the operation finishes and is then removed.
+The staged SHA-256 is rechecked after consent and admission checks, immediately before loading.
+A local writer can still change bytes between that check and Designer opening the file.

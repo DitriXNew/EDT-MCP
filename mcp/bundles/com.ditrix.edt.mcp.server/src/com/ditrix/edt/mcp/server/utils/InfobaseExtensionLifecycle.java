@@ -157,7 +157,8 @@ public final class InfobaseExtensionLifecycle
                 staged = Files.createTempFile("edt-mcp-extension-", ".cfe");
                 stageCfe(request.cfePath(), staged);
             }
-            String current = previewContent(request, target, before, safe, protection, staged);
+            String artifactHash = staged == null ? null : sha256(staged);
+            String current = previewContent(request, target, before, safe, protection, artifactHash);
             if (!request.confirm())
             {
                 return ToolResult.success().put("requiresConfirmation", true).put("action", request.action())
@@ -191,6 +192,12 @@ public final class InfobaseExtensionLifecycle
             {
                 return ToolResult.error("Installed extensions changed while awaiting consent or admission checks; request a fresh preview before retrying.");
             }
+            if (staged != null && !artifactHash.equals(sha256(staged)))
+            {
+                return ToolResult.error("Staged .cfe bytes changed while awaiting consent or admission checks; nothing was changed. "
+                    + "Request a fresh preview before retrying.");
+            }
+            // A local writer can still change bytes between this check and Designer opening the file.
             mutationEntered.run();
             try
             {
@@ -267,7 +274,7 @@ public final class InfobaseExtensionLifecycle
 
     static void stageCfe(Path source, Path staged) throws java.io.IOException
     {
-        // Preserve the private file's identity and permissions instead of replacing it.
+        // Preserve the temporary file's identity and permissions instead of replacing it.
         try (var output = Files.newOutputStream(staged, java.nio.file.StandardOpenOption.WRITE,
             java.nio.file.StandardOpenOption.TRUNCATE_EXISTING))
         {
@@ -275,24 +282,24 @@ public final class InfobaseExtensionLifecycle
         }
     }
 
-    private static String previewContent(Request request, Target target, List<Extension> before,
-        boolean safe, boolean protection, Path staged) throws Exception
+    private static String sha256(Path file) throws Exception
     {
-        String artifactHash = null;
-        if (staged != null)
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (var input = Files.newInputStream(file))
         {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (var input = Files.newInputStream(staged))
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1)
             {
-                byte[] buffer = new byte[8192];
-                int count;
-                while ((count = input.read(buffer)) != -1)
-                {
-                    digest.update(buffer, 0, count);
-                }
+                digest.update(buffer, 0, count);
             }
-            artifactHash = HexFormat.of().formatHex(digest.digest());
         }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static String previewContent(Request request, Target target, List<Extension> before,
+        boolean safe, boolean protection, String artifactHash)
+    {
         Map<String, Object> inputs = new TreeMap<>();
         inputs.put("projectName", target.projectName());
         inputs.put("applicationId", target.applicationId());
