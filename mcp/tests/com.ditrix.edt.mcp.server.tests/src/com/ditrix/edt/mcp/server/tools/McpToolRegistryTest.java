@@ -130,11 +130,10 @@ public class McpToolRegistryTest
         assertEquals("launch", visible.iterator().next().getName()); //$NON-NLS-1$
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void testGetToolNull()
     {
-        // ConcurrentHashMap does not allow null keys
-        registry.getTool(null);
+        assertNull("A missing name must be an absent tool, not an exception", registry.getTool(null));
     }
 
     // === GetAllTools ===

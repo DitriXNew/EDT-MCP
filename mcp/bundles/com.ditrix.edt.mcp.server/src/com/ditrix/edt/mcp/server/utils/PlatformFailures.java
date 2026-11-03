@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.debug.core.DebugException;
 
 import com.e1c.g5.dt.applications.ApplicationException;
 
@@ -40,6 +41,7 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * returns the first non-blank message it finds. When the whole failure genuinely carries no text
  * it says so, naming the exception type and the status severity, because "CANCEL, no message" is
  * itself the diagnosis: something aborted the operation rather than failing it.
+ * Debug failures prefer the status's own exception message before the wrapper or child text.
  *
  * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
  * {@code describe} has selected the headline, what does the deepest distinct bounded
@@ -243,6 +245,15 @@ public final class PlatformFailures
             boolean allowNonFailingChildren)
     {
         IStatus status = statusOf(failure);
+        if (failure instanceof DebugException && status != null)
+        {
+            Throwable carried = status.getException();
+            String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
+            if (carriedMessage != null)
+            {
+                return new FailureMessage(carriedMessage, null);
+            }
+        }
         if (hasChildren(status))
         {
             String fromChildren = statusMessage(status, 0, allowNonFailingChildren);
