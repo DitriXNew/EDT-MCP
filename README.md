@@ -826,7 +826,7 @@ Which tool families stay JSON, and why:
 
 - **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
-- **`validate_query`** — returns the error **line/column** *(b)*;
+- **`validate_query`** — returns the error **line/column** *(b)*; complete native DBView validation reports `VALID`, `INVALID`, or `PARTIAL`; query-bearing DCS/DynamicList writes share this validator and refuse proven errors before mutation.
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
 - **`clean_project`** / **`update_database`** / **`infobase_sessions`** — return machine-readable status whose JSON shape is asserted by e2e *(d-like contract)*.
 

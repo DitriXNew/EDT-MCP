@@ -36,6 +36,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.QueryWriteValidation;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsChartReferences;
@@ -704,6 +705,10 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(prepared.error()).toJson();
             }
 
+            QueryWriteValidation.Batch queryValidation = QueryWriteValidation.validate(context.project(),
+                QueryWriteValidation.dcs(type, body, detachedImport));
+            if (queryValidation.errorJson() != null) return queryValidation.errorJson();
+
             WriteOutcome outcome;
             try
             {
@@ -852,7 +857,7 @@ public class DcsTool implements IMcpTool
                 + "`\n\n**Hash:** `" + outcome.hash + "`\n\n**Export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
                 + "\n\n**Settings applied:** `" + outcome.settingsApplied + "`" //$NON-NLS-1$ //$NON-NLS-2$
                 + "\n\n**Schema applied:** " + countsText //$NON-NLS-1$
-                + localeUnusedNote(context, languages);
+                + queryValidation.note() + localeUnusedNote(context, languages);
         }
         catch (RuntimeException e)
         {
@@ -913,6 +918,10 @@ public class DcsTool implements IMcpTool
         {
             return verdict;
         }
+        QueryWriteValidation.Batch queryValidation = QueryWriteValidation.validate(context.project(),
+            QueryWriteValidation.dynamicList(type, body));
+        if (queryValidation.errorJson() != null) return queryValidation.errorJson();
+
         if (verdict == null)
         {
             ConsentPreview preview = new ConsentPreview(
@@ -1030,7 +1039,7 @@ public class DcsTool implements IMcpTool
             + "\n\n**ListSettings.dcss export scheduled:** `" //$NON-NLS-1$
             + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
             + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)) //$NON-NLS-1$ //$NON-NLS-2$
-            + localeUnusedNote(context, languages);
+            + queryValidation.note() + localeUnusedNote(context, languages);
     }
 
     private static String executeOptions(String projectName, DcsAddress address, String type,

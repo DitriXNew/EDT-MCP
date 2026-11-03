@@ -51,4 +51,7 @@
   <httpServices>HTTPService.ProbeService</httpServices>
   <commonForms>CommonForm.Form</commonForms>
   <catalogs>Catalog.Catalog</catalogs>
+  <documents>Document.QueryOrder</documents>
+  <informationRegisters>InformationRegister.QueryPrices</informationRegisters>
+  <accumulationRegisters>AccumulationRegister.QueryStock</accumulationRegisters>
 </mdclass:Configuration>
