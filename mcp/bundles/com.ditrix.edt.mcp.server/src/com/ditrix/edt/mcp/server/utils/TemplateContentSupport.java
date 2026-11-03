@@ -64,6 +64,14 @@ public final class TemplateContentSupport
 {
     private static final String TEXT = "text"; //$NON-NLS-1$
     private static final String EXPECTED_HASH = "expectedHash"; //$NON-NLS-1$
+    private static final String EXPECTED_SOURCE = "expectedSource"; //$NON-NLS-1$
+    private static final String MODE = "mode"; //$NON-NLS-1$
+    private static final String OLD_TEXT = "oldText"; //$NON-NLS-1$
+    private static final String OVERWRITE = "overwrite"; //$NON-NLS-1$
+    private static final String SEARCH_REPLACE = "searchReplace"; //$NON-NLS-1$
+    private static final String REPLACE = "replace"; //$NON-NLS-1$
+    private static final String APPEND = "append"; //$NON-NLS-1$
+    private static final Set<String> TEXT_KEYS = Set.of(TEXT, EXPECTED_HASH, EXPECTED_SOURCE, MODE, OLD_TEXT, OVERWRITE);
     private static final String SUPPORTED = "TextDocument, SpreadsheetDocument"; //$NON-NLS-1$
 
     private TemplateContentSupport()
@@ -304,17 +312,42 @@ public final class TemplateContentSupport
         {
             for (String key : spec.keySet())
             {
-                if (!TEXT.equals(key) && !EXPECTED_HASH.equals(key))
+                if (!TEXT_KEYS.contains(key))
                 {
                     return ToolResult.error("TextDocument template '" + fqn + "' cannot accept '" + key //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'. Use template:{text:\"...\", expectedHash?:\"...\"}; cells, areas and other " //$NON-NLS-1$
+                        + "'. Use template:{mode:\"replace\", text:\"...\", expectedHash:\"...\"}; cells, areas and other " //$NON-NLS-1$
                         + "spreadsheet keys require a SpreadsheetDocument template.").toJson(); //$NON-NLS-1$
                 }
             }
-            if (!isString(spec.get(TEXT)) || spec.has(EXPECTED_HASH) && !isString(spec.get(EXPECTED_HASH)))
+            for (String key : Set.of(TEXT, EXPECTED_HASH, EXPECTED_SOURCE, MODE, OLD_TEXT))
             {
-                return ToolResult.error("TextDocument template requires a string 'text' and an optional string " //$NON-NLS-1$
-                    + "'expectedHash'. Read the text and contentHash with get_metadata_details.").toJson(); //$NON-NLS-1$
+                if ((TEXT.equals(key) || spec.has(key)) && !isString(spec.get(key)))
+                {
+                    return ToolResult.error("template." + key + " must be a string. Read the text and contentHash " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "with get_metadata_details and retry.").toJson(); //$NON-NLS-1$
+                }
+            }
+            if (spec.has(OVERWRITE) && !(spec.get(OVERWRITE).isJsonPrimitive()
+                && spec.get(OVERWRITE).getAsJsonPrimitive().isBoolean()))
+            {
+                return ToolResult.error("template.overwrite must be a boolean; use true only to force a full " //$NON-NLS-1$
+                    + "replace, or read get_metadata_details and supply expectedHash.").toJson(); //$NON-NLS-1$
+            }
+            String mode = textMode(spec);
+            if (!Set.of(SEARCH_REPLACE, REPLACE, APPEND).contains(mode))
+            {
+                return ToolResult.error("Invalid template.mode '" + mode //$NON-NLS-1$
+                    + "'; use searchReplace (default), replace or append.").toJson(); //$NON-NLS-1$
+            }
+            if (SEARCH_REPLACE.equals(mode) && (!spec.has(OLD_TEXT) || spec.get(OLD_TEXT).getAsString().isEmpty()))
+            {
+                return ToolResult.error("template.oldText must be a non-empty string for searchReplace. " //$NON-NLS-1$
+                    + "Read get_metadata_details and provide exactly one literal match.").toJson(); //$NON-NLS-1$
+            }
+            if (!SEARCH_REPLACE.equals(mode) && spec.has(OLD_TEXT))
+            {
+                return ToolResult.error("template.oldText is only accepted for searchReplace; remove it for mode=" //$NON-NLS-1$
+                    + mode + ".").toJson(); //$NON-NLS-1$
             }
         }
         else if (spec.has(EXPECTED_HASH))
@@ -339,32 +372,51 @@ public final class TemplateContentSupport
     /** Enlist file changes only AFTER validation, so a refusal never rolls back somebody else's edit. */
     public static String writeText(BasicTemplate template, IFile file, JsonObject spec, Context context)
     {
+        return writeTextResult(template, file, spec, context).error();
+    }
+
+    /** Hashes the actual edited text while the final read and write still hold the file rule. */
+    public record TextWriteResult(String error, String contentHash)
+    {
+    }
+
+    public static TextWriteResult writeTextResult(BasicTemplate template, IFile file, JsonObject spec, Context context)
+    {
         String refusal = payloadError(template, spec, template.getName());
         if (refusal != null)
         {
-            return refusal;
+            return new TextWriteResult(refusal, null);
         }
-        String expected = spec.has(EXPECTED_HASH) ? spec.get(EXPECTED_HASH).getAsString() : null;
-        refusal = expectedHashError(file, expected);
+        if (file == null)
+        {
+            return new TextWriteResult(ToolResult.error("Cannot resolve Template.txt; refresh the project " //$NON-NLS-1$
+                + "and retry get_metadata_details.").toJson(), null); //$NON-NLS-1$
+        }
+        refusal = textEditError(readText(file), file.exists(), spec);
         if (refusal != null)
         {
-            return refusal;
+            return new TextWriteResult(refusal, null);
         }
-        String[] lateError = new String[1];
+        TextWriteResult[] result = new TextWriteResult[1];
         try
         {
             IWorkspace workspace = file.getWorkspace();
             // Already inside the BM write lambda: setContents acquires this same file rule there,
             // so holding it across the final check and write adds no new lock class.
             ICoreRunnable operation = monitor -> {
-                lateError[0] = expectedHashError(file, expected);
-                if (lateError[0] == null)
+                String current = readText(file);
+                String error = textEditError(current, file.exists(), spec);
+                if (error != null)
                 {
-                    lateError[0] = writeTextContents(file, spec.get(TEXT).getAsString(), context);
+                    result[0] = new TextWriteResult(error, null);
+                    return;
                 }
+                String text = editedText(current, spec);
+                error = writeTextContents(file, text, context);
+                result[0] = new TextWriteResult(error, error == null ? ContentHash.of(text) : null);
             };
             workspace.run(operation, workspace.getRuleFactory().modifyRule(file), IWorkspace.AVOID_UPDATE, null);
-            return lateError[0];
+            return result[0];
         }
         catch (CoreException error)
         {
@@ -372,11 +424,77 @@ public final class TemplateContentSupport
         }
     }
 
-    private static String expectedHashError(IFile file, String expected)
+    private static String textMode(JsonObject spec)
+    {
+        return spec.has(MODE) ? spec.get(MODE).getAsString() : SEARCH_REPLACE;
+    }
+
+    private static String textEditError(String current, boolean exists, JsonObject spec)
+    {
+        String expected = spec.has(EXPECTED_HASH) ? spec.get(EXPECTED_HASH).getAsString() : null;
+        String error = expectedHashError(current, expected);
+        if (error != null)
+        {
+            return error;
+        }
+        if (spec.has(EXPECTED_SOURCE) && !current.replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .equals(spec.get(EXPECTED_SOURCE).getAsString().replace("\r\n", "\n"))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return ToolResult.error("template.expectedSource does not match the current template text; " //$NON-NLS-1$
+                + "nothing was written. Read get_metadata_details again and retry.").toJson(); //$NON-NLS-1$
+        }
+        String mode = textMode(spec);
+        if (!exists && !REPLACE.equals(mode))
+        {
+            return ToolResult.error("Template.txt does not exist; only template.mode=replace can create it. " //$NON-NLS-1$
+                + "Read get_metadata_details and retry with replace.").toJson(); //$NON-NLS-1$
+        }
+        if (REPLACE.equals(mode) && exists && (expected == null || expected.isEmpty())
+            && !spec.has(EXPECTED_SOURCE) && !(spec.has(OVERWRITE) && spec.get(OVERWRITE).getAsBoolean()))
+        {
+            return ToolResult.error("Template.txt already exists; a full replace requires expectedHash or " //$NON-NLS-1$
+                + "expectedSource from get_metadata_details, or overwrite=true to force. Nothing was written.") //$NON-NLS-1$
+                .toJson();
+        }
+        if (SEARCH_REPLACE.equals(mode))
+        {
+            String old = spec.get(OLD_TEXT).getAsString();
+            int count = 0;
+            for (int at = current.indexOf(old); at >= 0; at = current.indexOf(old, at + 1))
+            {
+                count++;
+            }
+            if (count != 1)
+            {
+                return ToolResult.error("template.oldText has " + count + " literal matches; searchReplace requires " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "exactly one. Nothing was written. Read get_metadata_details and choose a unique oldText.") //$NON-NLS-1$
+                    .toJson();
+            }
+        }
+        return null;
+    }
+
+    private static String editedText(String current, JsonObject spec)
+    {
+        String text = spec.get(TEXT).getAsString();
+        String mode = textMode(spec);
+        if (APPEND.equals(mode))
+        {
+            return current + text;
+        }
+        if (SEARCH_REPLACE.equals(mode))
+        {
+            String old = spec.get(OLD_TEXT).getAsString();
+            int at = current.indexOf(old);
+            return current.substring(0, at) + text + current.substring(at + old.length());
+        }
+        return text;
+    }
+
+    private static String expectedHashError(String current, String expected)
     {
         if (expected != null && !expected.isEmpty())
         {
-            String current = readText(file);
             if (!ContentHash.matches(current, expected))
             {
                 return ToolResult.error("expectedHash does not match the current template text; nothing was " //$NON-NLS-1$
@@ -441,11 +559,11 @@ public final class TemplateContentSupport
         }
         try
         {
-            return BslModuleUtils.readFileText(file);
+            return BslModuleUtils.readFileText(file, true);
         }
         catch (Exception error)
         {
-            throw new IllegalStateException("Cannot read Template.txt; refresh the project and retry: " //$NON-NLS-1$
+            throw new IllegalStateException("Cannot read Template.txt; check its encoding in EDT, refresh the project and retry: " //$NON-NLS-1$
                 + error.getMessage(), error);
         }
     }

@@ -39,6 +39,8 @@ import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
 import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
+import com._1c.g5.v8.dt.core.model.EditingMode;
+import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -66,6 +68,285 @@ public class TemplateContentSupportTest
 {
     private static final Class<?>[] INIT = {BasicTemplate.class, TemplateType.class,
         IBmTransaction.class, IDtProject.class, ITopObjectFqnGenerator.class, IFile.class};
+
+    @Test public void testDefaultSearchReplaceChangesOneLiteralMatchExactly() throws Exception
+    {
+        MemoryFile file = new MemoryFile("before\r\nneedle\r\nafter\n");
+        assertNull(edit(file, json("{'oldText':'needle','text':'new'}")));
+        assertArrayEquals("before\r\nnew\r\nafter\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        assertTrue(file.modifiedUnderRule);
+    }
+
+    @Test public void testSearchReplaceRejectsZeroMultipleAndOverlappingMatches() throws Exception
+    {
+        for (String current : new String[] {"absent", "needle needle", "needleneedle"})
+        {
+            MemoryFile file = new MemoryFile(current);
+            assertEditRefused(file, json("{'oldText':'needle','text':'new'}"), "matches");
+        }
+        assertEditRefused(new MemoryFile("aaa"), json("{'oldText':'aa','text':'b'}"), "matches");
+    }
+
+    @Test public void testSearchReplaceRequiresNonemptyOldText() throws Exception
+    {
+        assertEditRefused(new MemoryFile("keep"), json("{'text':'new'}"), "oldText");
+        assertEditRefused(new MemoryFile("keep"), json("{'oldText':'','text':'new'}"), "oldText");
+    }
+
+    @Test public void testAppendPreservesExistingBytesAndAddsNoSeparator() throws Exception
+    {
+        MemoryFile file = new MemoryFile("\uFEFFfirst\r\n");
+        assertNull(edit(file, json("{'mode':'append','text':'last'}")));
+        assertArrayEquals("\uFEFFfirst\r\nlast".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testOnlyReplaceCreatesMissingTextFile() throws Exception
+    {
+        assertEditRefused(new MemoryFile(null), json("{'mode':'append','text':'new'}"), "replace");
+        assertEditRefused(new MemoryFile(null), json("{'oldText':'old','text':'new'}"), "replace");
+        MemoryFile file = new MemoryFile(null);
+        assertNull(edit(file, json("{'mode':'replace','text':'new'}")));
+        assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testReplaceExistingRequiresGuardEvenWhenEmpty() throws Exception
+    {
+        for (String current : new String[] {"keep", ""})
+        {
+            assertEditRefused(new MemoryFile(current), json("{'mode':'replace','text':'new'}"), "expectedSource");
+        }
+        MemoryFile file = new MemoryFile("keep");
+        assertNull(edit(file, json("{'mode':'replace','text':'new','overwrite':true}")));
+        assertEquals("new", TemplateContentSupport.readText(file.file));
+    }
+
+    @Test public void testExpectedSourceNormalizesComparisonButNeverWrittenText() throws Exception
+    {
+        MemoryFile file = new MemoryFile("old\r\n");
+        JsonObject spec = json("{'mode':'replace','text':'new'}");
+        spec.addProperty("text", "new\r\n");
+        spec.addProperty("expectedSource", "old\n");
+        assertNull(edit(file, spec));
+        assertArrayEquals("new\r\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testMatchingHashAloneAuthorizesReplaceAndBlankHashDoesNot() throws Exception
+    {
+        MemoryFile file = new MemoryFile("old");
+        assertEditRefused(file, json("{'mode':'replace','text':'new','expectedHash':''}"), "expectedSource");
+        JsonObject spec = json("{'mode':'replace','text':'new'}");
+        spec.addProperty("expectedHash", ContentHash.of("old"));
+        assertNull(edit(file, spec));
+        assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testTextEditingRefusesEveryNonTextTemplateType() throws Exception
+    {
+        for (TemplateType type : TemplateType.values())
+        {
+            if (type == TemplateType.TEXT_DOCUMENT) { continue; }
+            MemoryFile file = new MemoryFile("keep");
+            String error = TemplateContentSupport.writeText(template(type), file.file,
+                json("{'mode':'append','text':'lost'}"));
+            assertNotNull(type.toString(), error);
+            assertTrue(error, error.contains("not a TextDocument"));
+            assertTrue(error, error.contains("create_metadata"));
+            assertArrayEquals("keep".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+            verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        }
+    }
+
+    @Test public void testExplicitGuardsStillRefuseWithOverwrite() throws Exception
+    {
+        for (String mode : new String[] {"replace", "append", "searchReplace"})
+        {
+            JsonObject spec = json("{'text':'new','oldText':'keep','overwrite':true}");
+            spec.addProperty("mode", mode);
+            if (!mode.equals("searchReplace")) { spec.remove("oldText"); }
+            spec.addProperty("expectedSource", "stale");
+            assertEditRefused(new MemoryFile("keep"), spec, "expectedSource");
+            spec.remove("expectedSource");
+            spec.addProperty("expectedHash", ContentHash.of("stale"));
+            assertEditRefused(new MemoryFile("keep"), spec, "expectedHash");
+        }
+    }
+
+    @Test public void testConcurrentSaveRechecksExpectedSourceAndMatchCount() throws Exception
+    {
+        MemoryFile file = new MemoryFile("keep");
+        file.pendingSave = "concurrent".getBytes(StandardCharsets.UTF_8);
+        String error = edit(file, json("{'mode':'replace','text':'new','expectedSource':'keep'}"));
+        assertNotNull(error);
+        assertTrue(error, error.contains("expectedSource"));
+        assertArrayEquals("concurrent".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+
+        file = new MemoryFile("needle");
+        file.pendingSave = "needle needle".getBytes(StandardCharsets.UTF_8);
+        error = edit(file, json("{'oldText':'needle','text':'new'}"));
+        assertNotNull(error);
+        assertTrue(error, error.contains("matches"));
+        assertArrayEquals("needle needle".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+    }
+
+    @Test public void testAppendUsesLatestTextUnderFileRule() throws Exception
+    {
+        MemoryFile file = new MemoryFile("old");
+        file.pendingSave = "latest".getBytes(StandardCharsets.UTF_8);
+        assertNull(edit(file, json("{'mode':'append','text':'!'}")));
+        assertArrayEquals("latest!".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testInvalidEditPayloadsNeverWrite() throws Exception
+    {
+        for (String spec : new String[] {
+            "{'mode':'unknown','text':'new'}", "{'mode':7,'text':'new'}",
+            "{'mode':'replace','text':'new','overwrite':'true'}",
+            "{'mode':'append','oldText':'keep','text':'new'}",
+            "{'mode':'replace','text':'new','expectedSource':null}",
+            "{'oldText':false,'text':'new'}"})
+        {
+            assertEditRefused(new MemoryFile("keep"), json(spec), "template");
+        }
+    }
+
+    @Test public void testWriteResultHashCoversFullEditedText() throws Exception
+    {
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        MemoryFile file = new MemoryFile("first\r\n");
+        initialize("initialize", template, TemplateType.TEXT_DOCUMENT, file);
+        JsonObject result = invokeTemplateWrite(template, json("{'mode':'append','text':'last'}"),
+            file, new MemoryFile(null), mock(IBmTransaction.class));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(ContentHash.of("first\r\nlast"),
+            result.getAsJsonObject("template").get("contentHash").getAsString());
+        assertArrayEquals("first\r\nlast".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testMalformedExistingBytesAreRefusedWithoutReencoding() throws Exception
+    {
+        MemoryFile file = new MemoryFile("");
+        byte[] malformed = {(byte)0xC3, 0x28};
+        file.bytes.set(malformed);
+        try
+        {
+            edit(file, json("{'mode':'append','text':'!'}"));
+            fail("Malformed UTF-8 must not be replaced during a text edit");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("encoding in EDT"));
+        }
+        assertArrayEquals(malformed, file.bytes.get());
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+    }
+
+    @Test public void testTextWriteRechecksVendorSupportInsideTransaction() throws Exception
+    {
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        MemoryFile file = new MemoryFile("keep");
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.setName("Cfg");
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+        IModelEditingSupport support = mock(IModelEditingSupport.class);
+        VendorSupportGuard.setServiceForTests(() -> support);
+        try
+        {
+            String expected = VendorSupportGuard.refusalFor(template, scope,
+                "CommonTemplate.Contract730", "CommonTemplate.Contract730", "changed");
+            JsonObject result = invokeTemplateWrite(template, json("{'mode':'append','text':'lost'}"),
+                file, new MemoryFile(null), mock(IBmTransaction.class), scope);
+            assertFalse(result.toString(), result.get("success").getAsBoolean());
+            assertEquals(expected, result.get("error").getAsString());
+            assertTrue(expected, expected.contains("vendor support"));
+            assertTrue(expected, expected.contains("adopt_metadata_object"));
+            verify(support, atLeastOnce()).canEdit(template, EditingMode.DIRECT);
+            assertArrayEquals("keep".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+            verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
+    }
+
+    @Test public void testOwnedTextEditsUseSharedBilingualResolverAndProgrammaticName() throws Exception
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var owner = MdClassFactory.eINSTANCE.createCatalog();
+        owner.setName("\u0422\u043e\u0432\u0430\u0440\u044b");
+        owner.getSynonym().put("en", "Products");
+        var template = MdClassFactory.eINSTANCE.createTemplate();
+        template.setName("Contract");
+        template.setTemplateType(TemplateType.TEXT_DOCUMENT);
+        owner.getTemplates().add(template);
+        config.getCatalogs().add(owner);
+        for (String type : new String[] {"Catalog", "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"})
+        {
+            for (String kind : new String[] {"Template", "\u041c\u0430\u043a\u0435\u0442"})
+            {
+                var node = MetadataNodeResolver.resolveExisting(config, type + "." + owner.getName() + "." + kind + ".Contract");
+                assertNotNull(node);
+                assertSame(template, node.object);
+                MemoryFile file = new MemoryFile("old");
+                assertNull(TemplateContentSupport.writeText((BasicTemplate)node.object, file.file,
+                    json("{'oldText':'old','text':'new'}")));
+                assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+            }
+        }
+        assertNull(MetadataNodeResolver.resolveExisting(config, "Catalog.Products.Template.Contract"));
+    }
+
+    @Test public void testEditableTemplateCannotBypassLockedOwner() throws Exception
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var owner = MdClassFactory.eINSTANCE.createCatalog();
+        owner.setName("Locked");
+        config.getCatalogs().add(owner);
+        var template = MdClassFactory.eINSTANCE.createTemplate();
+        template.setName("Text826");
+        template.setTemplateType(TemplateType.TEXT_DOCUMENT);
+        owner.getTemplates().add(template);
+        MemoryFile file = new MemoryFile("keep");
+        IModelEditingSupport support = mock(IModelEditingSupport.class);
+        when(support.canEdit(any(), any())).thenReturn(true);
+        when(support.canEdit(owner, EditingMode.DIRECT)).thenReturn(false);
+        VendorSupportGuard.setServiceForTests(() -> support);
+        try
+        {
+            JsonObject result = invokeTemplateWrite(template, json("{'mode':'append','text':'lost'}"),
+                file, new MemoryFile(null), mock(IBmTransaction.class), MetadataScope.ofConfiguration(config));
+            assertFalse(result.toString(), result.get("success").getAsBoolean());
+            assertTrue(result.toString(), result.get("error").getAsString().contains("vendor support"));
+            verify(support).canEdit(template, EditingMode.DIRECT);
+            verify(support).canEdit(owner, EditingMode.DIRECT);
+            assertArrayEquals("keep".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+            verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
+    }
+
+    private static String edit(MemoryFile file, JsonObject spec)
+    {
+        return TemplateContentSupport.writeText(template(TemplateType.TEXT_DOCUMENT), file.file, spec);
+    }
+
+    private static void assertEditRefused(MemoryFile file, JsonObject spec, String message) throws Exception
+    {
+        byte[] before = file.bytes.get();
+        String error = edit(file, spec);
+        assertNotNull("Expected edit refusal for " + spec, error);
+        assertFalse(error, JsonParser.parseString(error).getAsJsonObject().get("success").getAsBoolean());
+        assertTrue(error, error.contains(message));
+        assertTrue(error, error.contains("get_metadata_details") || error.contains("template"));
+        assertArrayEquals(before, file.bytes.get());
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any());
+    }
 
     @Test public void testTextInitializationCreatesEmptyFileAndPlatformProxy() throws Exception
     {
@@ -138,7 +419,7 @@ public class TemplateContentSupportTest
         ((InternalEObject)placeholder).eSetProxyURI(URI.createURI("unresolved:/legacy/Template.txt"));
         template.setTemplate(placeholder);
         MemoryFile file = new MemoryFile(null);
-        JsonObject result = invokeTemplateWrite(template, json("{'text':'new text'}"),
+        JsonObject result = invokeTemplateWrite(template, json("{'mode':'replace','overwrite':true,'text':'new text'}"),
             file, new MemoryFile(null), mock(IBmTransaction.class));
         assertTrue(result.toString(), result.get("success").getAsBoolean());
         assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8), file.bytes.get());
@@ -151,7 +432,7 @@ public class TemplateContentSupportTest
         BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
         MemoryFile file = new MemoryFile("old text");
         initialize("initialize", template, TemplateType.TEXT_DOCUMENT, file);
-        JsonObject result = invokeTemplateWrite(template, json("{'text':'new text'}"),
+        JsonObject result = invokeTemplateWrite(template, json("{'mode':'replace','overwrite':true,'text':'new text'}"),
             file, new MemoryFile(null), mock(IBmTransaction.class));
         assertTrue(result.toString(), result.get("success").getAsBoolean());
         assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8), file.bytes.get());
@@ -490,6 +771,8 @@ public class TemplateContentSupportTest
                 String.class, BasicTemplate.class, JsonObject.class);
             write.setAccessible(true);
             JsonObject spec = new JsonObject();
+            spec.addProperty("mode", "replace");
+            spec.addProperty("overwrite", true);
             spec.addProperty("text", text);
             JsonObject result = JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
                 "CommonTemplate.Contract730", template, spec)).getAsJsonObject();
@@ -521,6 +804,8 @@ public class TemplateContentSupportTest
         byte[] original = file.bytes.get() == null ? null : file.bytes.get().clone();
         Class<?> type = Class.forName("com.ditrix.edt.mcp.server.utils.TemplateContentSupport$Context");
         JsonObject spec = new JsonObject();
+        spec.addProperty("mode", "replace");
+        spec.addProperty("overwrite", true);
         spec.addProperty("text", text);
         try (AutoCloseable context = (AutoCloseable)type.getConstructor(org.eclipse.core.resources.IProject.class)
             .newInstance(new Object[] {null}))
@@ -567,6 +852,7 @@ public class TemplateContentSupportTest
         try (TemplateContentSupport.Context context = new TemplateContentSupport.Context(null))
         {
             JsonObject spec = new JsonObject();
+            spec.addProperty("mode", "replace");
             spec.addProperty("text", "lost update\n");
             spec.addProperty("expectedHash", ContentHash.of("original\n"));
             String error = TemplateContentSupport.writeText(template(TemplateType.TEXT_DOCUMENT), file.file,
@@ -617,7 +903,7 @@ public class TemplateContentSupportTest
         file.pendingSave = "concurrent creation".getBytes(StandardCharsets.UTF_8);
         try (TemplateContentSupport.Context context = new TemplateContentSupport.Context(null))
         {
-            JsonObject spec = json("{'text':'lost update'}");
+            JsonObject spec = json("{'mode':'replace','overwrite':true,'text':'lost update'}");
             spec.addProperty("expectedHash", ContentHash.of(""));
             String error = TemplateContentSupport.writeText(template(TemplateType.TEXT_DOCUMENT),
                 file.file, spec, context);
@@ -680,7 +966,7 @@ public class TemplateContentSupportTest
     {
         String error = (String)call("payloadError",
             new Class<?>[] {BasicTemplate.class, JsonObject.class, String.class},
-            template(TemplateType.TEXT_DOCUMENT), json("{'text':'x','cells':[]}"), "Template.Contract");
+            template(TemplateType.TEXT_DOCUMENT), json("{'mode':'replace','overwrite':true,'text':'x','cells':[]}"), "Template.Contract");
         assertNotNull(error);
         assertTrue(error, error.contains("cells"));
     }
@@ -690,7 +976,7 @@ public class TemplateContentSupportTest
         MemoryFile file = new MemoryFile("original");
         String error = (String)call("writeText",
             new Class<?>[] {BasicTemplate.class, IFile.class, JsonObject.class},
-            template(TemplateType.TEXT_DOCUMENT), file.file, json("{'text':5}"));
+            template(TemplateType.TEXT_DOCUMENT), file.file, json("{'mode':'replace','overwrite':true,'text':5}"));
         assertNotNull(error);
         assertTrue(error, error.contains("string"));
         assertArrayEquals("original".getBytes(StandardCharsets.UTF_8), file.bytes.get());
@@ -738,7 +1024,7 @@ public class TemplateContentSupportTest
             .newInstance(new Object[] {null}))
         {
             assertNull(call("writeText", new Class<?>[] {BasicTemplate.class, IFile.class, JsonObject.class, type},
-                template(TemplateType.TEXT_DOCUMENT), file.file, json("{'text':'uncommitted\\n'}"), context));
+                template(TemplateType.TEXT_DOCUMENT), file.file, json("{'mode':'replace','overwrite':true,'text':'uncommitted\\n'}"), context));
             assertArrayEquals("uncommitted\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
         }
         assertArrayEquals("original\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
@@ -754,7 +1040,7 @@ public class TemplateContentSupportTest
             String error = (String)call("writeText",
                 new Class<?>[] {BasicTemplate.class, IFile.class, JsonObject.class, type},
                 template(TemplateType.TEXT_DOCUMENT), file.file,
-                json("{'text':'lost','expectedHash':'stale'}"), context);
+                json("{'mode':'replace','overwrite':true,'text':'lost','expectedHash':'stale'}"), context);
             assertNotNull(error);
         }
         verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
@@ -835,7 +1121,7 @@ public class TemplateContentSupportTest
         MemoryFile text = new MemoryFile("keep text sidecar");
         MemoryFile spreadsheet = new MemoryFile("keep spreadsheet sidecar");
         IBmTransaction tx = mock(IBmTransaction.class);
-        JsonObject result = invokeTemplateWrite(template, json("{'text':'lost update'}"),
+        JsonObject result = invokeTemplateWrite(template, json("{'mode':'replace','overwrite':true,'text':'lost update'}"),
             text, spreadsheet, tx);
         assertFalse(result.toString(), result.get("success").getAsBoolean());
         assertTrue(result.toString(), result.toString().contains("has incompatible content"));
@@ -860,6 +1146,12 @@ public class TemplateContentSupportTest
     private static JsonObject invokeTemplateWrite(BasicTemplate current, JsonObject spec,
         MemoryFile text, MemoryFile other, IBmTransaction tx) throws Exception
     {
+        return invokeTemplateWrite(current, spec, text, other, tx, null);
+    }
+
+    private static JsonObject invokeTemplateWrite(BasicTemplate current, JsonObject spec,
+        MemoryFile text, MemoryFile other, IBmTransaction tx, MetadataScope scope) throws Exception
+    {
         BasicTemplate outer = mock(BasicTemplate.class, withSettings().extraInterfaces(IBmObject.class));
         when(outer.getTemplateType()).thenReturn(current.getTemplateType());
         IBmObject bm = (IBmObject)outer;
@@ -882,6 +1174,9 @@ public class TemplateContentSupportTest
             Field project = contextType.getField("project");
             project.setAccessible(true);
             project.set(context, services.project);
+            Field scopeField = contextType.getField("scope");
+            scopeField.setAccessible(true);
+            scopeField.set(context, scope);
             var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
                 String.class, BasicTemplate.class, java.util.List.class, java.util.List.class,
                 boolean.class, JsonObject.class);
@@ -934,6 +1229,8 @@ public class TemplateContentSupportTest
         throws Exception
     {
         JsonObject spec = new JsonObject();
+        spec.addProperty("mode", "replace");
+        spec.addProperty("overwrite", true);
         spec.addProperty("text", text);
         if (hash != null) { spec.addProperty("expectedHash", hash); }
         return (String)call("writeText", new Class<?>[] {BasicTemplate.class, IFile.class, JsonObject.class},

@@ -168,7 +168,7 @@ A configuration on vendor support can lock objects. A new top-level object needs
 
 ## Template content types
 
-`templateType` is accepted at creation only for a common or owned template. Supported types are TextDocument and SpreadsheetDocument (including their Russian spellings). Other types, including DataCompositionSchema and binary templates, are refused. Creation initializes the same external content as the EDT wizard: an empty `Templates/<Name>/Template.txt` with a FileAwareTextDocument proxy, or a canonical spreadsheet resource. Use `modify_metadata` with `template:{text:"..."}` to fill a TextDocument; read its text and `contentHash` with `get_metadata_details`.
+`templateType` is accepted at creation only for a common or owned template. Supported types are TextDocument and SpreadsheetDocument (including their Russian spellings). Other types, including DataCompositionSchema and binary templates, are refused. Creation initializes the same external content as the EDT wizard: an empty `Templates/<Name>/Template.txt` with a FileAwareTextDocument proxy, or a canonical spreadsheet resource. Use `modify_metadata` with `template:{mode:"replace", text:"...", expectedSource:""}` to fill a newly created TextDocument; read its text and `contentHash` with `get_metadata_details`.
 
 ## External data source structure
 

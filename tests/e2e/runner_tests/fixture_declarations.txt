@@ -16,6 +16,7 @@ tests/ExternalObjects/src/ExternalReports/ExtReport/ExtReport.mdo:ExtReport
 tests/SupportedConfiguration/.project:SupportedConfiguration
 tests/SupportedConfiguration/.project:org.eclipse.xtext.ui.shared.xtextBuilder
 tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Locked
+tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Text826
 tests/SupportedConfiguration/src/Catalogs/Locked/Locked.mdo:Weight
 tests/SupportedConfiguration/src/Catalogs/Open/Open.mdo:Note
 tests/SupportedConfiguration/src/Catalogs/Open/Open.mdo:Open
