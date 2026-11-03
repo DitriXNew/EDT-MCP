@@ -40,6 +40,30 @@ public final class MetadataCloneDiskVerifier
     {
     }
 
+    /** Called after export has drained; pending destination files never use source-readiness checks. */
+    public static byte[] verifyCopiedFile(IFile file, String expectedHash)
+    {
+        if (!file.exists())
+        {
+            throw new IllegalStateException("Missing clone file '" + file.getProjectRelativePath()
+                + "' after export. Inspect the clone and use resync_to_disk to export its committed model.");
+        }
+        try (InputStream input = file.getContents(true))
+        {
+            byte[] bytes = input.readAllBytes();
+            if (expectedHash != null && !expectedHash.equals(MetadataClonePlan.bytesHash(bytes)))
+            {
+                throw new IllegalStateException("Copied bytes differ in '" + file.getProjectRelativePath() + "'");
+            }
+            return bytes;
+        }
+        catch (org.eclipse.core.runtime.CoreException | java.io.IOException e)
+        {
+            throw new IllegalStateException("Cannot read clone file '" + file.getProjectRelativePath()
+                + "' after export. Inspect its file permissions and the EDT log before recovery.", e);
+        }
+    }
+
     /** Source readiness is model/disk equality, not merely an empty export queue. */
     public static void verifyOwned(IProject project, Map<String, EObject> graph, IProjectFileSystemSupport fs)
     {
@@ -100,7 +124,8 @@ public final class MetadataCloneDiskVerifier
         catch (Exception e)
         {
             throw new IllegalStateException("Export verification failed for '" + file.getProjectRelativePath()
-                + "': " + e.getMessage() + ". Inspect the model and use resync_to_disk before retrying.", e);
+                + "': " + String.valueOf(e.getMessage()).replaceFirst("[.!?]+$", "")
+                + ". Inspect the model and use resync_to_disk before recovery.", e);
         }
         finally
         {

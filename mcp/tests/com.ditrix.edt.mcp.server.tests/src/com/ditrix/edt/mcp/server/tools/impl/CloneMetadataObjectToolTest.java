@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.MetadataCloneFilesFixture;
 import com.ditrix.edt.mcp.server.utils.MetadataClonePlan;
+import com.ditrix.edt.mcp.server.utils.MetadataCloneDiskVerifier;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -52,16 +53,89 @@ public class CloneMetadataObjectToolTest
         assertTrue(manifest.toString().contains("src/Catalogs/Copy/ObjectModule.bsl"));
         assertTrue(manifest.toString().contains("src/Catalogs/Copy/ManagerModule.bsl"));
         when(fixture.copiedManagerModule.exists()).thenReturn(false);
+        JsonArray pending = CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
+        assertEquals("Destination paths must be planned even while files await export", 3, pending.size());
         try
         {
-            CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
-            fail("An omitted source module must not pass confirmation");
+            MetadataCloneDiskVerifier.verifyCopiedFile(fixture.copiedManagerModule,
+                preview.files.get("ManagerModule.bsl"));
+            fail("A file still missing after export must not pass verification");
         }
         catch (IllegalStateException expected)
         {
-            assertTrue(expected.getMessage().contains("omitted owned resource"));
-            assertTrue(expected.getMessage().contains("managerModule"));
+            assertTrue(expected.getMessage().contains("after export"));
+            assertTrue(expected.getMessage().contains("ManagerModule.bsl"));
         }
+    }
+
+    @Test
+    public void pendingExternalFormIsPlannedBeforeExportAndVerifiedAfterwards() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        var sourceForm = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalogForm();
+        sourceForm.setName("ItemForm");
+        fixture.source.getForms().add(sourceForm);
+        var content = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm();
+        content.setMdForm(sourceForm);
+        sourceForm.setForm(content);
+        content.getAttributes().add(com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute());
+        var sourceFile = MetadataCloneFilesFixture.file("Source/Forms/ItemForm/Form.form", true, "<Form/>");
+        when(fixture.fs.getFile(content)).thenReturn(sourceFile);
+        when(fixture.fs.getFile(sourceForm,
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.BASIC_FORM__FORM)).thenReturn(sourceFile);
+        MetadataClonePlan preview = fixture.preview();
+
+        var holder = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+        var copiedForm = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalogForm();
+        copiedForm.setName("ItemForm");
+        holder.getForms().add(copiedForm);
+        when(fixture.clone.eGet(com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.CATALOG__FORMS))
+            .thenReturn(holder.getForms());
+        var copiedContent = mock(com._1c.g5.v8.dt.form.model.Form.class,
+            withSettings().extraInterfaces(com._1c.g5.v8.bm.core.IBmObject.class));
+        copiedForm.setForm(copiedContent);
+        when(copiedContent.eClass()).thenReturn(com._1c.g5.v8.dt.form.model.FormPackage.Literals.FORM);
+        when(copiedContent.eIsSet(any(org.eclipse.emf.ecore.EStructuralFeature.class))).thenReturn(true);
+        var top = (com._1c.g5.v8.bm.core.IBmObject)copiedContent;
+        when(top.bmIsTop()).thenReturn(true);
+        when(top.bmGetFqn()).thenReturn("Catalog.Copy.Form.ItemForm.Form");
+        var destination = MetadataCloneFilesFixture.file("Copy/Forms/ItemForm/Form.form", false, "<Form/>");
+        when(fixture.fs.getFile(copiedContent)).thenReturn(destination);
+        when(fixture.fs.getFile(copiedForm,
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.BASIC_FORM__FORM)).thenReturn(destination);
+
+        JsonArray manifest = CloneMetadataObjectTool.resourceManifest(preview, fixture.source, fixture.clone, fixture.fs);
+        JsonObject form = java.util.stream.StreamSupport.stream(manifest.spliterator(), false)
+            .map(value -> value.getAsJsonObject()).filter(row -> row.get("file").getAsString().endsWith("Form.form"))
+            .findFirst().orElseThrow();
+        assertTrue(form.get("modeled").getAsBoolean());
+        assertEquals("Catalog.Copy.Form.ItemForm.Form", form.get("modelFqn").getAsString());
+        verify(destination, never()).getContents(true);
+        try
+        {
+            MetadataCloneDiskVerifier.verifyCopiedFile(destination, null);
+            fail("The export barrier cannot excuse a missing form file");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("after export"));
+            assertFalse(expected.getMessage().contains("source"));
+        }
+        when(destination.exists()).thenReturn(true);
+        assertArrayEquals("<Form/>".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            MetadataCloneDiskVerifier.verifyCopiedFile(destination, null));
+    }
+
+    @Test
+    public void partialApplyUsesCloneRecoveryWordingWithoutDoublePeriod()
+    {
+        String response = CloneMetadataObjectTool.partial("Catalog.Copy", "Missing clone file 'Form.form' after export.");
+        assertTrue(response.contains("Clone apply"));
+        assertTrue(response.contains("Catalog.Copy"));
+        assertTrue(response.contains("resync_to_disk"));
+        assertFalse(response.contains(".."));
+        assertFalse(response.contains("previewing again"));
+        assertFalse(response.contains("refresh the source"));
     }
 
     @Test

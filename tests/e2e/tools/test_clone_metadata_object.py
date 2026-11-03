@@ -44,6 +44,15 @@ def _xml(path):
     return ET.fromstring(read_disk(path))
 
 
+def _assert_only_external_incoming(data):
+    source = data["sourceFqn"]
+    for field in ("incomingRelations", "notCopied"):
+        for row in data[field]:
+            owner = row["owner"]
+            assert owner != source and not owner.startswith((source + ".", source + " - ", source + " / ")), row
+            assert not owner.startswith(("Catalogs/Catalog/", "src/Catalogs/Catalog/")), row
+
+
 def _details(fqn):
     result = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "full": True})
     assert_ok(result, "clone model read-back")
@@ -120,7 +129,7 @@ def test_clone_preserves_named_forms_modules_templates_types_and_predefined():
     modules = ["Catalogs/Catalog/ObjectModule.bsl", "Catalogs/Catalog/ManagerModule.bsl",
                "Catalogs/Catalog/Forms/ItemForm/Module.bsl"]
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Command.CloneCommand"}), "seed own command")
-    modules.append("Catalogs/Catalog/Commands/CloneCommand/Module.bsl")
+    modules.append("Catalogs/Catalog/Commands/CloneCommand/CommandModule.bsl")
     for module in modules:
         assert_ok(call("write_module_source", {"projectName": PROJECT, "modulePath": module,
                   "mode": "replace", "source": code, "overwrite": True}), "seed owned module")
@@ -142,9 +151,11 @@ def test_clone_preserves_named_forms_modules_templates_types_and_predefined():
     template_hash = _hash_file("src/Catalogs/Catalog/Templates/Invoice/Template.mxlx")
     before = tree_snapshot()
     preview = _preview(fqn="Catalog.Catalog", newName="E2ERichClone")
+    _assert_only_external_incoming(preview)
     assert {"src/" + path for path in modules} <= {row["file"] for row in preview["resources"]}, preview
     assert_tree_unchanged(before, "rich source preview")
     data = _apply(preview, fqn="Catalog.Catalog", newName="E2ERichClone")
+    _assert_only_external_incoming(data)
     name = data["fqn"].split(".")[1]
     folder = "src/Catalogs/" + name
     root = _xml(folder + "/" + name + ".mdo")
@@ -199,6 +210,7 @@ def test_clone_ignores_unowned_sidecar_files():
     assert_tree_unchanged(before, "preview must leave unowned note unchanged")
     data = _apply(preview, fqn="Catalog.Catalog", newName="E2ESidecarClone")
     assert _xml("src/Catalogs/E2ESidecarClone/E2ESidecarClone.mdo").findtext("name") == "E2ESidecarClone"
+    assert _xml("src/Catalogs/E2ESidecarClone/Forms/ItemForm/Form.form").tag == "{http://g5.1c.ru/v8/dt/form}Form"
     assert not os.path.exists(os.path.join(PROJECT_DIR, "src", "Catalogs", "E2ESidecarClone", "README.clone819.txt"))
     with open(note, encoding="utf-8") as stream:
         assert stream.read() == "Unowned note; native paste must not copy this file.\n"
@@ -220,6 +232,7 @@ def test_clone_reports_and_copies_only_selected_incoming_relations():
     selection = [{"kind": "subsystem", "owner": "Subsystem.E2ECloneSelected"},
                  {"kind": "roleRights", "owner": "Role.E2ECloneRole"}]
     base = _preview(fqn="Catalog.Catalog", newName="E2ECloneTransfers")
+    _assert_only_external_incoming(base)
     assert {row["owner"] for row in base["incomingRelations"] if row["transferSupport"] == "supported"} >= {
         "Subsystem.E2ECloneSelected", "Subsystem.E2ECloneUntouched", "Role.E2ECloneRole"}
     before = tree_snapshot()
@@ -232,6 +245,7 @@ def test_clone_reports_and_copies_only_selected_incoming_relations():
     assert preview["contentHash"] != base["contentHash"]
     untouched_hash = _hash_file("src/Subsystems/E2ECloneUntouched/E2ECloneUntouched.mdo")
     data = _apply(preview, fqn="Catalog.Catalog", newName="E2ECloneTransfers", transfer=selection)
+    assert _xml("src/Catalogs/E2ECloneTransfers/Forms/ItemForm/Form.form").tag == "{http://g5.1c.ru/v8/dt/form}Form"
     assert _hash_file("src/Subsystems/E2ECloneUntouched/E2ECloneUntouched.mdo") == untouched_hash
     selected = _xml("src/Subsystems/E2ECloneSelected/E2ECloneSelected.mdo")
     assert {row.text for row in selected.findall("content")} == {"Catalog.Catalog", data["fqn"]}

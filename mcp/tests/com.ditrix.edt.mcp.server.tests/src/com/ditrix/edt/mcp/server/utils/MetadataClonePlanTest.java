@@ -38,6 +38,82 @@ import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
 public class MetadataClonePlanTest
 {
     @Test
+    public void previewIncludesTheNativeCommandModulePathAndHashesItsBytes() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        var command = MdClassFactory.eINSTANCE.createCatalogCommand();
+        command.setName("CloneCommand");
+        fixture.source.getCommands().add(command);
+        var module = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createModule();
+        ((org.eclipse.emf.ecore.InternalEObject)module).eSetProxyURI(
+            org.eclipse.emf.common.util.URI.createURI("unresolved:/Catalog.Source.Command.CloneCommand.CommandModule"));
+        command.setCommandModule(module);
+        var feature = MdClassPackage.Literals.BASIC_COMMAND__COMMAND_MODULE;
+        assertTrue(MetadataClonePlan.external(feature));
+        var file = MetadataCloneFilesFixture.file("Source/Commands/CloneCommand/CommandModule.bsl", true, "// command");
+        when(fixture.fs.getFile(command, feature)).thenReturn(file);
+        MetadataClonePlan preview = fixture.preview();
+        assertTrue(preview.files.containsKey("Commands/CloneCommand/CommandModule.bsl"));
+        assertFalse(preview.files.containsKey("Commands/CloneCommand/Module.bsl"));
+        when(file.getContents(true)).thenAnswer(call -> new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}));
+        assertNotEquals(preview.hash(), fixture.preview().hash());
+    }
+
+    @Test
+    public void incomingFilterExcludesOwnedDerivedFieldsAndSeparateFormTops()
+    {
+        Catalog source = MdClassFactory.eINSTANCE.createCatalog();
+        source.setName("Source");
+        EObject derived = mock(EObject.class);
+        when(derived.eContainer()).thenReturn(source);
+        var ref = new com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService.ReferenceInfo(
+            "Catalogs", "unformatted", "type", null);
+        var bmDerived = mock(com._1c.g5.v8.bm.core.IBmObject.class);
+        when(bmDerived.eContainer()).thenReturn(derived);
+        ref.sourceObject = bmDerived;
+        assertTrue(MetadataClonePlan.isOwnedReference(ref, "Catalog.Source", Map.of("", source),
+            "/P/src/Catalogs/Source"));
+
+        var formTop = mock(com._1c.g5.v8.bm.core.IBmObject.class);
+        when(formTop.bmIsTop()).thenReturn(true);
+        when(formTop.bmGetFqn()).thenReturn("Catalog.Source.Form.ItemForm.Form");
+        ref.sourceObject = formTop;
+        assertTrue(MetadataClonePlan.isOwnedReference(ref, "Catalog.Source", Map.of(), "/P/src/Catalogs/Source"));
+    }
+
+    @Test
+    public void incomingFilterUsesOwnerBoundariesAndRetainsGenuineExternalOwners()
+    {
+        for (String owner : List.of("Catalog.Source - Fields.Parent.Type", "Catalog.Source - Fields.Ref.Type",
+            "Catalog.Source.Form.ItemForm.Form - Items.Code.Data path", "Catalog.Source / Form.ItemForm",
+            "Catalog.Source / Attribute.X", "Catalog.Source.TabularSection.Rows.Attribute.Item"))
+        {
+            var ref = new com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService.ReferenceInfo(
+                "Metadata", owner, "type", null);
+            assertTrue(owner, MetadataClonePlan.isOwnedReference(ref, "Catalog.Source", Map.of(), "/P/src/Catalogs/Source"));
+        }
+        for (String owner : List.of("Catalog.SourceOther - Fields.Ref.Type", "Catalog.Source2",
+            "Catalog.SourceExtra.Form.F", "Role.Reader - Object.Catalog.Source", "Subsystem.Sales - Content",
+            "Configuration - Catalogs", "Document.Consumer - Fields.Source.Type"))
+        {
+            var ref = new com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService.ReferenceInfo(
+                "Metadata", owner, "type", null);
+            assertFalse(owner, MetadataClonePlan.isOwnedReference(ref, "Catalog.Source", Map.of(), "/P/src/Catalogs/Source"));
+        }
+    }
+
+    @Test
+    public void incomingFilterDistinguishesAnExternalProjectsSameRelativeBslPath()
+    {
+        var own = new com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService.ReferenceInfo(
+            "BSL", "Catalogs/Source/ObjectModule.bsl", 2, "/P/src/Catalogs/Source/ObjectModule.bsl");
+        var external = new com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService.ReferenceInfo(
+            "BSL", "Extension/Catalogs/Source/ObjectModule.bsl", 2, "/Extension/src/Catalogs/Source/ObjectModule.bsl");
+        assertTrue(MetadataClonePlan.isOwnedReference(own, "Catalog.Source", Map.of(), "/P/src/Catalogs/Source"));
+        assertFalse(MetadataClonePlan.isOwnedReference(external, "Catalog.Source", Map.of(), "/P/src/Catalogs/Source"));
+    }
+
+    @Test
     public void previewWithOnlyMetadataFileIgnoresAbsentModuleProxies() throws Exception
     {
         MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();

@@ -267,9 +267,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 }
                 WriteScope.recordUndeterminable("native copy may write external files before failure", List.of(projectName));
                 started.set(true);
-                MdObject clone = (MdObject)NativeMetadataClone.create(tx, model, source, newName,
-                    attached -> actualFqn.set(attached.eClass().getName() + "." + attached.getName()))
-                    .copy(source, config, MetadataClonePlan.collection(config, source));
+                NativeMetadataClone copier = NativeMetadataClone.create(tx, model, source, newName,
+                    attached -> actualFqn.set(attached.eClass().getName() + "." + attached.getName()));
+                MdObject clone = (MdObject)copier.copy(source, config, MetadataClonePlan.collection(config, source));
                 if (!(clone instanceof IBmObject) || model.getEngine().getCurrentTransaction() != tx)
                 {
                     throw new IllegalStateException("EDT native copy did not join this transaction. Inspect the project "
@@ -283,11 +283,17 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                         + "'. Inspect the destination and choose an unused name.");
                 }
                 validateClone(source, clone, newName);
-                Set<String> exports = new LinkedHashSet<>(MetadataClonePlan.topFqns(MetadataClonePlan.graph(clone)));
+                Set<String> exports = new LinkedHashSet<>(copier.attachedTopFqns());
+                exports.add(created);
+                exports.addAll(MetadataClonePlan.topFqns(MetadataClonePlan.graph(clone)));
                 exports.addAll(MetadataClonePlan.transfer(config, source, clone, transfer, generator));
                 exports.add(((IBmObject)config).bmGetFqn());
                 dirty.set(new ArrayList<>(exports));
                 JsonArray resources = resourceManifest(preview, source, clone, fs);
+                for (String attachedFqn : copier.attachedTopFqns())
+                {
+                    addModelResource(resources, tx.getTopObjectByFqn(attachedFqn), fs);
+                }
                 addModelResource(resources, config, fs);
                 for (JsonObject selected : transfer)
                 {
@@ -402,7 +408,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         Map<String, EObject> originals = MetadataClonePlan.graph(source);
         Map<String, EObject> copies = MetadataClonePlan.graph(clone);
         Map<String, IFile> from = MetadataClonePlan.ownedResources(originals, fs);
-        Map<String, IFile> to = MetadataClonePlan.ownedResources(copies, fs);
+        Map<String, IFile> to = MetadataClonePlan.destinationResources(copies, fs);
         Map<String, JsonObject> files = new java.util.LinkedHashMap<>();
         IFile sourceFile = fs.getFile(source);
         for (Map.Entry<String, IFile> entry : from.entrySet())
@@ -550,9 +556,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             + "confirm again, with the intended newName and transfer selection, then use its contentHash.").toJson();
     }
 
-    private static String partial(String fqn, String reason)
+    static String partial(String fqn, String reason)
     {
-        return ToolResult.error("Clone operation was not verified: " + reason + ". "
+        return ToolResult.error("Clone apply did not complete verification: " + reason.replaceFirst("[.!?]+$", "") + ". "
             + (fqn == null ? "No created FQN was established; inspect get_metadata_objects and project files. "
                 : "Inspect clone '" + fqn + "' with get_metadata_details and its project files. ")
             + "External files may have been written even if BM rolled back. Nothing was cleaned up automatically. "
@@ -625,20 +631,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             {
                 JsonObject resource = element.getAsJsonObject();
                 IFile file = project.getFile(resource.get("file").getAsString());
-                if (!file.exists())
-                {
-                    return partial(fqn, "missing copied file '" + file.getProjectRelativePath() + "'");
-                }
-                byte[] bytes;
-                try (InputStream input = file.getContents(true))
-                {
-                    bytes = input.readAllBytes();
-                }
-                if (!resource.get("modeled").getAsBoolean()
-                    && !resource.get("sourceHash").getAsString().equals(MetadataClonePlan.bytesHash(bytes)))
-                {
-                    return partial(fqn, "copied bytes differ in '" + file.getProjectRelativePath() + "'");
-                }
+                byte[] bytes = MetadataCloneDiskVerifier.verifyCopiedFile(file,
+                    resource.get("modeled").getAsBoolean() ? null : resource.get("sourceHash").getAsString());
                 if (resource.has("expectedRoot") && resource.get("expectedRoot").getAsBoolean())
                 {
                     org.w3c.dom.Element root = SecureXml.documentBuilderFactory().newDocumentBuilder()

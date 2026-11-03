@@ -6,6 +6,8 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.eclipse.emf.ecore.EAttribute;
@@ -15,6 +17,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.core.resources.IFile;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.bm.index.emf.IBmEmfIndexManager;
 import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
@@ -41,6 +44,7 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
     private final MdObject source;
     private final String newName;
     private Consumer<MdObject> onRootAttached = object -> { };
+    private final Set<String> attachedTopFqns = new LinkedHashSet<>();
 
     NativeMetadataClone(Injector services, IBmTransaction tx, IBmModel model,
         MdObject source, String newName)
@@ -69,11 +73,45 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
     protected EObject attach(EObject copy, EObject parent, EReference reference)
     {
         EObject attached = super.attach(copy, parent, reference);
+        recordAttachedTop(attached);
         if (parent instanceof Configuration && attached instanceof MdObject)
         {
             onRootAttached.accept((MdObject)attached);
         }
         return attached;
+    }
+
+    @Override
+    protected <T extends IBmObject> T attachExternalProperty(T object, EObject owner, EReference reference)
+    {
+        T attached = super.attachExternalProperty(object, owner, reference);
+        recordAttachedTop(attached);
+        return attached;
+    }
+
+    @Override
+    protected <T extends IBmObject> T attachModelObject(T object, boolean isTop)
+    {
+        T attached = super.attachModelObject(object, isTop);
+        if (isTop)
+        {
+            recordAttachedTop(attached);
+        }
+        return attached;
+    }
+
+    /** Actual attached roots, including external models absent from the metadata containment tree. */
+    public Set<String> attachedTopFqns()
+    {
+        return Set.copyOf(attachedTopFqns);
+    }
+
+    private void recordAttachedTop(EObject object)
+    {
+        if (object instanceof IBmObject && ((IBmObject)object).bmIsTop())
+        {
+            attachedTopFqns.add(((IBmObject)object).bmGetFqn());
+        }
     }
 
     @Override

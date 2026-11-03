@@ -20,6 +20,24 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 public class MetadataCloneDiskVerifierTest
 {
     @Test
+    public void copiedFileBytesMustMatchAfterExport() throws Exception
+    {
+        var file = MetadataCloneFilesFixture.file("Copy/CommandModule.bsl", true, "// copied code");
+        byte[] expected = "// copied code".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertArrayEquals(expected, MetadataCloneDiskVerifier.verifyCopiedFile(file, MetadataClonePlan.bytesHash(expected)));
+        try
+        {
+            MetadataCloneDiskVerifier.verifyCopiedFile(file, MetadataClonePlan.bytesHash(new byte[] {1}));
+            fail("A readable but corrupt copied module must fail verification");
+        }
+        catch (IllegalStateException failure)
+        {
+            assertTrue(failure.getMessage().contains("Copied bytes differ"));
+            assertTrue(failure.getMessage().contains("CommandModule.bsl"));
+        }
+    }
+
+    @Test
     public void metadataDiskVerificationAllowsAbsentModuleFiles() throws Exception
     {
         MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();

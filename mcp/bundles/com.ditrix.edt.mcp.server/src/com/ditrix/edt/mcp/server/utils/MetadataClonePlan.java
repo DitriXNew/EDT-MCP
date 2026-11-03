@@ -280,9 +280,8 @@ public final class MetadataClonePlan
             complete = scan.complete;
             for (ReferenceInfo ref : scan.refs)
             {
-                if ((ref.sourceObject != null && graph.containsValue(ref.sourceObject))
-                    || sourcePath(ref.sourcePath, rootFile.getParent().getProjectRelativePath().toPortableString())
-                    || sourcePath(ref.identityPath, rootFile.getParent().getProjectRelativePath().toPortableString()))
+                if (isOwnedReference(ref, fqn, graph,
+                    rootFile.getFullPath().removeLastSegments(1).toPortableString()))
                 {
                     continue;
                 }
@@ -324,10 +323,57 @@ public final class MetadataClonePlan
         {
             return false;
         }
-        String portable = path.replace('\\', '/');
-        String sourceRelative = folder.startsWith("src/") ? folder.substring(4) : folder;
-        return portable.startsWith(folder + "/") || portable.contains("/" + folder + "/")
-            || portable.startsWith(sourceRelative + "/") || portable.contains("/" + sourceRelative + "/");
+        String portable = path.replace('\\', '/').toLowerCase(Locale.ROOT);
+        String canonical = folder.toLowerCase(Locale.ROOT);
+        if (portable.contains("/src/"))
+        {
+            return portable.contains(canonical + "/");
+        }
+        String sourceRelative = canonical.substring(canonical.indexOf("/src/") + 5);
+        return portable.startsWith("src/" + sourceRelative + "/") || portable.startsWith(sourceRelative + "/");
+    }
+
+    /** Incoming relations have owners outside the copied graph, including derived field nodes. */
+    static boolean isOwnedReference(ReferenceInfo ref, String sourceFqn, Map<String, EObject> graph, String folder)
+    {
+        Set<EObject> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (EObject owner = ref.sourceObject; owner != null && visited.add(owner); owner = owner.eContainer())
+        {
+            if (graph.containsValue(owner))
+            {
+                return true;
+            }
+            if (owner instanceof IBmObject && ((IBmObject)owner).bmIsTop()
+                && !((IBmObject)owner).bmIsTransient()
+                && ownedAddress(((IBmObject)owner).bmGetFqn(), sourceFqn))
+            {
+                return true;
+            }
+        }
+        if (ref.isBslReference && ref.identityPath != null && ref.identityPath.replace('\\', '/').contains("/src/"))
+        {
+            return sourcePath(ref.identityPath, folder);
+        }
+        return sourcePath(ref.sourcePath, folder) || sourcePath(ref.identityPath, folder)
+            || (!ref.isBslReference && (ownedAddress(ref.sourcePath, sourceFqn)
+                || ownedAddress(ref.identityPath, sourceFqn)));
+    }
+
+    private static boolean ownedAddress(String display, String sourceFqn)
+    {
+        if (display == null)
+        {
+            return false;
+        }
+        int separator = display.indexOf(" - ");
+        int member = display.indexOf(" / ");
+        if (member >= 0 && (separator < 0 || member < separator))
+        {
+            separator = member;
+        }
+        String owner = MetadataTypeUtils.normalizeFqn(separator < 0 ? display : display.substring(0, separator));
+        return owner.equalsIgnoreCase(sourceFqn)
+            || owner.regionMatches(true, 0, sourceFqn + ".", 0, sourceFqn.length() + 1);
     }
 
     /** Stable serialization used by postconditions and revision checks, never EObject.toString(). */
@@ -634,6 +680,18 @@ public final class MetadataClonePlan
     /** Native-owned resources keyed by model-node/feature address, independent of physical names. */
     public static Map<String, IFile> ownedResources(Map<String, EObject> graph, IProjectFileSystemSupport fs)
     {
+        return resourcePaths(graph, fs, true);
+    }
+
+    /** Destination paths are planned before commit/export; existence is checked only after the barrier. */
+    public static Map<String, IFile> destinationResources(Map<String, EObject> graph, IProjectFileSystemSupport fs)
+    {
+        return resourcePaths(graph, fs, false);
+    }
+
+    private static Map<String, IFile> resourcePaths(Map<String, EObject> graph, IProjectFileSystemSupport fs,
+        boolean source)
+    {
         Map<String, IFile> result = new LinkedHashMap<>();
         for (Map.Entry<String, EObject> entry : graph.entrySet())
         {
@@ -673,7 +731,8 @@ public final class MetadataClonePlan
                 {
                     continue;
                 }
-                addFile(result, entry.getKey() + "@" + ref.getName(), externalFile(node, ref, fs));
+                addFile(result, entry.getKey() + "@" + ref.getName(),
+                    source ? externalFile(node, ref, fs) : fs.getFile(node, ref));
             }
         }
         return result;
