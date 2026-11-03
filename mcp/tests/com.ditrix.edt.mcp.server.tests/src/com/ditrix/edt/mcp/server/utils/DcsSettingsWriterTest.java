@@ -576,11 +576,11 @@ public class DcsSettingsWriterTest
             .createSettingsParameterValue();
         String error = DcsSettingsWriter.applyOutputParameterItemForTest(item,
             json("{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Title\"}," //$NON-NLS-1$
-                + "\"value\":{\"kind\":\"string\",\"value\":\"wrong type\"}}"), //$NON-NLS-1$
+                + "\"value\":{\"kind\":\"boolean\",\"value\":true}}"), //$NON-NLS-1$
             LANGUAGES, outputParameters());
         assertNotNull(error);
         assertTrue(error, error.contains("LocalString")); //$NON-NLS-1$
-        assertTrue(error, error.contains("StringValue")); //$NON-NLS-1$
+        assertTrue(error, error.contains("BooleanValue")); //$NON-NLS-1$
     }
 
     @Test

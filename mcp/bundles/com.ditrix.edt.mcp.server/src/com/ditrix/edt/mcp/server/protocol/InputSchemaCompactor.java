@@ -126,6 +126,8 @@ public final class InputSchemaCompactor
     private static Map<String, Set<String>> buildKeepList()
     {
         Map<String, Set<String>> keep = new HashMap<>();
+        // XOR input modes and the method's conditional scope must survive schema compaction.
+        keep.put("validate_query", asSet("queryText", "method"));
         // The only statement anywhere that a 'task' marker means TODO/FIXME/XXX/HACK.
         // priority sub-filters the TASK family only - a bookmark has no priority, and the
         // combination is rejected. The enum lists high|normal|low with nothing saying that.

@@ -482,6 +482,11 @@ public class McpProtocolHandler
     private String handleToolCall(JsonRpcRequest request, Object requestId, ClientCapabilities capabilities)
     {
         String toolName = request != null ? request.getToolName() : null;
+        if (toolName == null || toolName.isBlank())
+        {
+            return buildErrorResponse(McpConstants.ERROR_INVALID_PARAMS,
+                "Invalid params.name: provide a non-blank tool name from tools/list.", requestId); //$NON-NLS-1$
+        }
         
         // Find tool by name
         IMcpTool tool = toolRegistry.getTool(toolName);

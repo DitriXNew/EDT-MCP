@@ -474,10 +474,12 @@ public class TemplateContentSupportTest
             IDtProject project = mock(IDtProject.class);
             BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
             template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(project));
+            ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
+            when(names.generateExternalPropertyFqn(any(), any())).thenReturn("Template.Contract.Content");
             call("retype", INIT, template, TemplateType.DATA_COMPOSITION_SCHEMA,
-                mock(IBmTransaction.class), project, null, null);
+                mock(IBmTransaction.class), project, names, null);
             assertSame(TemplateType.DATA_COMPOSITION_SCHEMA, template.getTemplateType());
-            assertNull(template.getTemplate());
+            assertTrue(template.getTemplate() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema);
         }
     }
 
@@ -590,7 +592,7 @@ public class TemplateContentSupportTest
         assertEmptyWizardRetype(TemplateType.TEXT_DOCUMENT);
     }
 
-    @Test public void testRetypeEmptySpreadsheetToDcsLeavesTheSchemaToTheDcsTool() throws Exception
+    @Test public void testRetypeEmptySpreadsheetToDcsAttachesTheSchema() throws Exception
     {
         assertEmptyWizardRetype(TemplateType.DATA_COMPOSITION_SCHEMA);
     }
@@ -1263,10 +1265,12 @@ public class TemplateContentSupportTest
             BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
             template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(project));
             MemoryFile file = new MemoryFile(null);
-            call("retype", INIT, template, type, mock(IBmTransaction.class), project, null, file.file);
+            ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
+            when(names.generateExternalPropertyFqn(any(), any())).thenReturn("Template.Contract.Content");
+            call("retype", INIT, template, type, mock(IBmTransaction.class), project, names, file.file);
             assertSame(type, template.getTemplateType());
             if (type == TemplateType.TEXT_DOCUMENT) { assertArrayEquals(new byte[0], file.bytes.get()); }
-            else { assertNull(template.getTemplate()); }
+            else { assertTrue(template.getTemplate() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema); }
         }
     }
 
@@ -1389,6 +1393,9 @@ public class TemplateContentSupportTest
                 ((BasicTemplate)invocation.getArgument(0)).getTemplateType() == TemplateType.TEXT_DOCUMENT
                     ? text.file : other.file);
             when(activator.getDtProjectManager()).thenReturn(mock(IDtProjectManager.class));
+            ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
+            when(names.generateExternalPropertyFqn(any(), any())).thenReturn("Template.Contract.Content");
+            when(activator.getTopObjectFqnGenerator()).thenReturn(names);
             IBmModelManager models = mock(IBmModelManager.class);
             when(activator.getBmModelManager()).thenReturn(models);
             when(models.getModel(project)).thenReturn(model);

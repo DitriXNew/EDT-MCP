@@ -23,9 +23,8 @@ import org.eclipse.emf.ecore.EReference;
  * {@code Catalog.Files.CatalogAttribute.Width} — by matching each segment against the
  * parent's containment references by EClass type token + reflective {@code getName()}.
  *
- * <p>NOTE: the nested match uses the EClass type name, not the bilingual metadata type
- * token; aligning it with {@code MetadataNodeResolver} is tracked separately (see the
- * {@code ui-adapters-reinvent-fqn-eobject-resolution} backlog card).
+ * <p>Keep this walk: TagUtils persists EClass tokens such as CatalogAttribute and CatalogForm.
+ * MetadataNodeResolver.resolveExisting accepts kind aliases (Attribute), not those tokens or form roots.</p>
  */
 public final class EObjectFqnNavigator
 {
@@ -41,7 +40,7 @@ public final class EObjectFqnNavigator
      * @param parts the full FQN split on {@code '.'}
      * @param startIndex the index to start from (skip the top-level type and name,
      *        typically {@code 2})
-     * @return the resolved nested EObject, or {@code null} if any segment is unresolved
+     * @return the resolved nested EObject, or {@code null} if any pair is incomplete or unresolved
      */
     public static EObject resolveNestedObject(EObject parent, String[] parts, int startIndex)
     {
@@ -51,7 +50,7 @@ public final class EObjectFqnNavigator
         {
             if (i + 1 >= parts.length)
             {
-                break;
+                return null;
             }
 
             String subTypeName = parts[i];

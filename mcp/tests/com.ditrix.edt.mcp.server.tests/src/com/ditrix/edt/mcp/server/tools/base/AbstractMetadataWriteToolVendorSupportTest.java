@@ -100,7 +100,30 @@ public class AbstractMetadataWriteToolVendorSupportTest
     }
 
     @Test
-    public void testMemberRefusalsNormalizeLeadingTypeAndPreserveCallerMemberTokens()
+    public void testLoadedTextTemplateAndOwnerRefusalsUseCanonicalTokens()
+    {
+        var template = MdClassFactory.eINSTANCE.createTemplate();
+        template.setName("ТекстMixedCase");
+        locked.getTemplates().add(template);
+        when(support.canEdit(template, EditingMode.DIRECT)).thenReturn(false);
+        when(support.canEdit(locked, EditingMode.DIRECT)).thenReturn(false);
+        IntentTool tool = new IntentTool(VendorSupportGuard.Intent.MODIFY);
+        String canonical = "Catalog.Locked.Template.ТекстMixedCase";
+        for (String address : List.of(canonical, "Справочник.Locked.Макет.ТекстMixedCase",
+            "Catalog.Locked.Макет.ТекстMixedCase"))
+        {
+            assertRefusal(tool.vendorSupportRefusal(template, scope, address, address, "changed"),
+                "'" + canonical + "' cannot be changed");
+            String ownerError = tool.vendorSupportRefusal(locked, scope, "Справочник.Locked", address,
+                "changed");
+            assertTrue(ownerError, ownerError.contains("Catalog.Locked"));
+            assertFalse(ownerError, ownerError.contains("Макет"));
+            assertFalse(ownerError, ownerError.contains("Справочник"));
+        }
+    }
+
+    @Test
+    public void testMemberRefusalsCanonicalizeEveryStructuralTokenForAllWriteIntents()
     {
         var attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
         attribute.setName("Weight");
@@ -116,17 +139,62 @@ public class AbstractMetadataWriteToolVendorSupportTest
         {
             String name = intent == VendorSupportGuard.Intent.CREATE ? "New" : "Weight";
             String canonical = "Catalog.Locked.Attribute." + name;
-            String normalizedRussian = "Catalog.Locked." + ruAttribute + "." + name;
+            String mixed = "Catalog.Locked." + ruAttribute + "." + name;
             String russian = ruCatalog + ".Locked." + ruAttribute + "." + name;
             IntentTool tool = new IntentTool(intent);
             String englishError = tool.vendorSupportRefusal(scope, canonical);
             String russianError = tool.vendorSupportRefusal(scope, russian);
             assertRefusal(englishError, "'" + canonical + "' cannot be ");
-            assertRefusal(russianError, "'" + normalizedRussian + "' cannot be ");
-            assertEquals(tool.vendorSupportRefusal(scope, normalizedRussian), russianError);
+            assertRefusal(russianError, "'" + canonical + "' cannot be ");
+            assertEquals(englishError, russianError);
+            assertEquals(englishError, tool.vendorSupportRefusal(scope, mixed));
             assertTrue(russianError, russianError.contains("Locked"));
             assertFalse(russianError, russianError.contains(ruCatalog));
-            assertTrue(russianError, russianError.contains(ruAttribute));
+            assertFalse(russianError, russianError.contains(ruAttribute));
+        }
+    }
+
+    @Test
+    public void testTemplateRefusalsKeepRussianProgrammaticNamesAndCase()
+    {
+        String name = "\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442";
+        String templateName = "\u0424\u043e\u0440\u043c\u0430MixedCase";
+        locked.setName(name);
+        var template = MdClassFactory.eINSTANCE.createTemplate();
+        template.setName(templateName);
+        locked.getTemplates().add(template);
+        when(support.canEdit(locked, EditingMode.DIRECT)).thenReturn(false);
+        when(support.canEdit(template, EditingMode.DIRECT)).thenReturn(false);
+        when(support.canDelete(template, EditingMode.DIRECT)).thenReturn(false);
+        String canonical = "Catalog." + name + ".Template." + templateName;
+        String russian = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a."
+            + name + ".\u041c\u0430\u043a\u0435\u0442." + templateName;
+
+        for (var intent : List.of(VendorSupportGuard.Intent.CREATE, VendorSupportGuard.Intent.MODIFY,
+            VendorSupportGuard.Intent.DELETE))
+        {
+            IntentTool tool = new IntentTool(intent);
+            String englishError = tool.vendorSupportRefusal(scope, canonical);
+            String russianError = tool.vendorSupportRefusal(scope, russian);
+            assertRefusal(russianError, "'" + canonical + "' cannot be ");
+            assertEquals(englishError, russianError);
+        }
+    }
+
+    @Test
+    public void testNestedMemberRefusalsCanonicalizeTheWholeAddressAndOwnerLabel()
+    {
+        when(support.canEdit(locked, EditingMode.DIRECT)).thenReturn(false);
+        String canonical = "Catalog.Locked.Form.ListForm.Attribute.Code";
+        String russian = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Locked."
+            + "\u0424\u043e\u0440\u043c\u0430.ListForm.\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442.Code";
+        for (var intent : List.of(VendorSupportGuard.Intent.CREATE, VendorSupportGuard.Intent.MODIFY,
+            VendorSupportGuard.Intent.DELETE))
+        {
+            IntentTool tool = new IntentTool(intent);
+            String russianError = tool.vendorSupportRefusal(scope, russian);
+            assertRefusal(russianError, "'" + canonical + "' cannot be ");
+            assertEquals(tool.vendorSupportRefusal(scope, canonical), russianError);
         }
     }
 

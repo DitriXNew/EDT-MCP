@@ -104,11 +104,15 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
     /**
      * Returns a tool by name.
      * 
-     * @param name the tool name
+     * @param name the tool name (may be null)
      * @return tool or null if not found
      */
     public IMcpTool getTool(String name)
     {
+        if (name == null)
+        {
+            return null;
+        }
         IMcpTool tool = tools.get().get(name);
         if (tool != null)
         {

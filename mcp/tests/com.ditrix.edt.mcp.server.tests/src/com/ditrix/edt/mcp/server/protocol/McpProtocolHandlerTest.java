@@ -11,11 +11,18 @@ import static org.junit.Assert.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.UserSignal.SignalType;
@@ -1098,12 +1105,66 @@ public class McpProtocolHandlerTest
     @Test
     public void testToolCallNullToolName()
     {
-        String request = buildJsonRpcRequest(1, "tools/call",
-            "{\"arguments\":{}}");
-        String response = handler.processRequest(request);
+        assertInvalidToolName("{\"arguments\":{}}");
+    }
 
-        JsonObject json = parseResponse(response);
-        assertNotNull("Should return error for null tool name", json.get("error"));
+    @Test
+    public void testToolCallExplicitNullToolName()
+    {
+        assertInvalidToolName("{\"name\":null,\"arguments\":{}}");
+    }
+
+    @Test
+    public void testToolCallEmptyToolName()
+    {
+        assertInvalidToolName("{\"name\":\"\",\"arguments\":{}}");
+    }
+
+    @Test
+    public void testToolCallBlankToolName()
+    {
+        assertInvalidToolName("{\"name\":\" \\t\\n\",\"arguments\":{}}");
+    }
+
+    @Test
+    public void testToolCallMissingParams()
+    {
+        assertInvalidToolName(null);
+    }
+
+    private void assertInvalidToolName(String paramsJson)
+    {
+        Bundle bundle = FrameworkUtil.getBundle(McpProtocolHandler.class);
+        assertNotNull("Observe the real server bundle log", bundle);
+        ILog log = Platform.getLog(bundle);
+        List<IStatus> logged = new CopyOnWriteArrayList<>();
+        ILogListener listener = (status, plugin) -> {
+            if (bundle.getSymbolicName().equals(status.getPlugin()))
+            {
+                logged.add(status);
+            }
+        };
+        log.addLogListener(listener);
+        try
+        {
+            JsonObject json = parseResponse(handler.processRequest(
+                buildJsonRpcRequest(1, "tools/call", paramsJson)));
+            assertTrue("Invalid params must not log an exception: " + logged,
+                logged.stream().noneMatch(status -> status.getException() != null));
+            assertTrue("Invalid params must not be logged as server errors: " + logged,
+                logged.stream().noneMatch(status -> status.getSeverity() == IStatus.ERROR));
+            assertEquals(1, json.get("id").getAsInt());
+            assertFalse(json.has("result"));
+            JsonObject error = json.getAsJsonObject("error");
+            assertEquals(McpConstants.ERROR_INVALID_PARAMS, error.get("code").getAsInt());
+            String message = error.get("message").getAsString();
+            assertTrue(message, message.contains("params.name"));
+            assertTrue(message, message.contains("tools/list"));
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
     }
 
     /**

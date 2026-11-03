@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.tools.base.WriteExportBarrier;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.QueryWriteValidation;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -122,7 +123,8 @@ public class DcsTool implements IMcpTool
         return "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, " //$NON-NLS-1$
             + "form conditional appearance, and form dynamic lists. " //$NON-NLS-1$
             + "Call action='get' first; replace, remove and any index-addressed edit require its " //$NON-NLS-1$
-            + "hash as expectedHash. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
+            + "hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters " //$NON-NLS-1$
+            + "in this call. Writes wait for disk export. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
 
     @Override
@@ -297,10 +299,33 @@ public class DcsTool implements IMcpTool
         return scope == null ? result.get() : finalizeWriteResult(scope, result.get());
     }
 
-    /** The one exit for a DCS mutation, deriving its marker from the request's recorded writes. */
+    /** Completes exports off the UI thread before returning a mutation result. */
     static String finalizeWriteResult(WriteScope scope, String result)
     {
-        return scope.markErrorAfterRecordedWrite(result);
+        return finalizeWriteResult(scope, result, WriteExportBarrier.PLATFORM);
+    }
+
+    static String finalizeWriteResult(WriteScope scope, String result, WriteExportBarrier.Environment environment)
+    {
+        if (ToolResult.isErrorPayload(result)) return scope.markErrorAfterRecordedWrite(result);
+        try
+        {
+            WriteExportBarrier.Outcome export = WriteExportBarrier.await(scope,
+                WriteExportBarrier.DEADLINE_MS, environment);
+            if (export.pendingProject() != null)
+                return scope.markErrorAfterRecordedWrite(WriteExportBarrier.notConfirmed(export.pendingProject()));
+            if (!export.drained())
+                return scope.markErrorAfterRecordedWrite(ToolResult.error(
+                    "DCS changes committed, but EDT's export queue could not be observed. Nothing was rolled back. "
+                    + "Check list_projects, save or resync_to_disk, then re-read dcs before retrying.").toJson());
+            return result + "\n\n**Export drained:** `true`";
+        }
+        catch (RuntimeException e)
+        {
+            return scope.markErrorAfterRecordedWrite(ToolResult.error(
+                "Could not confirm DCS export to disk: " + e.getMessage()
+                + ". Nothing was rolled back. Check list_projects and resync_to_disk before retrying.").toJson());
+        }
     }
 
     private static String validateIntegerArguments(Map<String, String> params, int offset)
@@ -542,11 +567,11 @@ public class DcsTool implements IMcpTool
                 }
                 if (FORMAT_XML.equals(format))
                 {
-                    if (!(read.root() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema))
+                    if (read.root() != null
+                        && !(read.root() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema))
                     {
-                        return ToolResult.error("format='xml' requires a non-empty DataCompositionSchema at '" //$NON-NLS-1$
-                            + target.normalizedRootFqn() + "'. Create schema content with dcs upsert, " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "then retry the bare schema get.").toJson(); //$NON-NLS-1$
+                        return ToolResult.error("format='xml' requires a DataCompositionSchema at '" //$NON-NLS-1$
+                            + target.normalizedRootFqn() + "'. Use format='md' for other roots.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     DcsXmlCodec.XmlResult xml = resolvedCodec.serialize(
                         (com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema)read.root());
@@ -825,6 +850,18 @@ public class DcsTool implements IMcpTool
                     {
                         settings.plan().commit(content.schema());
                     }
+                    int filled;
+                    try
+                    {
+                        filled = com.ditrix.edt.mcp.server.utils.DcsQueryAutoFill.fill(context, model,
+                            tx, monitor, content.schema(), address, type, body, languages.configurationCode());
+                    }
+                    catch (RuntimeException e)
+                    {
+                        throw DcsWriteFailure.message("Query auto-fill failed: " + e.getMessage() //$NON-NLS-1$
+                            + ". Retry after project loading, or supply fields/parameters with " //$NON-NLS-1$
+                            + "autoFillFields=false; nothing was written."); //$NON-NLS-1$
+                    }
                     // The end state of the whole call, so a chart may measure a resource the call
                     // declares and a schema edit that breaks an unchanged chart is refused too.
                     String chartError = DcsChartReferences.error(chartsBefore,
@@ -834,7 +871,8 @@ public class DcsTool implements IMcpTool
                         throw DcsWriteFailure.message(chartError);
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
-                        counts, settingsWrite, null);
+                        counts, settingsWrite,
+                        filled == 0 ? null : DcsReadProjection.schemaCounts(content.schema()));
                 });
             }
             catch (DcsWriteFailure e)
@@ -860,7 +898,8 @@ public class DcsTool implements IMcpTool
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
             DcsWriter.Result counts = outcome.applied;
-            String countsText = outcome.xmlCounts != null ? "xml=wholesale, " + outcome.xmlCounts //$NON-NLS-1$
+            String countsText = outcome.storedCounts != null
+                ? (counts == null ? "xml=wholesale, " : "autoFill=completed, ") + outcome.storedCounts //$NON-NLS-1$ //$NON-NLS-2$
                 : counts == null ? "none" //$NON-NLS-1$
                 : "dataSources=" + counts.dataSources + ", dataSets=" + counts.dataSets //$NON-NLS-1$ //$NON-NLS-2$
                     + ", fields=" + counts.fields + ", parameters=" + counts.parameters //$NON-NLS-1$ //$NON-NLS-2$
@@ -1472,16 +1511,16 @@ public class DcsTool implements IMcpTool
         final String contentFqn;
         final DcsWriter.Result applied;
         final boolean settingsApplied;
-        final DcsReadProjection.SchemaCounts xmlCounts;
+        final DcsReadProjection.SchemaCounts storedCounts;
 
         WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
-            boolean settingsApplied, DcsReadProjection.SchemaCounts xmlCounts)
+            boolean settingsApplied, DcsReadProjection.SchemaCounts storedCounts)
         {
             this.hash = hash;
             this.contentFqn = contentFqn;
             this.applied = applied;
             this.settingsApplied = settingsApplied;
-            this.xmlCounts = xmlCounts;
+            this.storedCounts = storedCounts;
         }
     }
 

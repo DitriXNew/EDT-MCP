@@ -1423,7 +1423,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         counts.addProperty("order", plan.order().size()); //$NON-NLS-1$
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, plan.isEmpty() ? "unchanged" : VAL_MODIFIED) //$NON-NLS-1$
-            .put("fqn", fqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(fqn)) //$NON-NLS-1$
             .put(KEY_COMMANDS, counts)
             .put(KEY_PERSISTED, persisted);
         if (edit.stored != null)
@@ -1437,8 +1437,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             result.put(KEY_UNCHANGED, unchanged);
         }
         String message = plan.isEmpty()
-            ? "Nothing to change in " + fqn + ": every entry requested what the section already has" //$NON-NLS-1$ //$NON-NLS-2$
-            : MSG_MODIFIED_PREFIX + fqn + " (visibility: " + plan.visibility().size() + ", placement: " //$NON-NLS-1$ //$NON-NLS-2$
+            ? "Nothing to change in " + MetadataTypeUtils.toCanonicalEnglishFqn(fqn)
+                + ": every entry requested what the section already has" //$NON-NLS-1$ //$NON-NLS-2$
+            : MSG_MODIFIED_PREFIX + MetadataTypeUtils.toCanonicalEnglishFqn(fqn) + " (visibility: " + plan.visibility().size() + ", placement: " //$NON-NLS-1$ //$NON-NLS-2$
                 + plan.placement().size() + ", order: " + plan.order().size() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
         return result.put(McpKeys.MESSAGE, message).toJson();
     }
@@ -2034,18 +2035,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "' no longer exists; re-read get_metadata_details.").toJson());
                 }
                 BasicTemplate current = (BasicTemplate)object;
-                String locked = VendorSupportGuard.refusalFor(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
+                String locked = vendorSupportRefusal(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
                 if (locked != null)
                 {
-                    throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                    throw new TemplateWriteException(locked);
                 }
                 EObject owner = current.eContainer();
                 if (owner instanceof MdObject && !(owner instanceof Configuration))
                 {
-                    locked = VendorSupportGuard.refusalFor(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
+                    locked = vendorSupportRefusal(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
                     if (locked != null)
                     {
-                        throw new TemplateWriteException(ToolResult.error(locked).toJson());
+                        throw new TemplateWriteException(locked);
                     }
                 }
                 String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
@@ -2086,9 +2087,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, writeCtx.exportFqn);
         JsonObject applied = new JsonObject();
         applied.addProperty("contentHash", hash);
-        return ToolResult.success().put(McpKeys.ACTION, VAL_MODIFIED).put("fqn", normFqn)
+        return ToolResult.success().put(McpKeys.ACTION, VAL_MODIFIED).put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn))
             .put(KEY_TEMPLATE, applied).put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified text template " + normFqn).toJson();
+            .put(McpKeys.MESSAGE, "Modified text template " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)).toJson();
     }
 
     /** The final templateType in a property batch, or null when it does not change this property. */
@@ -2342,10 +2343,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("rowHeights", result.rowHeights); //$NON-NLS-1$
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_TEMPLATE, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified template " + normFqn + " content (cells: " + result.cells //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Modified template " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " content (cells: " + result.cells //$NON-NLS-1$ //$NON-NLS-2$
                 + ", merges: " + result.merges + ", areas: " + result.areas + ", columnWidths: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + result.columnWidths + ", rowHeights: " + result.rowHeights + ")") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
@@ -3612,7 +3613,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         if (localizedReport != null)
@@ -3644,8 +3645,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         TypeChangeDefaults.Reset typeReset, List<String> adoptedNotes)
     {
         String message = applied.isEmpty() && !adoptedNotes.isEmpty()
-            ? "Nothing was changed on " + normFqn //$NON-NLS-1$
-            : MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ? "Nothing was changed on " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) //$NON-NLS-1$
+            : MSG_MODIFIED_PREFIX + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
         {
             message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
@@ -3779,10 +3780,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty(KEY_ROLE_PROPERTIES, roleProperties);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified role " + normFqn + " (rights: " + rights //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Modified role " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " (rights: " + rights //$NON-NLS-1$ //$NON-NLS-2$
                 + ", templates: " + templates + ", roleProperties: " + roleProperties //$NON-NLS-1$ //$NON-NLS-2$
                 + ")") //$NON-NLS-1$
             .toJson();
@@ -3825,10 +3826,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified common attribute " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Modified common attribute " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.added + ", updated: " + result.updated + MSG_REMOVED_COUNT + result.removed //$NON-NLS-1$
                 + ")") //$NON-NLS-1$
             .toJson();
@@ -3871,10 +3872,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified exchange plan " + normFqn + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Modified exchange plan " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " content (added: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.added + ", updated: " + result.updated + MSG_REMOVED_COUNT + result.removed //$NON-NLS-1$
                 + ")") //$NON-NLS-1$
             .toJson();
@@ -4067,10 +4068,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty(KEY_REMOVED, result.removed);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_CONTENT, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + kindNoun + " " + normFqn + " " + listNoun + " (added: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + kindNoun + " " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " " + listNoun + " (added: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + result.added + MSG_REMOVED_COUNT + result.removed + ")") //$NON-NLS-1$
             .toJson();
     }
@@ -4487,7 +4488,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         if (applied.contains(ExcludedCommandsSupport.PROPERTY))
@@ -4505,7 +4506,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             result.put(KEY_REMOVED_EVENT_HANDLERS, removedHandlers);
         }
         return result
-            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
 
@@ -4676,13 +4677,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         queryValidation.addTo(result);
         normReport.addTo(result);
         return result
-            .put(McpKeys.MESSAGE, "Configured dynamic-list query on " + normFqn //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Configured dynamic-list query on " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) //$NON-NLS-1$
                 + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
     }
@@ -6074,7 +6075,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted)
             .put("destination", destination[0]) //$NON-NLS-1$
@@ -6169,7 +6170,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, java.util.Collections.singletonList(PROP_PROCEDURE))
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Rebound the handler for event '" + eventName + "' to procedure '" //$NON-NLS-1$ //$NON-NLS-2$
@@ -6258,7 +6259,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, java.util.Collections.singletonList(PROP_COMMAND))
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Re-pointed button '" + buttonName + "' at command '" //$NON-NLS-1$ //$NON-NLS-2$

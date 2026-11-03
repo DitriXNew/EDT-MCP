@@ -1355,7 +1355,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
+    "description": "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters in this call. Writes wait for disk export. Call get_tool_guide('dcs') for body shapes.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -6208,22 +6208,30 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Check a 1C query for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query').",
+    "description": "Check a 1C query or stored BSL query literals for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query').",
     "inputSchema": {
       "properties": {
         "dcsMode": {
           "type": "boolean"
         },
+        "method": {
+          "description": "Procedure/function name (case-insensitive); only with modulePath.",
+          "type": "string"
+        },
+        "modulePath": {
+          "description": "Stored BSL path from src/, e.g. 'CommonModules/MyModule/Module.bsl'. Exclusive with queryText; omit method to scan the whole module.",
+          "type": "string"
+        },
         "projectName": {
           "type": "string"
         },
         "queryText": {
+          "description": "Full 1C query text, e.g. 'SELECT Ref FROM Catalog.Products'. Pass exactly one of queryText or modulePath.",
           "type": "string"
         }
       },
       "required": [
-        "projectName",
-        "queryText"
+        "projectName"
       ],
       "type": "object"
     },
@@ -6236,6 +6244,9 @@
         "errorCount": {
           "type": "integer"
         },
+        "foundCount": {
+          "type": "integer"
+        },
         "infoCount": {
           "type": "integer"
         },
@@ -6244,6 +6255,27 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "modulePath": {
+          "type": "string"
+        },
+        "queries": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "skipped": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "skippedCount": {
+          "type": "integer"
         },
         "sources": {
           "items": {

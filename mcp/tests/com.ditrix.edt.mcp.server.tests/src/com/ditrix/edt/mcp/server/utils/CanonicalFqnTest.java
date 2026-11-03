@@ -36,6 +36,15 @@ import org.junit.Test;
  */
 public class CanonicalFqnTest
 {
+    @Test
+    public void testAdditionalColumnTailContainsOnlyProgrammaticNames()
+    {
+        String canonical = "Catalog.cAtAlOg.Form.ItemForm.Attribute.Object.Column.Реквизит.Форма.Колонка";
+        assertEquals(canonical, MetadataTypeUtils.toCanonicalEnglishFqn(canonical));
+        assertEquals(canonical, MetadataTypeUtils.toCanonicalEnglishFqn(
+            "Справочник.cAtAlOg.Форма.ItemForm.Реквизит.Object.Колонка.Реквизит.Форма.Колонка"));
+    }
+
     /** Spravochnik - the Russian type token for Catalog. */
     private static final String SPRAVOCHNIK = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; //$NON-NLS-1$
 

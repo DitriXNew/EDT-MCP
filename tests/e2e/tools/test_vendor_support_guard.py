@@ -109,7 +109,8 @@ def test_vendor_create_refused_on_a_locked_configuration_and_owner():
              ["Catalog.Locked"], "create a member of a locked catalog")
     err = _refused("create_metadata",
                    {"fqn": "%s.%s.%s.E2EVendorRu" % (RU_CATALOG, RU_CLOSED, RU_ATTRIBUTE)},
-                   [RU_CLOSED], "create a member through Russian tokens")
+                   ["Catalog.%s.Attribute.E2EVendorRu" % RU_CLOSED],
+                   "create a member through Russian tokens")
     assert_contains(err, "itself is locked", "the locked configuration is named as well")
     _assert_byte_identical(before, "refused creates")
     listed = call("get_metadata_objects", {"projectName": SUPPORTED_PROJECT})
@@ -144,16 +145,19 @@ def test_vendor_text_template_edit_is_refused_without_changing_bytes():
     details = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
     assert_ok(details, "read existing locked text template")
     assert_contains(details.text, "Vendor-locked text template #826.", "locked template resolves in model")
-    # The shared write boundary normalizes only the leading metadata type token.
-    for address, refusal_fqn in (
-        (fqn, fqn),
-        ("Справочник.Locked.Макет.Text826", "Catalog.Locked.Макет.Text826"),
+    # Every structural token is canonical English; programmatic names remain unchanged.
+    for address in (
+        fqn,
+        "Справочник.Locked.Макет.Text826",
+        "Catalog.Locked.Макет.Text826",
+        "Справочник.Locked.Template.Text826",
     ):
         for spec in ({"mode": "append", "text": "E2E vendor"},
                      {"oldText": "#826", "text": "E2E vendor"},
                      {"mode": "replace", "text": "E2E vendor", "overwrite": True}):
-            _refused("modify_metadata", {"fqn": address, "template": spec},
-                     [refusal_fqn, "Locked"], "edit text owned by a locked catalog")
+            err = _refused("modify_metadata", {"fqn": address, "template": spec},
+                           [fqn, "Locked"], "edit text owned by a locked catalog")
+            assert_not_contains(err, "Макет", "the refused address must not retain a Russian KIND")
             _assert_byte_identical(before, "refused text template edit")
     after = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
     assert_ok(after, "re-read refused text edit")
@@ -225,7 +229,8 @@ def test_vendor_delete_refused_in_preview_and_with_force():
     _refused("delete_metadata",
              {"fqn": "%s.%s.%s.Code2" % (RU_CATALOG, RU_CLOSED, RU_ATTRIBUTE),
               "confirm": True, "force": True},
-             ["Code2"], "forced delete of a locked attribute through Russian tokens")
+             ["Catalog.%s.Attribute.Code2" % RU_CLOSED],
+             "forced delete of a locked attribute through Russian tokens")
     # Catalog.Open is editable, but deleting a top object changes the locked configuration.
     _refused("delete_metadata", {"fqn": "Catalog.Open", "confirm": True, "force": True},
              ["Catalog.Open"], "forced delete of a top object of a locked configuration")

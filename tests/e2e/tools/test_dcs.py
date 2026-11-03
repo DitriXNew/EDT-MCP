@@ -57,6 +57,125 @@ _VERTICAL_OVERALL_PLACEMENT_RU = (
 _TITLE_RU = "\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a"
 
 
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_empty_retyped_template_is_exported_and_readable_as_xml_immediately():
+    report = "Report.E2EDcsEmpty664"
+    root = report + ".Template.Empty"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": report}), "create empty report")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root,
+                                      "templateType": "TextDocument"}), "create empty text template")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": root,
+              "properties": [{"name": "templateType", "value": "DataCompositionSchema"}]}),
+              "retype and export empty DCS")
+    # Disk first: no other MCP round trip may rescue this export.
+    disk = read_disk("src/Reports/E2EDcsEmpty664/Templates/Empty/Template.dcs")
+    document = ET.fromstring(disk)
+    assert document.tag.rsplit("}", 1)[-1] == "DataCompositionSchema", disk
+    assert not any(node.tag.rsplit("}", 1)[-1] == "dataSet" for node in document), disk
+    xml, _ = _read_all_xml(root)
+    assert _xml_structure(xml) == _xml_structure(disk), "empty XML must match the exported document"
+    assert_ok(_get(root, "schema"), "empty DCS remains readable in the model")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_query_autofill_exports_fields_and_parameters_in_the_same_call():
+    name = "E2EDcsAutoFill664"
+    root = "Report." + name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}), "seed auto-fill report")
+    wait_for_project_ready()
+    written = _write(root, "upsert", "dataSet", {
+        "name": "Query", "query": "SELECT 1 AS Amount WHERE 1 = &Minimum", "autoFillFields": True,
+    })
+    assert_ok(written, "synchronous designer query fill")
+    assert_contains(written.text, "autoFill=completed", "fill must finish before answering")
+    assert_contains(written.text, "fields=1", "report the stored field count")
+    assert_contains(written.text, "parameters=1", "report the stored parameter count")
+    assert_contains(written.text, "**Export drained:** `true`", "disk export must finish in this call")
+    # This is the first disk read after the only schema write, without a follow-up mutation.
+    disk = read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE))
+    assert re.search(r"<(?:\w+:)?dataPath>Amount</", disk), disk
+    assert re.search(r"<(?:\w+:)?name>Minimum</", disk), disk
+    fields = _get(root + "#/dataSets/Query/fields", "field")
+    params = _get(root + "#/parameters", "parameter")
+    assert_ok(fields, "read auto-filled fields")
+    assert_ok(params, "read auto-filled parameters")
+    assert_contains(fields.text, "Amount", "derived field in model")
+    assert_contains(params.text, "Minimum", "derived parameter in model")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_localstring_output_accepts_bare_typed_and_language_map_forms():
+    name = "E2EDcsLocalString664"
+    root = _seed_report(name)
+    forms = ["Bare664", {"kind": "string", "value": "Typed664"}, {"en": "Mapped664"}]
+    for index, (value, marker) in enumerate(zip(forms, ["Bare664", "Typed664", "Mapped664"])):
+        address = root + "#/defaultSettings/outputParameters"
+        written = _write(address, "upsert", "outputParameter", {
+            "items": [{"parameter": {"kind": "parameter", "value": "Title"}, "value": value}],
+        })
+        assert_ok(written, "write LocalString form %d" % index)
+        assert_contains(written.text, "**Export drained:** `true`", "LocalString export completes")
+        disk = read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE))
+        assert marker in disk and "LocalStringType" in disk, disk
+        read = _get(address, "outputParameter")
+        assert_ok(read, "read LocalString form %d" % index)
+        assert_contains(read.text, marker, "localized title must be readable")
+    refused = _write(address, "upsert", "outputParameter", {
+        "items": [{"parameter": {"kind": "parameter", "value": "Title"},
+                   "value": {"kind": "boolean", "value": True}}],
+    })
+    assert_error_quality(assert_error(refused, "Title refuses Boolean"),
+                         names=["LocalString"], suggests=["string", "languageCode"])
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_field_and_conditional_appearance_accept_bare_and_typed_values():
+    name = "E2EDcsAppearance664"
+    root = _seed_report(name)
+    field = root + "#/dataSets/DataSet1/fields/Amount1"
+    for typed, marker in [(False, "BareAppearance664"), (True, "TypedAppearance664")]:
+        appearance = {"Text": marker, "MarkNegatives": True, "Indent": 7,
+                      "TextColor": {"color": {"red": 12, "green": 34, "blue": 56}}}
+        if typed:
+            appearance = {"Text": {"kind": "string", "value": marker},
+                          "MarkNegatives": {"kind": "boolean", "value": True},
+                          "Indent": {"kind": "number", "value": 7},
+                          "TextColor": {"kind": "color", "value": {"red": 12, "green": 34, "blue": 56}}}
+        assert_ok(_write(field, "update", "field", {"appearance": appearance}), "field appearance")
+        holder = root + "#/defaultSettings/conditionalAppearance"
+        written = _write(holder, "upsert", "conditionalAppearance", {
+            "items": [{"appearance": appearance}],
+        })
+        assert_ok(written, "conditional appearance")
+        assert_contains(written.text, "**Export drained:** `true`", "both appearance writes complete")
+        disk = ET.fromstring(read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE)))
+        field_node = next(node for node in disk.iter() if node.tag.rsplit("}", 1)[-1] == "dataPath"
+                          and node.text == "Amount1")
+        assert field_node is not None
+        # The marker must occur below each distinct appearance owner, not just somewhere in the file.
+        owners = [node for node in disk.iter() if node.tag.rsplit("}", 1)[-1] == "appearance"
+                  and marker in "".join(node.itertext())]
+        assert len(owners) == 2, "both appearance owners must store %s, got %d" % (marker, len(owners))
+        for address, kind in [(field, "field"), (holder, "conditionalAppearance")]:
+            read = _get(address, kind)
+            assert_ok(read, "read " + kind)
+            assert_contains(read.text, marker, kind + " appearance model read-back")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_field_options_list_model_enum_literals_and_restriction_keys():
+    root = _seed_report("E2EDcsFieldOptions664")
+    before = tree_snapshot()
+    options = _options(root, "field", limit=100)
+    assert_ok(options, "field dictionaries")
+    for key in ["role.periodType", "Main", "useRestriction.field", "useRestriction.condition",
+                "attributeUseRestriction.group", "attributeUseRestriction.order", "true", "false"]:
+        assert_contains(options.text, key, "field options dictionary")
+    assert_tree_unchanged(before, "field options is read-only")
+
+
 def _seed_report(name, data_set_names=("DataSet1",)):
     fqn = "Report." + name
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
