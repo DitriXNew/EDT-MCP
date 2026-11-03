@@ -18,6 +18,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_tree_unchanged,
+    tree_snapshot,
     assert_not_contains,
     assert_ok,
     call,
@@ -3579,3 +3581,81 @@ def test_unknown_action_is_a_clean_non_mutating_error():
     assert_error_quality(error, names=["merge"], suggests=["get", "upsert"],
                          ctx="unknown actions name the supported alternatives")
     assert_no_diff("a rejected unknown action must not change the project")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_query_gate_refuses_invalid_dataset_before_mutation_and_reads_back_valid_query():
+    report_name = "E2EQueryGate513"
+    root = _seed_report(report_name)
+    address = root + "#/dataSets/DataSet1"
+    before = _get(address, "dataSet")
+    assert_ok(before, "read dataset before refused query")
+    disk = _poll_report_dcs(report_name, ctx="settle seeded schema before refusal")
+    original_disk = read_disk(disk)
+    snapshot = tree_snapshot()
+    invalid = _write(address, "update", "dataSet", {
+        "query": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
+    })
+    error = assert_error(invalid, "invalid dataset query must be refused before BM mutation")
+    assert_error_quality(error, names=["query"], suggests=["validate_query"])
+    assert not invalid.structured.get("mutationCommitted"), invalid.structured
+    assert_tree_unchanged(snapshot, "refused query must preserve fixture bytes")
+    after = _get(address, "dataSet")
+    assert_ok(after, "read dataset after refused query")
+    assert after.text == before.text, "refusal must leave the model and its hash unchanged"
+    assert read_disk(disk) == original_disk, "refusal must leave Template.dcs unchanged"
+    query = "SELECT C.Ref AS GateValid513 FROM Catalog.Catalog AS C"
+    saved = _write(address, "update", "dataSet", {"query": query})
+    assert_ok(saved, "save authoritative valid dataset query")
+    assert "**Query validation:** `VALID`" in saved.text, saved.text
+    poll_disk_contains(disk, "GateValid513", ctx="valid dataset query must persist")
+    assert _read_all_fenced_scalar(address + "/query", "dataSet", limit=None) == query
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dynamic_list_query_gate_refuses_invalid_and_reports_partial_forward_authoring():
+    root = _seed_dynamic_list("QueryGate513")
+    before = _get(root + "#/queryText", "dynamicList")
+    assert_ok(before, "read dynamic-list query before refusal")
+    form_rel = "src/Catalogs/E2EDcsListQueryGate513/Forms/ListForm/Form.form"
+    poll_disk_contains(form_rel, "SELECT Ref", ctx="settle seeded form before refusal")
+    original = read_disk(form_rel)
+    snapshot = tree_snapshot()
+    invalid = _write(root, "upsert", "dynamicList", {
+        "queryText": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
+    })
+    error = assert_error(invalid, "invalid dynamic-list query must be refused before mutation")
+    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_tree_unchanged(snapshot, "refused dynamic-list query must preserve fixture bytes")
+    after = _get(root + "#/queryText", "dynamicList")
+    assert_ok(after, "read dynamic list after refusal")
+    assert after.text == before.text, "refusal must preserve the model query and hash"
+    assert read_disk(form_rel) == original
+    valid_query = "SELECT Ref, Description AS GateValid513 FROM Catalog.Catalog"
+    saved = _write(root, "upsert", "dynamicList", {"queryText": valid_query})
+    assert_ok(saved, "valid dynamic-list query")
+    assert "**Query validation:** `VALID`" in saved.text
+    poll_disk_contains(form_rel, "GateValid513", ctx="valid dynamic-list query must persist")
+    assert _read_all_fenced_scalar(root + "#/queryText", "dynamicList", limit=None) == valid_query
+    future_query = "SELECT F.Ref FROM Catalog.Future513 AS F"
+    partial = _write(root, "upsert", "dynamicList", {"queryText": future_query})
+    assert_ok(partial, "forward authoring permits unresolved query sources")
+    assert "**Query validation:** `PARTIAL`" in partial.text
+    assert "validationComplete=false" in partial.text
+    poll_disk_contains(form_rel, "Future513", ctx="forward-authored query must persist")
+    assert _read_all_fenced_scalar(root + "#/queryText", "dynamicList", limit=None) == future_query
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dataset_future_source_is_saved_with_explicit_partial_notice():
+    report_name = "E2EQueryPartial513"
+    root = _seed_report(report_name)
+    address = root + "#/dataSets/DataSet1"
+    query = "SELECT F.Ref FROM Catalog.Future513 AS F"
+    saved = _write(address, "update", "dataSet", {"query": query})
+    assert_ok(saved, "forward-authored dataset")
+    assert "**Query validation:** `PARTIAL`" in saved.text
+    assert "validationComplete=false" in saved.text
+    disk = _poll_report_dcs(report_name, ctx="forward-authored dataset")
+    poll_disk_contains(disk, "Future513", ctx="partial query must persist with an honest result")
+    assert _read_all_fenced_scalar(address + "/query", "dataSet", limit=None) == query
