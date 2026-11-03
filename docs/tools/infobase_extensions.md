@@ -17,8 +17,6 @@ List installed infobase extensions and install, update or uninstall .cfe files. 
 | timeoutSeconds | — | integer | Operation deadline, 10..600; default 120. A timeout does not imply rollback. |
 
 ## Guide
-## Guide
-
 Manage compiled configuration extensions directly in an infobase, without importing an extension
 project into the workspace. Resolve `applicationId` with `get_applications` first. This tool uses
 EDT's installed platform resolution, stored infobase access settings and Designer connection pool.

@@ -1,5 +1,3 @@
-## Guide
-
 Manage compiled configuration extensions directly in an infobase, without importing an extension
 project into the workspace. Resolve `applicationId` with `get_applications` first. This tool uses
 EDT's installed platform resolution, stored infobase access settings and Designer connection pool.

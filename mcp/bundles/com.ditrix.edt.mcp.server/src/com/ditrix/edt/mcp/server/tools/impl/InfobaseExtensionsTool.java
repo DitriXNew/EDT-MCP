@@ -136,8 +136,10 @@ public class InfobaseExtensionsTool implements IMcpTool
             action = action == null ? "list" : action;
             String file = JsonUtils.extractStringArgument(params, "cfePath");
             Request request = new Request(action, JsonUtils.extractStringArgument(params, "extensionName"),
-                file == null ? null : Path.of(file), optionalBoolean(params, "safeMode"),
-                optionalBoolean(params, "protectionFromDangerousActions"),
+                file == null ? null : Path.of(file),
+                params.containsKey("safeMode") ? JsonUtils.extractBooleanArgument(params, "safeMode", true) : null,
+                params.containsKey("protectionFromDangerousActions")
+                    ? JsonUtils.extractBooleanArgument(params, "protectionFromDangerousActions", true) : null,
                 JsonUtils.extractStringArgument(params, "expectedVersion"),
                 JsonUtils.extractBooleanArgument(params, "confirm", false));
             String validation = InfobaseExtensionLifecycle.validate(request);
@@ -253,11 +255,6 @@ public class InfobaseExtensionsTool implements IMcpTool
                 + PlatformFailures.describeWithRootCause(e)
                 + ". Check get_applications and the supplied parameters, then retry.").toJson();
         }
-    }
-
-    private static Boolean optionalBoolean(Map<String, String> params, String key)
-    {
-        return params.containsKey(key) ? JsonUtils.extractBooleanArgument(params, key, true) : null;
     }
 
     /** Unreadable is never an empty inventory; Designer kind alone does not identify EDT ownership. */
