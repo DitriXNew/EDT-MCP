@@ -739,6 +739,8 @@ def _confirmed(args):
 MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source",
     "apply_quick_fix", "build_external_objects",
+    # The preview never writes; a confirmed clone writes only after validation and the hash check.
+    "clone_metadata_object",
     # dcs authors schemas / settings / dynamic lists. It belongs here rather than in
     # DEEP_MUTATION_TOOLS because an ordinary refusal does not move the model: the writer validates
     # the request before the first eSet. The exception is a post-commit force-export scheduling
