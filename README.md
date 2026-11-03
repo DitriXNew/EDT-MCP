@@ -211,7 +211,9 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 ### Tool Groups
 
 All **103 tools** are organized into 11 semantic groups; **100 are enabled by default**.
-`git`, `ask_workmate`, and `get_form_screenshot` require explicit opt-in:
+`git`, `ask_workmate`, and `get_form_screenshot` are **disabled by default**. Enable
+them in **Window → Preferences → MCP Server → Tools**; `enable_toolset` only changes
+progressive-disclosure visibility and does not enable disabled tools:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -400,8 +402,8 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 ## 1C:Workmate in-process bridge
 
-When 1C:Workmate (`com.e1c.edt.ai*` 1.0.5 or 1.0.7) runs in the same EDT JVM,
-integration works in both directions. The two builds differ in the conversation
+The MCP-to-Workmate conversation adapter supports 1C:Workmate (`com.e1c.edt.ai*`
+1.0.5 or 1.0.7) in the same EDT JVM. The two builds differ in the conversation
 API — 1.0.5 wraps the project in `ProjectId`, 1.0.7 takes the Eclipse `IProject`
 and adds a progress-listener argument — and the adapter picks the layout by
 probing the installed classes, so no version has to be configured. One behaviour
@@ -486,21 +488,50 @@ therefore execute code but cannot obtain the one value executing code requires.
 
 EDT-MCP breaks that deadlock: shortly after startup it registers a JShell session
 under the constant id **`edt-mcp`** (retried in the background while Workmate comes
-up, and again if Workmate ever evicts it). Together with `jshell_edt_canonical_imports`
-— a fixed entry in Workmate's own scenario catalogue — both values JShell demands are
-constants, so a project's rules can name them literally and nothing has to be passed
-around at runtime:
+up, and again if Workmate ever evicts it). Call `JShell` directly with that session
+id and the following manual id:
 
 ```
+scope           = "eclipse"
 repl_session_id = "edt-mcp"
-manual_ids      = ["jshell_edt_canonical_imports"]
+manual_ids      = ["active_workbench"]
+request_description  = "Call EDT-MCP through its in-process bridge."
+response_description = "EDT-MCP tool response was printed."
 ```
+
+This chat-to-bridge setup was verified on **Workmate 1.0.8**, EDT 2026.2.1 on
+Windows 11, as reported in [#787](https://github.com/DitriXNew/EDT-MCP/issues/787).
+`active_workbench` is also registered by `EclipsePlatformBindingProvider.getManualEntries()`
+and used in the `JShell` example in the inspected Workmate **1.0.5 and 1.0.7** sources.
+The old `jshell_edt_canonical_imports` id belongs to the EDT metadata manual catalogue
+in the inspected **1.0.5** build; it is absent from the inspected **1.0.7** builds
+and was rejected on **1.0.8** in #787. Use `active_workbench` for this Eclipse bridge
+setup across these versions.
+
+`manual_ids` is validated against the installed build's live scenario catalogue;
+an unknown or blank id is rejected **before any Java code executes**. For another
+build, use `JShellManual` when available to obtain an exact `manual_id` from its
+catalogue. If the chat cannot access it, report the installed Workmate version and
+the exact error instead of guessing an id. The session id remains `edt-mcp`.
 
 [`tests/TestConfiguration/.workmate/WORKMATE.md`](tests/TestConfiguration/.workmate/WORKMATE.md)
 is a working example of such a rules file; copy it into `<project>/.workmate/` to give
-the chat the same access in your own configuration. Note that the chat cannot reach the
-HTTP endpoint at all — `java.net.URL`, `java.net.Socket` and `ProcessBuilder` are on
-Workmate's restricted-types list — so the in-process bridge is its only route.
+the chat the same access in your own configuration, replacing `TestConfiguration`
+with your EDT project name (`list_projects` lists valid names). **Start a new chat**
+after changing the rules so Workmate loads them. If `JShell` reports `Session not
+found`, the startup registration has not completed; report that error and retry
+after EDT-MCP and Workmate have started.
+
+For a request such as "show the last three commits through EDT-MCP", first enable
+**`git`** in **Window → Preferences → MCP Server → Tools → Git**. Both `git` and
+`ask_workmate` ship **disabled by default**, and **`enable_toolset` does not enable
+them**. The bridge obeys the same tool settings as HTTP MCP: a response such as
+`Tool 'git' is disabled by the user` means the bridge reached the dispatcher;
+ask the user to enable the tool in the Tools tab before retrying.
+
+The chat cannot reach the HTTP endpoint at all — `java.net.URL`, `java.net.Socket`
+and `ProcessBuilder` are on Workmate's restricted-types list — so the in-process
+bridge is its only route.
 
 ## Multi-EDT Proxy
 
