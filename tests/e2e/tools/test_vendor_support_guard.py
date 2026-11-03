@@ -144,12 +144,16 @@ def test_vendor_text_template_edit_is_refused_without_changing_bytes():
     details = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
     assert_ok(details, "read existing locked text template")
     assert_contains(details.text, "Vendor-locked text template #826.", "locked template resolves in model")
-    for address in (fqn, "Справочник.Locked.Макет.Text826"):
+    # The shared write boundary normalizes only the leading metadata type token.
+    for address, refusal_fqn in (
+        (fqn, fqn),
+        ("Справочник.Locked.Макет.Text826", "Catalog.Locked.Макет.Text826"),
+    ):
         for spec in ({"mode": "append", "text": "E2E vendor"},
                      {"oldText": "#826", "text": "E2E vendor"},
                      {"mode": "replace", "text": "E2E vendor", "overwrite": True}):
             _refused("modify_metadata", {"fqn": address, "template": spec},
-                     [address], "edit text owned by a locked catalog")
+                     [refusal_fqn, "Locked"], "edit text owned by a locked catalog")
             _assert_byte_identical(before, "refused text template edit")
     after = call("get_metadata_details", {"projectName": SUPPORTED_PROJECT, "objectFqns": [fqn]})
     assert_ok(after, "re-read refused text edit")
