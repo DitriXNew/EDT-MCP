@@ -304,15 +304,17 @@ public class AbstractMetadataWriteToolMarkersTest
     }
 
     @Test
-    public void testOnlyCreateAndModifyOptIn()
+    public void testCreateModifyAndDeleteBatchesOptIn()
     {
         assertTrue(((AbstractMetadataWriteTool)new CreateMetadataTool()).reportsWrittenObjectMarkers());
         assertTrue(((AbstractMetadataWriteTool)new ModifyMetadataTool()).reportsWrittenObjectMarkers());
         assertFalse("delete reports referrers, not markers (#643 scope)", //$NON-NLS-1$
             ((AbstractMetadataWriteTool)new DeleteMetadataTool()).reportsWrittenObjectMarkers());
-        assertFalse(new DeleteMetadataTool().getOutputSchema().contains(WrittenObjectMarkers.KEY_INCOMPLETE));
+        AbstractMetadataWriteTool delete = new DeleteMetadataTool();
+        assertFalse(delete.reportsWrittenObjectMarkers(params("Catalog.X")));
+        assertTrue(delete.reportsWrittenObjectMarkers(Map.of("projectName", PROJECT, "operations", "[]")));
         for (String schema : Arrays.asList(new CreateMetadataTool().getOutputSchema(),
-            new ModifyMetadataTool().getOutputSchema()))
+            new ModifyMetadataTool().getOutputSchema(), new DeleteMetadataTool().getOutputSchema()))
         {
             for (String key : Arrays.asList("markersIncomplete", "markersIncompleteReason", "markerCount", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "markers")) //$NON-NLS-1$
