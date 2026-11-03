@@ -59,7 +59,7 @@ import time
 from harness import (
     call, assert_ok, assert_contains, assert_not_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, _fail,
-    wait_for_project_ready,
+    wait_for_project_ready, diff,
 )
 
 # A checkId that cannot match any real check id or short UID, so EVERY marker is
@@ -244,6 +244,51 @@ def _seed_bsl_error_and_wait():
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATHS
 # ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_saved_text_ranges_in_structured_rows_and_detailed_table():
+    """A seeded BSL text marker must expose saved coordinates on both output channels."""
+    _seed_bsl_error_and_wait()
+    before = diff()
+    args = {"projectName": PROJECT, "objectFqns": [EN_MODULE_OWNER],
+            "responseFormat": "detailed"}
+    result = call("get_project_errors", args)
+    assert_ok(result, "reading the seeded text marker with saved ranges")
+    _assert_verdicts(result, resolved=[EN_MODULE_OWNER], not_found=[], unsupported=[])
+    payload = result.structured or {}
+    problems = payload.get("problems")
+    if not isinstance(problems, list) or not problems or payload.get("problemsFound") != len(problems):
+        _fail("the seeded marker must appear in structured problems with an accurate count: %r" % payload)
+    if any(p.get("project") != PROJECT for p in problems):
+        _fail("every problem must retain its project: %r" % problems)
+    text_rows = [p for p in problems if p.get("modulePath") == SEEDED_MODULE_PATH
+                 and type(p.get("offset")) is int and type(p.get("length")) is int]
+    if not text_rows:
+        _fail("the seeded BSL text marker must expose its saved range: %r" % problems)
+    row = text_rows[0]
+    for key in ("line", "offset", "length"):
+        if type(row.get(key)) is not int or row[key] < (1 if key == "line" else 0):
+            _fail("the seeded BSL text marker must carry a numeric %s: %r" % (key, row))
+    if not row.get("message") or not row.get("checkCode"):
+        _fail("structured problems must preserve the message and short UID: %r" % row)
+    assert_contains(_report(result), "| Offset | Length |", "detailed range columns")
+    assert_contains(_report(result), "| %d | %d | %d |" %
+                    (row["line"], row["offset"], row["length"]),
+                    "Markdown coordinates must match structured numeric values")
+    args["responseFormat"] = "concise"
+    concise = call("get_project_errors", args)
+    assert_ok(concise, "concise structured marker report")
+    assert_not_contains(_report(concise), "| Offset |", "concise keeps its compact columns")
+    if (concise.structured or {}).get("problems") != problems:
+        _fail("responseFormat must not change the structured problem rows")
+    args["limit"] = 1
+    limited = call("get_project_errors", args)
+    assert_ok(limited, "limiting the structured marker report")
+    if len((limited.structured or {}).get("problems", [])) != 1 or limited.structured.get("problemsFound") != 1:
+        _fail("limit=1 must cap the structured rows and count together: %r" % limited.structured)
+    if diff() != before:
+        _fail("reading saved marker ranges must not change the already seeded source")
+
 
 @e2e_test(tool="get_project_errors", kind="read")
 def test_no_match_filter_renders_no_errors_banner_for_project():

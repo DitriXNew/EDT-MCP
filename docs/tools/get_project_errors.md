@@ -11,7 +11,7 @@ Find detailed validation errors and warnings in an EDT project. Parameters and e
 | objects | — | array | Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive with objectFqns. |
 | objectFqns | — | array | EXACT model addresses; mutually exclusive with objects. A MEMBER address (Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - EDT indexes the marker there - so the result can carry problems from elsewhere in that object. Returns objectsNotFound / objectsUnsupported. |
 | limit | — | integer | Max results; default 100, max 1000 (optional) |
-| responseFormat | — | string (one of: concise, detailed) | Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs' |
+| responseFormat | — | string (one of: concise, detailed) | Output verbosity (optional): concise (default) = leaner table; detailed = adds stored Offset/Length and 'Has docs' |
 
 ## Guide
 Lists EDT configuration problems (validation markers: the same set EDT shows in its *Configuration Problems* view) as a Markdown table, with optional filters. All parameters are optional; with none, every problem across every project is returned (up to `limit`).
