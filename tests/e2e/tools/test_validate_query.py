@@ -66,6 +66,8 @@ def test_extension_union_scope_resolves_inherited_field():
     assert_ok(r, "extension union scope must resolve inherited fields")
     assert r.structured is not None, \
         "extension validation must return structuredContent; got: %r" % (r.text,)
+    assert r.structured.get("validationState") == "VALID", r.structured
+    assert r.structured.get("validationComplete") is True, r.structured
     assert r.structured.get("valid") is True, \
         "the inherited field must be valid in the union scope: %r" % (r.structured,)
     assert r.structured.get("issues") == [], \
@@ -82,6 +84,12 @@ def test_extension_union_scope_resolves_extension_owned_object():
     assert_ok(r, "extension union scope must resolve extension-owned objects")
     assert r.structured is not None, \
         "extension validation must return structuredContent; got: %r" % (r.text,)
+    assert r.structured.get("validationState") == "VALID", r.structured
+    assert r.structured.get("validationComplete") is True, r.structured
+    assert r.structured.get("unresolvedSources") == [], r.structured
+    assert any(field.get("name") == "ExtValue"
+               for source in r.structured.get("sources", [])
+               for field in source.get("availableFields", [])), r.structured
     assert r.structured.get("valid") is True, \
         "the extension-owned object must be valid in the union scope: %r" % (r.structured,)
     assert r.structured.get("issues") == [], \
@@ -110,6 +118,9 @@ def test_extension_union_resolves_own_and_adopted_fields_together_in_both_dialec
             })
             assert_ok(r, "extension-owned and inherited fields in the same query")
             assert r.structured is not None, "missing structuredContent: %r" % (r.text,)
+            assert r.structured.get("validationState") == "VALID", r.structured
+            assert r.structured.get("validationComplete") is True, r.structured
+            assert r.structured.get("unresolvedSources") == [], r.structured
             assert r.structured.get("valid") is True, r.structured
             assert r.structured.get("issues") == [], r.structured
             assert r.structured.get("dcsMode") is dcs_mode, r.structured
@@ -125,6 +136,8 @@ def test_extension_owned_object_still_rejects_unknown_field():
     })
     assert_ok(r, "semantic errors are returned as validation issues")
     assert r.structured is not None, "missing structuredContent: %r" % (r.text,)
+    assert r.structured.get("validationState") == "INVALID", r.structured
+    assert r.structured.get("validationComplete") is True, r.structured
     assert r.structured.get("valid") is False, r.structured
     errors = [issue for issue in r.structured.get("issues", []) if issue.get("severity") == "ERROR"]
     assert len(errors) == 1, "only the unknown field must fail: %r" % (r.structured,)
@@ -245,3 +258,86 @@ def test_nonexistent_project_errors_clearly():
     assert_error_quality(err, names=[bogus], suggests=[],
                          ctx="non-existent project names the bad value")
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_native_dbview_matrix_has_authoritative_bilingual_verdicts():
+    cases = [
+        ("Catalog.Catalog", "Ref", "Справочник.Catalog", "Ссылка"),
+        ("Document.QueryOrder.Items", "Quantity", "Документ.QueryOrder.Items", "Quantity"),
+        ("AccumulationRegister.QueryStock.Balance()", "QuantityBalance",
+         "РегистрНакопления.QueryStock.Остатки()", "QuantityОстаток"),
+        ("AccumulationRegister.QueryStock.Turnovers()", "QuantityTurnover",
+         "РегистрНакопления.QueryStock.Обороты()", "QuantityОборот"),
+        ("AccumulationRegister.QueryStock.BalanceAndTurnovers()", "QuantityClosingBalance",
+         "РегистрНакопления.QueryStock.ОстаткиИОбороты()", "QuantityКонечныйОстаток"),
+        ("InformationRegister.QueryPrices.SliceLast()", "Price",
+         "РегистрСведений.QueryPrices.СрезПоследних()", "Price"),
+    ]
+    for en_source, en_field, ru_source, ru_field in cases:
+        for source, field, select, from_kw, as_kw in [
+            (en_source, en_field, "SELECT", "FROM", "AS"),
+            (ru_source, ru_field, "ВЫБРАТЬ", "ИЗ", "КАК"),
+        ]:
+            for requested, expected in [(field, "VALID"), ("MissingField513", "INVALID")]:
+                query = "%s T.%s %s %s %s T" % (select, requested, from_kw, source, as_kw)
+                r = call("validate_query", {"projectName": PROJECT, "queryText": query})
+                assert_ok(r, query)
+                payload = r.structured
+                assert payload and payload.get("validationState") == expected, (query, payload)
+                assert payload.get("valid") is (expected == "VALID"), (query, payload)
+                assert payload.get("validationComplete") is True, (query, payload)
+                sources = payload.get("sources")
+                assert len(sources) == 1 and sources[0]["resolution"] == "RESOLVED", payload
+                fields = sources[0].get("availableFields")
+                assert any(field in (f.get("name"), f.get("nameRu")) for f in fields), (query, payload)
+                if expected == "INVALID":
+                    assert payload.get("errorCount", 0) > 0, payload
+                    assert any(i.get("origin") == "validator" and "MissingField513" in i.get("message", "")
+                               for i in payload.get("issues", [])), payload
+    assert_no_diff("the complete native DBView matrix must leave the fixture clean")
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_future_source_is_partial_and_independent_error_still_wins():
+    for query in ["SELECT F.Ref FROM Catalog.Future513 AS F",
+                  "SELECT Ref FROM Catalog.Future513",
+                  "ВЫБРАТЬ F.Ссылка ИЗ Справочник.Future513 КАК F"]:
+        r = call("validate_query", {"projectName": PROJECT, "queryText": query})
+        assert_ok(r, "unavailable future source")
+        payload = r.structured
+        assert payload.get("validationState") == "PARTIAL", payload
+        assert payload.get("valid") is False and payload.get("validationComplete") is False, payload
+        assert payload.get("errorCount") == 0, payload
+        assert any("Future513" in s.get("source", "") and s.get("reason")
+                   for s in payload.get("unresolvedSources", [])), payload
+    r = call("validate_query", {"projectName": PROJECT, "queryText":
+        "SELECT C.MissingField513, F.Ref FROM Catalog.Catalog AS C "
+        "LEFT JOIN Catalog.Future513 AS F ON TRUE"})
+    assert_ok(r, "independent error alongside an unresolved source")
+    assert r.structured.get("validationState") == "INVALID", r.structured
+    assert r.structured.get("validationComplete") is False, r.structured
+    assert_no_diff()
+
+
+@e2e_test(tool="validate_query", kind="read")
+def test_fixture_query_corpus_does_not_produce_false_refusals():
+    # Exercises parser/scope constructs against deterministic fixture objects, without executing QL.
+    corpus = [
+        ("SELECT 1 AS Amount", True),
+        ("SELECT Ref FROM Catalog.Catalog WHERE Description LIKE &Pattern", False),
+        ("SELECT C.Ref, C.Description FROM Catalog.Catalog AS C ORDER BY Description", False),
+        ("SELECT COUNT(*) AS Total FROM Document.QueryOrder.Items", False),
+        ("SELECT T.QuantityBalance FROM AccumulationRegister.QueryStock.Balance(, Item = &Item) AS T", False),
+        ("SELECT T.Price FROM InformationRegister.QueryPrices.SliceLast(, Item = &Item) AS T", False),
+        ("SELECT T.Ref FROM (SELECT Ref FROM Catalog.Catalog) AS T", False),
+        ("SELECT Ref INTO Temp FROM Catalog.Catalog; SELECT Ref FROM Temp", False),
+    ]
+    refusals = []
+    for query, dcs_mode in corpus:
+        r = call("validate_query", {"projectName": PROJECT, "queryText": query, "dcsMode": dcs_mode})
+        assert_ok(r, "fixture corpus validation")
+        if r.structured.get("validationState") != "VALID":
+            refusals.append((query, r.structured))
+    assert not refusals, "false refusals in %d fixture queries: %r" % (len(corpus), refusals)
+    assert_no_diff()

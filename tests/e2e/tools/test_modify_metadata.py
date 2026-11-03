@@ -51,6 +51,10 @@ from harness import (
     PROJECT,
     PROJECT_DIR,
     TESTS_PROJECT,
+    TESTS_PROJECT_REL,
+    REPO_ROOT,
+    restore_extension_fixture,
+    poll_disk_contains_all,
 )
 
 
@@ -87,6 +91,88 @@ def test_report_main_data_composition_schema_accepts_owned_template_member_refer
 # The fixture form every form-member test writes to.
 _ITEM_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 _COMMON_FORM_MDO = "src/CommonForms/Form/Form.mdo"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_parameter_and_attribute_collection_types_refused_atomically():
+    form = "Catalog.Catalog.Form.ItemForm"
+    for token in ("Parameter", "Attribute"):
+        name = "E2ETypeGuard" + token
+        fqn = form + "." + token + "." + name
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "create an untyped form member")
+        poll_diff_contains("<name>%s</name>" % name, ctx="untyped member reaches disk")
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "valueType", "value": {"types": [{"kind": "String"}]}}],
+        }), "control: String is offered by the form type picker")
+        wait_for_project_ready()
+        member_xml = next(node for node in ET.fromstring(read_disk(_ITEM_FORM)).findall(
+            "parameters" if token == "Parameter" else "attributes") if node.findtext("name") == name)
+        assert member_xml.findtext("valueType/types") == "String", "the control type must reach disk"
+        before = tree_snapshot()
+        before_model = _assignable_text(fqn)
+        for kind in ("Array", "Structure", "Map", "FixedArray", "FixedStructure", "FixedMap", "Массив"):
+            properties = [{"name": "comment", "value": "E2EMustNotBeWritten"}] if token == "Parameter" else []
+            properties.append({"name": "valueType", "value": {"types": [
+                {"kind": "String"}, {"kind": kind},
+            ]}})
+            r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "properties": properties})
+            err = assert_error(r, "refuse %s on form %s" % (kind, token))
+            canonical = "Array" if kind == "Массив" else kind
+            assert_error_quality(err, names=[canonical, token],
+                                 suggests=["type picker", "without a type", "arbitrary"])
+            assert_tree_unchanged(before, "a refused type must change nothing on disk")
+            assert _assignable_text(fqn) == before_model, "the whole batch must leave the model unchanged"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_parameter_type_guard_in_extension_project():
+    owner = "DataProcessor.E2EParameterTypeGuard"
+    form = owner + ".Form.Main"
+    parameter = form + ".Parameter.Payload"
+    try:
+        for fqn in (owner, form, parameter):
+            assert_ok(call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": fqn}),
+                      "seed extension-owned form parameter")
+            wait_for_project_ready()
+        path = "src/DataProcessors/E2EParameterTypeGuard/Forms/Main/Form.form"
+        poll_disk_contains_all(path, ["<name>Payload</name>"], fixture_rel=TESTS_PROJECT_REL,
+                               ctx="extension parameter reaches disk")
+        disk_path = os.path.relpath(os.path.join(REPO_ROOT, TESTS_PROJECT_REL, path), PROJECT_DIR)
+        before_disk = read_disk(disk_path)
+        before = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [parameter], "assignable": True,
+        })
+        assert_ok(before, "read extension parameter before refusal")
+        refused = call("modify_metadata", {
+            "projectName": TESTS_PROJECT, "fqn": parameter,
+            "properties": [{"name": "valueType", "value": {"types": [{"kind": "Array"}]}}],
+        })
+        err = assert_error(refused, "Array is refused in an extension too")
+        assert_error_quality(err, names=["Array", "parameter"], suggests=["without a type", "arbitrary"])
+        after = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [parameter], "assignable": True,
+        })
+        assert_ok(after, "read extension parameter after refusal")
+        assert before.text == after.text, "extension parameter must remain untyped"
+        assert read_disk(disk_path) == before_disk, "refusal must leave the extension form file unchanged"
+        valid = call("validate_form_model", {"projectName": TESTS_PROJECT, "formFqn": form})
+        assert_ok(valid, "validate extension form with arbitrary parameter")
+        assert valid.structured.get("valid") is True, valid.structured
+        assert_ok(call("modify_metadata", {
+            "projectName": TESTS_PROJECT, "fqn": parameter,
+            "properties": [{"name": "valueType", "value": {"types": [{"kind": "String"}]}}],
+        }), "control: an offered type is accepted in an extension")
+        poll_disk_contains_all(path, ["<name>Payload</name>", "<types>String</types>"],
+                               fixture_rel=TESTS_PROJECT_REL, ctx="extension parameter type reaches disk")
+        typed = call("get_metadata_details", {
+            "projectName": TESTS_PROJECT, "objectFqns": [parameter], "assignable": True,
+        })
+        assert_ok(typed, "read back the extension parameter type")
+        assert "String" in typed.text, typed.text
+    finally:
+        restore_extension_fixture("form parameter type guard in extension")
 
 
 def _assignable_text(fqn):
@@ -4615,6 +4701,30 @@ def test_retype_of_a_defined_type_runs_the_referrer_reset():
     poll_disk_contains("src/DefinedTypes/%s/%s.mdo" % (defined, defined), "<precision>15</precision>",
                        ctx="the DefinedType's new type must reach disk")
     _assert_reset_reported(r, "the type change also reset the fill value of every editable object typed with it")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dynamic_list_query_write_uses_shared_native_validator():
+    root = "Catalog.Catalog.Form.ItemForm.Attribute.QueryGate513"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}), "seed plain attribute")
+    wait_for_project_ready()
+    form_rel = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    poll_disk_contains(form_rel, "QueryGate513", ctx="settle seeded attribute")
+    snapshot = tree_snapshot()
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
+        {"name": "queryText", "value": "SELECT C.MissingField513 FROM Catalog.Catalog AS C"}]})
+    error = assert_error(r, "invalid custom query must be refused before attribute conversion")
+    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_tree_unchanged(snapshot, "invalid query must not convert the attribute or write the form")
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
+        {"name": "queryText", "value": "SELECT Ref AS GateValid513 FROM Catalog.Catalog"}]})
+    assert_ok(r, "valid custom query uses the shared validator")
+    assert r.structured.get("queryValidation")[0]["validationState"] == "VALID", r.structured
+    poll_disk_contains(form_rel, "GateValid513", ctx="valid query must reach Form.form")
+    read_back = call("dcs", {"projectName": PROJECT, "fqn": root + "#/queryText",
+                            "action": "get", "type": "dynamicList"})
+    assert_ok(read_back, "read back valid dynamic-list query")
+    assert "SELECT Ref AS GateValid513 FROM Catalog.Catalog" in read_back.text
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

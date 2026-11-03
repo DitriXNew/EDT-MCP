@@ -585,7 +585,7 @@ with `python docs/generate_tool_docs.py`.
 | [`create_metadata`](docs/tools/create_metadata.md) | Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata'). |
 | [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first;… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Paramete… |
-| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object acr… |
+| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object/member by FQN, or atomically delete members of one form with `operations`; preview before confirming. |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture'). |
 | [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties'). |
 | [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content'). |
@@ -882,9 +882,9 @@ An action/confirmation/status result with **none** of these returns **Markdown**
 
 Which tool families stay JSON, and why:
 
-- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*;
+- **metadata-writes** (`create_metadata`, `modify_metadata`, `delete_metadata`, via `AbstractMetadataWriteTool`) — return the edited object's round-trip **FQN** *(a)*. `delete_metadata` also accepts `operations: [{action: "delete", fqn: "..."}]` instead of `fqn` for 1..100 members of one form: preview, then `confirm:true`. Its batch mode uses one model transaction/export, aggregates preflight errors with zero applied writes, and preserves committed operation indexes on export refusals. `atomic` defaults to true; false is refused. Attributes/columns, multiple containers, create/modify actions, `force:true`, `timeout` and unknown fields are unsupported. Disk-export state and written-object markers remain separate from model atomicity. See the [batch contract](mcp/bundles/com.ditrix.edt.mcp.server/guides/delete_metadata.md#atomic-single-form-batch).
 - **debug / profiling tools** — return launch / application / breakpoint IDs and live session state consumed by follow-up calls *(a)*;
-- **`validate_query`** — returns the error **line/column** *(b)*;
+- **`validate_query`** — returns the error **line/column** *(b)*; complete native DBView validation reports `VALID`, `INVALID`, or `PARTIAL`; query-bearing DCS/DynamicList writes share this validator and refuse proven errors before mutation.
 - **`list_configurations`** — returns config **identities** consumed by other tools *(a)*;
 - **`clean_project`** / **`update_database`** / **`infobase_sessions`** — return machine-readable status whose JSON shape is asserted by e2e *(d-like contract)*.
 

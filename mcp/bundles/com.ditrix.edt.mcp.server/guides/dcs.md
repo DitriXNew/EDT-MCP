@@ -519,3 +519,18 @@ tree guard, not a cross-EDT-version content identifier.
 
 ## Vendor support
 A configuration on vendor support can lock objects. A write to a data composition schema, a form's dynamic-list query or its conditional appearance is refused when the object that owns it is locked by its support rule; nothing is written. Reading is never refused. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support: EDT applies support only to a configuration's own (native) root, never inside an extension, which is why an extension is the way to change a supported configuration.
+
+
+## Query validation before writes
+
+Submitted query datasets (including nested unions and XML schema replacements) use
+`validate_query`'s shared native EDT validator with `dcsMode=true`. Dynamic-list
+`queryText` writes use the same service with `dcsMode=false`, including the
+`modify_metadata` form-attribute path. `INVALID` refuses the whole call before BM
+mutation. The error includes `queryValidation` details and the submitted query slot.
+
+`PARTIAL` permits forward authoring and explicitly reports query validation incomplete,
+`validationComplete=false`, and unresolved sources. It does not mean the query has
+been validated. A missing QL service or a failed validation run refuses the write;
+retry after project loading or QL support is restored. Queries omitted by a partial
+update are left untouched and are not revalidated.

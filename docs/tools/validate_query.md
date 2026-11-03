@@ -10,7 +10,7 @@ Check a 1C query for syntax and metadata-reference errors. Parameters and exampl
 | dcsMode | — | boolean | true for Data Composition System queries (allows DCS-specific syntax). Default: false. |
 
 ## Guide
-Validates 1C:Enterprise query language (QL) text in the context of a project, using EDT's Xtext QL infrastructure. It parses the query and runs full semantic validation, so it catches both grammar errors and references to tables/fields that do not exist in the project's effective metadata model. For a configuration extension, that model is the union of the extension's own metadata and the base configuration's metadata. The query is validated only; nothing is written to the model or executed.
+Validates 1C queries with EDT's native Xtext parser and semantic checks, reporting grammar errors and invalid table/field references. Configuration extensions use the union of their own metadata and the base configuration. Nothing is written or executed.
 
 ## When to use
 - Before pasting a query string into a BSL module, to confirm it parses and all referenced metadata resolves.
@@ -26,7 +26,20 @@ Validates 1C:Enterprise query language (QL) text in the context of a project, us
 The QL parser is dialect-aware: both the English and Russian forms of keywords and table-type tokens are accepted (e.g. `SELECT ... FROM Catalog.Products` and `ВЫБРАТЬ ... ИЗ Справочник.Продукты`). Do not assume a single dialect. Metadata objects are referenced by their programmatic `Name` (not by synonym); only the type token (Catalog / Справочник) may be in either language.
 
 ## Result shape
-JSON with `valid` (true when there are zero issues), `dcsMode`, `validationScope` (the project and, for a linked extension, its base configuration), `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
+JSON with `validationScope` (the project and, for a linked extension, its base),
+`validationState` (`VALID`, `INVALID`, or `PARTIAL`), `validationComplete`,
+`unresolvedSources`, `sources`, and `valid` (true only for `VALID`). `INVALID` means
+EDT proved an error; `PARTIAL` means source/field resolution could not be completed.
+A missing future source is `PARTIAL`; independent proven errors still make the result
+`INVALID`. Native lookup diagnostics depending on that unresolved source are returned
+as warnings with `validationIncomplete:true` and their original `nativeSeverity`.
+Warnings and informational diagnostics alone do not invalidate a complete query.
+
+The `sources` census records native DBView resolution and computed `availableFields`
+with both `name` and `nameRu`. EDT supplies virtual-table fields, including fields
+computed from table parameters. No query is executed and no field catalogue is
+maintained by this tool. Issue `origin` distinguishes resource diagnostics from the
+native validator. The result also includes `dcsMode`, `errorCount`, `warningCount`, `infoCount`, and an `issues` array. Each issue has `severity` (ERROR / WARNING / INFO), `message`, and, when located, `line`, `column` and `offset` (1-based line/column; non-positive locations are omitted).
 
 ## Examples
 - Plain query: `{ "projectName": "MyProj", "queryText": "SELECT Ref FROM Catalog.Products" }`.

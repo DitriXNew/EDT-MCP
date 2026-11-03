@@ -17,6 +17,8 @@ import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+
 /**
  * Structural validation of a managed form's model - the connectivity a form needs to be openable
  * and editable, which neither BSL validation nor EDT's own markers answer (issue #473).
@@ -111,6 +113,8 @@ public final class FormModelValidator
     public static final String CODE_EMPTY_HANDLER_NAME = "empty-handler-name"; //$NON-NLS-1$
     public static final String CODE_UNRESOLVED_EVENT_REFERENCE = "unresolved-event-reference"; //$NON-NLS-1$
     public static final String CODE_FOREIGN_EVENT_REFERENCE = "foreign-event-reference"; //$NON-NLS-1$
+    public static final String CODE_INVALID_FORM_VALUE_TYPE = FormValueTypePolicy.INVALID_TYPE;
+    public static final String CODE_UNAVAILABLE_FORM_VALUE_TYPES = FormValueTypePolicy.UNAVAILABLE;
 
     /**
      * Every finding code this engine can emit. A code is documented as STABLE for a caller to
@@ -127,7 +131,7 @@ public final class FormModelValidator
         CODE_STALE_EXT_INFO, CODE_MISSING_PRESENTATION_FLAG, CODE_EMPTY_COMMAND_ACTION,
         CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE, CODE_INVALID_EXTENSION_CALL_TYPE,
         CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME, CODE_UNRESOLVED_EVENT_REFERENCE,
-        CODE_FOREIGN_EVENT_REFERENCE);
+        CODE_FOREIGN_EVENT_REFERENCE, CODE_INVALID_FORM_VALUE_TYPE, CODE_UNAVAILABLE_FORM_VALUE_TYPES);
 
     private FormModelValidator()
     {
@@ -203,7 +207,31 @@ public final class FormModelValidator
         checkItems(formModel, items, findings);
         checkHandlers(formModel, items, publication, findings);
         checkCommandActions(formModel, findings);
+        checkValueTypes(formModel, findings);
         return findings;
+    }
+
+    private static void checkValueTypes(EObject owner, List<Finding> findings)
+    {
+        Object valueType = value(owner, "valueType"); //$NON-NLS-1$
+        if (valueType instanceof TypeDescription)
+        {
+            FormValueTypePolicy.Problem problem = FormValueTypePolicy.check(owner, (TypeDescription)valueType);
+            if (problem != null && FormValueTypePolicy.INVALID_TYPE.equals(problem.code()))
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_INVALID_FORM_VALUE_TYPE,
+                    pathOf(owner), problem.message()));
+            }
+            else if (problem != null)
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_UNAVAILABLE_FORM_VALUE_TYPES,
+                    pathOf(owner), problem.message()));
+            }
+        }
+        for (EObject child : PersistedContents.of(owner))
+        {
+            checkValueTypes(child, findings);
+        }
     }
 
     // --- the form root -------------------------------------------------------------------------
