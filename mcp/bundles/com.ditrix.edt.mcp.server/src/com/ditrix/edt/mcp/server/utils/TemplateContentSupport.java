@@ -131,8 +131,7 @@ public final class TemplateContentSupport
 
     /**
      * An actionable refusal for a retype target, or null. A DataCompositionSchema is accepted here (but
-     * not at creation): the retype leaves the content empty and the dcs tool materializes the schema on
-     * its first write, as it does for any template declared as a DCS.
+     * not at creation): retyping creates and attaches the empty schema for immediate export.
      */
     public static String unsupportedRetypeError(TemplateType type, String supplied)
     {
@@ -206,9 +205,11 @@ public final class TemplateContentSupport
         detachContent(template, tx);
         if (type == TemplateType.DATA_COMPOSITION_SCHEMA)
         {
-            // Left empty on purpose: the dcs tool creates and attaches the schema on its first write.
             template.setTemplateType(type);
-            return null;
+            DcsSchemaContent.ResolveResult content =
+                DcsSchemaContent.resolveTemplateContent(tx, template, names, template.getName());
+            if (!content.isSuccess()) throw Refusals.state(content.error());
+            return content.contentFqn();
         }
         return initialize(template, type, tx, project, names, textFile);
     }

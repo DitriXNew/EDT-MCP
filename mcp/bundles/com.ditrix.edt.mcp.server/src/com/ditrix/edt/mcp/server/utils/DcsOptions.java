@@ -12,6 +12,9 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EEnum;
+import org.eclipse.emf.ecore.EcorePackage;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
@@ -266,6 +269,17 @@ public final class DcsOptions
     {
         switch (type)
         {
+            case "field": //$NON-NLS-1$
+                EClass field = com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+                    .DATA_COMPOSITION_SCHEMA_DATA_SET_FIELD;
+                addModelChoices(result, field, ""); //$NON-NLS-1$
+                addModelChoices(result, com._1c.g5.v8.dt.dcs.model.common.DcsPackage.Literals
+                    .DATA_COMPOSITION_DATA_SET_FIELD_ROLE, "role."); //$NON-NLS-1$
+                EClass restriction = com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+                    .DATA_COMPOSITION_SCHEMA_FIELD_USE_RESTRICTION;
+                addModelChoices(result, restriction, "useRestriction."); //$NON-NLS-1$
+                addModelChoices(result, restriction, "attributeUseRestriction."); //$NON-NLS-1$
+                break;
             case "userSettings": //$NON-NLS-1$
                 addEnum(result, "itemsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 break;
@@ -338,6 +352,26 @@ public final class DcsOptions
         result.add(new Option("body enum", member, //$NON-NLS-1$
             values[0].getClass().getSimpleName(),
             DcsSettingsWriter.enumeratorLiterals(values[0])));
+    }
+
+    private static void addModelChoices(List<Option> result, EClass model, String prefix)
+    {
+        for (var feature : model.getEAllAttributes())
+        {
+            if (feature.getEAttributeType() instanceof EEnum)
+            {
+                EEnum type = (EEnum)feature.getEAttributeType();
+                String kind = "role.".equals(prefix) && !"periodType".equals(feature.getName()) //$NON-NLS-1$ //$NON-NLS-2$
+                    ? "model enum (XML only)" : "model enum"; //$NON-NLS-1$ //$NON-NLS-2$
+                result.add(new Option(kind, prefix + feature.getName(), type.getName(),
+                    type.getELiterals().stream().map(literal -> literal.getLiteral()).toList()));
+            }
+            else if (feature.getEAttributeType() == EcorePackage.Literals.EBOOLEAN)
+            {
+                result.add(new Option("body flag", prefix + feature.getName(), "Boolean", //$NON-NLS-1$ //$NON-NLS-2$
+                    List.of("true", "false"))); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
     }
 
     private static final class Option

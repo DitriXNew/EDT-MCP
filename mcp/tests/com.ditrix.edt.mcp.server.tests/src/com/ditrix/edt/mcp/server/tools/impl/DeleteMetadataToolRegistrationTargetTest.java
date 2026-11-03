@@ -42,8 +42,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * A Russian-token delete keeps echoing the caller's normalized address in its response, preview and
- * texts, as before #448; only the post-export registration check compares EDT's canonical address.
+ * Bilingual delete results use canonical English tokens, while post-export checks still compare
+ * EDT's stored registration address independently of the caller's spelling.
  */
 public class DeleteMetadataToolRegistrationTargetTest
 {
@@ -74,7 +74,7 @@ public class DeleteMetadataToolRegistrationTargetTest
     }
 
     @Test
-    public void russianMemberPreviewEchoesTheCallersAddressAsBefore()
+    public void russianMemberPreviewEchoesCanonicalEnglishTokens()
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         config.setName("Cfg");
@@ -85,7 +85,7 @@ public class DeleteMetadataToolRegistrationTargetTest
         goods.getAttributes().add(weight);
         config.getCatalogs().add(goods);
         String normFqn = MetadataTypeUtils.normalizeFqn("Catalog.Goods." + RU_ATTRIBUTE + ".Weight");
-        assertTrue("the echo under test keeps the Russian member token: " + normFqn, normFqn.contains(RU_ATTRIBUTE));
+        assertTrue("the input retains the Russian member token: " + normFqn, normFqn.contains(RU_ATTRIBUTE));
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
         assertNotNull(node);
 
@@ -94,12 +94,12 @@ public class DeleteMetadataToolRegistrationTargetTest
 
         JsonObject preview = JsonParser.parseString(json).getAsJsonObject();
         assertEquals(json, "preview", preview.get("action").getAsString());
-        assertEquals(normFqn, preview.get("fqn").getAsString());
-        assertFalse(json, json.contains("Catalog.Goods.Attribute.Weight"));
+        assertEquals("Catalog.Goods.Attribute.Weight", preview.get("fqn").getAsString());
+        assertFalse(json, json.contains(RU_ATTRIBUTE));
     }
 
     @Test
-    public void russianTablePreviewEchoesTheCallersAddress()
+    public void russianTablePreviewEchoesCanonicalEnglishTokens()
     {
         var fixtures = new ExternalDataSourceFixtures();
         String normFqn = MetadataTypeUtils.normalizeFqn(RU_EDS + ".Eds." + RU_TABLE + ".T");
@@ -108,12 +108,12 @@ public class DeleteMetadataToolRegistrationTargetTest
 
         String json = tool.prepareResolvedDelete(project, node, normFqn, EDS, false, false, service, resolution);
 
-        assertEquals(normFqn, JsonParser.parseString(json).getAsJsonObject().get("fqn").getAsString());
-        assertFalse(json, json.contains(TABLE));
+        assertEquals(TABLE, JsonParser.parseString(json).getAsJsonObject().get("fqn").getAsString());
+        assertFalse(json, json.contains(RU_TABLE));
     }
 
     @Test
-    public void forcedRussianTableDeleteEchoesTheCallerAndVerifiesTheCanonicalRegistration()
+    public void forcedRussianTableDeleteEchoesAndVerifiesTheCanonicalAddress()
     {
         var fixtures = new ExternalDataSourceFixtures();
         String normFqn = MetadataTypeUtils.normalizeFqn(RU_EDS + ".Eds." + RU_TABLE + ".T");
@@ -123,13 +123,13 @@ public class DeleteMetadataToolRegistrationTargetTest
         String raw = tool.prepareResolvedDelete(project, node, normFqn, EDS, true, true, service, resolution);
         JsonObject executed = JsonParser.parseString(raw).getAsJsonObject();
         assertEquals(raw, "executed", executed.get("action").getAsString());
-        assertEquals(normFqn, executed.get("fqn").getAsString());
+        assertEquals(TABLE, executed.get("fqn").getAsString());
 
         JsonObject result = JsonParser.parseString(
             tool.refreshAfterExportAwait(Map.of("projectName", "TestConfiguration"), raw, true)).getAsJsonObject();
 
         assertEquals(List.of(TABLE), verifiedTargets);
-        assertEquals(normFqn, result.get("fqn").getAsString());
+        assertEquals(TABLE, result.get("fqn").getAsString());
         assertFalse("the internal member never reaches the caller: " + result,
             result.has("registrationTarget"));
         assertFalse(result.toString(), result.has("registeringContainer"));

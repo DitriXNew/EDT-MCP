@@ -3686,7 +3686,12 @@ public final class DcsSettingsWriter
             {
                 ValueResult supplied = value(raw, path);
                 if (supplied.error != null) return supplied;
-                return typedValueMismatch(expected, supplied.value, path);
+                if (!(supplied.value instanceof StringValue))
+                    return ValueResult.failure("Parameter at '" + path + "' expects LocalString, but got " //$NON-NLS-1$ //$NON-NLS-2$
+                        + supplied.value.eClass().getName()
+                        + ". Pass a string, {kind:'string',value:'text'}, or {languageCode:text}."); //$NON-NLS-1$
+                return typedParameterValue(new JsonPrimitive(((StringValue)supplied.value).getValue()),
+                    expected, languages, path);
             }
             if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().size() == 0)
             {
@@ -3720,6 +3725,23 @@ public final class DcsSettingsWriter
         }
         if (expected instanceof ColorValue || expected instanceof FontValue)
         {
+            String kind = expected instanceof ColorValue ? "color" : "font"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().has(KEY_KIND))
+            {
+                JsonObject spec = raw.getAsJsonObject();
+                String error = checkMembers(spec, path, KEY_KIND, "value"); //$NON-NLS-1$
+                if (error != null) return ValueResult.failure(error);
+                if (!kind.equals(DcsWriter.stringMember(spec, KEY_KIND)) || !spec.has("value")) //$NON-NLS-1$
+                    return ValueResult.failure("Parameter at '" + path + "' expects kind='" //$NON-NLS-1$ //$NON-NLS-2$
+                        + kind + "' with a value. Use the matching appearance value kind."); //$NON-NLS-1$
+                raw = spec.get("value"); //$NON-NLS-1$
+            }
+            if (raw != null && (!raw.isJsonObject() || !raw.getAsJsonObject().has(kind)))
+            {
+                JsonObject wrapped = new JsonObject();
+                wrapped.add(kind, raw);
+                raw = wrapped;
+            }
             StyleValueBuilder.Result built = StyleValueBuilder.build(raw, NAMED_COLOR_RESOLVER.get());
             if (built.error != null)
             {
@@ -3761,6 +3783,16 @@ public final class DcsSettingsWriter
             EnumValue value = McoreFactory.eINSTANCE.createEnumValue();
             value.setValue(selected);
             return ValueResult.success(value);
+        }
+        if (raw != null && raw.isJsonPrimitive())
+        {
+            String kind = expected instanceof BooleanValue ? "boolean" //$NON-NLS-1$
+                : expected instanceof NumberValue ? "number" //$NON-NLS-1$
+                : expected instanceof DateValue ? "date" : "string"; //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject spec = new JsonObject();
+            spec.addProperty(KEY_KIND, kind);
+            spec.add("value", raw); //$NON-NLS-1$
+            raw = spec;
         }
         ValueResult value = value(raw, path);
         if (value.error != null) return value;

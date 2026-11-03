@@ -4805,6 +4805,8 @@ def test_text_template_edit_modes_guards_and_exact_line_endings():
         def written(spec, expected, address=fqn):
             result = call("modify_metadata", {"projectName": PROJECT, "fqn": address, "template": spec})
             assert_ok(result, "text template edit")
+            assert result.structured.get("fqn") == fqn, result.structured
+            assert_contains(result.structured.get("message") or "", "Modified text template " + fqn)
             assert path.read_bytes() == expected.encode("utf-8"), "exact disk bytes after edit"
             assert _text_and_hash(_details(fqn)) == (expected, _hash(expected))
             assert _text_and_hash(_details(russian_fqn)) == (expected, _hash(expected))
