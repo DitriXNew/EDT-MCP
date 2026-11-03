@@ -16,6 +16,21 @@ import org.junit.Test;
 public class JsonSchemaBuilderTest
 {
     @Test
+    public void testNestedObjectSchemaKeepsItsRequiredFieldsWithoutMutatingChild()
+    {
+        JsonSchemaBuilder child = JsonSchemaBuilder.object().stringArrayProperty("found", "Picture FQNs", true);
+        String before = child.build();
+        String schema = JsonSchemaBuilder.object().objectProperty("pictures", "Dependencies", child, true).build();
+        com.google.gson.JsonObject parsed = com.google.gson.JsonParser.parseString(schema).getAsJsonObject();
+        com.google.gson.JsonObject nested = parsed.getAsJsonObject("properties").getAsJsonObject("pictures");
+        assertEquals("string", nested.getAsJsonObject("properties").getAsJsonObject("found")
+            .getAsJsonObject("items").get("type").getAsString());
+        assertEquals("[\"found\"]", nested.get("required").toString());
+        assertEquals("[\"pictures\"]", parsed.get("required").toString());
+        assertEquals(before, child.build());
+    }
+
+    @Test
     public void testEmptyObject()
     {
         String schema = JsonSchemaBuilder.object().build();

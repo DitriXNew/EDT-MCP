@@ -7,7 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.common.util.URI;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
@@ -66,6 +69,38 @@ public final class PictureValueBuilder
     private PictureValueBuilder()
     {
         // utility class
+    }
+
+    /** Canonical address of a stored CommonPicture, read inside its model's read boundary. */
+    static String commonPictureFqn(CommonPicture picture)
+    {
+        if (picture.eIsProxy())
+        {
+            return commonPictureFqn(((InternalEObject)picture).eProxyURI());
+        }
+        String name = picture.getName();
+        return name == null || name.isEmpty() ? null : COMMON_PREFIX + name;
+    }
+
+    /** BM references and EDT's detached export proxies retain the configuration picture's FQN. */
+    static String commonPictureFqn(URI proxyUri)
+    {
+        if (proxyUri != null && "unresolved".equals(proxyUri.scheme()) //$NON-NLS-1$
+            && proxyUri.segmentCount() == 1 && proxyUri.fragment() == null && proxyUri.query() == null)
+        {
+            String fqn = proxyUri.lastSegment();
+            return fqn.startsWith(COMMON_PREFIX) && fqn.length() > COMMON_PREFIX.length() ? fqn : null;
+        }
+        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri)
+            && proxyUri.path() != null && !proxyUri.path().isEmpty())
+        {
+            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
+            if (fqn != null && fqn.startsWith(COMMON_PREFIX) && fqn.length() > COMMON_PREFIX.length())
+            {
+                return fqn;
+            }
+        }
+        return null;
     }
 
     /**

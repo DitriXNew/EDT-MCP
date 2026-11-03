@@ -10,6 +10,7 @@ import java.util.function.Supplier;
 
 import org.eclipse.emf.ecore.EObject;
 
+import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.md.extension.IMdAdoptedPropertyAccess;
 import com._1c.g5.v8.dt.md.extension.IMdPropertyTypeProvider;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
@@ -21,7 +22,7 @@ import com._1c.g5.wiring.ServiceAccess;
  * EDT's configuration-extension services, and the one question every caller asks first: is this object
  * an extension's ADOPTED copy of a base-configuration object?
  *
- * <p>The services are the OSGi services EDT's md.extension bundle registers (MdExtensionPlugin, the
+ * <p>The metadata services are the OSGi services EDT's md.extension bundle registers (MdExtensionPlugin, the
  * same on EDT 2026.1 and 2026.2): {@link IMdAdoptedPropertyAccess} (the writer of an adopted property
  * and of its extension state), {@link IMdPropertyTypeProvider} (which extension states a property
  * offers for a platform version) and {@link IModelObjectAdopter} (the adopter, which also finds the
@@ -63,6 +64,12 @@ public final class ExtensionServices
     public static IModelObjectAdopter modelObjectAdopter()
     {
         return lookup(() -> ServiceAccess.get(IModelObjectAdopter.class));
+    }
+
+    /** @return EDT's form export projection, or {@code null} when it is not available */
+    public static IFormExtensionService formExtensionService()
+    {
+        return lookup(() -> ServiceAccess.get(IFormExtensionService.class));
     }
 
     private static <T> T lookup(Supplier<T> service)

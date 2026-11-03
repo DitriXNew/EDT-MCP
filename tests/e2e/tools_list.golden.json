@@ -15,6 +15,10 @@
         "fqn": {
           "type": "string"
         },
+        "includeReferencedPictures": {
+          "description": "Adopt referenced CommonPicture dependencies; forms only, default false",
+          "type": "boolean"
+        },
         "projectName": {
           "description": "The BASE configuration EDT project that owns the object (NOT the extension) (required)",
           "type": "string"
@@ -47,8 +51,54 @@
           },
           "type": "array"
         },
+        "dependencies": {
+          "properties": {
+            "commonPictures": {
+              "properties": {
+                "adopted": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "alreadyPresent": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "found": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "unresolved": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "found",
+                "adopted",
+                "alreadyPresent",
+                "unresolved"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "commonPictures"
+          ],
+          "type": "object"
+        },
         "extensionProject": {
           "type": "string"
+        },
+        "formAdopted": {
+          "type": "boolean"
         },
         "fqn": {
           "type": "string"

@@ -374,7 +374,7 @@ public class AdoptMetadataObjectToolCascadeTest
         when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of());
         emitCommitEvent = false;
         var outcome = AdoptMetadataObjectTool.adoptWithChanges(model, adopter, source.object, target);
-        org.junit.Assert.assertNull(outcome.copy);
+        org.junit.Assert.assertNull(outcome.copyId);
         assertTrue(outcome.changes.dirty.isEmpty());
         assertTrue(outcome.changes.cascaded.isEmpty());
         assertTrue(listeners.isEmpty());

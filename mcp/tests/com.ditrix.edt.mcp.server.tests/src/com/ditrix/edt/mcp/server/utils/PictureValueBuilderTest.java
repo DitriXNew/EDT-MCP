@@ -41,6 +41,31 @@ import com.google.gson.JsonPrimitive;
 public class PictureValueBuilderTest
 {
     @Test
+    public void testNativeExportProxyRetainsOnlyCommonPictureAddresses()
+    {
+        assertEquals("CommonPicture.\u041b\u043e\u0433\u043e", PictureValueBuilder.commonPictureFqn(
+            URI.createURI("unresolved:/CommonPicture.\u041b\u043e\u0433\u043e")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/StdPicture.Change")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/StdExtPicture.Change")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/CommonPicture.")));
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("unresolved:/CommonPicture.Logo/other")));
+    }
+
+    @Test
+    public void testStoredCommonPictureAddressUsesNameAndBmProxyIdentity()
+    {
+        CommonPicture picture = MdClassFactory.eINSTANCE.createCommonPicture();
+        picture.setName("\u041b\u043e\u0433\u043e"); //$NON-NLS-1$
+        picture.getSynonym().put("ru", "Displayed logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonPicture.\u041b\u043e\u0433\u043e", PictureValueBuilder.commonPictureFqn(picture)); //$NON-NLS-1$
+        ((org.eclipse.emf.ecore.InternalEObject)picture).eSetProxyURI(
+            com._1c.g5.v8.bm.core.BmUriUtil.createTopBmObjectUri("Base", "CommonPicture.Reloaded")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonPicture.Reloaded", PictureValueBuilder.commonPictureFqn(picture)); //$NON-NLS-1$
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("bm://Base#/CommonPicture.Invalid"))); //$NON-NLS-1$
+        assertNull(PictureValueBuilder.commonPictureFqn(URI.createURI("v8:/Pictures/StdExt/#/Change"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testStandardPictureUsesProviderFullSymbolicNameAndReturnsProxy()
     {
         IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);

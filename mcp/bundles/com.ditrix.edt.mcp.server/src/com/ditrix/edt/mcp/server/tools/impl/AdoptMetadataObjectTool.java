@@ -9,11 +9,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
@@ -25,11 +27,13 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
@@ -42,16 +46,19 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.AdoptedFormAttachment;
+import com.ditrix.edt.mcp.server.utils.BmObjectOwnership;
+import com.ditrix.edt.mcp.server.utils.AdoptedFormLookup;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
+import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
-import com.google.gson.JsonObject;
 
 /**
  * Adopts a base-configuration metadata object — or one of its members
@@ -123,6 +130,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("extensionProjectName", //$NON-NLS-1$
                 "Target extension EDT project name; REQUIRED only when more than one extension extends " //$NON-NLS-1$
                     + "the configuration (otherwise the single extension is used automatically)") //$NON-NLS-1$
+            .booleanProperty("includeReferencedPictures", //$NON-NLS-1$
+                "Adopt referenced CommonPicture dependencies; forms only, default false") //$NON-NLS-1$
             .build();
     }
 
@@ -141,6 +150,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
                     + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
+            .objectProperty("dependencies", "Form dependencies when includeReferencedPictures=true", JsonSchemaBuilder.object() //$NON-NLS-1$ //$NON-NLS-2$
+                .objectProperty("commonPictures", "Referenced common pictures", JsonSchemaBuilder.object() //$NON-NLS-1$ //$NON-NLS-2$
+                    .stringArrayProperty("found", "Canonical picture FQNs referenced by the form", true) //$NON-NLS-1$ //$NON-NLS-2$
+                    .stringArrayProperty("adopted", "Picture FQNs newly adopted by this call", true) //$NON-NLS-1$ //$NON-NLS-2$
+                    .stringArrayProperty("alreadyPresent", "Picture FQNs already present in the extension", true) //$NON-NLS-1$ //$NON-NLS-2$
+                    .stringArrayProperty("unresolved", "Unreadable content or picture references that could not be adopted", true), //$NON-NLS-1$ //$NON-NLS-2$
+                    true), false)
+            .booleanProperty("formAdopted", "Whether the form is observed as adopted after a platform failure") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .stringArrayProperty(KEY_CASCADED_OBJECTS,
                 "Additional metadata top objects added by EDT, excluding the requested object's implicit " //$NON-NLS-1$
@@ -177,6 +194,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         String extensionProjectName = JsonUtils.extractStringArgument(params, "extensionProjectName"); //$NON-NLS-1$
+        boolean includeReferencedPictures = JsonUtils.extractBooleanArgument(params, "includeReferencedPictures", false); //$NON-NLS-1$
+        if (includeReferencedPictures && !isFormFqn(fqn))
+        {
+            return ToolResult.error("includeReferencedPictures=true requires a form FQN, got '" + fqn //$NON-NLS-1$
+                + "'. Use CommonForm.Name or Type.Object.Form.Name, or omit includeReferencedPictures.").toJson(); //$NON-NLS-1$
+        }
         String memberRefusal = ReferencedTopObjects.memberOperationRefusal(NAME, fqn);
         if (memberRefusal != null)
         {
@@ -265,6 +288,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         MappingEvidence mapping = new MappingEvidence(extName, extensionModel, platformVersion(target),
             extensionModel == null ? null : keepsMappingByIds(extensionModel));
 
+        if (includeReferencedPictures)
+        {
+            return adoptForm(ctx, source, target, adopter, extensionModel, mapping);
+        }
+
         if (adopter.isAdopted(source.object, target))
         {
             // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
@@ -284,16 +312,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot inspect extension '" + extName //$NON-NLS-1$
                 + "' before adoption. Wait for the project to finish loading and retry.").toJson(); //$NON-NLS-1$
         }
-        AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
-        IExtensionProject extension = target;
-        IWorkspace workspace = ctx.project.getWorkspace();
-        // EDT's adopter takes the workspace root rule. Acquire it before entering BM, in the same
-        // order as its standalone path; the list overload then joins our current write transaction.
-        workspace.run(monitor -> outcome.set(adoptWithChanges(extensionModel, adopter, source.object, extension)),
-            workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
-        AdoptionWrite write = outcome.get();
-        EObject adopted = write.copy;
-        if (adopted == null)
+        AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
+            adopter, source.object, target);
+        Long adoptedId = write.copyId;
+        if (adoptedId == null)
         {
             WriteScope.recordNothingQueued();
             return alreadyAdoptedResult(source, extName,
@@ -306,7 +328,385 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         boolean persisted = changes.persistToDisk(target.getProject());
 
         // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
-        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted), changes);
+        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adoptedId), changes);
+    }
+
+    /** Discover and preflight before entering the extension adoption write. */
+    private static String adoptForm(ProjectContext ctx, AdoptionSource source, IExtensionProject target,
+        IModelObjectAdopter adopter, IBmModel extensionModel, MappingEvidence mapping) throws Exception
+    {
+        String extName = target.getProject().getName();
+        boolean alreadyAdopted = adopter.isAdopted(source.object, target);
+        EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, target) : null;
+        Long adoptedId = null;
+        List<String> found = List.of();
+        Set<String> unresolved = new LinkedHashSet<>();
+        List<String> alreadyPresent = new ArrayList<>();
+        Map<String, EObject> missing = new LinkedHashMap<>();
+        IBmModel baseModel = null;
+        String refusal = null;
+        try
+        {
+            if (!alreadyAdopted && extensionModel != null)
+            {
+                // Native name/scope lookup can miss an ID-mapped copy after an extension rename.
+                alreadyAdopted = BmTransactions.read(extensionModel,
+                    "adopt_metadata_object: locate adopted form", (tx, monitor) -> //$NON-NLS-1$
+                        AdoptedFormLookup.find(tx, (BasicForm)source.object) != null);
+            }
+            if (!alreadyAdopted)
+            {
+                baseModel = requireBaseModel(ctx.project);
+            }
+            FormPictureDependencies.Result pictures = FormPictureDependencies.collectPersisted(
+                alreadyAdopted ? extensionModel : baseModel, source.fqn, alreadyAdopted, (BasicForm)source.object);
+            found = pictures.found;
+            unresolved.addAll(pictures.unresolved);
+        }
+        catch (RuntimeException e)
+        {
+            unresolved.add("Form content: " + source.fqn + " (" + unwrapCauseMessage(e) + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        String baseModelError = null;
+        if (baseModel == null && !found.isEmpty())
+        {
+            try
+            {
+                baseModel = requireBaseModel(ctx.project);
+            }
+            catch (RuntimeException e)
+            {
+                baseModelError = unwrapCauseMessage(e);
+            }
+        }
+        for (String pictureFqn : found)
+        {
+            try
+            {
+                if (picturePresent(extensionModel, pictureFqn))
+                {
+                    alreadyPresent.add(pictureFqn);
+                    continue;
+                }
+                // The base model was resolved once before the loop; use the shared picture resolver.
+                if (baseModel == null)
+                {
+                    throw new IllegalStateException(baseModelError);
+                }
+                MetadataNodeResolver.MetadataNode node = BmTransactions.read(baseModel,
+                    "adopt_metadata_object: resolve form picture", //$NON-NLS-1$
+                    (tx, monitor) -> MetadataNodeResolver.resolveExisting(ctx.scope, pictureFqn));
+                if (node == null)
+                {
+                    unresolved.add(pictureFqn);
+                    refusal = "Form picture '" + pictureFqn //$NON-NLS-1$
+                        + "' was not found in the base configuration. Fix the reference using " //$NON-NLS-1$
+                        + "list_common_pictures and modify_metadata, then retry. No objects were adopted."; //$NON-NLS-1$
+                }
+                else if (!BmTransactions.read(baseModel, "adopt_metadata_object: preflight picture", //$NON-NLS-1$
+                    (tx, monitor) -> adopter.isAdoptable(node.object)))
+                {
+                    // EDT's isAdopted requires an adoptable source.
+                    unresolved.add(pictureFqn);
+                    refusal = "Form picture '" + pictureFqn //$NON-NLS-1$
+                        + "' cannot be adopted into extension '" + extName //$NON-NLS-1$
+                        + "'. Choose an adoptable picture using list_common_pictures and update the form " //$NON-NLS-1$
+                        + "with modify_metadata, then retry. No objects were adopted."; //$NON-NLS-1$
+                }
+                else if (extensionModel != null && isAdoptedInModel(extensionModel, adopter, node.object, target))
+                {
+                    alreadyPresent.add(pictureFqn);
+                }
+                else
+                {
+                    missing.put(pictureFqn, node.object);
+                }
+            }
+            catch (RuntimeException e)
+            {
+                unresolved.add(pictureFqn);
+                refusal = "Cannot read form picture '" + pictureFqn //$NON-NLS-1$
+                    + "'. Inspect the reference with get_metadata_details or reload the project with " //$NON-NLS-1$
+                    + "clean_project, then retry adopt_metadata_object. No objects were adopted. Details: " //$NON-NLS-1$
+                    + unwrapCauseMessage(e);
+            }
+        }
+        if (!unresolved.isEmpty())
+        {
+            WriteScope.recordNothingQueued();
+            boolean unreadableContent = unresolved.stream().anyMatch(value -> value.startsWith("Form content:")); //$NON-NLS-1$
+            String message = unreadableContent
+                ? "Cannot read form content for '" + source.fqn + "': " + unresolved //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". Inspect the form with get_metadata_details or reload the project with clean_project, " //$NON-NLS-1$
+                    + "then retry adopt_metadata_object. No objects were adopted." //$NON-NLS-1$
+                : refusal != null ? refusal : "Cannot adopt '" + source.fqn //$NON-NLS-1$
+                    + "': unresolved form picture references " + unresolved //$NON-NLS-1$
+                    + ". Fix the form references using list_common_pictures and modify_metadata, then retry. " //$NON-NLS-1$
+                    + "No objects were adopted."; //$NON-NLS-1$
+            return withPictures(ToolResult.error(message), found, List.of(), alreadyPresent, unresolved);
+        }
+
+        if (alreadyAdopted && missing.isEmpty())
+        {
+            WriteScope.recordNothingQueued();
+            return withPictures(alreadyAdoptedPayload(source, extName, mapping.forEarlierCopy(adopted)),
+                found, List.of(), alreadyPresent, unresolved);
+        }
+        if (extensionModel == null)
+        {
+            WriteScope.recordNothingQueued();
+            unresolved.addAll(missing.keySet());
+            return withPictures(ToolResult.error("Cannot inspect extension '" + extName //$NON-NLS-1$
+                + "'. Wait for the project to finish loading and retry adopt_metadata_object."), //$NON-NLS-1$
+                found, List.of(), alreadyPresent, unresolved);
+        }
+
+        Set<String> dirty = new LinkedHashSet<>();
+        Set<String> cascaded = new LinkedHashSet<>();
+        List<String> adoptedPictures = new ArrayList<>();
+        String warning = null;
+        boolean persisted = true;
+        boolean changed = false;
+        try
+        {
+            // Commit each picture before the form's native copier resolves its dependencies.
+            List<EObject> sources = new ArrayList<>(missing.values());
+            if (!alreadyAdopted)
+            {
+                sources.add(source.object);
+            }
+            for (EObject candidate : sources)
+            {
+                AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
+                    adopter, candidate, target);
+                if (write.copyId == null)
+                {
+                    continue;
+                }
+                changed = true;
+                if (candidate == source.object)
+                {
+                    adoptedId = write.copyId;
+                }
+                dirty.addAll(write.changes.dirty);
+                cascaded.addAll(write.changes.cascaded);
+                if (write.changes.warning != null)
+                {
+                    warning = write.changes.warning;
+                }
+                persisted = write.changes.persistToDisk(target.getProject()) && persisted;
+            }
+            for (Map.Entry<String, EObject> picture : missing.entrySet())
+            {
+                if (dirty.contains(picture.getKey()))
+                {
+                    adoptedPictures.add(picture.getKey());
+                }
+                else if (picturePresent(extensionModel, picture.getKey())
+                    || isAdoptedInModel(extensionModel, adopter, picture.getValue(), target))
+                {
+                    alreadyPresent.add(picture.getKey());
+                }
+                else
+                {
+                    unresolved.add(picture.getKey());
+                }
+            }
+            if (adopted == null && adoptedId == null)
+            {
+                adopted = adoptedCopy(adopter, source.object, target);
+            }
+            if (!changed)
+            {
+                WriteScope.recordNothingQueued();
+            }
+            ToolResult result;
+            if (!unresolved.isEmpty() || !alreadyAdopted && adoptedId == null && adopted == null)
+            {
+                result = ToolResult.error("Adoption incomplete for '" + source.fqn //$NON-NLS-1$
+                    + "'. Inspect the extension with get_metadata_details and fix unresolved references " //$NON-NLS-1$
+                    + "using list_common_pictures before retrying adopt_metadata_object."); //$NON-NLS-1$
+                result.put("fqn", source.fqn).put(KEY_EXTENSION_PROJECT, extName).put(KEY_PERSISTED, persisted); //$NON-NLS-1$
+            }
+            else
+            {
+                result = alreadyAdopted || !changed
+                    ? alreadyAdoptedPayload(source, extName, mapping.forEarlierCopy(adopted))
+                    : adoptedPayload(source, extName, persisted, mapping.forNewCopy(adoptedId));
+                result.put(KEY_PERSISTED, persisted);
+            }
+            List<String> cascadeFqns = cascaded.stream().sorted().collect(Collectors.toList());
+            putCascade(result, new AdoptionChanges(new ArrayList<>(dirty), cascadeFqns, warning));
+            return withPictures(result, found, adoptedPictures, alreadyPresent, unresolved);
+        }
+        catch (Exception e)
+        {
+            return failedFormAdoption(source, target, adopter, extensionModel, alreadyAdopted,
+                found, alreadyPresent, missing, dirty, persisted, adoptedId != null, e);
+        }
+    }
+
+    private static String failedFormAdoption(AdoptionSource source, IExtensionProject target,
+        IModelObjectAdopter adopter, IBmModel model, boolean wasAdopted, List<String> found,
+        List<String> alreadyPresent, Map<String, EObject> missing, Set<String> completedDirty,
+        boolean completedPersisted, boolean formCommitted, Exception failure)
+    {
+        List<String> adoptedPictures = new ArrayList<>();
+        Set<String> unresolved = new LinkedHashSet<>();
+        Set<String> dirty = new LinkedHashSet<>();
+        Boolean formAdopted = wasAdopted || formCommitted ? Boolean.TRUE : null;
+        if (formAdopted == null)
+        {
+            try
+            {
+                formAdopted = isAdoptedInModel(model, adopter, source.object, target);
+                if (formAdopted)
+                {
+                    dirty.addAll(dirtyCopyFqns(model, adoptedCopy(adopter, source.object, target)));
+                }
+            }
+            catch (RuntimeException e)
+            {
+                // Continue checking independent pictures when the form's top cannot be read.
+            }
+        }
+        for (Map.Entry<String, EObject> picture : missing.entrySet())
+        {
+            if (alreadyPresent.contains(picture.getKey()))
+            {
+                continue;
+            }
+            if (completedDirty.contains(picture.getKey()))
+            {
+                adoptedPictures.add(picture.getKey());
+                continue;
+            }
+            try
+            {
+                if (isAdoptedInModel(model, adopter, picture.getValue(), target))
+                {
+                    adoptedPictures.add(picture.getKey());
+                    dirty.add(picture.getKey());
+                }
+                else
+                {
+                    unresolved.add(picture.getKey());
+                }
+            }
+            catch (RuntimeException e)
+            {
+                unresolved.add(picture.getKey());
+            }
+        }
+        dirty.remove("Configuration"); //$NON-NLS-1$
+        boolean persisted = !completedDirty.isEmpty() && completedPersisted;
+        if (!dirty.isEmpty())
+        {
+            dirty.add("Configuration"); //$NON-NLS-1$
+            WriteScope.recordWrite(target.getProject());
+            persisted = BmTransactions.forceExportToDisk(target.getProject(), new ArrayList<>(dirty))
+                && (completedDirty.isEmpty() || completedPersisted);
+        }
+        String detail = String.valueOf(unwrapCauseMessage(failure));
+        ToolResult result = ToolResult.error("Adoption failed for '" + source.fqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
+            + detail + (detail.endsWith(".") ? " " : ". ") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "Inspect the extension with get_metadata_objects before retrying; " //$NON-NLS-1$
+            + "completed dependencies are reported below and cascade attribution is unavailable.") //$NON-NLS-1$
+            .put("fqn", source.fqn).put(KEY_EXTENSION_PROJECT, target.getProject().getName()) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted).put(KEY_CASCADE_ATTRIBUTION, "unavailable"); //$NON-NLS-1$
+        if (formAdopted != null)
+        {
+            result.put("formAdopted", formAdopted); //$NON-NLS-1$
+        }
+        return withPictures(result, found, adoptedPictures, alreadyPresent, unresolved);
+    }
+
+    private static boolean isAdoptedInModel(IBmModel model, IModelObjectAdopter adopter, EObject source,
+        IExtensionProject target)
+    {
+        return BmTransactions.read(model, "adopt_metadata_object: inspect adoption", //$NON-NLS-1$
+            (tx, monitor) -> adopter.isAdopted(source, target));
+    }
+
+    private static List<String> dirtyCopyFqns(IBmModel model, EObject copy)
+    {
+        return BmTransactions.read(model, "adopt_metadata_object: inspect completed adoption", (tx, monitor) -> { //$NON-NLS-1$
+            URI uri = copy != null && copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
+            EObject inTx = uri != null ? (EObject)tx.getObjectByUri(uri)
+                : copy instanceof IBmObject ? (EObject)tx.getObjectById(((IBmObject)copy).bmGetId()) : null;
+            IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+            return dirtyFqns(inTx, root instanceof Configuration ? (Configuration)root : null);
+        });
+    }
+
+    /** Validate the address before any project/model work; type tokens are bilingual. */
+    static boolean isFormFqn(String fqn)
+    {
+        String normalized = MetadataTypeUtils.normalizeFqn(fqn);
+        String[] parts = normalized == null ? new String[0] : normalized.split("\\.", -1); //$NON-NLS-1$
+        return parts.length == 2 && "CommonForm".equals(parts[0]) && !parts[1].isEmpty() //$NON-NLS-1$
+            || parts.length == 4 && MetadataTypeUtils.toEnglishSingular(parts[0]) != null
+                && MetadataTypeUtils.resolveNestedKind(parts[2]) != null
+                && "Form".equals(MetadataTypeUtils.resolveNestedKind(parts[2]).getEnglish()) //$NON-NLS-1$
+                && MetadataTypeUtils.typeCanContain(parts[0], "forms") //$NON-NLS-1$
+                && !parts[0].isEmpty()
+                && !parts[1].isEmpty() && !parts[3].isEmpty();
+    }
+
+    /** Resolve presence in the target before looking for a base counterpart to adopt. */
+    private static boolean picturePresent(IBmModel extensionModel, String fqn)
+    {
+        return extensionModel != null && BmTransactions.read(extensionModel,
+            "adopt_metadata_object: check existing form picture", (tx, monitor) -> { //$NON-NLS-1$
+                IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+                return root instanceof Configuration
+                    && MetadataNodeResolver.resolveExisting((Configuration)root, fqn) != null;
+            });
+    }
+
+    private static IBmModel requireBaseModel(IProject project)
+    {
+        BmModelResolver.Resolution model = BmModelResolver.resolve(project);
+        if (!model.isAvailable())
+        {
+            throw new IllegalStateException(model.actionableError(NAME, "No objects were adopted.")); //$NON-NLS-1$
+        }
+        return model.getModel();
+    }
+
+    private static String withPictures(ToolResult result, List<String> found, List<String> adopted,
+        List<String> alreadyPresent, Collection<String> unresolved)
+    {
+        return result.put("dependencies", Map.of("commonPictures", Map.of( //$NON-NLS-1$ //$NON-NLS-2$
+            "found", found, "adopted", adopted, //$NON-NLS-1$ //$NON-NLS-2$
+            "alreadyPresent", alreadyPresent, "unresolved", List.copyOf(unresolved)))).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static ToolResult alreadyAdoptedPayload(AdoptionSource source, String extName, String mappingNote)
+    {
+        String message = "'" + source.fqn + "' is already adopted in extension '" + extName + "'."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
+            .put("fqn", source.fqn) //$NON-NLS-1$
+            .put(KEY_EXTENSION_PROJECT, extName)
+            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+            .put(KEY_PERSISTED, true)
+            .put(McpKeys.MESSAGE, mappingNote == null ? message : message + " " + mappingNote); //$NON-NLS-1$
+    }
+
+    private static ToolResult adoptedPayload(AdoptionSource source, String extName, boolean persisted, String mappingNote)
+    {
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
+            .put("fqn", source.fqn) //$NON-NLS-1$
+            .put(KEY_EXTENSION_PROJECT, extName)
+            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted);
+        if (mappingNote != null)
+        {
+            result.put(McpKeys.MESSAGE, mappingNote);
+        }
+        return result;
     }
 
     /**
@@ -346,12 +746,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
 
         /**
-         * @param copy the copy this call adopted, or {@code null}
+         * @param copyId the stored identity captured during this call's adoption, or {@code null}
          * @return its note, or {@code null}
          */
-        String forNewCopy(EObject copy)
+        String forNewCopy(Long copyId)
         {
-            return mappingNote(extName, extensionModel, copy, version, keepsMappingByIds, false);
+            Boolean linked = copyId == null ? null : readCopyLink(extensionModel, tx -> tx.getObjectById(copyId));
+            return byNameMappingNote(extName, linked, version, keepsMappingByIds, false);
         }
     }
 
@@ -382,15 +783,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
      */
     static String alreadyAdoptedResult(AdoptionSource source, String extName, String mappingNote)
     {
-        String message = "'" + source.fqn + "' is already adopted in extension '" + extName + "'."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        return ToolResult.success()
-            .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
-            .put("fqn", source.fqn) //$NON-NLS-1$
-            .put(KEY_EXTENSION_PROJECT, extName)
-            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
-            .put(KEY_PERSISTED, true)
-            .put(McpKeys.MESSAGE, mappingNote == null ? message : message + " " + mappingNote) //$NON-NLS-1$
-            .toJson();
+        return alreadyAdoptedPayload(source, extName, mappingNote).toJson();
     }
 
     /**
@@ -420,16 +813,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote,
         AdoptionChanges changes)
     {
-        ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
-            .put("fqn", source.fqn) //$NON-NLS-1$
-            .put(KEY_EXTENSION_PROJECT, extName)
-            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted);
-        if (mappingNote != null)
-        {
-            result.put(McpKeys.MESSAGE, mappingNote);
-        }
+        ToolResult result = adoptedPayload(source, extName, persisted, mappingNote);
+        putCascade(result, changes);
+        return result.toJson();
+    }
+
+    private static void putCascade(ToolResult result, AdoptionChanges changes)
+    {
         if (changes.warning != null)
         {
             result.put(KEY_CASCADE_ATTRIBUTION, "unavailable").put(KEY_WARNING, changes.warning); //$NON-NLS-1$
@@ -440,7 +830,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 Math.min(changes.cascaded.size(), Pagination.DEFAULT_LIMIT)))
                 .put(KEY_CASCADED_COUNT, changes.cascaded.size());
         }
-        return result.toJson();
     }
 
     /**
@@ -570,13 +959,23 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             return null; // NOSONAR tri-state: null means "could not be read"
         }
+        return readCopyLink(extensionModel, tx -> {
+            URI proxyUri = copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
+            return proxyUri != null ? tx.getObjectByUri(proxyUri) : tx.getObjectById(((IBmObject)copy).bmGetId());
+        });
+    }
+
+    private static Boolean readCopyLink(IBmModel model, Function<IBmTransaction, IBmObject> resolve)
+    {
+        if (model == null)
+        {
+            return null;
+        }
         try
         {
-            URI proxyUri = copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
-            long id = ((IBmObject)copy).bmGetId();
-            return BmTransactions.read(extensionModel, "adopt_metadata_object: read the copy's link", //$NON-NLS-1$
+            return BmTransactions.read(model, "adopt_metadata_object: read the copy's link", //$NON-NLS-1$
                 (tx, monitor) -> {
-                    IBmObject inTx = proxyUri != null ? tx.getObjectByUri(proxyUri) : tx.getObjectById(id);
+                    IBmObject inTx = resolve.apply(tx);
                     return inTx instanceof MdObject
                         ? Boolean.valueOf(((MdObject)inTx).getExtendedConfigurationObject() != null)
                         : null;
@@ -709,13 +1108,23 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         return message;
     }
 
+    private static AdoptionWrite adoptUnderWorkspaceRule(IWorkspace workspace, IBmModel model,
+        IModelObjectAdopter adopter, EObject source, IExtensionProject target) throws CoreException
+    {
+        AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
+        // Acquire EDT's workspace rule before its global-context BM write, for every invocation.
+        workspace.run(monitor -> outcome.set(adoptWithChanges(model, adopter, source, target)),
+            workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+        return outcome.get();
+    }
+
     /** Adopt in one global write and attribute only the objects attached by that task's commit event. */
     static AdoptionWrite adoptWithChanges(IBmModel model, IModelObjectAdopter adopter, EObject source,
         IExtensionProject target)
     {
         AtomicReference<Set<Long>> associatedIds = new AtomicReference<>();
         List<String> requested = new ArrayList<>();
-        EObject adopted = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
+        Long adoptedId = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
             requested.clear(); // A deadlock retry executes the task again.
             IBmModel adoptingModel = target.getAdapter(IBmModel.class);
             if (adoptingModel == null || adoptingModel.getEngine().getCurrentTransaction() != tx)
@@ -746,14 +1155,67 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 return null; // Another writer adopted the source before this transaction started.
             }
             EObject copy = copies.get(0);
-            EObject inTx = copy instanceof IBmObject ? (EObject)tx.getObjectById(((IBmObject)copy).bmGetId()) : null;
+            EObject inTx = copy instanceof IBmObject && ((IBmObject)copy).bmGetId() != IBmObject.BM_NULL_ID
+                ? (EObject)tx.getObjectById(((IBmObject)copy).bmGetId()) : null;
+            if (copy instanceof IBmObject && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID
+                && source instanceof MdObject)
+            {
+                // The stored owner's member is available before EDT's global lookup indexes it.
+                EObject located = source instanceof BasicForm
+                    ? AdoptedFormLookup.find(tx, (BasicForm)source) : null;
+                if (located == null)
+                {
+                    located = adopter.getAdopted(source, target);
+                }
+                if (located != null && located.eIsProxy())
+                {
+                    located = (EObject)tx.getObjectByUri(((InternalEObject)located).eProxyURI());
+                }
+                if (located instanceof IBmObject && ((IBmObject)located).bmGetId() != IBmObject.BM_NULL_ID)
+                {
+                    inTx = tx.toTransactionObject(located);
+                    if (inTx != null && !BmObjectOwnership.isPrimary(tx, (IBmObject)inTx))
+                    {
+                        inTx = null;
+                    }
+                }
+            }
             if (inTx == null)
             {
-                throw new IllegalStateException("Adopted copy is unavailable; inspect the extension with " //$NON-NLS-1$
-                    + "get_metadata_objects before retrying adoption."); //$NON-NLS-1$
+                String recoveryFailure = null;
+                AtomicReference<String> declined = new AtomicReference<>("notApplicable"); //$NON-NLS-1$
+                if (source instanceof BasicForm && copy instanceof IBmObject
+                    && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID)
+                {
+                    try
+                    {
+                        inTx = AdoptedFormAttachment.complete(tx, (BasicForm)source, copy,
+                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set);
+                        if (inTx != null)
+                        {
+                            Activator.logInfo("adopt_metadata_object: Completed native form attachment after a " //$NON-NLS-1$
+                                + "cross-namespace containment collision: " + MetadataNodeResolver.addressOf((MdObject)inTx)); //$NON-NLS-1$
+                        }
+                    }
+                    catch (RuntimeException e)
+                    {
+                        recoveryFailure = e.getMessage();
+                        declined.set("exception(" + e.getClass().getSimpleName() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                }
+                if (inTx == null)
+                {
+                    String message = "Adopted copy is unavailable (" //$NON-NLS-1$
+                        + AdoptedFormAttachment.describe(tx, source, copy)
+                        + ", declined=" + declined.get() //$NON-NLS-1$
+                        + (recoveryFailure == null ? "" : ", attachmentFailure=" + recoveryFailure) //$NON-NLS-1$ //$NON-NLS-2$
+                        + "); inspect the extension with get_metadata_objects before retrying adoption."; //$NON-NLS-1$
+                    Activator.logWarning("adopt_metadata_object: " + message); //$NON-NLS-1$
+                    throw new IllegalStateException(message);
+                }
             }
             requested.addAll(dirtyFqns(inTx, (Configuration)root));
-            return copy;
+            return Long.valueOf(((IBmObject)inTx).bmGetId());
         }, event -> {
             Set<Long> ids = new LinkedHashSet<>();
             BmAssociationEvent association = event.getAssociationEvent();
@@ -769,7 +1231,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
             associatedIds.set(ids);
         });
-        if (adopted == null)
+        if (adoptedId == null)
         {
             return new AdoptionWrite(null, new AdoptionChanges(Collections.emptyList(), Collections.emptyList()));
         }
@@ -777,7 +1239,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         Set<Long> ids = associatedIds.get();
         if (ids == null)
         {
-            return new AdoptionWrite(adopted, AdoptionChanges.unavailable(requested,
+            return new AdoptionWrite(adoptedId, AdoptionChanges.unavailable(requested,
                 "EDT did not report its transaction additions")); //$NON-NLS-1$
         }
         AdoptionChanges changes;
@@ -814,18 +1276,18 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             Activator.logInfo("adopt_metadata_object: could not read committed additions: " + e); //$NON-NLS-1$
             changes = AdoptionChanges.unavailable(requested, "the committed additions could not be read"); //$NON-NLS-1$
         }
-        return new AdoptionWrite(adopted, changes);
+        return new AdoptionWrite(adoptedId, changes);
     }
 
-    /** Result of the committed adoption, with detached FQNs for response and export. */
+    /** Detached identity and FQNs of the committed adoption; no transaction-local object escapes. */
     static final class AdoptionWrite
     {
-        final EObject copy;
+        final Long copyId;
         final AdoptionChanges changes;
 
-        AdoptionWrite(EObject copy, AdoptionChanges changes)
+        AdoptionWrite(Long copyId, AdoptionChanges changes)
         {
-            this.copy = copy;
+            this.copyId = copyId;
             this.changes = changes;
         }
     }

@@ -234,14 +234,14 @@ public class AdoptMetadataObjectToolMappingNoteTest
         AdoptMetadataObjectTool.MappingEvidence mapping = new AdoptMetadataObjectTool.MappingEvidence(EXT, model,
             CURRENT, AdoptMetadataObjectTool.keepsMappingByIds(model));
 
-        String note = mapping.forNewCopy(copy);
+        String note = mapping.forNewCopy(COPY_ID);
 
         assertNotNull(note);
         assertTrue(note, note.contains(", and here the root's keepMappingToExtendedConfigurationObjectsByIDs is false")); //$NON-NLS-1$
         assertFalse("the flag read before this adoption IS its reason, not a likely one", note.contains("likely")); //$NON-NLS-1$ //$NON-NLS-2$
         IBmModel linked = model(extensionRoot(false), copyInModel(true));
         assertNull("a new copy that carries the link needs no note", //$NON-NLS-1$
-            new AdoptMetadataObjectTool.MappingEvidence(EXT, linked, CURRENT, Boolean.FALSE).forNewCopy(copy));
+            new AdoptMetadataObjectTool.MappingEvidence(EXT, linked, CURRENT, Boolean.FALSE).forNewCopy(COPY_ID));
     }
 
     // ==================== the version as the reason ====================

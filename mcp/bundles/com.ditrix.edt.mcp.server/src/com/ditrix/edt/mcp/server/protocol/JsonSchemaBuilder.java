@@ -321,6 +321,28 @@ public class JsonSchemaBuilder
     }
 
     /**
+     * Adds a nested object whose properties and required members are declared by another builder.
+     *
+     * @param name property name
+     * @param description property description
+     * @param nested the nested object schema
+     * @param required whether this property is required in its parent
+     * @return this builder
+     */
+    public JsonSchemaBuilder objectProperty(String name, String description, JsonSchemaBuilder nested,
+        boolean required)
+    {
+        Map<String, Object> prop = nested.buildMap();
+        prop.put(KEY_DESCRIPTION, description);
+        properties.put(name, prop);
+        if (required)
+        {
+            this.required.add(name);
+        }
+        return this;
+    }
+
+    /**
      * Adds an array-of-objects property to the schema. The element shape is declared
      * as {@code {"items":{"type":"object"}}} only — deliberately not constraining the
      * per-element fields, so the {@code outputSchema} describes "a list of records"

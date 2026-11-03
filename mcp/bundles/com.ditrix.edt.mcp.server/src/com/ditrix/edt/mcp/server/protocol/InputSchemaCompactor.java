@@ -303,8 +303,9 @@ public final class InputSchemaCompactor
         // Two similarly named projects with opposite roles: projectName is the BASE
         // configuration (NOT the extension), extensionProjectName picks the destination and
         // is mandatory once several extensions exist. Stripped, the natural reading is wrong.
+        // The picture option's form-only scope and opt-in default also require its prose.
         keep.put("adopt_metadata_object", //$NON-NLS-1$
-            asSet(McpKeys.PROJECT_NAME, "extensionProjectName")); //$NON-NLS-1$
+            asSet(McpKeys.PROJECT_NAME, "extensionProjectName", "includeReferencedPictures")); //$NON-NLS-1$ //$NON-NLS-2$
         // fillUpType is a bare string whose legal values live only here, and FROM_PROVIDER
         // makes providerId mandatory - a conditional the schema states nowhere.
         keep.put("generate_translation_strings", //$NON-NLS-1$
