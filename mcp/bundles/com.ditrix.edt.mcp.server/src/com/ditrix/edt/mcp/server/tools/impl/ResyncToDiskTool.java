@@ -10,7 +10,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,6 +45,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataTopObjects;
 import com.ditrix.edt.mcp.server.utils.RoleRightsOrphans;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonElement;
@@ -489,7 +489,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // could), and the collector keeps only MdObject instances - the ones that
         // map to a .mdo file - filtering out internal non-metadata top objects
         // (content forms, BSL module index objects) that have no .mdo by design.
-        List<String> allFqns = collectMetadataTopObjectFqns(bmModel);
+        List<String> allFqns = MetadataTopObjects.snapshot(bmModel);
 
         // Step 2: integrity check BEFORE the export - which registered objects have
         // no .mdo on disk. This pre-export set is the real desync we are catching up.
@@ -734,56 +734,6 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         List<String> missingBefore)
     {
         return fullExport ? allFqns : missingBefore;
-    }
-
-    /**
-     * Collects the FQNs of the real metadata top objects managed by the project's
-     * BM model. Runs inside a read-only BM transaction and iterates
-     * {@link IBmTransaction#getTopObjectIterator()}, keeping only {@link MdObject}
-     * instances (the objects that map to a {@code .mdo} file). Internal BM top
-     * objects that are not metadata and have no {@code .mdo} - content forms
-     * ({@code com._1c.g5.v8.dt.form.model.Form}) and BSL module reference/context
-     * index objects ({@code Module.bsl.mRIdx} / {@code Module.bsl.mCtxIdx}) - are
-     * skipped so they are not flagged as a missing-{@code .mdo} desync.
-     *
-     * @param bmModel the project BM model
-     * @return the metadata top-object FQNs (never {@code null}; may be empty)
-     */
-    private static List<String> collectMetadataTopObjectFqns(IBmModel bmModel)
-    {
-        List<String> fqns = new ArrayList<>();
-        BmTransactions.<Void>read(bmModel, "CollectTopObjectsForResync", (tx, pm) -> //$NON-NLS-1$
-        {
-            Iterator<IBmObject> it = tx.getTopObjectIterator();
-            while (it.hasNext()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
-            {
-                IBmObject obj = it.next();
-                if (obj == null)
-                {
-                    continue;
-                }
-                // getTopObjectIterator() returns EVERY BM top object, including
-                // internal ones that are not metadata and have no .mdo file:
-                // content forms (com._1c.g5.v8.dt.form.model.Form, persisted as
-                // .form) and BSL module reference/context index objects
-                // (Module.bsl.mRIdx / Module.bsl.mCtxIdx, internal derived data).
-                // Only real metadata objects implement MdObject and map to a .mdo
-                // file (Catalog/Document/CommonModule/Subsystem/Role/StyleItem/...),
-                // so filter out everything else to avoid false-positive "missing
-                // .mdo" reports for these non-MdObject top objects.
-                if (!(obj instanceof MdObject))
-                {
-                    continue;
-                }
-                String fqn = obj.bmGetFqn();
-                if (fqn != null && !fqn.isEmpty())
-                {
-                    fqns.add(fqn);
-                }
-            }
-            return null;
-        });
-        return fqns;
     }
 
     /**
