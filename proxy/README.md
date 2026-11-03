@@ -8,9 +8,16 @@ server on its own port (8765, 8766, ...). Instead of reconfiguring the AI client
 instance, point it at **one** endpoint — the proxy on port **8764** — and the proxy routes
 every `tools/call` to the EDT instance that owns the requested project.
 
-The proxy is a plain Java process (no Eclipse, no OSGi). The EDT plugin is **not**
-modified in any way: the proxy talks to ordinary EDT-MCP servers over their normal
-`/mcp` endpoint using the same MCP Streamable HTTP wire contract.
+The proxy is a plain Java process (no Eclipse, no OSGi). It talks to EDT-MCP servers
+over their normal `/mcp` endpoint using the same MCP Streamable HTTP wire contract.
+Current plugins report their workspace identity in `list_projects(format=json)`;
+older plugins remain routable by unique project names.
+
+Workspace routing and hot-plug are supported. Backend ports and proxy startup still
+use the configuration below. Automatic port fallback and plugin-managed proxy
+startup await an owner decision on migrating existing direct `:8765` clients and
+installing/updating the separate proxy process with the p2 plugin. This release does
+not yet provide the complete zero-configuration workflow proposed in #468.
 
 ## Quick start
 
@@ -162,19 +169,47 @@ fan-out).
    the call is routed to the backend that owns that project:
    - owned by exactly one backend → forwarded there;
    - owned by **more than one** backend → error naming the ports that hold the
-     duplicate (see [Limitations](#limitations-v1));
+     duplicate and their `workspacePath` values; pass the chosen workspace explicitly;
    - **unknown** → the proxy rescans **once** immediately (the hot-plug path: the AI
      agent may have just started that EDT) and retries the lookup; if still unknown it
      returns an actionable error listing the live backends with their projects and
      suggesting a retry in ~30 s or a `router_refresh` call.
-4. **No project argument** — forwarded to the first live backend (ascending port
+4. **`workspacePath` supplied** — restricts routing to that exact workspace, with or
+   without `projectName`. A missing workspace triggers one immediate rescan, then an
+   actionable error. An invalid or blank selector is refused. A selector never falls
+   back to another workspace. `list_projects` with this selector lists only that workspace.
+5. **No project or workspace argument** — forwarded to the first live backend (ascending port
    order). With zero live backends the call errors, naming the scan range.
 
-Routed requests and responses are forwarded **byte-for-byte**: the proxy parses the
-request JSON only to pick the route and never rewrites the payload of a routed call.
+Routed responses are forwarded **byte-for-byte** (except the existing structured-content
+opt-out). Requests without `workspacePath` are also unchanged; the proxy consumes that
+selector before sending a selected request to the backend. It verifies the workspace
+in the same backend MCP session before forwarding, including after a stale-session
+retry, so a replacement EDT on the same port cannot receive a call for another workspace.
 The proxy maintains its own MCP session with each backend (lazy `initialize`
 handshake per backend, transparent re-handshake if a backend restarts), so clients
 only ever see the proxy's own `Mcp-Session-Id`.
+
+### Duplicate project names
+
+`list_projects` shows a **Workspace** column, and each project in its JSON response
+has `workspacePath` when the backend reports it. `router_status.backends` also carries
+the path, including for empty workspaces. Project `path` continues to mean the project
+location, which may be outside the workspace.
+
+The proxy adds an optional `workspacePath` string to backend tool schemas in
+`tools/list`. Copy the path exactly from discovery; no path normalization or directory
+name guessing is applied. For example, these are distinct calls through the same proxy:
+
+```json
+{"name":"get_configuration_properties","arguments":{"projectName":"ERP","workspacePath":"C:\\Work\\ERP-task-1"}}
+{"name":"get_configuration_properties","arguments":{"projectName":"ERP","workspacePath":"C:\\Work\\ERP-task-2"}}
+```
+
+If both copies report the same workspace, routing remains ambiguous and the proxy
+refuses the call. If an older plugin does not report `workspacePath`, update that
+plugin before selecting it this way. A unique project name continues to work without
+the additional argument.
 
 ### Other MCP methods
 
@@ -188,7 +223,7 @@ only ever see the proxy's own `Mcp-Session-Id`.
 
 Two extra tools are injected into `tools/list` (both take no parameters):
 
-- **`router_status`** — returns the proxy port, the live backends with their projects,
+- **`router_status`** — returns the proxy port, the live backends with their workspace paths and projects,
   detected duplicate project names, the last refresh timestamp, and the scan range.
 - **`router_refresh`** — forces an immediate rescan, then returns the same status
   payload. Call it right after starting a new EDT instance to register it without
@@ -285,9 +320,9 @@ does not start user services without an active login, enable lingering once with
 
 ## Limitations (v1)
 
-- **Duplicate project names are not auto-resolved.** If two EDT instances both serve a
-  project with the same name, a call scoped to that project returns an error naming
-  both ports — close one of the instances or address its EDT-MCP port directly.
+- **Duplicate project names require an explicit workspace.** The proxy refuses an
+  ambiguous call and reports the available paths; the agent must ask which workspace
+  the user intends. It never picks a duplicate by port order.
 - **Single-machine discovery only.** Backends are found by a localhost port scan;
   there is no remote-backend support and no config-file backend list.
 - **No lifecycle management.** The proxy never starts or stops EDT instances; the AI

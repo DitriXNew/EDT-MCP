@@ -3080,10 +3080,11 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
     return poll_disk_contains_all(rel_path, [substr], timeout=timeout, ctx=ctx)
 
 
-def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=None):
+def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=None, *, check=None):
     """Poll until ONE read of a named fixture file contains every substring in substrs, and return
     that read. Polling each needle separately proves each was present at SOME moment, not that one
-    snapshot of the file holds them all.
+    snapshot of the file holds them all. An optional check(text) must also accept that same read;
+    use it for structural comparisons that cannot be expressed as substring checks.
 
     rel_path is relative to the BASE project by default, or to the fixture path `fixture_rel` names
     (TESTS_PROJECT_REL for the extension, say) - one poll for every fixture, not a copy per root.
@@ -3100,7 +3101,7 @@ def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=No
         try:
             with open(full, encoding="utf-8", errors="replace") as f:
                 last = f.read()
-            if all(s in last for s in substrs):
+            if all(s in last for s in substrs) and (check is None or check(last)):
                 return last
         except FileNotFoundError:
             last = "(file does not exist yet)"
@@ -3108,6 +3109,8 @@ def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=No
             last = "(file could not be read yet: %s)" % e
         time.sleep(0.5)
     missing = [s for s in substrs if s not in last]
+    if check is not None and not missing:
+        _fail("expected %s to pass its content check [%s]; it holds:\n%s" % (shown, ctx, last[:700]))
     _fail("expected %s to contain %r [%s]; it holds:\n%s"
           % (shown, missing[0] if len(missing) == 1 else missing, ctx, last[:700]))
 

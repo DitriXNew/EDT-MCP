@@ -246,8 +246,8 @@ public class WorkmateGateway
      */
     public static final String CHAT_SESSION_ID = "edt-mcp"; //$NON-NLS-1$
 
-    /** Manual id the rules pair with {@link #CHAT_SESSION_ID}; stable across restarts. */
-    public static final String CHAT_MANUAL_ID = "jshell_edt_canonical_imports"; //$NON-NLS-1$
+    /** Eclipse manual id present in Workmate 1.0.5/1.0.7 and verified on 1.0.8. */
+    public static final String CHAT_MANUAL_ID = "active_workbench"; //$NON-NLS-1$
 
     private static final String SESSION_MANAGER =
         "com.e1c.edt.ai.tools.IJShellSessionManager"; //$NON-NLS-1$

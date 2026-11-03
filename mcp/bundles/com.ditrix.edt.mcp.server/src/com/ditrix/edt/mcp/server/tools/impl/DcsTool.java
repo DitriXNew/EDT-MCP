@@ -465,8 +465,8 @@ public class DcsTool implements IMcpTool
         if (!xml.isJsonPrimitive() || !xml.getAsJsonPrimitive().isString()
             || xml.getAsString().trim().isEmpty())
         {
-            return ToolResult.error("body.xml must be a non-empty string containing the complete " //$NON-NLS-1$
-                + "DataCompositionSchema XML returned by dcs format='xml'.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DcsXmlCodec.invalidXmlError(
+                "body.xml must be a non-empty string containing the complete DataCompositionSchema XML")).toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -745,7 +745,19 @@ public class DcsTool implements IMcpTool
                     if (detachedImport != null)
                     {
                         DcsXmlCodec.replaceContent(content.schema(), detachedImport);
-                        DcsXmlCodec.XmlResult serialized = detachedImportCodec.serialize(content.schema());
+                        EObject attached = tx.getTopObjectByFqn(content.contentFqn());
+                        if (!(attached instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema))
+                        {
+                            throw DcsWriteFailure.message("XML replacement was refused because EDT " //$NON-NLS-1$
+                                + "did not retain the schema at '" + content.contentFqn() //$NON-NLS-1$
+                                + "'. Re-open or clean the project and retry; nothing was written."); //$NON-NLS-1$
+                        }
+                        var attachedSchema =
+                            (com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema)attached;
+                        String modelError = DcsMutationGuard.xmlReplaceError(detachedImport,
+                            attachedSchema, address);
+                        if (modelError != null) throw DcsWriteFailure.message(modelError);
+                        DcsXmlCodec.XmlResult serialized = detachedImportCodec.serialize(attachedSchema);
                         if (!serialized.isSuccess())
                         {
                             throw DcsWriteFailure.message("XML replacement was refused because EDT " //$NON-NLS-1$
@@ -760,8 +772,9 @@ public class DcsTool implements IMcpTool
                         }
                         catch (IllegalArgumentException e)
                         {
-                            throw DcsWriteFailure.message("XML replacement was refused because its " //$NON-NLS-1$
-                                + "deserialize/serialize loss check failed: " + e.getMessage()); //$NON-NLS-1$
+                            throw DcsWriteFailure.message(DcsXmlCodec.invalidXmlError(
+                                "XML replacement was refused because its deserialize/serialize loss check failed: " //$NON-NLS-1$
+                                + e.getMessage()));
                         }
                         if (missing != null)
                         {
@@ -770,8 +783,8 @@ public class DcsTool implements IMcpTool
                                 + missing + "'. Correct the unrecognized type or namespace at that " //$NON-NLS-1$
                                 + "path and retry; nothing was written."); //$NON-NLS-1$
                         }
-                        return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
-                            null, false, true);
+                        return new WriteOutcome(DcsHash.compute(attachedSchema), content.contentFqn(),
+                            null, false, DcsReadProjection.schemaCounts(attachedSchema));
                     }
                     DcsChartReferences.Census chartsBefore =
                         DcsChartReferences.census(content.schema(), address.rootFqn());
@@ -821,7 +834,7 @@ public class DcsTool implements IMcpTool
                         throw DcsWriteFailure.message(chartError);
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
-                        counts, settingsWrite, false);
+                        counts, settingsWrite, null);
                 });
             }
             catch (DcsWriteFailure e)
@@ -847,7 +860,7 @@ public class DcsTool implements IMcpTool
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
             DcsWriter.Result counts = outcome.applied;
-            String countsText = outcome.xmlReplaced ? "xml=wholesale" //$NON-NLS-1$
+            String countsText = outcome.xmlCounts != null ? "xml=wholesale, " + outcome.xmlCounts //$NON-NLS-1$
                 : counts == null ? "none" //$NON-NLS-1$
                 : "dataSources=" + counts.dataSources + ", dataSets=" + counts.dataSets //$NON-NLS-1$ //$NON-NLS-2$
                     + ", fields=" + counts.fields + ", parameters=" + counts.parameters //$NON-NLS-1$ //$NON-NLS-2$
@@ -1459,16 +1472,16 @@ public class DcsTool implements IMcpTool
         final String contentFqn;
         final DcsWriter.Result applied;
         final boolean settingsApplied;
-        final boolean xmlReplaced;
+        final DcsReadProjection.SchemaCounts xmlCounts;
 
         WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
-            boolean settingsApplied, boolean xmlReplaced)
+            boolean settingsApplied, DcsReadProjection.SchemaCounts xmlCounts)
         {
             this.hash = hash;
             this.contentFqn = contentFqn;
             this.applied = applied;
             this.settingsApplied = settingsApplied;
-            this.xmlReplaced = xmlReplaced;
+            this.xmlCounts = xmlCounts;
         }
     }
 

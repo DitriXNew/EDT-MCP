@@ -41,6 +41,24 @@ public class DeleteMetadataToolExternalDataSourceTest
         assertTrue(text, text.contains("ExternalDataSource.<X>.Table.<T>"));
     }
 
+    @Test public void cubeMembersUseTheirRegisteringFileAndActualFieldFeature() throws Exception
+    {
+        assertEquals("src/ExternalDataSources/Eds/Cubes/C/DimensionTables/DT/DT.mdo",
+            DeleteMetadataTool.registeringFilePath(DIMENSION_TABLE));
+        assertTrue(DeleteMetadataTool.containsRegistration(xml("<Cube><dimensionTables>" + DIMENSION_TABLE
+            + "</dimensionTables></Cube>"), CUBE, DIMENSION_TABLE));
+        assertTrue(DeleteMetadataTool.containsRegistration(xml("<Cube><dimensions><name>D</name>"
+            + "</dimensions></Cube>"), CUBE, DIMENSION));
+        assertTrue(DeleteMetadataTool.containsRegistration(xml("<Cube><resources><name>R</name>"
+            + "</resources></Cube>"), CUBE, RESOURCE));
+        assertTrue(DeleteMetadataTool.containsRegistration(xml("<DimensionTable><fields><name>DF</name>"
+            + "</fields></DimensionTable>"), DIMENSION_TABLE, DIMENSION_FIELD));
+        assertFalse(DeleteMetadataTool.containsRegistration(xml("<DimensionTable><tableFields><name>DF</name>"
+            + "</tableFields></DimensionTable>"), DIMENSION_TABLE, DIMENSION_FIELD));
+        assertFalse(DeleteMetadataTool.containsRegistration(xml("<DimensionTable><fields><name>Sibling</name>"
+            + "</fields></DimensionTable>"), DIMENSION_TABLE, DIMENSION_FIELD));
+    }
+
     @Test public void russianDeleteUsesCanonicalRegistrationText() throws Exception
     {
         var f = new com.ditrix.edt.mcp.server.utils.ExternalDataSourceFixtures();

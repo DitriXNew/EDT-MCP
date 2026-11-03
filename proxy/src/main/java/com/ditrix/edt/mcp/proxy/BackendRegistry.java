@@ -197,6 +197,7 @@ public final class BackendRegistry
 
         List<Backend> live = new ArrayList<>();
         Map<String, List<Backend>> holders = new LinkedHashMap<>();
+        Map<Integer, String> workspaces = new LinkedHashMap<>();
         List<Integer> unsupported = new ArrayList<>();
         List<Integer> truncated = new ArrayList<>();
         for (int port = cfg.scanFrom; port <= cfg.scanTo; port++)
@@ -213,6 +214,10 @@ public final class BackendRegistry
             }
             live.add(backend);
             ProjectsProbe probe = fetchProjectNames(backend);
+            if (probe.workspacePath != null)
+            {
+                workspaces.put(port, probe.workspacePath);
+            }
             if (probe.truncated)
             {
                 truncated.add(backend.getPort());
@@ -228,7 +233,7 @@ public final class BackendRegistry
         }
 
         Snapshot previous = snapshot;
-        snapshot = Snapshot.build(live, holders, unsupported, truncated);
+        snapshot = Snapshot.build(live, holders, unsupported, truncated, workspaces);
         lastRefreshMillis = System.currentTimeMillis();
         logChange(previous, snapshot);
     }
@@ -253,6 +258,23 @@ public final class BackendRegistry
     public List<Backend> live()
     {
         return snapshot.live;
+    }
+
+    /** One immutable view keeps workspace identity and projects on the same discovery snapshot. */
+    List<BackendView> backendViews()
+    {
+        Snapshot current = snapshot;
+        List<BackendView> views = new ArrayList<>();
+        for (Backend backend : current.live)
+        {
+            views.add(new BackendView(backend, current.workspaces.get(backend.getPort()),
+                current.projectsByPort.get(backend.getPort())));
+        }
+        return List.copyOf(views);
+    }
+
+    record BackendView(Backend backend, String workspacePath, List<String> projects)
+    {
     }
 
     /**
@@ -530,7 +552,9 @@ public final class BackendRegistry
                     + " - unsupported EDT-MCP plugin version; its projects are not routable."); //$NON-NLS-1$
                 return ProjectsProbe.unsupported();
             }
-            return ProjectsProbe.of(parseProjectNames(raw));
+            JsonObject result = Json.obj(Json.parseObject(Backend.stripSseFraming(raw)), "result"); //$NON-NLS-1$
+            return new ProjectsProbe(parseProjectNames(raw), true, false,
+                WorkspaceRouting.workspacePath(machinePayload(result)));
         }
         catch (InterruptedException e)
         {
@@ -586,14 +610,20 @@ public final class BackendRegistry
      */
     static JsonArray machineProjects(JsonObject result)
     {
+        return projectsArray(machinePayload(result));
+    }
+
+    /** The complete machine payload, from structured or plain-text transport. */
+    static JsonObject machinePayload(JsonObject result)
+    {
         if (result == null)
         {
             return null;
         }
-        JsonArray fromStructured = projectsArray(Json.obj(result, "structuredContent")); //$NON-NLS-1$
-        if (fromStructured != null)
+        JsonObject structured = Json.obj(result, "structuredContent"); //$NON-NLS-1$
+        if (projectsArray(structured) != null)
         {
-            return fromStructured;
+            return structured;
         }
         // Plain-text mode: the same JSON payload arrives as content text.
         JsonElement content = result.get("content"); //$NON-NLS-1$
@@ -607,10 +637,10 @@ public final class BackendRegistry
             {
                 continue;
             }
-            JsonArray fromText = projectsArray(Json.parseObject(Json.str(item.getAsJsonObject(), "text"))); //$NON-NLS-1$
-            if (fromText != null)
+            JsonObject text = Json.parseObject(Json.str(item.getAsJsonObject(), "text")); //$NON-NLS-1$
+            if (projectsArray(text) != null)
             {
-                return fromText;
+                return text;
             }
         }
         return null;
@@ -711,30 +741,32 @@ public final class BackendRegistry
     {
         final List<String> names;
         final boolean supported;
+        final String workspacePath;
 
         /** The plugin DOES support the machine list, but this answer was cut by the output cap. */
         final boolean truncated;
 
-        private ProjectsProbe(List<String> names, boolean supported, boolean truncated)
+        private ProjectsProbe(List<String> names, boolean supported, boolean truncated, String workspacePath)
         {
             this.names = names;
             this.supported = supported;
             this.truncated = truncated;
+            this.workspacePath = workspacePath;
         }
 
         static ProjectsProbe of(List<String> names)
         {
-            return new ProjectsProbe(names, true, false);
+            return new ProjectsProbe(names, true, false, null);
         }
 
         static ProjectsProbe unsupported()
         {
-            return new ProjectsProbe(List.of(), false, false);
+            return new ProjectsProbe(List.of(), false, false, null);
         }
 
         static ProjectsProbe truncated()
         {
-            return new ProjectsProbe(List.of(), false, true);
+            return new ProjectsProbe(List.of(), false, true, null);
         }
     }
 
@@ -808,6 +840,7 @@ public final class BackendRegistry
         final Map<String, List<Integer>> duplicates;
         final List<String> knownProjects;
         final Map<Integer, List<String>> projectsByPort;
+        final Map<Integer, String> workspaces;
         /** Ports of live backends whose plugin does not support the machine project list. */
         final List<Integer> unsupported;
 
@@ -816,7 +849,7 @@ public final class BackendRegistry
 
         private Snapshot(List<Backend> live, Map<String, Backend> owners, Map<String, List<Integer>> duplicates,
             List<String> knownProjects, Map<Integer, List<String>> projectsByPort, List<Integer> unsupported,
-            List<Integer> truncated)
+            List<Integer> truncated, Map<Integer, String> workspaces)
         {
             this.unsupported = unsupported;
             this.truncated = truncated;
@@ -825,6 +858,7 @@ public final class BackendRegistry
             this.duplicates = duplicates;
             this.knownProjects = knownProjects;
             this.projectsByPort = projectsByPort;
+            this.workspaces = workspaces;
         }
 
         static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
@@ -835,6 +869,12 @@ public final class BackendRegistry
 
         static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
             List<Integer> unsupportedIn, List<Integer> truncatedIn)
+        {
+            return build(liveIn, holders, unsupportedIn, truncatedIn, Map.of());
+        }
+
+        static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
+            List<Integer> unsupportedIn, List<Integer> truncatedIn, Map<Integer, String> workspaces)
         {
             List<Backend> live = new ArrayList<>(liveIn);
             live.sort(Comparator.comparingInt(Backend::getPort));
@@ -888,7 +928,8 @@ public final class BackendRegistry
                 Collections.unmodifiableList(projectNames),
                 Collections.unmodifiableMap(frozenByPort),
                 Collections.unmodifiableList(new ArrayList<>(unsupportedIn)),
-                Collections.unmodifiableList(new ArrayList<>(truncatedIn)));
+                Collections.unmodifiableList(new ArrayList<>(truncatedIn)),
+                Map.copyOf(workspaces));
         }
     }
 }

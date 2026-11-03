@@ -18,8 +18,8 @@ import com.sun.net.httpserver.HttpExchange;
  * for a user interrupt signal. If the user interrupts (via {@link McpServer#interruptToolCall}),
  * the signal response is sent on the active call and this returns {@code null}
  * (the caller must not send another response); otherwise it returns the tool's
- * normal JSON-RPC response. The EDT operation itself is not cancelled — it may
- * keep running in the background after an interrupt.
+ * normal JSON-RPC response. This executor does not cancel the EDT operation — it
+ * may keep running in the background, subject to EDT/platform cancellation.
  *
  * <p>Extracted from {@code McpServer} so the transport's interruption concern is
  * isolated from socket lifecycle. JSON id/name extraction reuses

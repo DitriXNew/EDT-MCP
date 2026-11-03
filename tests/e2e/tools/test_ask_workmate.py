@@ -83,7 +83,9 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
     sentinel = "EDT_MCP_WORKMATE_E2E_OK"
     result = call("ask_workmate", {
         "question": (
-            "Reply with exactly EDT_MCP_WORKMATE_E2E_OK and no other text. "
+            "Reply with EDT_MCP_WORKMATE_E2E_OK followed by the exact manual_id "
+            "specified for JShellManual in the bridge instructions prepended "
+            "to this question, and no other text. "
             "Do not call tools."
         ),
         "maxToolRounds": 1,
@@ -111,6 +113,11 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
         if sentinel not in result.text:
             raise AssertionError(
                 "installed Workmate did not return the requested sentinel: "
+                + result.text
+            )
+        if "active_workbench" not in result.text:
+            raise AssertionError(
+                "Workmate did not receive the supported Eclipse bridge manual id: "
                 + result.text
             )
     elif status == "failed":

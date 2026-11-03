@@ -12,6 +12,8 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.File;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -1479,6 +1481,12 @@ public final class BslModuleUtils
      */
     public static String readFileText(IFile file) throws Exception
     {
+        return readFileText(file, false);
+    }
+
+    /** Strict decoding prevents a read/edit/write cycle from replacing malformed source bytes. */
+    public static String readFileText(IFile file, boolean strict) throws Exception
+    {
         InputStream rawIs;
         try
         {
@@ -1517,10 +1525,16 @@ public final class BslModuleUtils
                 }
                 catch (Exception ce)
                 {
+                    if (strict)
+                    {
+                        throw ce;
+                    }
                     charset = UTF_8;
                 }
             }
-            try (InputStreamReader reader = new InputStreamReader(input, charset))
+            CodingErrorAction action = strict ? CodingErrorAction.REPORT : CodingErrorAction.REPLACE;
+            try (InputStreamReader reader = new InputStreamReader(input, Charset.forName(charset).newDecoder()
+                .onMalformedInput(action).onUnmappableCharacter(action)))
             {
                 StringBuilder content = new StringBuilder();
                 char[] buffer = new char[4096];

@@ -66,6 +66,9 @@ import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
@@ -1040,7 +1043,8 @@ public class GetProjectErrorsToolTest
         resolution.notFound.add("Catalog.Nope"); //$NON-NLS-1$
         resolution.unsupported.add(unsupportedEntry("XDTOPackage.P.Property.N", "why")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String json = GetProjectErrorsTool.addressPayload("# Configuration Problems", 2, resolution); //$NON-NLS-1$
+        String json = GetProjectErrorsTool.addressPayload("# Configuration Problems", //$NON-NLS-1$
+            Arrays.asList(new ErrorInfo(), new ErrorInfo()), resolution);
 
         assertTrue("must be a success envelope", json.contains("\"success\":true")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must carry the human report", //$NON-NLS-1$
@@ -1060,13 +1064,87 @@ public class GetProjectErrorsToolTest
     {
         // Consistent emission across branches: a consumer must never have to tell "absent" from
         // "none" (the response-contract rule the project pins for every output field).
-        String json = GetProjectErrorsTool.addressPayload("# No Errors Found", 0, //$NON-NLS-1$
+        String json = GetProjectErrorsTool.addressPayload("# No Errors Found", Collections.emptyList(), //$NON-NLS-1$
             new GetProjectErrorsTool.AddressResolution());
 
         assertTrue(json.contains("\"objectsResolved\":[]")); //$NON-NLS-1$
         assertTrue(json.contains("\"objectsNotFound\":[]")); //$NON-NLS-1$
         assertTrue(json.contains("\"objectsUnsupported\":[]")); //$NON-NLS-1$
         assertTrue(json.contains("\"problemsFound\":0")); //$NON-NLS-1$
+        assertTrue(json.contains("\"problems\":[]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testProblemPayloadPreservesProjectIdentityAndOptionalCoordinates()
+    {
+        ErrorInfo first = new ErrorInfo();
+        first.project = "First";
+        first.modulePath = "CommonModules/Probe/Module.bsl";
+        first.line = 2;
+        first.offset = 18;
+        first.length = 0;
+        first.checkId = "probe-check";
+        first.checkCode = "SU23";
+        first.contributorId = "probe.contributor";
+        first.message = "pipe|and\nnewline";
+        ErrorInfo second = new ErrorInfo();
+        second.project = "Second";
+        second.length = 7;
+        ErrorInfo metadata = new ErrorInfo();
+        metadata.project = "Third";
+        JsonObject payload = JsonParser.parseString(GetProjectErrorsTool.addressPayload("report",
+            Arrays.asList(first, second, metadata), new GetProjectErrorsTool.AddressResolution())).getAsJsonObject();
+        JsonArray rows = payload.getAsJsonArray("problems");
+        assertEquals(3, payload.get("problemsFound").getAsInt());
+        JsonObject row = rows.get(0).getAsJsonObject();
+        assertEquals("First", row.get("project").getAsString());
+        assertEquals(first.modulePath, row.get("modulePath").getAsString());
+        assertEquals(2, row.get("line").getAsInt());
+        assertEquals(18, row.get("offset").getAsInt());
+        assertEquals(0, row.get("length").getAsInt());
+        assertEquals(first.checkId, row.get("checkId").getAsString());
+        assertEquals(first.checkCode, row.get("checkCode").getAsString());
+        assertEquals(first.contributorId, row.get("contributorId").getAsString());
+        assertEquals(first.message, row.get("message").getAsString());
+        JsonObject partial = rows.get(1).getAsJsonObject();
+        assertEquals("Second", partial.get("project").getAsString());
+        assertFalse(partial.has("offset"));
+        assertEquals(7, partial.get("length").getAsInt());
+        JsonObject missing = rows.get(2).getAsJsonObject();
+        assertFalse(missing.has("offset"));
+        assertFalse(missing.has("length"));
+        assertFalse(missing.has("modulePath"));
+    }
+
+    @Test
+    public void testDetailedRangeCellsAndConciseCompatibility()
+    {
+        ErrorInfo row = new ErrorInfo();
+        row.message = "pipe|and\nnewline";
+        row.objectPresentation = "CommonModule.Probe";
+        row.modulePath = "CommonModules/Probe/Module.bsl";
+        row.line = 3;
+        row.offset = 27;
+        row.length = 0;
+        row.checkCode = "SU23";
+        GetProjectErrorsTool.AddressResolution resolution = new GetProjectErrorsTool.AddressResolution();
+        resolution.resolved.add("CommonModule.Probe");
+        List<ErrorInfo> rows = Arrays.asList(row, new ErrorInfo());
+        String detailed = GetProjectErrorsTool.assembleAddressReport(rows, "P", null,
+            resolution.resolved, 2, true, resolution, new int[] {1}, new int[] {1});
+        assertTrue(detailed.contains("| Offset | Length |"));
+        assertTrue(detailed.contains("| 3 | 27 | 0 | `SU23` |"));
+        assertTrue(detailed.contains("pipe\\|and newline"));
+        assertTrue(detailed.contains("limit"));
+        assertTrue(detailed.contains("1 marker(s) could not be resolved"));
+        assertTrue(detailed.contains("1 marker(s) were excluded from the object filter"));
+        assertTrue(detailed.contains("|  |  |  |  |  |  | `` |  | false |"));
+        String concise = GetProjectErrorsTool.assembleAddressReport(Collections.singletonList(row),
+            "P", null, resolution.resolved, 100, false, resolution, new int[] {0}, new int[] {0});
+        assertTrue(concise.contains("| Description | Location | Module path | Line | Check code | Fix registered |"));
+        assertFalse(concise.contains("Offset"));
+        assertFalse(concise.contains("Length"));
+        assertTrue(concise.contains("| 3 | `SU23` |"));
     }
 
     /** A single {@code objectsUnsupported} entry in the wire shape the tool emits. */
@@ -1657,13 +1735,13 @@ public class GetProjectErrorsToolTest
 
     /**
      * Features whose kinds are legal only DEEPER in an address: {@code methods} hangs off an
-     * HTTPService URLTemplate, {@code parameters} off a WebService Operation and {@code tableFields}
-     * off an EDS Table, so none may have
+     * HTTPService URLTemplate, {@code parameters} off a WebService Operation, {@code tableFields}
+     * off an EDS Table and {@code dimensionTables} off an EDS Cube, so none may have
      * a first-step owner. Named explicitly so a new kind that resolves to nothing is a failure
      * rather than another silent zero.
      */
     private static final Set<String> DEEPER_ONLY_FEATURES =
-        new HashSet<>(Arrays.asList("methods", "parameters", "tableFields")); //$NON-NLS-1$ //$NON-NLS-2$
+        new HashSet<>(Arrays.asList("methods", "parameters", "tableFields", "dimensionTables")); //$NON-NLS-1$ //$NON-NLS-2$
 
 
     @Test
@@ -1674,7 +1752,8 @@ public class GetProjectErrorsToolTest
         // the catalogue publishes their tokens.
         for (String address : new String[] {
             "HTTPService.Service.Method.Get",        // Method belongs to a URLTemplate //$NON-NLS-1$
-            "WebService.Service.Parameter.Value"})   // Parameter belongs to an Operation //$NON-NLS-1$
+            "WebService.Service.Parameter.Value",   // Parameter belongs to an Operation //$NON-NLS-1$
+            "ExternalDataSource.Source.DimensionTable.T"}) // DimensionTable belongs to a Cube //$NON-NLS-1$
         {
             assertFalse("legal only deeper, so not a valid first step: " + address, //$NON-NLS-1$
                 GetProjectErrorsTool.possibleAddressShape(address));
@@ -1684,6 +1763,10 @@ public class GetProjectErrorsToolTest
             "HTTPService.Service.URLTemplate.Root.Method.Get")); //$NON-NLS-1$
         assertTrue(GetProjectErrorsTool.possibleAddressShape(
             "WebService.Service.Operation.Calc.Parameter.Value")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "ExternalDataSource.Source.Cube.C.DimensionTable.T")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "ExternalDataSource.Source.Cube.C.DimensionTable.T.Field.F")); //$NON-NLS-1$
     }
 
 

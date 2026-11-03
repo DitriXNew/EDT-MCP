@@ -63,6 +63,9 @@ public final class FakeBackend
 
     private final int requestedPort;
     private volatile List<String> projects;
+    private volatile String workspacePath;
+    private volatile JsonObject lastToolArguments;
+    private volatile Runnable afterNextListProjects;
     private volatile boolean brokenListProjects;
     private volatile long listProjectsDelayMillis;
 
@@ -338,6 +341,7 @@ public final class FakeBackend
     {
         JsonObject params = request.get("params") != null && request.get("params").isJsonObject()
             ? request.getAsJsonObject("params") : new JsonObject();
+        lastToolArguments = Json.obj(params, "arguments");
         String toolName = params.get("name") != null && params.get("name").isJsonPrimitive()
             ? params.get("name").getAsString() : "";
 
@@ -349,7 +353,14 @@ public final class FakeBackend
                 sendSseRaw(exchange, "this-is-not-json");
                 return;
             }
-            sendFramed(exchange, jsonRpcResponse(id, listProjectsResult()), acceptsSse);
+            JsonObject listed = listProjectsResult();
+            Runnable callback = afterNextListProjects;
+            afterNextListProjects = null;
+            if (callback != null)
+            {
+                callback.run();
+            }
+            sendFramed(exchange, jsonRpcResponse(id, listed), acceptsSse);
             return;
         }
         if ("echo_port".equals(toolName))
@@ -432,9 +443,28 @@ public final class FakeBackend
         JsonObject structured = new JsonObject();
         structured.addProperty("success", true);
         structured.add("projects", array);
+        if (workspacePath != null)
+        {
+            structured.addProperty("workspacePath", workspacePath);
+        }
         JsonObject result = textResult("projects listed");
         result.add("structuredContent", structured);
         return result;
+    }
+
+    void setWorkspacePath(String path)
+    {
+        workspacePath = path;
+    }
+
+    JsonObject lastToolArguments()
+    {
+        return lastToolArguments;
+    }
+
+    void afterNextListProjects(Runnable callback)
+    {
+        afterNextListProjects = callback;
     }
 
     private JsonObject echoPortResult()

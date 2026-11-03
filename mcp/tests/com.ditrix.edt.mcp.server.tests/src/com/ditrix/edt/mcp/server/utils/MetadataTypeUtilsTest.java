@@ -1052,7 +1052,7 @@ public class MetadataTypeUtilsTest
         "Attribute", "TabularSection", "Dimension", "Resource", "EnumValue", "Command",
         "AccountingFlag", "ExtDimensionAccountingFlag", "AddressingAttribute", "Column",
         "Template", "Recalculation", "URLTemplate", "Method", "Operation", "Parameter",
-        "Table", "Field", "Function", "Cube"));
+        "Table", "Field", "Function", "Cube", "DimensionTable"));
 
     /** Registers one more applicable consumer for a canonical kind. */
     private static void addOwner(Map<String, List<Predicate<String>>> owners, String canonical,

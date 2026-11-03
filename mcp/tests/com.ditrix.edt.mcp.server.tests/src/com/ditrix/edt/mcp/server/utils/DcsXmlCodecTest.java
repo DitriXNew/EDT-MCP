@@ -9,10 +9,14 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import org.mockito.Mockito;
+import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
@@ -32,6 +36,101 @@ public class DcsXmlCodecTest
     private static final String HASH = "0123456789abcdef0123"; //$NON-NLS-1$
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void testReplacementDetachesRootChildrenBeforeBmAttachment()
+    {
+        var target = Mockito.spy(DcsFactory.eINSTANCE.createDataCompositionSchema());
+        var feature = com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+            .DATA_COMPOSITION_SCHEMA__PARAMETERS;
+        EList<Object> parameters = Mockito.spy((EList<Object>)target.eGet(feature));
+        Mockito.doReturn(parameters).when(target).eGet(feature);
+        Mockito.doAnswer(invocation ->
+        {
+            java.util.Collection<?> incoming = invocation.getArgument(0);
+            for (Object value : incoming)
+            {
+                // BM attachment switches storage delegates; a temporary parent must not retain it.
+                assertNull(((EObject)value).eContainer());
+            }
+            return invocation.callRealMethod();
+        }).when(parameters).addAll(Mockito.anyCollection());
+        var settingsFeature = com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+            .DATA_COMPOSITION_SCHEMA__DEFAULT_SETTINGS;
+        Mockito.doAnswer(invocation ->
+        {
+            EObject incoming = invocation.getArgument(1);
+            assertNull(incoming.eContainer());
+            return invocation.callRealMethod();
+        }).when(target).eSet(Mockito.eq(settingsFeature), Mockito.any(EObject.class));
+        var imported = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        imported.setDefaultSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+        for (int i = 0; i < 4; i++)
+        {
+            var parameter = DcsFactory.eINSTANCE.createDataCompositionSchemaParameter();
+            parameter.setName("P" + i);
+            imported.getParameters().add(parameter);
+        }
+
+        DcsXmlCodec.replaceContent(target, imported);
+
+        assertEquals(4, target.getParameters().size());
+        assertEquals(4, imported.getParameters().size());
+        assertNotSame(imported.getDefaultSettings(), target.getDefaultSettings());
+    }
+
+    @Test
+    public void testNativeXmlImportKeepsFourParametersAndVariantValuesAfterRepeatedReplacement() throws Exception
+    {
+        var schema = DcsStoredXmlTestSupport.schema();
+        var applied = DcsWriter.apply(schema, JsonParser.parseString("""
+            {"dataSources":[{"name":"Main","type":"Local"}],
+             "dataSets":[{"name":"Balances","query":"SELECT 1 AS Amount","autoFillFields":false,
+                "fields":[{"dataPath":"Amount","role":{"periodNumber":1,"periodType":"Main"},
+                    "useRestriction":{"field":true},"attributeUseRestriction":{"condition":true}}]}],
+             "parameters":[{"name":"Period"},{"name":"Start","expression":"&Period.StartDate"},
+                {"name":"End","expression":"&Period.EndDate"},{"name":"Дата"}]}
+            """).getAsJsonObject());
+        assertFalse(applied.error, applied.hasError());
+        for (int i = 1; i < 14; i++)
+        {
+            var field = DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetField();
+            field.setDataPath("Field" + i);
+            schema.getDataSets().get(0).getFields().add(field);
+        }
+        var period = DcsSettingsWriter.buildValue(JsonParser.parseString("""
+            {"kind":"standardPeriod","value":{"variant":"ThisYear"}}
+            """), "period");
+        assertNull(period.error);
+        schema.getParameters().get(0).getValues().add(period.value);
+        var variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createSettingsVariant();
+        variant.setName("Main");
+        variant.setSettings(DcsStoredXmlTestSupport.operand(false,
+            com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createStringValue()).getDefaultSettings());
+        schema.getSettingsVariants().add(variant);
+        var imported = DcsStoredXmlTestSupport.deserialize(DcsStoredXmlTestSupport.serialize(schema));
+        assertEquals(4, imported.getParameters().size());
+        var target = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        for (int pass = 0; pass < 2; pass++)
+        {
+            DcsXmlCodec.replaceContent(target, imported);
+            assertEquals(4, target.getParameters().size());
+            assertEquals(new DcsReadProjection.SchemaCounts(1, 1, 14, 4, 1),
+                DcsReadProjection.schemaCounts(target));
+            assertEquals("Дата", target.getParameters().get(3).getName());
+            assertEquals("&Period.StartDate", target.getParameters().get(1).getExpression());
+            assertEquals(1, target.getSettingsVariants().get(0).getSettings()
+                .getDataParameters().getItems().size());
+            assertEquals(null, DcsModelComparison.firstDifference(imported, target));
+            assertNull(DcsMutationGuard.xmlReplaceError(imported, target,
+                DcsAddress.parse("Report.Sales").address()));
+            assertEquals(null, DcsXmlRoundTripComparator.firstMissingPath(
+                DcsStoredXmlTestSupport.serialize(imported), DcsStoredXmlTestSupport.serialize(target)));
+            assertEquals(4, imported.getParameters().size());
+        }
+    }
+
+    @Test
     public void testMalformedXmlReturnsActionableError()
     {
         DcsXmlCodec codec = new DcsXmlCodec(new DcsV8Serializer((IResourceLookup)null), null);
@@ -41,8 +140,57 @@ public class DcsXmlCodecTest
         assertFalse(result.isSuccess());
         assertTrue(result.error(), result.error().contains("body.xml")); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("malformed")); //$NON-NLS-1$
-        assertTrue(result.error(), result.error().contains("format='xml'")); //$NON-NLS-1$
-        assertTrue(result.error(), result.error().contains("without editing or truncating")); //$NON-NLS-1$
+        assertInvalidXmlRecovery(result);
+    }
+
+    @Test
+    public void testUnknownXmlElementPreservesItsNameAndLineAndExplainsRecovery()
+    {
+        var codec = new DcsXmlCodec(new DcsV8Serializer((IResourceLookup)null), null);
+        var result = codec.deserialize("""
+            <DataCompositionSchema xmlns="http://v8.1c.ru/8.1/data-composition-system/schema">
+            <Issue664Unsupported/>
+            </DataCompositionSchema>
+            """);
+
+        assertInvalidXmlRecovery(result);
+        assertTrue(result.error(), result.error().contains("Issue664Unsupported"));
+        assertTrue(result.error(), result.error().contains("Line number = 2"));
+    }
+
+    @Test
+    public void testEmptyXmlExplainsNothingWasWrittenAndHowToRetry()
+    {
+        var codec = new DcsXmlCodec(new DcsV8Serializer((IResourceLookup)null), null);
+        for (String xml : new String[] {null, "", " \r\n "})
+        {
+            var result = codec.deserialize(xml);
+            assertTrue(result.error(), result.error().contains("body.xml is empty"));
+            assertInvalidXmlRecovery(result);
+        }
+    }
+
+    @Test
+    public void testMissingSchemaRootExplainsNothingWasWrittenAndHowToRetry() throws Exception
+    {
+        var serializer = Mockito.mock(DcsV8Serializer.class);
+        Mockito.when(serializer.deserializeXML(Mockito.any(java.io.InputStream.class))).thenReturn(null);
+        var codec = new DcsXmlCodec(serializer, null);
+
+        var result = codec.deserialize("<!-- no schema root -->");
+
+        assertTrue(result.error(), result.error().contains("does not contain a DataCompositionSchema root"));
+        assertInvalidXmlRecovery(result);
+    }
+
+    private static void assertInvalidXmlRecovery(DcsXmlCodec.SchemaResult result)
+    {
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("nothing was written"));
+        assertTrue(result.error(), result.error().contains("Remove or correct"));
+        assertTrue(result.error(), result.error().contains("reported line"));
+        assertTrue(result.error(), result.error().contains("retry with the complete DataCompositionSchema XML"));
+        assertTrue(result.error(), result.error().contains("action='get', type='schema', format='xml'"));
     }
 
     @Test

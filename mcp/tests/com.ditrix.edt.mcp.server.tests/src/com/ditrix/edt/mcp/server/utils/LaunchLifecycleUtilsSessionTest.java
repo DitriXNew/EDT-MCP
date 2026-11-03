@@ -20,6 +20,8 @@ import static org.mockito.Mockito.when;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IThread;
 import org.junit.Test;
@@ -555,6 +557,45 @@ public class LaunchLifecycleUtilsSessionTest
         assertFalse(LaunchLifecycleUtils.sweepTargetManagerSession(null, "app-none")); //$NON-NLS-1$
     }
 
+    private static IDebugTarget standaloneTargetWithLingeringClientThreads() throws Exception
+    {
+        IDebugTarget server = targetWithThreads(liveTypedThread(DebugTargetType.SERVER),
+            liveTypedThread(DebugTargetType.MANAGED_CLIENT));
+        ILaunch launch = launchWithTargets(server);
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID);
+        when(config.getType()).thenReturn(type);
+        when(launch.getLaunchConfiguration()).thenReturn(config);
+        when(server.getLaunch()).thenReturn(launch);
+        when(server.canTerminate()).thenReturn(true);
+        return server;
+    }
+
+    @Test
+    public void testSweepNeverTerminatesStandaloneTargetWithLingeringClientThreads() throws Exception
+    {
+        IDebugTarget server = standaloneTargetWithLingeringClientThreads();
+        assertFalse(LaunchLifecycleUtils.sweepTargetManagerSession(server, "app-server")); //$NON-NLS-1$
+        verify(server, never()).terminate();
+        verify(server.getLaunch(), never()).terminate();
+    }
+
+    @Test
+    public void testDecideStandaloneTargetWithLingeringClientThreadsIsNotASession() throws Exception
+    {
+        IDebugTarget server = standaloneTargetWithLingeringClientThreads();
+        assertNull(LaunchLifecycleUtils.decideExistingClientSession(server, server.getLaunch()));
+    }
+
+    @Test
+    public void testDecideStandaloneLaunchWithLingeringClientThreadsIsNotASession() throws Exception
+    {
+        IDebugTarget server = standaloneTargetWithLingeringClientThreads();
+        assertNull(LaunchLifecycleUtils.decideExistingClientSession(null, server.getLaunch()));
+        assertNull(LaunchLifecycleUtils.firstLiveClientThreadTarget(server.getLaunch()));
+    }
+
     @Test
     public void testSweepTargetManagerSkipsOwnedDebugSession() throws Exception
     {
@@ -582,7 +623,7 @@ public class LaunchLifecycleUtilsSessionTest
         // A foreign (not MCP-owned, e.g. a UI-started 'Debug As') client target IS terminated, and
         // the confirmed-termination boolean is returned.
         ILaunch foreignLaunch = mock(ILaunch.class);
-        IDebugTarget foreign = targetWithThreads(liveThread());
+        IDebugTarget foreign = targetWithThreads(liveTypedThread(DebugTargetType.MANAGED_CLIENT));
         when(foreign.getLaunch()).thenReturn(foreignLaunch);
         when(foreign.canTerminate()).thenReturn(true);
         when(foreign.isTerminated()).thenReturn(false, true);

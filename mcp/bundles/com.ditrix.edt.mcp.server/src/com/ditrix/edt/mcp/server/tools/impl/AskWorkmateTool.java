@@ -375,7 +375,7 @@ public class AskWorkmateTool implements IMcpTool
             + "markers, Git, tests - so prefer them over guessing whenever the question is " //$NON-NLS-1$
             + "about what is actually in the project.\n\n" //$NON-NLS-1$
             + "Every type below is JDK or standard OSGi API, so no unproven Java API is " //$NON-NLS-1$
-            + "involved. Call it with JShellManual (manual_id jshell_edt_canonical_imports), " //$NON-NLS-1$
+            + "involved. Call it with JShellManual (manual_id " + WorkmateGateway.CHAT_MANUAL_ID + "), " //$NON-NLS-1$ //$NON-NLS-2$
             + "then JShellSession, then JShell with scope=eclipse and this code:\n\n" //$NON-NLS-1$
             + "{\n" //$NON-NLS-1$
             + "var ctx = org.osgi.framework.FrameworkUtil\n" //$NON-NLS-1$

@@ -46,6 +46,20 @@ public class AbstractMetadataFormatterTest
     /** Concrete subclass instance; protected helpers are reached via same-package access. */
     private final UniversalMetadataFormatter f = UniversalMetadataFormatter.getInstance();
 
+    @Test
+    public void testCharacteristicValueTypeKeepsItsFeedableEnglishName()
+    {
+        for (String name : new String[] {"ExpenseItems", "СтатьиРасходов"})
+        {
+            com._1c.g5.v8.dt.mcore.TypeSet characteristic = McoreFactory.eINSTANCE.createTypeSet();
+            characteristic.setName("Characteristic." + name);
+            characteristic.setNameRu("Характеристика." + name);
+            TypeDescription type = McoreFactory.eINSTANCE.createTypeDescription();
+            type.getTypes().add(characteristic);
+            assertEquals("Characteristic." + name, f.formatType(type));
+        }
+    }
+
     // ==================== getSynonym — the language-CODE contract ====================
 
     @Test
