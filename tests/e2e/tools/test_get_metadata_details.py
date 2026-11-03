@@ -33,10 +33,49 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
 )
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_form_type_cell_caps_names_without_changing_assignable_value():
+    names = ["E2ECellType%02d" % i for i in range(1, 12)]
+    for name in names:
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + name})
+        assert_ok(created, "seed a distinct reference type")
+        assert_contains(read_disk("src/Catalogs/%s/%s.mdo" % (name, name)),
+                        "<name>%s</name>" % name, "catalog declaration persisted")
+    wait_for_project_ready()
+    form_fqn = "Catalog.Catalog.Form.ItemForm"
+    attribute_fqn = form_fqn + ".Attribute.E2ECappedTypes"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attribute_fqn}),
+              "seed the form attribute")
+    assert_contains(read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form"),
+                    "<name>E2ECappedTypes</name>", "attribute persisted")
+    changed = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": attribute_fqn,
+        "properties": [{"name": "type", "value": {"types": [
+            {"kind": "CatalogRef", "ref": name} for name in names]}}],
+    })
+    assert_ok(changed, "set eleven distinct reference types")
+    stored = read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
+    for name in names:
+        assert_contains(stored, "<types>CatalogRef.%s</types>" % name,
+                        "all types persist despite the display cap")
+    rendered = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form_fqn]})
+    assert_ok(rendered, "render the form type cell")
+    row = next((line for line in rendered.text.splitlines()
+                if line.startswith("| E2ECappedTypes |")), "")
+    assert_contains(row, "CatalogRef.E2ECellType10 \u2026 (+1 more)", "ten visible types and exact tail")
+    assert_not_contains(row, names[10], "eleventh type is omitted only from the cell")
+    assignable = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [attribute_fqn], "view": "assignable"})
+    assert_ok(assignable, "read back the full assignable type")
+    for name in names:
+        assert_contains(assignable.text, name, "the complete type value remains available")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

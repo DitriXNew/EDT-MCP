@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,6 +31,7 @@ import com._1c.g5.v8.dt.form.compare.FormComparisonNode;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.CollectionItem;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.compare.SupportStateReader.SupportState;
@@ -677,6 +679,8 @@ public final class ComparisonNodeRenderer
          */
         private final String[] identities = new String[SIDES.length];
 
+        private final Map<Integer, List<CollectionItem>> collections = new HashMap<>();
+
         /** Whether the read of that side's value FAILED, independent of what the cell renders. */
         private final boolean[] readFailed = new boolean[SIDES.length];
 
@@ -784,7 +788,15 @@ public final class ComparisonNodeRenderer
         for (int i = 0; i < shown; i++)
         {
             String name = properties.ordered.get(i);
-            String[] values = properties.rows.get(name).values;
+            PropertyRow row = properties.rows.get(name);
+            String[] values = row.values.clone();
+            if (properties.differing.contains(name))
+            {
+                for (int side = 0; side < SIDES.length; side++)
+                {
+                    values[side] = collectionDelta(row, side);
+                }
+            }
             sb.append(MarkdownUtils.tableRow(label(name), values[0], values[1], values[2]));
         }
         sb.append('\n');
@@ -864,8 +876,85 @@ public final class ComparisonNodeRenderer
             {
                 row.values[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
                 row.identities[index] = info.valueIdentity == null ? "" : info.valueIdentity; //$NON-NLS-1$
+                if (info.collectionItems != null)
+                {
+                    row.collections.put(index, info.collectionItems);
+                    if (info.collectionItems.size() > MarkdownUtils.TABLE_CELL_ITEM_LIMIT)
+                    {
+                        row.values[index] = MarkdownUtils.cappedList(info.collectionItems.stream()
+                            .map(CollectionItem::text).toList());
+                    }
+                }
             }
         }
+    }
+
+    /** Pairwise deltas keep three-way edits visible, including edits shared by Main and Other. */
+    private static String collectionDelta(PropertyRow row, int side)
+    {
+        List<CollectionItem> items = row.collections.get(side);
+        if (items == null)
+        {
+            return row.values[side];
+        }
+        Map<Integer, List<String>> onlyAgainst = new HashMap<>();
+        List<String> orderDifferences = new ArrayList<>();
+        boolean comparedAny = false;
+        for (int peer = 0; peer < SIDES.length; peer++)
+        {
+            List<CollectionItem> compared = row.collections.get(peer);
+            if (peer == side || compared == null || row.identities[side].equals(row.identities[peer]))
+            {
+                continue;
+            }
+            comparedAny = true;
+            Map<String, Integer> remaining = new HashMap<>();
+            for (CollectionItem item : compared)
+            {
+                remaining.merge(item.identity(), 1, Integer::sum);
+            }
+            int added = 0;
+            for (int index = 0; index < items.size(); index++)
+            {
+                CollectionItem item = items.get(index);
+                int count = remaining.getOrDefault(item.identity(), 0);
+                if (count == 0)
+                {
+                    onlyAgainst.computeIfAbsent(index, unused -> new ArrayList<>())
+                        .add(sideLabel(SIDES[peer]));
+                    added++;
+                }
+                else
+                {
+                    remaining.put(item.identity(), count - 1);
+                }
+            }
+            if (added == 0 && remaining.values().stream().allMatch(count -> count == 0))
+            {
+                orderDifferences.add(sideLabel(SIDES[peer]));
+            }
+        }
+        if (!comparedAny)
+        {
+            return row.values[side];
+        }
+        List<String> only = new ArrayList<>();
+        for (int index = 0; index < items.size(); index++)
+        {
+            List<String> peers = onlyAgainst.get(index);
+            if (peers != null)
+            {
+                only.add(items.get(index).identity() + " (vs " //$NON-NLS-1$
+                    + String.join(", ", peers) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        String delta = "Only in " + sideLabel(SIDES[side]) + ": " //$NON-NLS-1$ //$NON-NLS-2$
+            + (only.isEmpty() ? "(none)" : MarkdownUtils.cappedList(only)); //$NON-NLS-1$
+        if (!orderDifferences.isEmpty())
+        {
+            delta += "; same items, different order vs " + String.join(", ", orderDifferences); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return delta;
     }
 
     /**
