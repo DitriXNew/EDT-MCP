@@ -24,7 +24,7 @@ public class ProjectChecksMigrationTest
         {
             PreferenceStore store = stored(preset, 16);
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled_tool", "project_checks"), disabled(store));
+            assertEquals(Set.of("owner_disabled_tool", "project_checks", "clone_metadata_object"), disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
                 store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
