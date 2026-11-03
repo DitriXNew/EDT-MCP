@@ -36,6 +36,7 @@ from harness import (
     E2ECallTimeout,
     calls_aborted,
     call,
+    rename_call,
     assert_ok,
     assert_error,
     assert_error_quality,
@@ -652,7 +653,7 @@ def _repair_adopted_form_picture(rename_owner):
 
         renamed_owner = "E2ERenamedAdoptOwner"
         if rename_owner:
-            assert_ok(call("rename_metadata_object", {
+            assert_ok(rename_call({
                 "projectName": TESTS_PROJECT, "objectFqn": "Catalog.Catalog",
                 "newName": renamed_owner, "confirm": True,
             }), "rename only the extension's ID-mapped adopted owner")
@@ -728,7 +729,7 @@ def _repair_adopted_form_picture(rename_owner):
         assert_contains(details.text, "**Origin:** core (adopted)", "the repaired model copy must be adopted")
         if rename_owner:
             # EDT allows this rename but validates unequal base/extension names as a separate error.
-            assert_ok(call("rename_metadata_object", {
+            assert_ok(rename_call({
                 "projectName": TESTS_PROJECT, "objectFqn": "Catalog." + renamed_owner,
                 "newName": "Catalog", "confirm": True,
             }), "restore the owner's base name before checking project errors")

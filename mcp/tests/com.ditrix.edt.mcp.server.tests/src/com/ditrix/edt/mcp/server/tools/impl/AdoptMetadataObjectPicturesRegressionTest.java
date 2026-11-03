@@ -66,6 +66,110 @@ import com.google.gson.JsonParser;
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
     @Test
+    public void testFailureRetainsCommittedPictureWhenNativeLookupIsStale() throws Exception
+    {
+        assertFailureRetainsCommittedPicture(false, true, false);
+    }
+
+    @Test
+    public void testFailureRetainsCommittedPictureWhenRecoveryReadThrows() throws Exception
+    {
+        assertFailureRetainsCommittedPicture(true, true, false);
+    }
+
+    @Test
+    public void testFailureRetainsAnEarlierFailedExport() throws Exception
+    {
+        assertFailureRetainsCommittedPicture(false, false, false);
+    }
+
+    @Test
+    public void testRecoveryExportsOnlyAdditionalPicturesFromTheFailingStep() throws Exception
+    {
+        assertFailureRetainsCommittedPicture(false, true, true);
+    }
+
+    private void assertFailureRetainsCommittedPicture(boolean unreadable, boolean exported,
+        boolean additionalEffect) throws Exception
+    {
+        CommonPicture other = picture("Other");
+        form.getItems().add(field("First", logo));
+        form.getItems().add(field("Second", other));
+        when(models.forceExport(eq(dtExtension), anyList())).thenReturn(exported);
+        when(adopter.isAdopted(logo, target)).thenAnswer(inv -> {
+            if (unreadable && commits > 0)
+            {
+                throw new IllegalStateException("Lookup is unavailable after the first commit");
+            }
+            return false;
+        });
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            List<EObject> input = inv.getArgument(0);
+            EObject candidate = input.get(0);
+            if (candidate == other)
+            {
+                if (additionalEffect)
+                {
+                    adoptSource(other);
+                }
+                throw new IllegalStateException("Later picture adoption failed");
+            }
+            return List.of(adoptSource(candidate));
+        });
+        JsonObject result = run(FORM_FQN);
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertFalse(result.get("formAdopted").getAsBoolean());
+        assertNames(result, "adopted", additionalEffect
+            ? new String[] {"CommonPicture.Logo", "CommonPicture.Other"} : new String[] {"CommonPicture.Logo"});
+        assertNames(result, "unresolved", additionalEffect ? new String[0] : new String[] {"CommonPicture.Other"});
+        assertEquals(result.toString(), exported, result.get("persisted").getAsBoolean());
+        assertEquals(1, commits);
+        verify(models, times(1)).forceExport(dtExtension, List.of("CommonPicture.Logo", "Configuration"));
+        if (additionalEffect)
+        {
+            verify(models).forceExport(dtExtension, List.of("CommonPicture.Other", "Configuration"));
+        }
+        else
+        {
+            verify(models, times(1)).forceExport(eq(dtExtension), anyList());
+        }
+    }
+
+    @Test
+    public void testDetachedResultCapturesIdentityBeforeTheWriteTransactionEnds() throws Exception
+    {
+        EObject owner = exportedCopy("Catalog.Goods");
+        when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
+        CatalogForm global = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(((IBmObject)global).bmGetId()).thenReturn(2002L);
+        CatalogForm local = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(local.eIsProxy()).thenAnswer(inv -> {
+            assertTrue("transaction-local proxy state must not escape its write", writing);
+            return false;
+        });
+        when(((IBmObject)local).bmGetId()).thenAnswer(inv -> {
+            assertTrue("transaction-local identity must be captured before commit", writing);
+            return 2002L;
+        });
+        when(((IBmObject)local).bmGetTopObject()).thenReturn((IBmObject)owner);
+        when(extensionTx.toTransactionObject(global)).thenReturn(local);
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenAnswer(inv -> {
+            copies.put(mdForm, global);
+            committedObjects.put(2001L, (IBmObject)owner);
+            committedObjects.put(2002L, (IBmObject)global);
+            associated.addAll(List.of((IBmObject)owner, (IBmObject)global));
+            return List.of(MD.createCatalogForm());
+        });
+        JsonObject result = run(FORM_FQN);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertTrue("the mapping note must come from the re-resolved committed copy: " + result,
+            result.has("message"));
+        assertTrue(result.toString(), result.get("message").getAsString().contains("by NAME, not by ID"));
+        verify(extensionTx).toTransactionObject(global);
+        verify(extensionTx, times(2)).getObjectById(2002L);
+    }
+
+    @Test
     public void testReadoptionRepairsPicturesUsingTheRenamedAdoptedForm() throws Exception
     {
         assertRenamedReadoption(false, false);

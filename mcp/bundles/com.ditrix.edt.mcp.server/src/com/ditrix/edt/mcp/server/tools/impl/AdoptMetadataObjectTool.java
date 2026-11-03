@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
@@ -26,6 +27,7 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.core.event.BmAssociationEvent;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
@@ -310,8 +312,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
         AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
             adopter, source.object, target);
-        EObject adopted = write.copy;
-        if (adopted == null)
+        Long adoptedId = write.copyId;
+        if (adoptedId == null)
         {
             WriteScope.recordNothingQueued();
             return alreadyAdoptedResult(source, extName,
@@ -324,7 +326,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         boolean persisted = changes.persistToDisk(target.getProject());
 
         // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
-        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted), changes);
+        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adoptedId), changes);
     }
 
     /** Discover and preflight before entering the extension adoption write. */
@@ -334,6 +336,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         String extName = target.getProject().getName();
         boolean alreadyAdopted = adopter.isAdopted(source.object, target);
         EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, target) : null;
+        Long adoptedId = null;
         List<String> found = List.of();
         Set<String> unresolved = new LinkedHashSet<>();
         List<String> alreadyPresent = new ArrayList<>();
@@ -474,14 +477,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             {
                 AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
                     adopter, candidate, target);
-                if (write.copy == null)
+                if (write.copyId == null)
                 {
                     continue;
                 }
                 changed = true;
                 if (candidate == source.object)
                 {
-                    adopted = write.copy;
+                    adoptedId = write.copyId;
                 }
                 dirty.addAll(write.changes.dirty);
                 cascaded.addAll(write.changes.cascaded);
@@ -507,7 +510,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     unresolved.add(picture.getKey());
                 }
             }
-            if (adopted == null)
+            if (adopted == null && adoptedId == null)
             {
                 adopted = adoptedCopy(adopter, source.object, target);
             }
@@ -516,7 +519,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 WriteScope.recordNothingQueued();
             }
             ToolResult result;
-            if (!unresolved.isEmpty() || !alreadyAdopted && adopted == null)
+            if (!unresolved.isEmpty() || !alreadyAdopted && adoptedId == null && adopted == null)
             {
                 result = ToolResult.error("Adoption incomplete for '" + source.fqn //$NON-NLS-1$
                     + "'. Inspect the extension with get_metadata_details and fix unresolved references " //$NON-NLS-1$
@@ -527,7 +530,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             {
                 result = alreadyAdopted || !changed
                     ? alreadyAdoptedPayload(source, extName, mapping.forEarlierCopy(adopted))
-                    : adoptedPayload(source, extName, persisted, mapping.forNewCopy(adopted));
+                    : adoptedPayload(source, extName, persisted, mapping.forNewCopy(adoptedId));
                 result.put(KEY_PERSISTED, persisted);
             }
             List<String> cascadeFqns = cascaded.stream().sorted().collect(Collectors.toList());
@@ -537,34 +540,43 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         catch (Exception e)
         {
             return failedFormAdoption(source, target, adopter, extensionModel, alreadyAdopted,
-                found, alreadyPresent, missing, e);
+                found, alreadyPresent, missing, dirty, persisted, adoptedId != null, e);
         }
     }
 
     private static String failedFormAdoption(AdoptionSource source, IExtensionProject target,
         IModelObjectAdopter adopter, IBmModel model, boolean wasAdopted, List<String> found,
-        List<String> alreadyPresent, Map<String, EObject> missing, Exception failure)
+        List<String> alreadyPresent, Map<String, EObject> missing, Set<String> completedDirty,
+        boolean completedPersisted, boolean formCommitted, Exception failure)
     {
         List<String> adoptedPictures = new ArrayList<>();
         Set<String> unresolved = new LinkedHashSet<>();
         Set<String> dirty = new LinkedHashSet<>();
-        Boolean formAdopted = wasAdopted ? Boolean.TRUE : null;
-        try
+        Boolean formAdopted = wasAdopted || formCommitted ? Boolean.TRUE : null;
+        if (formAdopted == null)
         {
-            formAdopted = isAdoptedInModel(model, adopter, source.object, target);
-            if (!wasAdopted && formAdopted)
+            try
             {
-                dirty.addAll(dirtyCopyFqns(model, adoptedCopy(adopter, source.object, target)));
+                formAdopted = isAdoptedInModel(model, adopter, source.object, target);
+                if (formAdopted)
+                {
+                    dirty.addAll(dirtyCopyFqns(model, adoptedCopy(adopter, source.object, target)));
+                }
             }
-        }
-        catch (RuntimeException e)
-        {
-            // Continue checking independent pictures when the form's top cannot be read.
+            catch (RuntimeException e)
+            {
+                // Continue checking independent pictures when the form's top cannot be read.
+            }
         }
         for (Map.Entry<String, EObject> picture : missing.entrySet())
         {
             if (alreadyPresent.contains(picture.getKey()))
             {
+                continue;
+            }
+            if (completedDirty.contains(picture.getKey()))
+            {
+                adoptedPictures.add(picture.getKey());
                 continue;
             }
             try
@@ -585,13 +597,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
         }
         dirty.remove("Configuration"); //$NON-NLS-1$
+        boolean persisted = !completedDirty.isEmpty() && completedPersisted;
         if (!dirty.isEmpty())
         {
             dirty.add("Configuration"); //$NON-NLS-1$
             WriteScope.recordWrite(target.getProject());
+            persisted = BmTransactions.forceExportToDisk(target.getProject(), new ArrayList<>(dirty))
+                && (completedDirty.isEmpty() || completedPersisted);
         }
-        boolean persisted = !dirty.isEmpty()
-            && BmTransactions.forceExportToDisk(target.getProject(), new ArrayList<>(dirty));
         String detail = String.valueOf(unwrapCauseMessage(failure));
         ToolResult result = ToolResult.error("Adoption failed for '" + source.fqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
             + detail + (detail.endsWith(".") ? " " : ". ") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -731,12 +744,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
 
         /**
-         * @param copy the copy this call adopted, or {@code null}
+         * @param copyId the stored identity captured during this call's adoption, or {@code null}
          * @return its note, or {@code null}
          */
-        String forNewCopy(EObject copy)
+        String forNewCopy(Long copyId)
         {
-            return mappingNote(extName, extensionModel, copy, version, keepsMappingByIds, false);
+            Boolean linked = copyId == null ? null : readCopyLink(extensionModel, tx -> tx.getObjectById(copyId));
+            return byNameMappingNote(extName, linked, version, keepsMappingByIds, false);
         }
     }
 
@@ -943,13 +957,23 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             return null; // NOSONAR tri-state: null means "could not be read"
         }
+        return readCopyLink(extensionModel, tx -> {
+            URI proxyUri = copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
+            return proxyUri != null ? tx.getObjectByUri(proxyUri) : tx.getObjectById(((IBmObject)copy).bmGetId());
+        });
+    }
+
+    private static Boolean readCopyLink(IBmModel model, Function<IBmTransaction, IBmObject> resolve)
+    {
+        if (model == null)
+        {
+            return null;
+        }
         try
         {
-            URI proxyUri = copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
-            long id = ((IBmObject)copy).bmGetId();
-            return BmTransactions.read(extensionModel, "adopt_metadata_object: read the copy's link", //$NON-NLS-1$
+            return BmTransactions.read(model, "adopt_metadata_object: read the copy's link", //$NON-NLS-1$
                 (tx, monitor) -> {
-                    IBmObject inTx = proxyUri != null ? tx.getObjectByUri(proxyUri) : tx.getObjectById(id);
+                    IBmObject inTx = resolve.apply(tx);
                     return inTx instanceof MdObject
                         ? Boolean.valueOf(((MdObject)inTx).getExtendedConfigurationObject() != null)
                         : null;
@@ -1098,7 +1122,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     {
         AtomicReference<Set<Long>> associatedIds = new AtomicReference<>();
         List<String> requested = new ArrayList<>();
-        EObject adopted = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
+        Long adoptedId = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
             requested.clear(); // A deadlock retry executes the task again.
             IBmModel adoptingModel = target.getAdapter(IBmModel.class);
             if (adoptingModel == null || adoptingModel.getEngine().getCurrentTransaction() != tx)
@@ -1154,7 +1178,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                         inTx = null;
                     }
                 }
-                copy = inTx;
             }
             if (inTx == null)
             {
@@ -1162,7 +1185,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "get_metadata_objects before retrying adoption."); //$NON-NLS-1$
             }
             requested.addAll(dirtyFqns(inTx, (Configuration)root));
-            return copy;
+            return Long.valueOf(((IBmObject)inTx).bmGetId());
         }, event -> {
             Set<Long> ids = new LinkedHashSet<>();
             BmAssociationEvent association = event.getAssociationEvent();
@@ -1178,7 +1201,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
             associatedIds.set(ids);
         });
-        if (adopted == null)
+        if (adoptedId == null)
         {
             return new AdoptionWrite(null, new AdoptionChanges(Collections.emptyList(), Collections.emptyList()));
         }
@@ -1186,7 +1209,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         Set<Long> ids = associatedIds.get();
         if (ids == null)
         {
-            return new AdoptionWrite(adopted, AdoptionChanges.unavailable(requested,
+            return new AdoptionWrite(adoptedId, AdoptionChanges.unavailable(requested,
                 "EDT did not report its transaction additions")); //$NON-NLS-1$
         }
         AdoptionChanges changes;
@@ -1223,18 +1246,18 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             Activator.logInfo("adopt_metadata_object: could not read committed additions: " + e); //$NON-NLS-1$
             changes = AdoptionChanges.unavailable(requested, "the committed additions could not be read"); //$NON-NLS-1$
         }
-        return new AdoptionWrite(adopted, changes);
+        return new AdoptionWrite(adoptedId, changes);
     }
 
-    /** Result of the committed adoption, with detached FQNs for response and export. */
+    /** Detached identity and FQNs of the committed adoption; no transaction-local object escapes. */
     static final class AdoptionWrite
     {
-        final EObject copy;
+        final Long copyId;
         final AdoptionChanges changes;
 
-        AdoptionWrite(EObject copy, AdoptionChanges changes)
+        AdoptionWrite(Long copyId, AdoptionChanges changes)
         {
-            this.copy = copy;
+            this.copyId = copyId;
             this.changes = changes;
         }
     }
