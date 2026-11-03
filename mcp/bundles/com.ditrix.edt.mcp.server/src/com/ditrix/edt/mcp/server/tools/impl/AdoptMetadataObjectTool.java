@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.AdoptedFormAttachment;
 import com.ditrix.edt.mcp.server.utils.AdoptedFormLookup;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -1181,8 +1182,34 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
             if (inTx == null)
             {
-                throw new IllegalStateException("Adopted copy is unavailable; inspect the extension with " //$NON-NLS-1$
-                    + "get_metadata_objects before retrying adoption."); //$NON-NLS-1$
+                String recoveryFailure = null;
+                if (source instanceof BasicForm && copy instanceof IBmObject
+                    && ((IBmObject)copy).bmGetId() == IBmObject.BM_NULL_ID)
+                {
+                    try
+                    {
+                        inTx = AdoptedFormAttachment.complete(tx, (BasicForm)source, copy,
+                            Activator.getDefault().getTopObjectFqnGenerator());
+                        if (inTx != null)
+                        {
+                            Activator.logInfo("adopt_metadata_object: Completed native form attachment after a " //$NON-NLS-1$
+                                + "cross-namespace containment collision: " + MetadataNodeResolver.addressOf((MdObject)inTx)); //$NON-NLS-1$
+                        }
+                    }
+                    catch (RuntimeException e)
+                    {
+                        recoveryFailure = e.getMessage();
+                    }
+                }
+                if (inTx == null)
+                {
+                    String message = "Adopted copy is unavailable (" //$NON-NLS-1$
+                        + AdoptedFormAttachment.describe(tx, source, copy)
+                        + (recoveryFailure == null ? "" : ", attachmentFailure=" + recoveryFailure) //$NON-NLS-1$ //$NON-NLS-2$
+                        + "); inspect the extension with get_metadata_objects before retrying adoption."; //$NON-NLS-1$
+                    Activator.logWarning("adopt_metadata_object: " + message); //$NON-NLS-1$
+                    throw new IllegalStateException(message);
+                }
             }
             requested.addAll(dirtyFqns(inTx, (Configuration)root));
             return Long.valueOf(((IBmObject)inTx).bmGetId());

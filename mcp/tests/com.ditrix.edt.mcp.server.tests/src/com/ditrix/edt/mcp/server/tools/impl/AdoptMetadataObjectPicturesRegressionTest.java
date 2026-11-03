@@ -23,10 +23,15 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.lang.reflect.Field;
 
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.ecore.EObject;
@@ -35,6 +40,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmNamespaceDataStore;
 import com._1c.g5.v8.dt.core.naming.ISymbolicNameService;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -65,6 +71,79 @@ import com.google.gson.JsonParser;
 /** Compatibility, persisted-model recovery, and failure reporting regressions. */
 public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObjectPicturesTestSupport
 {
+    @Test
+    public void testNativeContainmentCollisionIsCompletedBeforeCommitWithoutRetry() throws Exception
+    {
+        Catalog baseOwner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class)
+            .defaultAnswer(delegatesTo(goods)));
+        doReturn(2001L).when((IBmObject)baseOwner).bmGetId();
+        doReturn(mock(IBmNamespace.class)).when((IBmObject)baseOwner).bmGetNamespace();
+        CatalogForm source = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class)
+            .defaultAnswer(delegatesTo(mdForm)));
+        doReturn(baseOwner).when(source).eContainer();
+        Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(owner.getName()).thenReturn("Goods");
+        when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
+        when(((IBmObject)owner).bmIsTop()).thenReturn(true);
+        when(((IBmObject)owner).bmGetFqn()).thenReturn("Catalog.Goods");
+        when(extensionTx.getTopObjectByFqn("Catalog.Goods")).thenReturn((IBmObject)owner);
+        CatalogForm copy = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        when(copy.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
+        when(copy.getName()).thenReturn("Item");
+        when(copy.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        AtomicLong id = new AtomicLong(IBmObject.BM_NULL_ID);
+        when(((IBmObject)copy).bmGetId()).thenAnswer(inv -> id.get());
+        when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)owner);
+        Form content = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
+        when(copy.getForm()).thenReturn(content);
+        when(((IBmObject)content).bmGetId()).thenReturn(3001L);
+        when(((IBmObject)content).bmIsTop()).thenReturn(true);
+        when(((IBmObject)content).bmGetFqn()).thenReturn("CatalogForm.Item.Form");
+        when(extensionTx.getTopObjectIterator()).thenAnswer(inv -> List.of((IBmObject)content).iterator());
+        when(extensionTx.getTopObjectByFqn("Catalog.Goods.Form.Item.Form")).thenReturn(null);
+        when(Activator.getDefault().getTopObjectFqnGenerator()
+            .generateExternalPropertyFqn(copy, MdClassPackage.Literals.BASIC_FORM__FORM))
+                .thenAnswer(inv -> id.get() == IBmObject.BM_NULL_ID
+                    ? "CatalogForm.Item.Form" : "Catalog.Goods.Form.Item.Form");
+        BasicEList<EObject> forms = new BasicEList<>()
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public boolean contains(Object value)
+            {
+                return value == source || super.contains(value);
+            }
+
+            @Override
+            public boolean add(EObject value)
+            {
+                if (value == copy)
+                {
+                    assertTrue("attachment must finish inside the original write", writing);
+                    id.set(2002L);
+                    committedObjects.put(2002L, (IBmObject)copy);
+                    associated.add((IBmObject)copy);
+                }
+                return super.add(value);
+            }
+        };
+        forms.add(MD.createCatalogForm());
+        when(owner.eGet(MdClassPackage.Literals.CATALOG__FORMS)).thenReturn(forms);
+        when(adopter.getAdopted(source, target)).thenReturn(null);
+        when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of(copy));
+        workspaceRule = true;
+        var result = AdoptMetadataObjectTool.adoptWithChanges(extensionModel, adopter, source, target);
+        assertEquals(Long.valueOf(2002L), result.copyId);
+        assertEquals(1, commits);
+        assertEquals(List.of("Catalog.Goods", "Configuration"), result.changes.dirty);
+        assertEquals(copy, forms.get(1));
+        verify(extensionTx).updateTopObjectFqn((IBmObject)content, "Catalog.Goods.Form.Item.Form");
+        verify(adopter, times(1)).adoptAndAttach(anyList(), eq(target), any());
+    }
+
     @Test
     public void testFailureRetainsCommittedPictureWhenNativeLookupIsStale() throws Exception
     {
@@ -405,11 +484,34 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     public void testMissingNativeCopyReportsASinglePeriodBeforeRecoveryAdvice() throws Exception
     {
         when(adopter.adoptAndAttach(anyList(), eq(target), any())).thenReturn(List.of(MD.createCatalogForm()));
-        JsonObject result = run(FORM_FQN);
+        List<IStatus> warnings = new ArrayList<>();
+        ILog log = Platform.getLog(Platform.getBundle(Activator.PLUGIN_ID));
+        ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().startsWith("adopt_metadata_object: Adopted copy is unavailable"))
+            {
+                warnings.add(status);
+            }
+        };
+        JsonObject result;
+        log.addLogListener(listener);
+        try
+        {
+            result = run(FORM_FQN);
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
         String error = result.get("error").getAsString();
         assertFalse(result.toString(), result.get("success").getAsBoolean());
         assertTrue(error, error.contains("get_metadata_objects before retrying adoption. Inspect"));
         assertFalse(error, error.contains("adoption.. Inspect"));
+        assertTrue(error, error.contains("copy=CatalogFormImpl:null#-1, container=null, feature=null"));
+        assertTrue(error, error.contains("ownerFound=false") && error.contains("formsCount=0"));
+        assertTrue(error, error.contains("candidates=[]"));
+        assertEquals("the failure must be diagnosable in edt.log", 1, warnings.size());
+        assertEquals(IStatus.WARNING, warnings.get(0).getSeverity());
+        assertTrue(error, error.contains(warnings.get(0).getMessage().substring("adopt_metadata_object: ".length())));
         verify(adopter).getAdopted(mdForm, target);
         verify(extensionTx, never()).getObjectById(IBmObject.BM_NULL_ID);
     }

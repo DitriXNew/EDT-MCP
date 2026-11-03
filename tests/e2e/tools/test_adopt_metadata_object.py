@@ -650,6 +650,8 @@ def _repair_adopted_form_picture(rename_owner):
                         "positive control: the extension picture must exist before deletion")
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk), picture_fqn,
                         "the adopted form must persist its common-picture reference")
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk.replace("/Form.form", "/BaseForm/Form.form")),
+                        picture_fqn, "the native base snapshot must be exported under the adopted owner")
 
         renamed_owner = "E2ERenamedAdoptOwner"
         if rename_owner:

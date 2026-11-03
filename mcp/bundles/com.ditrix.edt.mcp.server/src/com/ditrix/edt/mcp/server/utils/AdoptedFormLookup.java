@@ -31,24 +31,26 @@ public final class AdoptedFormLookup
         {
             return findTop(tx, (MdObject)source);
         }
-        EObject baseOwner = source.eContainer();
+        MdObject storedOwner = findOwner(tx, source);
         EStructuralFeature feature = source.eContainingFeature();
-        if (!(baseOwner instanceof MdObject) || feature == null || !feature.isMany())
-        {
-            return null;
-        }
-        MdObject storedOwner = findTop(tx, (MdObject)baseOwner);
         if (storedOwner == null)
         {
             return null;
         }
         // ModelObjectAdopter.addChild writes this exact containment on its transaction-local owner.
         Object contents = storedOwner.eGet(feature);
-        if (!(contents instanceof Iterable<?>))
+        return contents instanceof Iterable<?> ? select(tx, (MdObject)source, (Iterable<?>)contents) : null;
+    }
+
+    static MdObject findOwner(IBmTransaction tx, BasicForm source)
+    {
+        EObject baseOwner = source.eContainer();
+        EStructuralFeature feature = source.eContainingFeature();
+        if (!(baseOwner instanceof MdObject) || feature == null || !feature.isMany())
         {
             return null;
         }
-        return select(tx, (MdObject)source, (Iterable<?>)contents);
+        return findTop(tx, (MdObject)baseOwner);
     }
 
     private static MdObject findTop(IBmTransaction tx, MdObject source)
