@@ -569,9 +569,11 @@ def _is_transient_building(result):
 _OUTPUT_SCHEMAS = None
 
 
-def _output_schemas():
-    """Cache the server's advertised contracts once, including paginated catalogues."""
+def _output_schemas(refresh=False):
+    """Cache each advertised tool's contract, including explicit schema-free entries."""
     global _OUTPUT_SCHEMAS
+    if refresh:
+        _OUTPUT_SCHEMAS = None
     if _OUTPUT_SCHEMAS is None:
         schemas, params, cursors = {}, {}, set()
         while True:
@@ -580,8 +582,7 @@ def _output_schemas():
             if "error" in raw or not isinstance(page.get("tools"), list):
                 raise AssertionError("tools/list: cannot load outputSchema contracts: %r" % raw)
             for tool in page["tools"]:
-                if "outputSchema" in tool:
-                    schemas[tool["name"]] = tool["outputSchema"]
+                schemas[tool["name"]] = tool.get("outputSchema")
             cursor = page.get("nextCursor")
             if not cursor:
                 break
@@ -671,7 +672,13 @@ def _validate_tool_output(tool, result):
         return
     if isinstance(result.structured, dict) and result.structured.get("success") is False:
         return
-    schema = _output_schemas().get(tool)
+    schemas = _output_schemas()
+    if tool not in schemas:
+        schemas = _output_schemas(refresh=True)
+    if tool not in schemas:
+        raise AssertionError("%s structuredContent $: outputSchema discovery: tool is not advertised "
+                             "by tools/list; enable its toolset before calling it" % tool)
+    schema = schemas[tool]
     if schema is not None:
         validate_output_schema(result.structured, schema, tool)
 
@@ -685,6 +692,7 @@ def call(tool, arguments):
     until it clears stabilizes the slower matrix legs without masking a real success/error
     (which returns unchanged on the next attempt). Bounded by BUILDING_RETRY_TIMEOUT; on
     expiry the building refusal is returned so the test fails loudly rather than hanging."""
+    global _OUTPUT_SCHEMAS
     deadline = time.time() + BUILDING_RETRY_TIMEOUT
     attempt = 0
     # Record the attempt BEFORE issuing it, once for the whole retry loop. If the request dies
@@ -695,6 +703,8 @@ def call(tool, arguments):
     # Prove the body can be built before counting the attempt. If this raises, nothing left this
     # process, so no outcome exists for anyone to read back.
     json.dumps({"name": tool, "arguments": arguments})
+    if tool == "enable_toolset":
+        _OUTPUT_SCHEMAS = None
     _record_attempt(tool, arguments)
     while True:
         try:
@@ -1423,7 +1433,10 @@ def initialize(capabilities=None):
     """MCP lifecycle handshake: initialize -> capture session id -> notifications/initialized.
 
     Per the 2025-06-18 / 2025-11-25 spec the client MUST send initialize first and
-    then the initialized notification before normal operations. Done once at startup."""
+    then the initialized notification before normal operations. Reset cached contracts
+    for the new session's capabilities and visible tools."""
+    global _OUTPUT_SCHEMAS
+    _OUTPUT_SCHEMAS = None
     result = _post("initialize", {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": capabilities or {},

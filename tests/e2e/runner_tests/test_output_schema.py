@@ -133,7 +133,8 @@ class OutputSchemaCallContractTest(unittest.TestCase):
                 self.h.call("modify_metadata", {})
 
     def test_each_tool_uses_its_own_cached_schema(self):
-        self.h._OUTPUT_SCHEMAS = {"first": {"type": "object"}, "second": self.schema}
+        self.h._OUTPUT_SCHEMAS = {"first": {"type": "object"}, "second": self.schema,
+                                  "unconstrained_tool": None}
         raw = {"result": {"structuredContent": {}}}
         with mock.patch.object(self.h, "_post", return_value=raw):
             self.h.call("first", {})
@@ -155,3 +156,69 @@ class OutputSchemaCallContractTest(unittest.TestCase):
         raw = {"result": {"structuredContent": {"applied": {"rights": 1, "templates": 0, "roleProperties": 0}}}}
         with mock.patch.object(self.h, "_post", side_effect=[raw, self.catalogue(schema=schema)]):
             self.h.call("modify_metadata", {})
+
+
+    def test_toolset_enable_refreshes_newly_revealed_schema(self):
+        self.h._OUTPUT_SCHEMAS = {"enable_toolset": self.schema}
+        toggle = {"result": {"structuredContent": {"applied": ["metadata"]}}}
+        invalid = {"result": {"structuredContent": {"applied": 42}}}
+        catalogue = {"result": {"tools": [
+            {"name": "enable_toolset", "outputSchema": self.schema},
+            {"name": "modify_metadata", "outputSchema": self.schema}]}}
+
+        def post(method, params):
+            if method == "tools/list":
+                return catalogue
+            return toggle if params["name"] == "enable_toolset" else invalid
+
+        with mock.patch.object(self.h, "_post", side_effect=post) as wire:
+            self.h.call("enable_toolset", {"toolsets": ["metadata"]})
+            self.assertIn(mock.call("tools/list", {}), wire.call_args_list)
+            with self.assertRaisesRegex(AssertionError, "modify_metadata.*applied.*type"):
+                self.h.call("modify_metadata", {})
+        self.assertEqual(1, sum(c.args[0] == "tools/list" for c in wire.call_args_list))
+
+    def test_toolset_disable_removes_hidden_tool_from_cached_catalogue(self):
+        self.h._OUTPUT_SCHEMAS = {"enable_toolset": self.schema, "modify_metadata": self.schema}
+        toggle = {"result": {"structuredContent": {"applied": ["metadata"]}}}
+        with mock.patch.object(self.h, "_post", side_effect=[toggle, self.catalogue("enable_toolset")]):
+            self.h.call("enable_toolset", {"toolsets": ["metadata"], "disable": True})
+        self.assertNotIn("modify_metadata", self.h._OUTPUT_SCHEMAS)
+
+    def test_initialize_discards_prior_session_schemas(self):
+        self.h._OUTPUT_SCHEMAS = {"modify_metadata": {"type": "object"}}
+        invalid = {"result": {"structuredContent": {"applied": 42}}}
+        with mock.patch.object(self.h, "_notify") as notify, \
+                mock.patch.object(self.h, "_post", side_effect=[{"result": {}}, invalid, self.catalogue()]) as wire:
+            self.h.initialize()
+            with self.assertRaisesRegex(AssertionError, "modify_metadata.*applied.*type"):
+                self.h.call("modify_metadata", {})
+        notify.assert_called_once_with("notifications/initialized", {})
+        self.assertEqual("tools/list", wire.call_args_list[-1].args[0])
+
+    def test_cache_miss_refreshes_before_validating_a_new_tool(self):
+        self.h._OUTPUT_SCHEMAS = {"known": None}
+        invalid = {"result": {"structuredContent": {"applied": 42}}}
+        with mock.patch.object(self.h, "_post", side_effect=[invalid, self.catalogue()]) as wire:
+            with self.assertRaisesRegex(AssertionError, "modify_metadata.*applied.*type"):
+                self.h.call("modify_metadata", {})
+        self.assertEqual(mock.call("tools/list", {}), wire.call_args_list[-1])
+
+    def test_undiscovered_tool_fails_after_refresh(self):
+        self.h._OUTPUT_SCHEMAS = {"known": None}
+        raw = {"result": {"structuredContent": {}}}
+        catalogue = {"result": {"tools": [{"name": "known"}]}}
+        with mock.patch.object(self.h, "_post", side_effect=[raw, catalogue]) as wire:
+            with self.assertRaisesRegex(AssertionError, "hidden_tool.*outputSchema.*not advertised"):
+                self.h.call("hidden_tool", {})
+        self.assertEqual(mock.call("tools/list", {}), wire.call_args_list[-1])
+
+    def test_advertised_schema_free_tool_is_cached_explicitly(self):
+        raw = {"result": {"structuredContent": {"arbitrary": "value"}}}
+        catalogue = {"result": {"tools": [{"name": "schema_free"}]}}
+        with mock.patch.object(self.h, "_post", side_effect=[raw, catalogue, raw]) as wire:
+            self.h.call("schema_free", {})
+            self.assertIn("schema_free", self.h._OUTPUT_SCHEMAS)
+            self.assertIsNone(self.h._OUTPUT_SCHEMAS["schema_free"])
+            self.h.call("schema_free", {})
+        self.assertEqual(1, sum(c.args[0] == "tools/list" for c in wire.call_args_list))
