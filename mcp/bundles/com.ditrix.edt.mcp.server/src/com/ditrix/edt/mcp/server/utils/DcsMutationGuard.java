@@ -11,12 +11,29 @@ import java.util.List;
 
 import org.eclipse.emf.ecore.EObject;
 
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+
 /** Safety checks shared by destructive DCS mutations. */
 public final class DcsMutationGuard
 {
     private DcsMutationGuard()
     {
         // Utility class
+    }
+
+    /** Checks the attached model before commit, independently of the serializer's XML projection. */
+    public static String xmlReplaceError(DataCompositionSchema requested, DataCompositionSchema actual,
+        DcsAddress target)
+    {
+        var expectedCounts = DcsReadProjection.schemaCounts(requested);
+        var actualCounts = DcsReadProjection.schemaCounts(actual);
+        String difference = DcsModelComparison.firstDifference(requested, actual);
+        if (difference == null && expectedCounts.equals(actualCounts)) return null;
+        return "XML replacement was refused at '" + target + "' because the attached EDT model " //$NON-NLS-1$ //$NON-NLS-2$
+            + "differs from the parsed schema: " + (difference == null ? "collection counts" : difference) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Requested: " + expectedCounts //$NON-NLS-1$
+            + "; model: " + actualCounts + ". Re-open or clean the project, run dcs action='get', " //$NON-NLS-1$ //$NON-NLS-2$
+            + "then retry the complete XML replacement; nothing was written."; //$NON-NLS-1$
     }
 
     /** Refuses authoritative replacement when it would discard an unmodellable descendant. */

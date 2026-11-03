@@ -217,6 +217,19 @@ def _xml_structure(xml):
     return node(root)
 
 
+def _poll_dcs_xml_structure(rel_path, expected_xml, ctx=""):
+    """Return the exported snapshot once its complete XML structure matches the model."""
+    expected = _xml_structure(expected_xml)
+
+    def matches(text):
+        try:
+            return _xml_structure(text) == expected
+        except ET.ParseError:
+            return False  # The asynchronous export may be between truncation and completion.
+
+    return poll_disk_contains_all(rel_path, [], ctx=ctx, check=matches)
+
+
 def _read_all_xml(fqn, limit=None):
     """Read every JSON-envelope page and enforce the transfer invariants."""
     offset = 0
@@ -340,6 +353,98 @@ def _read_all_text_value(fqn, target_type, *, limit):
         following = int(next_offset.group(1))
         assert following > offset, "a non-final composite page must make progress"
         offset = following
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_xml_replace_keeps_four_parameters_and_followup_dataset_write_in_model_and_disk():
+    source = _seed_report("E2EDcs664Source")
+    period_name = "СтандартныйПериод"
+    parameter_names = [period_name, "НачалоПериода", "КонецПериода", "Дата"]
+    period = {"kind": "standardPeriod", "value": {"variant": "ThisYear"}}
+    fields = [{"dataPath": "F%d" % i, "field": "F%d" % i} for i in range(14)]
+    fields[0].update({"role": {"periodNumber": 1, "periodType": "Main"},
+                      "useRestriction": {"field": True},
+                      "attributeUseRestriction": {"condition": True},
+                      "appearance": {"Format": "NFD=2"}})
+    query = "SELECT " + ", ".join("%d AS F%d" % (i, i) for i in range(14))
+    source_before = _get(source, "schema")
+    assert_ok(source_before)
+    authored = _write(source, "replace", "schema", {
+        "dataSources": [{"name": "Main", "type": "Local"}],
+        "dataSets": [{"name": "DataSet1", "dataSource": "Main", "query": query, "autoFillFields": False,
+                      "fields": fields}],
+        "parameters": [
+            {"name": period_name, "values": [period]},
+            {"name": parameter_names[1], "expression": "&" + period_name + ".StartDate"},
+            {"name": parameter_names[2], "expression": "&" + period_name + ".EndDate"},
+            {"name": parameter_names[3]},
+        ],
+        "variants": [{"name": "Main", "presentation": "Main", "settings": {
+            "dataParameters": {"items": [{"parameter": {"kind": "parameter", "value": period_name},
+                                           "value": period, "use": True}]},
+            "outputParameters": {"items": [{"parameter": {"kind": "parameter", "value": "Title"},
+                                             "value": "Issue 664 title", "use": True}]},
+            "conditionalAppearance": {"items": [{"appearance": {"Format": "NFD=2"}}]},
+        }}],
+    }, expectedHash=_hash(source_before))
+    assert_ok(authored, "seed the four-parameter XML import fixture")
+    source_xml, _ = _read_all_xml(source)
+    ns = {"d": "http://v8.1c.ru/8.1/data-composition-system/schema"}
+    source_document = ET.fromstring(source_xml)
+    source_parameters = source_document.findall("d:parameter", ns)
+    assert [item.findtext("d:name", namespaces=ns) for item in source_parameters] == parameter_names
+    assert len(source_document.findall("d:dataSet/d:field", ns)) == 14
+    assert "ThisYear" in source_xml
+
+    target_name = "E2EDcs664Target"
+    target = _seed_report(target_name)
+    target_path = _poll_report_dcs(target_name, ctx="seed the existing XML replacement target")
+    for attempt in range(2):
+        before = _get(target, "schema")
+        assert_ok(before)
+        replaced = _write(target, "replace", "schema", {"xml": source_xml}, expectedHash=_hash(before))
+        assert_ok(replaced, "replace the attached schema, pass %d" % attempt)
+        assert_contains(replaced.text,
+                        "xml=wholesale, dataSources=1, dataSets=1, fields=14, parameters=4, variants=1")
+        disk = _poll_dcs_xml_structure(target_path, source_xml,
+                                       ctx="the scheduled XML replacement must reach disk")
+        assert _xml_structure(disk) == _xml_structure(source_xml), \
+            "the scheduled export must retain the complete imported schema"
+        parameters = _get(target, "parameter")
+        assert_ok(parameters)
+        for name in parameter_names:
+            assert_contains(parameters.text, name)
+        model_xml, _ = _read_all_xml(target)
+        assert _xml_structure(model_xml) == _xml_structure(source_xml), \
+            "the attached model must retain every parameter, field role, appearance and variant value"
+
+    updated = _write(target + "#/dataSets/DataSet1", "update", "dataSet", {"query": query + "\n"})
+    assert_ok(updated, "the write after XML replacement must use a healthy model")
+    model_after_update, _ = _read_all_xml(target)
+    assert ET.fromstring(model_after_update).findtext("d:dataSet/d:query", namespaces=ns) == query + "\n", \
+        "the model must contain the following data-set update"
+    exported_after_update = _poll_dcs_xml_structure(
+        target_path, model_after_update, ctx="the scheduled data-set update must reach disk")
+    disk_after_update = ET.fromstring(exported_after_update)
+    assert [ET.tostring(p) for p in disk_after_update.findall("d:parameter", ns)] == [
+        ET.tostring(p) for p in source_parameters], "the following write must not erase imported parameters"
+    assert _xml_structure(model_after_update) == _xml_structure(exported_after_update)
+
+    before_refusal = exported_after_update
+    current = _get(target, "schema")
+    assert_ok(current)
+    opening, closing = source_xml.rsplit("</", 1)
+    lossy_xml = opening + "<Issue664Unsupported>must survive</Issue664Unsupported></" + closing
+    refused = _write(target, "replace", "schema", {"xml": lossy_xml}, expectedHash=_hash(current))
+    message = assert_error(refused, "refuse an XML member EDT cannot retain")
+    assert_error_quality(message, names=["Issue664Unsupported"], suggests=["nothing was written", "retry"])
+    after_refusal_disk = poll_disk_contains_all(
+        target_path, [], check=lambda text: text == before_refusal,
+        ctx="the refused XML import must leave the completed export unchanged")
+    assert after_refusal_disk == before_refusal, "refused import must roll back and leave disk unchanged"
+    after_refusal = _get(target, "schema")
+    assert_ok(after_refusal)
+    assert _hash(after_refusal) == _hash(current), "refused import must leave the model unchanged"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")

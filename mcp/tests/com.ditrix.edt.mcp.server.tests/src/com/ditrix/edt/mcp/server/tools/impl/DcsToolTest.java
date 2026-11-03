@@ -433,6 +433,25 @@ public class DcsToolTest
         assertTrue(result, result.contains("not both")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testInvalidXmlBodyValuesExplainNoWriteAndRecovery()
+    {
+        for (String xml : new String[] {"\"\"", "\"   \"", "42", "true", "{}", "[]"})
+        {
+            var params = baseGet("Report.Sales", "schema");
+            params.put("action", "replace");
+            params.put("body", "{\"xml\":" + xml + "}");
+            params.put("expectedHash", "00000000000000000000");
+
+            String result = new DcsTool().execute(params);
+
+            assertTrue(result, result.contains("body.xml must be a non-empty string"));
+            assertTrue(result, result.contains("nothing was written"));
+            assertTrue(result, result.contains("retry with the complete DataCompositionSchema XML"));
+            assertTrue(result, result.contains("action='get', type='schema', format='xml'"));
+        }
+    }
+
     private static Map<String, String> baseGet(String fqn, String type)
     {
         Map<String, String> params = new HashMap<>();

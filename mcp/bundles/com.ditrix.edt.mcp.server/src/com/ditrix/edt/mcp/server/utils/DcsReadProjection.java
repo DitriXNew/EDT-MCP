@@ -116,6 +116,34 @@ public final class DcsReadProjection
         // utility class
     }
 
+    /** Counts the model's root collections and concrete fields, including union/folder descendants. */
+    public static SchemaCounts schemaCounts(DataCompositionSchema schema)
+    {
+        if (schema == null) return new SchemaCounts(0, 0, 0, 0, 0);
+        int fields = 0;
+        for (DataSet dataSet : schema.getDataSets())
+        {
+            var contents = dataSet.eAllContents();
+            while (contents.hasNext())
+            {
+                if (contents.next() instanceof DataCompositionSchemaDataSetField) fields++;
+            }
+        }
+        return new SchemaCounts(schema.getDataSources().size(), schema.getDataSets().size(), fields,
+            schema.getParameters().size(), schema.getSettingsVariants().size());
+    }
+
+    /** Immutable transaction-local model census for XML import verification and confirmation. */
+    public record SchemaCounts(int dataSources, int dataSets, int fields, int parameters, int variants)
+    {
+        @Override
+        public String toString()
+        {
+            return "dataSources=" + dataSources + ", dataSets=" + dataSets //$NON-NLS-1$ //$NON-NLS-2$
+                + ", fields=" + fields + ", parameters=" + parameters + ", variants=" + variants; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
     /**
      * Projects a root summary, a paginated collection, or one fully resolved pointer node.
      *

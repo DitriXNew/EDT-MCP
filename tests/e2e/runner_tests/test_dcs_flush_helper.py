@@ -120,5 +120,58 @@ class DcsFlushHelperTest(unittest.TestCase):
         self.clock.sleep.assert_not_called()
 
 
+class DcsXmlStructurePollTest(unittest.TestCase):
+    relative = DcsFlushHelperTest.relative
+    model = DcsFlushHelperTest.model
+
+    def setUp(self):
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        self.read = self.patches.enter_context(mock.patch.object(HARNESS, "open", create=True))
+        self.clock = self.patches.enter_context(mock.patch.object(HARNESS, "time"))
+        self.clock.time.side_effect = [100.0, 100.0, 100.5, 101.0, 101.5, 110.0]
+
+    def test_retries_empty_truncated_and_stale_exports_and_keeps_the_matching_snapshot(self):
+        exported = "<schema>\n  <value>ready</value>\n</schema>"
+        observations = ["", "<schema><value>", "<schema><value>stale</value></schema>", exported]
+        self.read.side_effect = [mock.mock_open(read_data=text).return_value for text in observations]
+
+        self.assertEqual(exported, DCS._poll_dcs_xml_structure(self.relative, self.model))
+
+        self.assertEqual(4, self.read.call_count)
+        self.assertEqual([mock.call(0.5)] * 3, self.clock.sleep.call_args_list)
+
+    def test_structure_that_never_matches_fails_at_the_usual_deadline(self):
+        self.clock.time.side_effect = [100.0, 100.0, 110.0]
+        stale = "<schema><value>stale</value></schema>"
+        self.read.return_value = mock.mock_open(read_data=stale).return_value
+
+        with self.assertRaises(HARNESS.E2EAssertion) as raised:
+            DCS._poll_dcs_xml_structure(self.relative, self.model, ctx="replacement export")
+
+        message = str(raised.exception)
+        self.assertIn(self.relative, message)
+        self.assertIn("content check", message)
+        self.assertIn("replacement export", message)
+        self.assertIn(stale, message)
+        self.assertEqual(1, self.read.call_count)
+
+    def test_invalid_expected_xml_fails_before_polling(self):
+        with self.assertRaises(ET.ParseError):
+            DCS._poll_dcs_xml_structure(self.relative, "<schema>")
+
+        self.read.assert_not_called()
+        self.clock.sleep.assert_not_called()
+
+    def test_unexpected_comparison_errors_are_not_retried(self):
+        self.read.return_value = mock.mock_open(read_data=self.model).return_value
+        with mock.patch.object(DCS, "_xml_structure", side_effect=[(), RuntimeError("bad comparator")]):
+            with self.assertRaisesRegex(RuntimeError, "bad comparator"):
+                DCS._poll_dcs_xml_structure(self.relative, self.model)
+
+        self.read.assert_called_once()
+        self.clock.sleep.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
