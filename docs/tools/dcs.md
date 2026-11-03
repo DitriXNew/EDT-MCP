@@ -138,8 +138,10 @@ model is compared with the parsed schema, including counts of root data sources,
 concrete fields (including union/folder fields), schema parameters, and variants. It is also
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
 namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
-refuses the call and rolls back the transaction. The normal DCS force-export path writes
-`Template.dcs` after commit. The success response includes `xml=wholesale` and those model counts.
+refuses the call and rolls back the transaction. After commit, the normal DCS force-export path
+schedules an asynchronous `Template.dcs` export. `Export scheduled: true` does not mean the file
+has finished writing when the call returns. The success response includes `xml=wholesale` and
+those model counts.
 
 ### Start with a root summary
 
