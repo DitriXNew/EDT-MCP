@@ -488,11 +488,15 @@ public final class McpProxyHandler implements HttpHandler
         switch (route.kind)
         {
             case BACKEND:
-                forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId,
+                forwardToBackend(exchange, route.backend,
+                    isToolCall ? WorkspaceRouting.backendRequest(rawBody, requestJson) : rawBody,
+                    isToolCall ? WorkspaceRouting.workspacePath(WorkspaceRouting.arguments(requestJson)) : null,
+                    isToolCall, requestId,
                     allowStructuredContent);
                 break;
             case FAN_OUT_LIST_PROJECTS:
-                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson), allowStructuredContent);
+                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson), allowStructuredContent,
+                    WorkspaceRouting.workspacePath(WorkspaceRouting.arguments(requestJson)));
                 break;
             case PROXY_SELF:
                 handleProxySelf(exchange, requestJson, requestId, allowStructuredContent);
@@ -518,13 +522,14 @@ public final class McpProxyHandler implements HttpHandler
      * registry is refreshed and an actionable error naming the dead port is returned instead
      * (in the tool-call error shape for a {@code tools/call}, a plain JSON-RPC error otherwise).
      */
-    private void forwardToBackend(HttpExchange exchange, Backend backend, String rawBody, boolean isToolCall,
+    private void forwardToBackend(HttpExchange exchange, Backend backend, String rawBody, String workspacePath,
+        boolean isToolCall,
         Object requestId, boolean allowStructuredContent) throws IOException
     {
         try
         {
             String clientAccept = exchange.getRequestHeaders().getFirst(HEADER_ACCEPT);
-            HttpResponse<InputStream> response = backend.forward(rawBody, clientAccept);
+            HttpResponse<InputStream> response = backend.forward(rawBody, clientAccept, workspacePath);
             if (isToolCall && !allowStructuredContent)
             {
                 // The backends share ONE handshake, made by the proxy with its own capabilities, so a
@@ -539,6 +544,12 @@ public final class McpProxyHandler implements HttpHandler
             {
                 streamBackendResponse(exchange, response);
             }
+        }
+        catch (Backend.WorkspaceMismatchException e)
+        {
+            registry.refresh();
+            sendMcpResponse(exchange, 200,
+                RouterTools.toolCallError(e.getMessage(), requestId, allowStructuredContent), null);
         }
         catch (IOException e)
         {
@@ -606,9 +617,11 @@ public final class McpProxyHandler implements HttpHandler
      * itself, so the backends never saw the capability and the gate has to be applied here.
      */
     private void handleFanOut(HttpExchange exchange, Object requestId, boolean jsonFormat,
-        boolean allowStructuredContent) throws IOException
+        boolean allowStructuredContent, String workspacePath) throws IOException
     {
-        List<Backend> live = registry.live();
+        List<Backend> live = registry.backendViews().stream()
+            .filter(view -> workspacePath == null || workspacePath.equals(view.workspacePath()))
+            .map(BackendRegistry.BackendView::backend).toList();
         List<String> responses = new ArrayList<>(live.size());
         boolean anyBackendFailed = false;
         for (Backend backend : live)
@@ -621,7 +634,7 @@ public final class McpProxyHandler implements HttpHandler
                 // nothing - the registry reports it as an unsupported plugin version.
                 JsonObject arguments = new JsonObject();
                 arguments.addProperty(ARG_FORMAT, FORMAT_JSON);
-                responses.add(backend.callToolBlocking(ProjectRouter.TOOL_LIST_PROJECTS, arguments));
+                responses.add(backend.callToolBlocking(ProjectRouter.TOOL_LIST_PROJECTS, arguments, -1, workspacePath));
             }
             catch (IOException e)
             {

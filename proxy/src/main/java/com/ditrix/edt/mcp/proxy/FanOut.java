@@ -231,6 +231,7 @@ public final class FanOut
             // Keep the success flag a direct format=json call carries, even when the donating
             // envelope came from a backend that answered without structuredContent.
             structured.addProperty(KEY_SUCCESS, true);
+            structured.remove(WorkspaceRouting.WORKSPACE_PATH);
             structured.add(KEY_PROJECTS, mergedProjects);
         }
         else
@@ -361,8 +362,8 @@ public final class FanOut
             md.append("*No projects found.*\n"); //$NON-NLS-1$
             return md.toString();
         }
-        md.append("| Name | State | Path | Open | EDT Project | Natures |\n"); //$NON-NLS-1$
-        md.append("|------|-------|------|------|-------------|--------|\n"); //$NON-NLS-1$
+        md.append("| Name | State | Path | Open | EDT Project | Natures | Workspace |\n"); //$NON-NLS-1$
+        md.append("|------|-------|------|------|-------------|--------|-----------|\n"); //$NON-NLS-1$
         for (JsonElement element : projects)
         {
             if (!element.isJsonObject())
@@ -376,6 +377,7 @@ public final class FanOut
                 .append(" | ").append(boolCell(p, KEY_OPEN)) //$NON-NLS-1$
                 .append(" | ").append(edtCell(p)) //$NON-NLS-1$
                 .append(" | ").append(cell(Json.str(p, KEY_NATURES))) //$NON-NLS-1$
+                .append(" | ").append(cell(WorkspaceRouting.workspacePath(p))) //$NON-NLS-1$
                 .append(" |\n"); //$NON-NLS-1$
         }
         return md.toString();
@@ -489,16 +491,28 @@ public final class FanOut
     {
         // Shared extractor: accepts the machine list from structuredContent AND from a plain-text-mode
         // backend (the same JSON payload delivered as content text), but never scrapes the Markdown.
-        JsonArray projects = BackendRegistry.machineProjects(result);
+        JsonObject payload = BackendRegistry.machinePayload(result);
+        JsonArray projects = payload == null ? null : payload.getAsJsonArray(KEY_PROJECTS);
         if (projects == null)
         {
             // No machine payload at all - a backend too old for it, NOT a backend with zero projects
             // (that one answers with an empty array, which is authoritative).
             return false;
         }
+        String workspace = WorkspaceRouting.workspacePath(payload);
         for (JsonElement project : projects)
         {
-            mergedProjects.add(project);
+            JsonElement copy = project.deepCopy();
+            if (copy.isJsonObject())
+            {
+                JsonObject row = copy.getAsJsonObject();
+                row.remove(WorkspaceRouting.WORKSPACE_PATH);
+                if (workspace != null)
+                {
+                    row.addProperty(WorkspaceRouting.WORKSPACE_PATH, workspace);
+                }
+            }
+            mergedProjects.add(copy);
         }
         return true;
     }

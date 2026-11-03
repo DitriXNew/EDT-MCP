@@ -271,29 +271,91 @@ public final class Backend
         return sendWithStaleSessionRetry(rawBody, acceptHeader, timeoutSeconds);
     }
 
+    /** Verifies explicit workspace selection in the same backend session as the forwarded call. */
+    HttpResponse<InputStream> forward(String rawBody, String acceptHeader, String workspacePath)
+        throws IOException, InterruptedException
+    {
+        return sendWithStaleSessionRetry(rawBody, acceptHeader, timeoutSeconds, workspacePath);
+    }
+
     private HttpResponse<InputStream> sendWithStaleSessionRetry(String rawBody, String acceptHeader,
         int requestTimeoutSeconds) throws IOException, InterruptedException
     {
+        return sendWithStaleSessionRetry(rawBody, acceptHeader, requestTimeoutSeconds, null);
+    }
+
+    private HttpResponse<InputStream> sendWithStaleSessionRetry(String rawBody, String acceptHeader,
+        int requestTimeoutSeconds, String workspacePath) throws IOException, InterruptedException
+    {
         String accept = acceptHeader == null || acceptHeader.isBlank() ? ACCEPT_JSON_AND_SSE : acceptHeader;
-        String session = ensureSession();
-        HttpResponse<InputStream> response = client.send(
-            newPostRequest(rawBody, session, requestTimeoutSeconds, accept), HttpResponse.BodyHandlers.ofInputStream());
-        // 404 means the session we presented is gone. 400 with NO session presented means the
-        // same thing one step earlier: this handshake was made with a plugin that issued no
-        // session id, that plugin has since been upgraded to one that requires it, and the
-        // cached handshake is now unusable. A Backend outlives a rescan by design, so without
-        // this the proxy would answer 400 to every routed call until someone restarted it.
-        // Narrow on purpose: a 400 for a request that DID carry a session is a real bad request
-        // and is returned as-is rather than retried.
-        if (response.statusCode() == 404 || (response.statusCode() == 400 && session == null))
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            String session = ensureSession();
+            if (workspacePath != null && !verifyWorkspace(session, workspacePath))
+            {
+                invalidateSessionIfCurrent(session);
+                continue;
+            }
+            HttpResponse<InputStream> response = client.send(
+                newPostRequest(rawBody, session, requestTimeoutSeconds, accept),
+                HttpResponse.BodyHandlers.ofInputStream());
+            if (attempt == 0 && isStaleSession(response, session))
+            {
+                closeQuietly(response.body());
+                invalidateSessionIfCurrent(session);
+                continue;
+            }
+            return response;
+        }
+        throw new WorkspaceMismatchException("Backend :" + port //$NON-NLS-1$
+            + " kept changing sessions while verifying workspacePath '" + workspacePath //$NON-NLS-1$
+            + "'; call router_refresh and retry."); //$NON-NLS-1$
+    }
+
+    private static boolean isStaleSession(HttpResponse<?> response, String session)
+    {
+        return response.statusCode() == 404 || (response.statusCode() == 400 && session == null);
+    }
+
+    private boolean verifyWorkspace(String session, String expected) throws IOException, InterruptedException
+    {
+        if (session == null)
+        {
+            throw new WorkspaceMismatchException("Cannot verify workspacePath '" + expected //$NON-NLS-1$
+                + "' on session-less backend :" + port + "; update its EDT-MCP plugin and call router_refresh."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        JsonObject arguments = new JsonObject();
+        arguments.addProperty("format", "json"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject params = new JsonObject();
+        params.addProperty("name", "list_projects"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.add("arguments", arguments); //$NON-NLS-1$
+        HttpResponse<InputStream> response = client.send(newPostRequest(
+            buildJsonRpcRequest("tools/call", params), session, HANDSHAKE_TIMEOUT_SECONDS), //$NON-NLS-1$
+            HttpResponse.BodyHandlers.ofInputStream());
+        if (isStaleSession(response, session))
         {
             closeQuietly(response.body());
-            invalidateSessionIfCurrent(session);
-            session = ensureSession();
-            response = client.send(newPostRequest(rawBody, session, requestTimeoutSeconds, accept),
-                HttpResponse.BodyHandlers.ofInputStream());
+            return false;
         }
-        return response;
+        String raw = readToolResponse(response, "list_projects"); //$NON-NLS-1$
+        JsonObject result = Json.obj(Json.parseObject(raw), "result"); //$NON-NLS-1$
+        String actual = WorkspaceRouting.workspacePath(BackendRegistry.machinePayload(result));
+        if (response.statusCode() != 200 || BackendRegistry.isToolError(raw) || !expected.equals(actual))
+        {
+            throw new WorkspaceMismatchException("Backend :" + port + " no longer confirms workspacePath '" //$NON-NLS-1$ //$NON-NLS-2$
+                + expected + "' (reported: " + actual + "). Call router_refresh and select the workspace again."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return true;
+    }
+
+    static final class WorkspaceMismatchException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        WorkspaceMismatchException(String message)
+        {
+            super(message);
+        }
     }
 
     /**
@@ -335,13 +397,25 @@ public final class Backend
     public String callToolBlocking(String toolName, JsonObject arguments, int timeoutSecondsOverride)
         throws IOException, InterruptedException
     {
+        return callToolBlocking(toolName, arguments, timeoutSecondsOverride, null);
+    }
+
+    String callToolBlocking(String toolName, JsonObject arguments, int timeoutSecondsOverride, String workspacePath)
+        throws IOException, InterruptedException
+    {
         JsonObject params = new JsonObject();
         params.addProperty("name", toolName); //$NON-NLS-1$
         params.add("arguments", arguments == null ? new JsonObject() : arguments); //$NON-NLS-1$
 
         int effectiveTimeoutSeconds = timeoutSecondsOverride > 0 ? timeoutSecondsOverride : timeoutSeconds;
         HttpResponse<InputStream> response =
-            sendWithStaleSessionRetry(buildJsonRpcRequest("tools/call", params), null, effectiveTimeoutSeconds); //$NON-NLS-1$
+            sendWithStaleSessionRetry(buildJsonRpcRequest("tools/call", params), null, effectiveTimeoutSeconds, //$NON-NLS-1$
+                workspacePath);
+        return readToolResponse(response, toolName);
+    }
+
+    private String readToolResponse(HttpResponse<InputStream> response, String toolName) throws IOException
+    {
         String body;
         try (InputStream in = response.body())
         {

@@ -6,8 +6,6 @@
 
 package com.ditrix.edt.mcp.proxy;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -119,10 +117,22 @@ public final class RouterTools
             result.add(KEY_TOOLS, tools);
         }
 
+        for (JsonElement item : tools)
+        {
+            if (item.isJsonObject())
+            {
+                JsonObject tool = item.getAsJsonObject();
+                String name = Json.str(tool, KEY_NAME);
+                if (!TOOL_ROUTER_STATUS.equals(name) && !TOOL_ROUTER_REFRESH.equals(name))
+                {
+                    WorkspaceRouting.decorateTool(tool);
+                }
+            }
+        }
         if (containsTool(tools, TOOL_ROUTER_STATUS))
         {
             // Already injected (e.g. a double-inject on a cached response) - keep it as is.
-            return backendToolsListResponse;
+            return Json.compact(envelope);
         }
 
         for (JsonElement descriptor : descriptorsArray())
@@ -160,15 +170,17 @@ public final class RouterTools
         boolean allowStructuredContent)
     {
         Map<String, List<Integer>> duplicates = registry.duplicateProjects();
-        Map<Integer, List<String>> projectsByPort = projectsByPort(registry, duplicates);
-
         JsonArray backends = new JsonArray();
-        for (Map.Entry<Integer, List<String>> entry : projectsByPort.entrySet())
+        for (BackendRegistry.BackendView view : registry.backendViews())
         {
             JsonObject backend = new JsonObject();
-            backend.addProperty("port", entry.getKey()); //$NON-NLS-1$
+            backend.addProperty("port", view.backend().getPort()); //$NON-NLS-1$
+            if (view.workspacePath() != null)
+            {
+                backend.addProperty(WorkspaceRouting.WORKSPACE_PATH, view.workspacePath());
+            }
             JsonArray projects = new JsonArray();
-            for (String project : entry.getValue())
+            for (String project : view.projects())
             {
                 projects.add(project);
             }
@@ -325,40 +337,6 @@ public final class RouterTools
             }
         }
         return false;
-    }
-
-    /**
-     * Groups the registry's known projects by owning backend port, in live (ascending port)
-     * order. A duplicate project is listed under EVERY port that holds it.
-     */
-    private static Map<Integer, List<String>> projectsByPort(BackendRegistry registry,
-        Map<String, List<Integer>> duplicates)
-    {
-        Map<Integer, List<String>> projectsByPort = new LinkedHashMap<>();
-        for (Backend backend : registry.live())
-        {
-            projectsByPort.put(backend.getPort(), new ArrayList<>());
-        }
-        for (String project : registry.knownProjects())
-        {
-            List<Integer> duplicatePorts = duplicates.get(project);
-            if (duplicatePorts != null)
-            {
-                for (Integer port : duplicatePorts)
-                {
-                    projectsByPort.computeIfAbsent(port, p -> new ArrayList<>()).add(project);
-                }
-            }
-            else
-            {
-                Backend owner = registry.byProject(project);
-                if (owner != null)
-                {
-                    projectsByPort.computeIfAbsent(owner.getPort(), p -> new ArrayList<>()).add(project);
-                }
-            }
-        }
-        return projectsByPort;
     }
 
     private static String toolCallSuccess(JsonObject structuredContent, String digest, Object requestId,
