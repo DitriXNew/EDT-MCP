@@ -1598,6 +1598,10 @@
         "confirm": {
           "type": "boolean"
         },
+        "expectedHash": {
+          "description": "Optional form-attribute/column scope guard: pass the preview's contentHash on confirm=true; a changed scope refuses without writing. Omit to use the current scope. Ignored for other targets.",
+          "type": "string"
+        },
         "force": {
           "type": "boolean"
         },
@@ -1678,6 +1682,9 @@
         },
         "committed": {
           "type": "boolean"
+        },
+        "contentHash": {
+          "type": "string"
         },
         "errors": {
           "items": {
