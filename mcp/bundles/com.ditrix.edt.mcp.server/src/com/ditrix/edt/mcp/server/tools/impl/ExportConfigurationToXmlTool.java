@@ -8,8 +8,10 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Map;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -22,6 +24,7 @@ import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
 
 /**
  * Tool that wraps the EDT "Export → Configuration to XML Files" action.
@@ -133,7 +136,41 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             // exportProject(String projectName, Path outputPath)
             Method method = api.getClass().getMethod("exportProject", //$NON-NLS-1$
                 String.class, Path.class);
+            Path rootXml = outputPath.resolve("Configuration.xml"); //$NON-NLS-1$
+            BasicFileAttributes previousRoot = null;
+            String previousDigest = null;
+            try
+            {
+                previousRoot = Files.readAttributes(rootXml, BasicFileAttributes.class);
+                if (previousRoot.isRegularFile())
+                {
+                    previousDigest = MergeRulesCodec.fileDigest(rootXml);
+                }
+            }
+            catch (NoSuchFileException missing)
+            {
+                previousRoot = null; // An absent root is a valid initial state.
+            }
             method.invoke(api, projectName, outputPath);
+
+            boolean rootWritten = Files.isRegularFile(rootXml);
+            if (rootWritten && previousRoot != null && previousRoot.isRegularFile())
+            {
+                BasicFileAttributes written = Files.readAttributes(rootXml, BasicFileAttributes.class);
+                // Equal/coarse timestamps prove nothing; changed bytes can still prove a rewrite.
+                rootWritten = written.lastModifiedTime().compareTo(previousRoot.lastModifiedTime()) > 0
+                    || written.size() != previousRoot.size()
+                    || !previousDigest.equals(MergeRulesCodec.fileDigest(rootXml));
+            }
+            if (!rootWritten)
+            {
+                return ToolResult.error("EDT returned, but root file '" + rootXml //$NON-NLS-1$
+                    + "' is missing or cannot be proven rewritten. " //$NON-NLS-1$
+                    + "Export preparation may have failed, the export may have been cancelled, or timestamps may be too coarse. " //$NON-NLS-1$
+                    + "Check the EDT Error Log, wait for project '" + projectName //$NON-NLS-1$
+                    + "' to finish loading/building, verify permissions, and retry into a fresh outputPath directory.") //$NON-NLS-1$
+                    .toJson();
+            }
 
             // Action result: status + the project and destination path. There is no
             // round-trip ID, machine-structured position, declared outputSchema, or
