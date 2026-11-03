@@ -465,18 +465,22 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         return field;
     }
 
-    protected static EObject exportedCopy(String fqn)
+    protected EObject exportedCopy(String fqn)
     {
         MdObject copy = mock(MdObject.class, withSettings().extraInterfaces(IBmObject.class));
+        IBmNamespace namespace = extensionTx.getNamespace();
+        when(((IBmObject)copy).bmGetNamespace()).thenReturn(namespace);
         when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)copy);
         when(((IBmObject)copy).bmGetFqn()).thenReturn(fqn);
         when(copy.getName()).thenReturn(fqn.substring(fqn.indexOf('.') + 1));
         return copy;
     }
 
-    protected static EObject exportedPicture(String fqn)
+    protected EObject exportedPicture(String fqn)
     {
         CommonPicture copy = mock(CommonPicture.class, withSettings().extraInterfaces(IBmObject.class));
+        IBmNamespace namespace = extensionTx.getNamespace();
+        when(((IBmObject)copy).bmGetNamespace()).thenReturn(namespace);
         when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)copy);
         when(((IBmObject)copy).bmGetFqn()).thenReturn(fqn);
         when(copy.getName()).thenReturn(fqn.substring(fqn.indexOf('.') + 1));

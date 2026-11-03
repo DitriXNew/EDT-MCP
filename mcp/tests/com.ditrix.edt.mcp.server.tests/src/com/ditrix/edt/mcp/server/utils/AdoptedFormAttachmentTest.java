@@ -105,6 +105,7 @@ public class AdoptedFormAttachmentTest
         when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
         when(owner.getExtendedConfigurationObject()).thenReturn(ownerId);
         when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
+        when(((IBmObject)owner).bmGetNamespace()).thenReturn(namespace);
         when(owner.eGet(MdClassPackage.Literals.CATALOG__FORMS)).thenReturn(forms);
         when(source.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
         when(source.getName()).thenReturn("Item");
@@ -117,15 +118,18 @@ public class AdoptedFormAttachmentTest
         when(copy.getExtendedConfigurationObject()).thenReturn(formId);
         when(copy.getForm()).thenReturn(content);
         when(((IBmObject)copy).bmGetId()).thenAnswer(inv -> copyId.get());
+        when(((IBmObject)copy).bmGetNamespace()).thenReturn(namespace);
         when(tx.getNamespace()).thenReturn(namespace);
         when(namespace.getPrimaryStore()).thenReturn(primary);
         when(tx.getPlatformTransaction()).thenReturn(platform);
         when(platform.getContainingDataStore(any())).thenReturn(primary);
         when(tx.getTopObjectByFqn("Catalog.Goods")).thenReturn((IBmObject)owner);
         when(((IBmObject)content).bmGetId()).thenReturn(3001L);
+        when(((IBmObject)content).bmGetNamespace()).thenReturn(namespace);
         when(((IBmObject)content).bmIsTop()).thenReturn(true);
         when(((IBmObject)content).bmGetFqn()).thenReturn("CatalogForm.Item.Form");
         when(((IBmObject)snapshot).bmGetId()).thenReturn(3002L);
+        when(((IBmObject)snapshot).bmGetNamespace()).thenReturn(namespace);
         when(((IBmObject)snapshot).bmGetFqn()).thenReturn("CatalogForm.Item.Form.BaseForm");
         when(content.getBaseForm()).thenReturn(snapshot);
         when(tx.getTopObjectIterator()).thenAnswer(inv -> List.of((IBmObject)content, (IBmObject)snapshot).iterator());
@@ -134,6 +138,7 @@ public class AdoptedFormAttachmentTest
                 ? "CatalogForm.Item.Form" : "Catalog.Goods.Form.Item.Form");
         CatalogForm other = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
         when(other.getName()).thenReturn("Other");
+        when(((IBmObject)other).bmGetNamespace()).thenReturn(namespace);
         forms.add(other);
     }
 
@@ -189,6 +194,7 @@ public class AdoptedFormAttachmentTest
         Form stored = mock(Form.class, withSettings().extraInterfaces(IBmObject.class)
             .defaultAnswer(delegatesTo(data)));
         org.mockito.Mockito.doReturn(3001L).when((IBmObject)stored).bmGetId();
+        org.mockito.Mockito.doReturn(namespace).when((IBmObject)stored).bmGetNamespace();
         org.mockito.Mockito.doReturn(true).when((IBmObject)stored).bmIsTop();
         org.mockito.Mockito.doReturn(oldFqn).when((IBmObject)stored).bmGetFqn();
         when(source.getForm()).thenReturn(data);
@@ -231,6 +237,7 @@ public class AdoptedFormAttachmentTest
         UUID origin = source.getUuid();
         when(storedCopy.getExtendedConfigurationObject()).thenReturn(origin);
         when(((IBmObject)storedCopy).bmGetId()).thenReturn(2003L);
+        when(((IBmObject)storedCopy).bmGetNamespace()).thenReturn(namespace);
         when(generator.generateExternalPropertyFqn(storedCopy, MdClassPackage.Literals.BASIC_FORM__FORM))
             .thenReturn("Catalog.Goods.Form.Item.Form");
         assertSame(storedCopy, AdoptedFormAttachment.complete(tx, source, copy, generator));
@@ -283,6 +290,41 @@ public class AdoptedFormAttachmentTest
     }
 
     @Test
+    public void testCiRegisteredContentCreatedInThisTransactionHasNoStoreYet() throws Exception
+    {
+        IBmNamespace ownNamespace = BmCreationTestFixture.namespace();
+        IBmPlatformTransaction ownPlatform = BmCreationTestFixture.platform();
+        IBmNamespaceDataStore ownStore = BmCreationTestFixture.store();
+        when(ownNamespace.getPrimaryStore()).thenReturn(ownStore);
+        when(tx.getNamespace()).thenReturn(ownNamespace);
+        when(tx.getPlatformTransaction()).thenReturn(ownPlatform);
+        when(ownPlatform.getContainingDataStore(any())).thenReturn(ownStore);
+        when(((IBmObject)owner).bmGetNamespace()).thenReturn(ownNamespace);
+        when(((IBmObject)copy).bmGetNamespace()).thenReturn(ownNamespace);
+        when(((IBmObject)content).bmGetNamespace()).thenReturn(ownNamespace);
+        when(((IBmObject)snapshot).bmGetNamespace()).thenReturn(ownNamespace);
+        when(((IBmObject)content).bmGetId()).thenReturn(103079215104L);
+        when(ownPlatform.getContainingDataStore((IBmObject)content)).thenReturn(null);
+        when(ownPlatform.getContainingDataStore((IBmObject)snapshot)).thenReturn(null);
+        IBmObject created = BmCreationTestFixture.object(tx, 103079215104L, "CREATED");
+        IBmObject baseSnapshot = BmCreationTestFixture.object(tx, 3002L, "CREATED");
+        when(tx.toTransactionObject((EObject)content)).thenReturn(created);
+        when(tx.toTransactionObject((EObject)snapshot)).thenReturn(baseSnapshot);
+        when(tx.getTopObjectByFqn("CatalogForm.Item.Form")).thenReturn((IBmObject)content);
+        assertSame(copy, AdoptedFormAttachment.complete(tx, source, copy, generator));
+        verify(tx).updateTopObjectFqn((IBmObject)content, "Catalog.Goods.Form.Item.Form");
+        verify(tx).updateTopObjectFqn((IBmObject)snapshot, "Catalog.Goods.Form.Item.Form.BaseForm");
+    }
+
+    @Test
+    public void testRegisteredContentFromAnotherNamespaceIsRefusedEvenWithTheSameStoreLabel()
+    {
+        when(((IBmObject)content).bmGetNamespace()).thenReturn(mock(IBmNamespace.class));
+        when(tx.getTopObjectByFqn("CatalogForm.Item.Form")).thenReturn((IBmObject)content);
+        assertTrue(assertRefused().startsWith("contentNotPrimary("));
+    }
+
+    @Test
     public void testFindNativePrimaryContentByItsAllocationBackReference()
     {
         Form inherited = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
@@ -312,62 +354,12 @@ public class AdoptedFormAttachmentTest
     }
 
     @Test
-    public void testCiForeignContentWithoutRegisteredRootRunsNativeAdoptionAfterAttachment()
-    {
-        when(((IBmObject)baseOwner).bmGetId()).thenReturn(12884901888L);
-        when(((IBmObject)owner).bmGetId()).thenReturn(12884901888L);
-        CatalogForm item = (CatalogForm)forms.get(0);
-        when(item.getName()).thenReturn("ItemForm");
-        when(item.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
-        when(((IBmObject)item).bmGetId()).thenReturn(12884901896L);
-        when(((IBmObject)source).bmGetId()).thenReturn(12884902302L);
-        Form inherited = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
-        when(((IBmObject)inherited).bmGetId()).thenReturn(103079215104L);
-        when(platform.getContainingDataStore((IBmObject)inherited)).thenReturn(mock(IBmNamespaceDataStore.class));
-        when(source.getForm()).thenReturn(inherited);
-        when(copy.getForm()).thenReturn(inherited);
-        List<String> reasons = new ArrayList<>();
-        assertSame(copy, AdoptedFormAttachment.complete(tx, source, copy, generator, reasons::add,
-            (original, attached) -> {
-                assertSame(source, original);
-                assertSame(copy, attached);
-                assertTrue("native content adoption needs the stored metadata target", copyId.get() != IBmObject.BM_NULL_ID);
-                assertEquals(2, forms.size());
-                assertNull("no native content was registered under the detached allocation", tx.getTopObjectByFqn("CatalogForm.Item.Form"));
-                when(((IBmObject)content).bmGetFqn()).thenReturn("Catalog.Goods.Form.Item.Form");
-                when(copy.getForm()).thenReturn(content);
-            }));
-        assertTrue(reasons.toString(), reasons.isEmpty());
-        assertSame(inherited, source.getForm());
-        verify(inherited, never()).setMdForm(any());
-        verify(copy, never()).setForm(inherited);
-        verify(tx, never()).updateTopObjectFqn((IBmObject)inherited, "Catalog.Goods.Form.Item.Form");
-    }
-
-    @Test
-    public void testNativeContentRecoveryCannotAcceptForeignContent()
-    {
-        when(source.getForm()).thenReturn(content);
-        when(platform.getContainingDataStore((IBmObject)content)).thenReturn(mock(IBmNamespaceDataStore.class));
-        try
-        {
-            AdoptedFormAttachment.complete(tx, source, copy, generator, reason -> { }, (original, attached) -> { });
-            fail("a native recovery which still exposes foreign content must roll back");
-        }
-        catch (IllegalStateException expected)
-        {
-            assertTrue(expected.getMessage(), expected.getMessage().contains("contentNotPrimary(expectedFqn="));
-            assertTrue(expected.getMessage(), expected.getMessage().contains("nativeContentAdoption="));
-        }
-        verify(content, never()).setMdForm(any());
-    }
-
-    @Test
     public void testRegisteredPrimaryFormReplacesAnInheritedAllocationReference()
     {
         when(platform.getContainingDataStore((IBmObject)content)).thenReturn(mock(IBmNamespaceDataStore.class));
         Form own = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
         when(((IBmObject)own).bmGetId()).thenReturn(3003L);
+        when(((IBmObject)own).bmGetNamespace()).thenReturn(namespace);
         when(((IBmObject)own).bmIsTop()).thenReturn(true);
         when(((IBmObject)own).bmGetFqn()).thenReturn("CatalogForm.Item.Form");
         when(tx.getTopObjectByFqn("CatalogForm.Item.Form")).thenReturn((IBmObject)own);

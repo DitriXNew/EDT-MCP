@@ -67,6 +67,8 @@ public class AdoptedFormLookupTest
         when(object.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
         when(object.getExtendedConfigurationObject()).thenReturn(link);
         when(((IBmObject)object).bmGetId()).thenReturn(100L);
+        IBmNamespace namespace = tx.getNamespace();
+        when(((IBmObject)object).bmGetNamespace()).thenReturn(namespace);
     }
 
     private CatalogForm form(String name, UUID link)

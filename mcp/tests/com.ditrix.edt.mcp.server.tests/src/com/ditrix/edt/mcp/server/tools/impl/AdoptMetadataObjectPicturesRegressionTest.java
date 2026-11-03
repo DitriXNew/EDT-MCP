@@ -85,6 +85,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
         when(owner.getName()).thenReturn("Goods");
         when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)owner).bmGetNamespace();
         when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
         when(((IBmObject)owner).bmIsTop()).thenReturn(true);
         when(((IBmObject)owner).bmGetFqn()).thenReturn("Catalog.Goods");
@@ -94,10 +95,12 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         when(copy.getName()).thenReturn("Item");
         when(copy.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
         AtomicLong id = new AtomicLong(IBmObject.BM_NULL_ID);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)copy).bmGetNamespace();
         when(((IBmObject)copy).bmGetId()).thenAnswer(inv -> id.get());
         when(((IBmObject)copy).bmGetTopObject()).thenReturn((IBmObject)owner);
         Form content = mock(Form.class, withSettings().extraInterfaces(IBmObject.class));
         when(copy.getForm()).thenReturn(content);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)content).bmGetNamespace();
         when(((IBmObject)content).bmGetId()).thenReturn(3001L);
         when(((IBmObject)content).bmIsTop()).thenReturn(true);
         when(((IBmObject)content).bmGetFqn()).thenReturn("CatalogForm.Item.Form");
@@ -218,14 +221,17 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     public void testDetachedResultCapturesIdentityBeforeTheWriteTransactionEnds() throws Exception
     {
         EObject owner = exportedCopy("Catalog.Goods");
+        doReturn(extensionTx.getNamespace()).when((IBmObject)owner).bmGetNamespace();
         when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
         CatalogForm global = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        doReturn(extensionTx.getNamespace()).when((IBmObject)global).bmGetNamespace();
         when(((IBmObject)global).bmGetId()).thenReturn(2002L);
         CatalogForm local = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
         when(local.eIsProxy()).thenAnswer(inv -> {
             assertTrue("transaction-local proxy state must not escape its write", writing);
             return false;
         });
+        doReturn(extensionTx.getNamespace()).when((IBmObject)local).bmGetNamespace();
         when(((IBmObject)local).bmGetId()).thenAnswer(inv -> {
             assertTrue("transaction-local identity must be captured before commit", writing);
             return 2002L;
@@ -300,6 +306,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
             ? mock(CommonForm.class, withSettings().extraInterfaces(IBmObject.class).defaultAnswer(delegatesTo(data)))
             : mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class).defaultAnswer(delegatesTo(data)));
         doReturn(7001L).when((IBmObject)stored).bmGetId();
+        doReturn(extensionTx.getNamespace()).when((IBmObject)stored).bmGetNamespace();
         copies.put(source, stored);
         committedObjects.put(7001L, (IBmObject)stored);
         extensionReadRoot = stored;
@@ -309,6 +316,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         when(owner.getName()).thenReturn(renameOwner ? "RenamedGoods" : "Goods");
         when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
         when(owner.getExtendedConfigurationObject()).thenReturn(goods.getUuid());
+        doReturn(extensionTx.getNamespace()).when((IBmObject)owner).bmGetNamespace();
         when(((IBmObject)owner).bmGetId()).thenReturn(7000L);
         if (!common)
         {
@@ -358,6 +366,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
         when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
         when(owner.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)owner).bmGetNamespace();
         when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
         when(((IBmObject)owner).bmIsTop()).thenReturn(true);
         when(((IBmObject)owner).bmGetTopObject()).thenReturn((IBmObject)owner);
@@ -371,6 +380,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         when(attached.getName()).thenReturn(mdForm.getName());
         when(attached.getObjectBelonging()).thenReturn(ObjectBelonging.ADOPTED);
         when(attached.getExtendedConfigurationObject()).thenReturn(nameMapped ? null : mdForm.getUuid());
+        doReturn(extensionTx.getNamespace()).when((IBmObject)attached).bmGetNamespace();
         when(((IBmObject)attached).bmGetId()).thenReturn(2002L);
         when(((IBmObject)attached).bmGetTopObject()).thenReturn((IBmObject)owner);
         committedObjects.put(2001L, (IBmObject)owner);
@@ -423,15 +433,18 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
         String ownerFqn = "Catalog." + goods.getName();
         Catalog owner = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
         when(owner.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)owner).bmGetNamespace();
         when(((IBmObject)owner).bmGetId()).thenReturn(2001L);
         when(((IBmObject)owner).bmIsTop()).thenReturn(true);
         when(((IBmObject)owner).bmGetTopObject()).thenReturn((IBmObject)owner);
         when(((IBmObject)owner).bmGetFqn()).thenReturn(ownerFqn);
         CatalogForm attached = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
         when(attached.eClass()).thenReturn(MdClassPackage.Literals.CATALOG_FORM);
+        doReturn(extensionTx.getNamespace()).when((IBmObject)attached).bmGetNamespace();
         when(((IBmObject)attached).bmGetId()).thenReturn(2002L);
         when(((IBmObject)attached).bmGetTopObject()).thenReturn((IBmObject)owner);
         CatalogForm global = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        doReturn(extensionTx.getNamespace()).when((IBmObject)global).bmGetNamespace();
         when(((IBmObject)global).bmGetId()).thenReturn(2002L);
         when(extensionTx.toTransactionObject(global)).thenReturn(attached);
         URI uri = BmUriUtil.createContainedBmObjectUri("tests", ownerFqn, "forms/" + mdForm.getName());
@@ -521,6 +534,7 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     public void testDetachedResultDoesNotAcceptALookupInASecondaryStore() throws Exception
     {
         CatalogForm found = mock(CatalogForm.class, withSettings().extraInterfaces(IBmObject.class));
+        doReturn(extensionTx.getNamespace()).when((IBmObject)found).bmGetNamespace();
         when(((IBmObject)found).bmGetId()).thenReturn(2002L);
         when(extensionPlatformTx.getContainingDataStore((IBmObject)found))
             .thenReturn(mock(IBmNamespaceDataStore.class));

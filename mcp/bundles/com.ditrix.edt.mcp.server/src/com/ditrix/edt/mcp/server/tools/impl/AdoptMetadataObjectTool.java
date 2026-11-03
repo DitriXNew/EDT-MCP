@@ -47,7 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.AdoptedFormAttachment;
-import com.ditrix.edt.mcp.server.utils.AdoptedFormContent;
+import com.ditrix.edt.mcp.server.utils.BmObjectOwnership;
 import com.ditrix.edt.mcp.server.utils.AdoptedFormLookup;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -1174,8 +1174,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 if (located instanceof IBmObject && ((IBmObject)located).bmGetId() != IBmObject.BM_NULL_ID)
                 {
                     inTx = tx.toTransactionObject(located);
-                    if (inTx != null && tx.getPlatformTransaction().getContainingDataStore((IBmObject)inTx)
-                        != tx.getNamespace().getPrimaryStore())
+                    if (inTx != null && !BmObjectOwnership.isPrimary(tx, (IBmObject)inTx))
                     {
                         inTx = null;
                     }
@@ -1191,8 +1190,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     try
                     {
                         inTx = AdoptedFormAttachment.complete(tx, (BasicForm)source, copy,
-                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set,
-                            (original, attached) -> AdoptedFormContent.adopt(tx, adoptingModel, adopter, target, original, attached));
+                            Activator.getDefault().getTopObjectFqnGenerator(), declined::set);
                         if (inTx != null)
                         {
                             Activator.logInfo("adopt_metadata_object: Completed native form attachment after a " //$NON-NLS-1$

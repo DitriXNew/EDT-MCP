@@ -645,7 +645,9 @@ def _repair_adopted_form_picture(rename_owner):
             "projectName": PROJECT, "fqn": form_fqn, "extensionProjectName": TESTS_PROJECT, "includeReferencedPictures": True,
         })
         assert_ok(first, "adopt the form and picture before removing the picture copy")
-        assert _structured(first, "first adoption into an existing owner").get("action") == "adopted", first.text
+        first_outcome = _structured(first, "first adoption into an existing owner")
+        assert first_outcome.get("action") == "adopted", first.text
+        assert first_outcome.get("persisted") is True, first.text
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, picture_disk), "<name>%s</name>" % name,
                         "positive control: the extension picture must exist before deletion")
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, form_disk), picture_fqn,

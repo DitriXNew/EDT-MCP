@@ -112,13 +112,7 @@ public final class AdoptedFormLookup
     private static boolean usable(IBmTransaction tx, MdObject source, MdObject candidate)
     {
         return !candidate.eIsProxy() && candidate.eClass() == source.eClass()
-            && ExtensionServices.isAdopted(candidate) && candidate instanceof IBmObject && primary(tx, (IBmObject)candidate);
-    }
-
-    private static boolean primary(IBmTransaction tx, IBmObject object)
-    {
-        return object.bmGetId() != IBmObject.BM_NULL_ID
-            && tx.getPlatformTransaction().getContainingDataStore(object) == tx.getNamespace().getPrimaryStore();
+            && ExtensionServices.isAdopted(candidate) && candidate instanceof IBmObject && BmObjectOwnership.isPrimary(tx, (IBmObject)candidate);
     }
 
     private static boolean matches(MdObject source, MdObject candidate)

@@ -10,7 +10,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
-import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.EList;
@@ -44,13 +43,6 @@ public final class AdoptedFormAttachment
     /** Reports exactly one decline token; all callbacks and model access stay inside the caller's write. */
     public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
         ITopObjectFqnGenerator generator, Consumer<String> declined)
-    {
-        return complete(tx, source, allocation, generator, declined, null);
-    }
-
-    /** The optional callback runs EDT's native after-adopt participants on the now-stored metadata copy. */
-    public static EObject complete(IBmTransaction tx, BasicForm source, EObject allocation,
-        ITopObjectFqnGenerator generator, Consumer<String> declined, BiConsumer<BasicForm, BasicForm> adoptContent)
     {
         MdObject owner = AdoptedFormLookup.findOwner(tx, source);
         EObject baseOwner = source.eContainer();
@@ -123,19 +115,19 @@ public final class AdoptedFormAttachment
             : generator.generateExternalPropertyFqn(allocation, MdClassPackage.Literals.BASIC_FORM__FORM);
         // BasicForm.form is transient; the native copier registers its external top object synchronously.
         IBmObject registered = expectedFqn == null ? null : tx.getTopObjectByFqn(expectedFqn);
-        if (registered instanceof AbstractForm && !registered.eIsProxy() && primary(tx, registered))
+        if (registered instanceof AbstractForm && !registered.eIsProxy() && BmObjectOwnership.isPrimary(tx, registered))
         {
             content = registered;
         }
         boolean linkedContent = false;
-        if (!(content instanceof IBmObject) || !primary(tx, (IBmObject)content))
+        if (!(content instanceof IBmObject) || !BmObjectOwnership.isPrimary(tx, (IBmObject)content))
         {
             // FormExtender sets mdForm to its allocation, even when that allocation was not inserted.
             Iterator<IBmObject> objects = tx.getTopObjectIterator();
             while (objects.hasNext())
             {
                 IBmObject candidate = objects.next();
-                if (candidate instanceof AbstractForm && !candidate.eIsProxy() && primary(tx, candidate)
+                if (candidate instanceof AbstractForm && !candidate.eIsProxy() && BmObjectOwnership.isPrimary(tx, candidate)
                     && ((AbstractForm)candidate).getMdForm() == allocation
                     && (!(candidate instanceof Form) || ((Form)candidate).getExtensionForm() == null))
                 {
@@ -148,35 +140,8 @@ public final class AdoptedFormAttachment
                 }
             }
         }
-        boolean missing = content == null && source.getForm() != null;
-        boolean foreign = content instanceof IBmObject && !primary(tx, (IBmObject)content);
-        String contentState = contentState(tx, missing ? "missingContent" : "contentNotPrimary", //$NON-NLS-1$ //$NON-NLS-2$
+        String contentState = contentState(tx, content == null ? "missingContent" : "contentNotPrimary", //$NON-NLS-1$ //$NON-NLS-2$
             expectedFqn, registered, content);
-        if ((missing || foreign) && adoptContent != null && source.getForm() != null)
-        {
-            // Do not carry the inherited external reference into the extension during insertion.
-            copy.setForm(null);
-            BasicForm attached = attach(tx, source, allocation, forms);
-            try
-            {
-                adoptContent.accept(source, attached);
-                AbstractForm adoptedContent = attached.getForm();
-                String attachedFqn = generator.generateExternalPropertyFqn(attached, MdClassPackage.Literals.BASIC_FORM__FORM);
-                if (!(adoptedContent instanceof IBmObject) || adoptedContent.eIsProxy()
-                    || !primary(tx, (IBmObject)adoptedContent)
-                    || !attachedFqn.equals(BmObjectAddress.topFqnOrNull((IBmObject)adoptedContent))
-                    || adoptedContent instanceof Form && (((Form)adoptedContent).getBaseForm() == null
-                        || !primary(tx, (IBmObject)((Form)adoptedContent).getBaseForm())))
-                {
-                    throw new IllegalStateException("EDT did not create primary form content and BaseForm at " + attachedFqn); //$NON-NLS-1$
-                }
-                return attached;
-            }
-            catch (RuntimeException e)
-            {
-                throw new IllegalStateException(contentState + "; nativeContentAdoption=" + e.getMessage(), e); //$NON-NLS-1$
-            }
-        }
         if (content == null && source.getForm() != null)
         {
             return decline(declined, contentState);
@@ -189,7 +154,7 @@ public final class AdoptedFormAttachment
             {
                 return decline(declined, "contentTypeOrProxy(" + label(content) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            if (!primary(tx, (IBmObject)content))
+            if (!BmObjectOwnership.isPrimary(tx, (IBmObject)content))
             {
                 return decline(declined, contentState);
             }
@@ -203,7 +168,7 @@ public final class AdoptedFormAttachment
             {
                 IBmObject object = objects.next();
                 String fqn = object.bmGetFqn();
-                if (primary(tx, object) && fqn != null && (fqn.equals(oldFqn) || fqn.startsWith(oldFqn + "."))) //$NON-NLS-1$
+                if (BmObjectOwnership.isPrimary(tx, object) && fqn != null && (fqn.equals(oldFqn) || fqn.startsWith(oldFqn + "."))) //$NON-NLS-1$
                 {
                     external.add(object);
                 }
@@ -297,7 +262,7 @@ public final class AdoptedFormAttachment
                     }
                     text.append(observed(() -> label(candidate))).append("{adopted=") //$NON-NLS-1$
                         .append(observed(() -> ExtensionServices.isAdopted(candidate))).append(",primary=") //$NON-NLS-1$
-                        .append(observed(() -> candidate instanceof IBmObject && primary(tx, (IBmObject)candidate)))
+                        .append(observed(() -> candidate instanceof IBmObject && BmObjectOwnership.isPrimary(tx, (IBmObject)candidate)))
                         .append(",originUuidMatch=").append(observed(() -> candidate instanceof MdObject && form.getUuid() != null //$NON-NLS-1$
                             && form.getUuid().equals(((MdObject)candidate).getExtendedConfigurationObject()))).append('}');
                 }
@@ -341,12 +306,6 @@ public final class AdoptedFormAttachment
         }
         return object.getClass().getSimpleName() + ":" + (object instanceof MdObject ? ((MdObject)object).getName() : "") //$NON-NLS-1$ //$NON-NLS-2$
             + "#" + (object instanceof IBmObject ? ((IBmObject)object).bmGetId() : "no-bm-id"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    private static boolean primary(IBmTransaction tx, IBmObject object)
-    {
-        return object.bmGetId() != IBmObject.BM_NULL_ID
-            && tx.getPlatformTransaction().getContainingDataStore(object) == tx.getNamespace().getPrimaryStore();
     }
 
     private static boolean originMatches(MdObject source, MdObject copy)
