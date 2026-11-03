@@ -65,6 +65,7 @@ public class ValidateQueryToolTest
         assertTrue("outputSchema must declare success", schema.contains("\"success\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare valid", schema.contains("\"valid\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare dcsMode", schema.contains("\"dcsMode\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare validationScope", schema.contains("\"validationScope\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare errorCount", schema.contains("\"errorCount\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare warningCount", schema.contains("\"warningCount\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare infoCount", schema.contains("\"infoCount\"")); //$NON-NLS-1$ //$NON-NLS-2$

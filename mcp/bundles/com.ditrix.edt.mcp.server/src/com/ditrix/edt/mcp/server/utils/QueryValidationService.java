@@ -31,6 +31,8 @@ import org.eclipse.xtext.validation.IResourceValidator;
 import org.eclipse.xtext.validation.Issue;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.metadata.dbview.DbViewElement;
 import com._1c.g5.v8.dt.metadata.dbview.Table;
 import com._1c.g5.v8.dt.ql.dcs.resource.QlDcsResource;
@@ -63,11 +65,14 @@ public class QueryValidationService
             try
             {
                 var manager = Activator.getDefault().getBmModelManager();
-                IBmModel model = manager == null ? null : manager.getModel(project);
+                IV8Project v8Project = ExtensionOriginUtils.resolveV8Project(project);
+                IBmModel model = manager == null || v8Project == null
+                    ? null : manager.getModel(v8Project.getDtProject());
                 result.set(model == null
-                    ? Result.unavailable(dcsMode, "BM model is unavailable. Wait for project loading and retry.")
+                    ? Result.unavailable(dcsMode, "BM model is unavailable for project '" + project.getName()
+                        + "'. Check list_projects, wait for project loading and retry.")
                     : BmTransactions.read(model, "ValidateQuery", (tx, monitor) ->
-                        validateOnDisplay(project, queryText, dcsMode)));
+                        validateOnDisplay(project, v8Project, queryText, dcsMode)));
             }
             catch (RuntimeException e)
             {
@@ -77,8 +82,7 @@ public class QueryValidationService
         };
         try
         {
-            if (Display.getCurrent() != null) work.run();
-            else Display.getDefault().syncExec(work);
+            dispatch(work);
         }
         catch (RuntimeException e)
         {
@@ -88,7 +92,29 @@ public class QueryValidationService
         return result.get();
     }
 
-    private Result validateOnDisplay(IProject project, String text, boolean dcsMode)
+    /** Dispatch precedes the BM read boundary; headless tests substitute only the display. */
+    protected void dispatch(Runnable work)
+    {
+        if (Display.getCurrent() != null) work.run();
+        else Display.getDefault().syncExec(work);
+    }
+
+    private static String validationScope(QlDcsResource resource, IV8Project v8Project)
+    {
+        String scope = "Project '" + resource.getDtProject().getName() + "'";
+        if (v8Project instanceof IExtensionProject extension)
+        {
+            if (!resource.isParentScopeAware()) return scope + " (extension; parent scope disabled)";
+            // EDT's parent-scope flag and parent handle do not certify loaded base metadata.
+            IProject base = extension.getParentProject();
+            return scope + (base == null ? " (extension; base scope unavailable)"
+                : " (extension; base configuration '" + base.getName()
+                    + "' requested, availability not verified)");
+        }
+        return scope;
+    }
+
+    private Result validateOnDisplay(IProject project, IV8Project v8Project, String text, boolean dcsMode)
     {
         XtextResource resource = null;
         try
@@ -109,14 +135,17 @@ public class QueryValidationService
             if (!(resource instanceof QlDcsResource))
                 return Result.unavailable(dcsMode, "EDT did not create a QlDcs resource. Install QL language support.");
             QlDcsResource ql = (QlDcsResource)resource;
+            // Bind the own index separately from the parent-scope union, before parsing.
+            ql.setDtProject(v8Project.getDtProject());
             ql.setParentScopeAware(true);
             ql.addOptions(QlDcsResource.DCS_VALIDATION_MODE_OPTION, dcsMode);
             ql.setPreComputeAnnounceAlias(dcsMode);
+            String scope = validationScope(ql, v8Project);
             try (var input = new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)))
             {
                 resource.load(input, null);
             }
-            return inspect(resource, validator, computer, dcsMode);
+            return new Result(inspect(resource, validator, computer, dcsMode), scope);
         }
         catch (Exception e)
         {
@@ -316,6 +345,17 @@ public class QueryValidationService
         private final List<Map<String, Object>> sources;
         private final List<Map<String, Object>> unresolved;
         private final String failure;
+        private final String validationScope;
+
+        private Result(Result result, String validationScope)
+        {
+            this.dcsMode = result.dcsMode;
+            this.issues = result.issues;
+            this.sources = result.sources;
+            this.unresolved = result.unresolved;
+            this.failure = result.failure;
+            this.validationScope = validationScope;
+        }
 
         Result(boolean dcsMode, List<Problem> issues, List<Source> sources, String failure)
         {
@@ -324,6 +364,7 @@ public class QueryValidationService
             this.sources = sources.stream().map(Source::wire).toList();
             this.unresolved = sources.stream().filter(s -> s.reason != null).map(Source::wire).toList();
             this.failure = failure;
+            this.validationScope = null;
         }
 
         static Result unavailable(boolean mode, String reason)
@@ -347,6 +388,7 @@ public class QueryValidationService
             result.put("validationState", state().name());
             result.put("validationComplete", complete());
             result.put("dcsMode", dcsMode);
+            if (validationScope != null) result.put("validationScope", validationScope);
             result.put("errorCount", issues.stream().filter(i -> !i.incomplete && "ERROR".equals(i.severity)).count());
             result.put("warningCount", issues.stream().filter(i -> i.incomplete || "WARNING".equals(i.severity)).count());
             result.put("infoCount", issues.stream().filter(i -> !i.incomplete && "INFO".equals(i.severity)).count());
