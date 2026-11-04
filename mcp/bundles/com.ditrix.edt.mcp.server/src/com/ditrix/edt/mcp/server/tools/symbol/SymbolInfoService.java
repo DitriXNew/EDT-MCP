@@ -446,25 +446,41 @@ public class SymbolInfoService
 
         if (ReflectionUtils.findMethod(hoverInfo.getClass(), "getHtml") != null) //$NON-NLS-1$
         {
-            Object html = ReflectionUtils.invokeMethod(hoverInfo, "getHtml"); //$NON-NLS-1$
-            if (html instanceof String)
+            try
             {
-                return (String) html;
+                Object html = ReflectionUtils.invokeMethod(hoverInfo, "getHtml"); //$NON-NLS-1$
+                if (html instanceof String)
+                {
+                    return (String) html;
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logWarning("Could not read hover getHtml; trying remaining content: " //$NON-NLS-1$
+                    + PlatformFailures.describe(e));
             }
         }
         if (ReflectionUtils.findMethod(hoverInfo.getClass(), "getInputElement") != null) //$NON-NLS-1$
         {
-            Object inputElement = ReflectionUtils.invokeMethod(hoverInfo, "getInputElement"); //$NON-NLS-1$
-            if (inputElement != null)
+            try
             {
-                return meaningfulOrNull(inputElement.toString());
+                Object inputElement = ReflectionUtils.invokeMethod(hoverInfo, "getInputElement"); //$NON-NLS-1$
+                if (inputElement != null)
+                {
+                    return meaningfulOrNull(inputElement.toString());
+                }
+            }
+            catch (Exception e)
+            {
+                Activator.logWarning("Could not read hover getInputElement; trying remaining content: " //$NON-NLS-1$
+                    + PlatformFailures.describe(e));
             }
         }
         return meaningfulOrNull(hoverInfo.toString());
     }
 
     /**
-     * Drops blank content and object references, including Markdown-escaped references.
+     * Drops blank content and bare object references, including Markdown-escaped references.
      */
     static String meaningfulOrNull(String s)
     {
@@ -472,8 +488,8 @@ public class SymbolInfoService
         {
             return null;
         }
-        String unescaped = s.replace("\\", ""); //$NON-NLS-1$ //$NON-NLS-2$
-        return PlatformFailures.withoutObjectIdentity(unescaped).equals(unescaped) ? s : null;
+        String unescaped = s.replace("\\", "").trim(); //$NON-NLS-1$ //$NON-NLS-2$
+        return PlatformFailures.isObjectIdentity(unescaped) ? null : s;
     }
 
     /**

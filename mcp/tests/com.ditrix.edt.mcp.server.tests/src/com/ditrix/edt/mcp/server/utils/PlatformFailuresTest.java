@@ -44,6 +44,20 @@ public class PlatformFailuresTest
     private static final String PLUGIN = "com.ditrix.edt.mcp.server";
 
     @Test
+    public void testIsObjectIdentityRequiresTheWholeString()
+    {
+        assertTrue(PlatformFailures.isObjectIdentity("com.example.Outer$Inner@a"));
+        assertTrue(PlatformFailures.isObjectIdentity("Foo@DEADBEEF"));
+        assertFalse(PlatformFailures.isObjectIdentity(null));
+        assertFalse(PlatformFailures.isObjectIdentity(""));
+        assertFalse(PlatformFailures.isObjectIdentity(" Foo@deadbeef "));
+        assertFalse(PlatformFailures.isObjectIdentity("<p>Foo@deadbeef</p>"));
+        assertFalse(PlatformFailures.isObjectIdentity("Details: Foo@deadbeef"));
+        assertFalse(PlatformFailures.isObjectIdentity(
+            "Connect(Repository): Clones ssh://git@db/repo into the workspace."));
+    }
+
+    @Test
     public void testDebugExceptionStatusAlreadyUsesCoreExceptionShape()
     {
         IStatus status = new Status(IStatus.ERROR, PLUGIN, "Debug request failed");
