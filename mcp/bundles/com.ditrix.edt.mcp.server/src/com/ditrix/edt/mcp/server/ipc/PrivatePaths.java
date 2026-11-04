@@ -88,6 +88,20 @@ public final class PrivatePaths
         return path;
     }
 
+    /** Creates a unique private child of an already private, verified parent. */
+    public static Path temporaryDirectory(Path parent, String prefix) throws IOException
+    {
+        verifyDirectory(parent);
+        Path temporary = Files.createTempDirectory(parent, prefix, attributes(parent, true));
+        try { return directory(temporary); }
+        catch (IOException | RuntimeException failure)
+        {
+            try { Files.delete(temporary); }
+            catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
+
     public static void verifyDirectory(Path path) throws IOException
     {
         verifyOwnedDirectory(path);

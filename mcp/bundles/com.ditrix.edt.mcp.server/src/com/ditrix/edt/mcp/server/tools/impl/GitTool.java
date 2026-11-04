@@ -2933,7 +2933,7 @@ public class GitTool implements IMcpTool
         }
         for (String flag : BLOCKED_FLAGS)
         {
-            if (flag.substring(2).startsWith(opt)) // opt is a (possibly full) prefix of this blocked long flag
+            if (flag.startsWith(opt, 2)) // opt is a (possibly full) prefix of this blocked long flag
             {
                 return true;
             }

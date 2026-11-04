@@ -358,7 +358,7 @@ public final class InfobaseSessionSupport
         }
         catch (LinkageError e)
         {
-            return PreparedTarget.error("Infobase session commands are not available because " //$NON-NLS-1$
+            return PreparedTarget.failed("Infobase session commands are not available because " //$NON-NLS-1$
                 + "the EDT standalone-server feature is not installed."); //$NON-NLS-1$
         }
     }
@@ -368,18 +368,18 @@ public final class InfobaseSessionSupport
     {
         if (application == null)
         {
-            return PreparedTarget.error("No application was resolved."); //$NON-NLS-1$
+            return PreparedTarget.failed("No application was resolved."); //$NON-NLS-1$
         }
         if (!appliesTo(application))
         {
-            return PreparedTarget.error("Application '" + application.getId() //$NON-NLS-1$
+            return PreparedTarget.failed("Application '" + application.getId() //$NON-NLS-1$
                 + "' is not a standalone-server (wst-server) application; ibcmd sessions " //$NON-NLS-1$
                 + "cannot be inspected for this application type."); //$NON-NLS-1$
         }
         Object server = StandaloneServerSupport.serverOfApplication(application);
         if (server == null)
         {
-            return PreparedTarget.error("EDT could not resolve the standalone server for application '" //$NON-NLS-1$
+            return PreparedTarget.failed("EDT could not resolve the standalone server for application '" //$NON-NLS-1$
                 + application.getId() + "'."); //$NON-NLS-1$
         }
         Path runtimeLocation;
@@ -389,17 +389,17 @@ public final class InfobaseSessionSupport
         }
         catch (Exception e)
         {
-            return PreparedTarget.error("The standalone-server runtime location could not be read: " //$NON-NLS-1$
+            return PreparedTarget.failed("The standalone-server runtime location could not be read: " //$NON-NLS-1$
                 + PlatformFailures.describe(unwrap(e)));
         }
         if (runtimeLocation == null)
         {
-            return PreparedTarget.error("The standalone-server runtime location is unknown."); //$NON-NLS-1$
+            return PreparedTarget.failed("The standalone-server runtime location is unknown."); //$NON-NLS-1$
         }
         Ibcmd ibcmd = Ibcmd.of(runtimeLocation);
         if (!ibcmd.exists())
         {
-            return PreparedTarget.error("ibcmd is missing at '" + ibcmd.getExecutablePath() //$NON-NLS-1$
+            return PreparedTarget.failed("ibcmd is missing at '" + ibcmd.getExecutablePath() //$NON-NLS-1$
                 + "'. Select a 1C runtime that includes the standalone server."); //$NON-NLS-1$
         }
         return PreparedTarget.of(server, ibcmd,
@@ -1272,7 +1272,7 @@ public final class InfobaseSessionSupport
             return new PreparedTarget(server, ibcmd, credentials, null);
         }
 
-        static PreparedTarget error(String error)
+        static PreparedTarget failed(String error)
         {
             return new PreparedTarget(null, null, null, error);
         }

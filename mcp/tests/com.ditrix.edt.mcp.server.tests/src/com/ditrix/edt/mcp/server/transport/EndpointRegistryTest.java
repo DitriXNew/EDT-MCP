@@ -114,6 +114,7 @@ public class EndpointRegistryTest extends StdioTestSupport
         String original = Files.readString(registry.recordPath());
         makeForeignWritable(registry.directory());
         assertThrows(IOException.class, () -> PrivatePaths.verifyDirectory(registry.directory()));
+        assertThrows(IOException.class, () -> PrivatePaths.temporaryDirectory(registry.directory(), "extension-"));
         assertThrows(IOException.class, () -> new EndpointRegistry(registry.directory(), registry.workspace()));
         assertThrows(IOException.class, registry::read);
         assertThrows(IOException.class, () -> { try (var channel = PrivatePaths.lockFile(registry.lockPath())) { } });
