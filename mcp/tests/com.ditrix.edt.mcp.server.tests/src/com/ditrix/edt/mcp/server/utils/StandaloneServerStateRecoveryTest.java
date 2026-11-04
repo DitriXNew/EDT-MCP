@@ -14,7 +14,10 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -25,8 +28,10 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
@@ -34,6 +39,7 @@ import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
 import org.mockito.Mockito;
 
+import com.ditrix.edt.mcp.server.tools.impl.LaunchTool;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
@@ -978,6 +984,134 @@ public class StandaloneServerStateRecoveryTest
             assertTrue(failure.getMessage().contains(
                 "was stopped for this operation and could NOT be started again")); //$NON-NLS-1$
         }
+    }
+
+    private ILaunchConfiguration cancelledConfiguration(String name) throws Exception
+    {
+        ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
+        Mockito.when(config.getName()).thenReturn(name);
+        Mockito.doAnswer(invocation -> {
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return Mockito.mock(ILaunch.class);
+        }).when(config).launch(Mockito.eq(ILaunchManager.DEBUG_MODE),
+            Mockito.any(IProgressMonitor.class));
+        return config;
+    }
+
+    private CoreException plainCancellation() throws Exception
+    {
+        try
+        {
+            StandaloneServerStateRecovery.launchWithRecovery(cancelledConfiguration("Cancelled launch"),
+                ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
+            throw new AssertionError("the delegate cancelled the launch");
+        }
+        catch (CoreException failure)
+        {
+            assertTrue(StandaloneServerStateRecovery.isAbandonedLaunch(failure));
+            return failure;
+        }
+    }
+
+    @Test
+    public void testDefaultAbandonedMessageDoesNotReferToAnUnloggedError() throws Exception
+    {
+        assertEquals("Launch of 'Cancelled launch' was abandoned by EDT "
+            + "(the launch delegate cancelled it); no reason was logged.", plainCancellation().getMessage());
+    }
+
+    private void assertRestorationCancellationIsError(
+        StandaloneServerStateRecovery.RestorationStartOutcome outcome, String expected) throws Exception
+    {
+        CoreException cancelled = plainCancellation();
+        String restored;
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer(APPLICATION_ID);
+            restored = StandaloneServerStateRecovery.appendRestorationOutcome(cancelled.getMessage(),
+                "Standalone", applicationId -> outcome);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+        assertTrue(restored, restored.contains(expected));
+        Method failureStatus = StandaloneServerStateRecovery.class.getDeclaredMethod(
+            "failureStatus", String.class, Throwable.class);
+        failureStatus.setAccessible(true);
+        CoreException failure = new CoreException((IStatus)failureStatus.invoke(null, restored, cancelled));
+        assertTrue("restoration must retain the broad abandonment classification",
+            StandaloneServerStateRecovery.isAbandonedLaunch(failure));
+        ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
+        Mockito.when(config.getName()).thenReturn("Restoration cancellation");
+        Mockito.when(config.launch(Mockito.eq(ILaunchManager.DEBUG_MODE),
+            Mockito.any(IProgressMonitor.class))).thenThrow(failure);
+        assertCancellationJobIsError(config, expected);
+    }
+
+    private void assertCancellationJobIsError(ILaunchConfiguration config, String expected) throws Exception
+    {
+        List<IStatus> logs = new ArrayList<>();
+        ILogListener listener = (status, plugin) -> {
+            if (PLUGIN.equals(status.getPlugin()) && status.getMessage().startsWith("launch "))
+            {
+                logs.add(status);
+            }
+        };
+        Method job = LaunchTool.class.getDeclaredMethod("runLaunchJobBody",
+            ILaunchConfiguration.class, boolean.class, ExternalInfobaseChangesPolicy.class,
+            IProgressMonitor.class);
+        job.setAccessible(true);
+        IStatus status;
+        Platform.addLogListener(listener);
+        try
+        {
+            status = (IStatus)job.invoke(null, config, false, ExternalInfobaseChangesPolicy.DEFAULT,
+                new NullProgressMonitor());
+        }
+        finally
+        {
+            Platform.removeLogListener(listener);
+        }
+        assertEquals(status.getMessage(), IStatus.ERROR, status.getSeverity());
+        assertTrue(status.getMessage(), status.getMessage().contains(expected));
+        assertEquals(1, logs.size());
+        assertEquals(IStatus.ERROR, logs.get(0).getSeverity());
+        assertEquals("launch failed asynchronously: " + status.getMessage(), logs.get(0).getMessage());
+        assertNotNull(logs.get(0).getException());
+        assertTrue(AsyncLaunchOutcomes.recent().stream().anyMatch(outcome ->
+            config.getName().equals(outcome.launchConfiguration())
+                && status.getMessage().equals(outcome.message())));
+    }
+
+    @Test
+    public void testCancellationWithFailedRestorationStaysError() throws Exception
+    {
+        assertRestorationCancellationIsError(
+            new StandaloneServerStateRecovery.RestorationStartOutcome("restoration failed", true),
+            "could NOT be started again: restoration failed");
+    }
+
+    @Test
+    public void testCancellationWithInconclusiveRestorationStaysError() throws Exception
+    {
+        assertRestorationCancellationIsError(
+            new StandaloneServerStateRecovery.RestorationStartOutcome("restoration deadline elapsed", false),
+            "its restoration start did not finish conclusively: restoration deadline elapsed");
+    }
+
+    @Test
+    public void testCancelledLaunchJobWithAnOperationStopStaysError() throws Exception
+    {
+        ILaunchConfiguration config = cancelledConfiguration("Stopped server cancellation");
+        Mockito.doAnswer(invocation -> {
+            StandaloneServerStateRecovery.recordStoppedServer(APPLICATION_ID);
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return Mockito.mock(ILaunch.class);
+        }).when(config).launch(Mockito.eq(ILaunchManager.DEBUG_MODE),
+            Mockito.any(IProgressMonitor.class));
+        assertCancellationJobIsError(config, "was stopped for this operation and could NOT be started again");
     }
 
     // ==================== a stop that outlives the wait for it (#623) ====================

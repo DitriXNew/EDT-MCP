@@ -2466,14 +2466,14 @@ public class LaunchTool implements IMcpTool
      * the same flags the asyncExec dispatch used), runs the launch, and ALWAYS
      * releases any acquired arm in {@code finally} — both calls are thread-safe from a Job thread.
      *
-     * <p>Failures are logged and returned as ERROR; an unreasoned delegate cancellation
+     * <p>Failures are logged and returned as ERROR; a plain unreasoned delegate cancellation
      * is recorded and returned as CANCEL without an error-log entry.
      *
      * @param config the launch configuration to start
      * @param autoConfirmUpdateDialog arm the "Application update" matcher
      * @param monitor the Job's progress monitor, passed through to
      *        {@code config.launch} so the Progress view shows the delegate's steps
-     * @return OK on success, CANCEL on unreasoned delegate cancellation, else an error status
+     * @return OK on success, CANCEL on plain unreasoned delegate cancellation, else an error status
      */
     static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy, IProgressMonitor monitor)
@@ -2601,7 +2601,8 @@ public class LaunchTool implements IMcpTool
                 String message = appendAccessSettingsDialogFailure(e.getMessage(),
                     accessDialogsBefore, accessDialogsAfter);
                 recordAsyncFailure(config, message);
-                if (abortReason.reason() == null && accessDialogsAfter == accessDialogsBefore)
+                if (StandaloneServerStateRecovery.isPlainAbandonedLaunch(e)
+                    && abortReason.reason() == null && accessDialogsAfter == accessDialogsBefore)
                 {
                     Activator.logInfo("launch cancelled asynchronously: " + message); //$NON-NLS-1$
                     return new Status(IStatus.CANCEL, Activator.PLUGIN_ID, message);

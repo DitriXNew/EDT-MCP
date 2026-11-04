@@ -594,10 +594,13 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /** This generic Designer question channel is identifiable only with its complete button set. */
-    static boolean isExclusiveLockQuestion(String shellTitle, Set<String> buttonLabels)
+    static boolean isExclusiveLockQuestion(String shellTitle, Map<String, ? extends List<?>> buttons,
+        boolean complete)
     {
-        return ("Action selection".equals(shellTitle) || ACTION_SELECTION_TITLE_RU.equals(shellTitle)) //$NON-NLS-1$
-            && buttonLabels != null && EXCLUSIVE_LOCK_BUTTON_SETS.contains(buttonLabels);
+        return complete
+            && ("Action selection".equals(shellTitle) || ACTION_SELECTION_TITLE_RU.equals(shellTitle)) //$NON-NLS-1$
+            && buttons != null && EXCLUSIVE_LOCK_BUTTON_SETS.contains(buttons.keySet())
+            && buttons.values().stream().allMatch(matches -> matches != null && matches.size() == 1);
     }
 
     /**

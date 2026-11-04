@@ -6,12 +6,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
@@ -323,6 +325,139 @@ public class EdtDialogToolTest
         configure.setAccessible(true);
         configure.invoke(consent, shell);
         assertQuestionRefuses(buttons);
+    }
+
+    private Control nested(Control child, int levels)
+    {
+        for (int i = 0; i < levels; i++)
+        {
+            Composite parent = mock(Composite.class);
+            when(parent.getChildren()).thenReturn(new Control[] {child});
+            child = parent;
+        }
+        return child;
+    }
+
+    private Control[] depthLimitedQuestion(Button[] buttons)
+    {
+        return new Control[] {buttons[0], buttons[1], buttons[2], nested(button, 6)};
+    }
+
+    private Control[] budgetLimitedQuestion(Button[] buttons, boolean extra)
+    {
+        Control[] controls = new Control[extra ? 500 : 499];
+        System.arraycopy(buttons, 0, controls, 0, buttons.length);
+        Arrays.fill(controls, 3, 499, mock(Label.class));
+        if (extra)
+        {
+            controls[499] = button;
+        }
+        return controls;
+    }
+
+    private void assertPressInventoryRefuses(Button[] buttons, Control[] changed)
+    {
+        JsonObject dialog = list();
+        assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        when(shell.getChildren()).thenReturn(buttons, changed);
+        String result = press(dialog, buttons[0].getText());
+        assertTrue(result, result.contains("ask the user to answer it in EDT"));
+        for (Button candidate : buttons)
+        {
+            verify(candidate, never()).notifyListeners(anyInt(), any());
+        }
+        assertFalse(list().get("answerable").getAsBoolean());
+    }
+
+    @Test
+    public void lockQuestionWithButtonBelowDepthLimitRefusesAtCapture()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        Control[] controls = depthLimitedQuestion(buttons);
+        when(shell.getChildren()).thenReturn(controls);
+        assertQuestionRefuses(buttons);
+    }
+
+    @Test
+    public void lockQuestionWithButtonBelowDepthLimitRefusesAtPress()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        assertPressInventoryRefuses(buttons, depthLimitedQuestion(buttons));
+    }
+
+    @Test
+    public void lockQuestionWithButtonBeyondBudgetRefusesAtCapture()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        Control[] controls = budgetLimitedQuestion(buttons, true);
+        when(shell.getChildren()).thenReturn(controls);
+        assertQuestionRefuses(buttons);
+    }
+
+    @Test
+    public void lockQuestionWithButtonBeyondBudgetRefusesAtPress()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        assertPressInventoryRefuses(buttons, budgetLimitedQuestion(buttons, true));
+    }
+
+    @Test
+    public void lockQuestionWithDuplicateLabelRefusesUniqueButtonAtCapture()
+    {
+        assertQuestionRefuses(question("Action selection", "Cancel", "Retry", "Dynamic update", "Retry"));
+    }
+
+    @Test
+    public void lockQuestionWithDuplicateLabelRefusesUniqueButtonAtPress()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        Button duplicate = mock(Button.class);
+        when(duplicate.getStyle()).thenReturn(SWT.PUSH);
+        when(duplicate.getText()).thenReturn("Retry");
+        assertPressInventoryRefuses(buttons,
+            new Control[] {buttons[0], buttons[1], buttons[2], duplicate});
+        verify(duplicate, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void exactLockTripleAtDepthLimitRemainsAnswerable()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        Composite row = mock(Composite.class);
+        when(row.getChildren()).thenReturn(buttons);
+        Control branch = nested(row, 4);
+        when(shell.getChildren()).thenReturn(new Control[] {branch});
+        JsonObject dialog = list();
+        assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Cancel").contains("\"success\":true"));
+        verify(buttons[0]).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    @Test
+    public void exactLockTripleAtBudgetLimitRemainsAnswerable()
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        Control[] controls = budgetLimitedQuestion(buttons, false);
+        when(shell.getChildren()).thenReturn(controls);
+        JsonObject dialog = list();
+        assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Cancel").contains("\"success\":true"));
+        verify(buttons[0]).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    @Test
+    public void titleOnlyDialogsRemainAnswerableWithIncompleteInventory()
+    {
+        for (String title : new String[] {"Application update", "Infobase configuration changes"})
+        {
+            Button[] buttons = question(title, "Cancel", "Retry", "Dynamic update", "Retry");
+            Control branch = nested(button, 6);
+            when(shell.getChildren()).thenReturn(new Control[] {buttons[0], branch});
+            JsonObject dialog = list();
+            assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+            assertTrue(press(dialog, "Cancel").contains("\"success\":true"));
+            verify(buttons[0]).notifyListeners(eq(SWT.Selection), any(Event.class));
+        }
     }
 
     @Test

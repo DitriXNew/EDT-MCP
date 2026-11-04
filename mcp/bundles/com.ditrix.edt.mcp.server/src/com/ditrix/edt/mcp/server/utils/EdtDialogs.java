@@ -9,7 +9,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -161,12 +160,12 @@ public class EdtDialogs
         return !shell.isDisposed() && shell.isVisible() && (shell.getStyle() & SWT.APPLICATION_MODAL) != 0;
     }
 
-    private static boolean answerable(Shell shell, Set<String> buttonLabels)
+    private static boolean answerable(Shell shell, Map<String, List<Button>> buttons, boolean complete)
     {
         return shell.getData(HUMAN_KEY) == null
             && (LaunchUpdateDialogAutoConfirmer.isTargetTitle(shell.getText())
                 || LaunchUpdateDialogAutoConfirmer.isConflictTitle(shell.getText())
-                || LaunchUpdateDialogAutoConfirmer.isExclusiveLockQuestion(shell.getText(), buttonLabels));
+                || LaunchUpdateDialogAutoConfirmer.isExclusiveLockQuestion(shell.getText(), buttons, complete));
     }
 
     private void capture(Shell shell)
@@ -183,12 +182,12 @@ public class EdtDialogs
         data.addProperty("title", shell.getText());
         StringBuilder message = new StringBuilder();
         Map<String, List<Button>> buttons = new LinkedHashMap<>();
-        readControls(shell, 0, new int[] {500}, message, buttons);
+        boolean complete = readControls(shell, 0, new int[] {500}, message, buttons);
         data.addProperty("message", message.toString().strip());
         JsonArray labels = new JsonArray();
         buttons.keySet().forEach(labels::add);
         data.add("buttons", labels);
-        boolean allowed = answerable(shell, buttons.keySet());
+        boolean allowed = answerable(shell, buttons, complete);
         data.addProperty("answerable", allowed);
         if (!allowed)
         {
@@ -204,13 +203,18 @@ public class EdtDialogs
         publish();
     }
 
-    private static void readControls(Control control, int depth, int[] budget, StringBuilder text,
+    private static boolean readControls(Control control, int depth, int[] budget, StringBuilder text,
         Map<String, List<Button>> buttons)
     {
-        if (control.isDisposed() || depth > 6 || budget[0]-- <= 0)
+        if (control.isDisposed())
         {
-            return;
+            return true;
         }
+        if (depth > 6 || budget[0] <= 0)
+        {
+            return false;
+        }
+        budget[0]--;
         String value = null;
         if (control instanceof Button && (control.getStyle() & SWT.PUSH) != 0)
         {
@@ -238,13 +242,15 @@ public class EdtDialogs
         {
             text.append(value, 0, Math.min(value.length(), 8192 - text.length())).append('\n');
         }
+        boolean complete = true;
         if (control instanceof Composite)
         {
             for (Control child : ((Composite)control).getChildren())
             {
-                readControls(child, depth + 1, budget, text, buttons);
+                complete &= readControls(child, depth + 1, budget, text, buttons);
             }
         }
+        return complete;
     }
 
     private void publish()
@@ -313,8 +319,8 @@ public class EdtDialogs
                 + "' has changed or been replaced. Call edt_dialog with action=list again.").toJson();
         }
         Map<String, List<Button>> buttons = new LinkedHashMap<>();
-        readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
-        if (!answerable(shell, buttons.keySet()))
+        boolean complete = readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
+        if (!answerable(shell, buttons, complete))
         {
             return ToolResult.error("Dialog '" + dialogId + "': " + HUMAN_REASON + ".").toJson();
         }
