@@ -52,6 +52,7 @@ public class McpServerStartup implements IStartup
     @Override
     public void earlyStartup()
     {
+        com.ditrix.edt.mcp.server.utils.EdtDialogs.getInstance().ensureInstalled();
         // Opt-in headless/CI bootstrap (env-gated; no-op without the env vars).
         importConfiguredProjects();
 

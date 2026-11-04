@@ -2062,6 +2062,95 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Inspect open EDT modal dialogs or press an allowlisted dialog's button. List first; press only an exact returned button on an answerable dialog. Full parameters and examples: call get_tool_guide('edt_dialog').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "press"
+          ],
+          "type": "string"
+        },
+        "button": {
+          "description": "Required for press; exact button label from list.",
+          "type": "string"
+        },
+        "dialogId": {
+          "description": "Required for press; use the id from list.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "edt_dialog",
+    "outputSchema": {
+      "properties": {
+        "button": {
+          "type": "string"
+        },
+        "dialogId": {
+          "type": "string"
+        },
+        "dialogs": {
+          "items": {
+            "properties": {
+              "answerable": {
+                "type": "boolean"
+              },
+              "buttons": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "dialogId": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dialogId",
+              "title",
+              "message",
+              "buttons",
+              "answerable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -4093,7 +4182,7 @@
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
+          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
           "type": "boolean"
         }
       },
@@ -4124,6 +4213,12 @@
         },
         "configurationType": {
           "type": "string"
+        },
+        "edtDialogs": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "externalObjectName": {
           "type": "string"

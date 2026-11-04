@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.EdtDialogs;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchAbortReason;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -55,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
@@ -168,7 +170,7 @@ public class LaunchTool implements IMcpTool
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
                     + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
-                    + "modal. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
+                    + "modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
                     + "update on this route even when omitted, and an explicit true is refused - run " //$NON-NLS-1$
                     + "update_database separately.") //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
@@ -238,6 +240,7 @@ public class LaunchTool implements IMcpTool
                 + "alreadyRunning short-circuit. Poll debug_status for asynchronous-launch readiness.") //$NON-NLS-1$
             .booleanProperty(KEY_STANDALONE_SERVER_PORTS_REASSIGNED,
                 "True when EDT moved a standalone server to free ports and rewrote its configuration") //$NON-NLS-1$
+            .objectArrayProperty("edtDialogs", "EDT modal dialogs observed shortly after dispatch; call edt_dialog to answer")
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message") //$NON-NLS-1$
             .build();
     }
@@ -521,6 +524,7 @@ public class LaunchTool implements IMcpTool
                 return applied.errorJson;
             }
 
+            boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, isAttach, configProject, effectiveAppId);
             String launchError = performLaunch(applied.config, updateBeforeLaunch,
                 isAttach ? null : policy, isAttach ? null : portPolicy,
                 eclipseLaunchMode(mode));
@@ -530,8 +534,8 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
-            return buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
-                overrides, prepared, mode);
+            return reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
+                overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance());
         }
         catch (Exception e)
         {
@@ -1632,6 +1636,7 @@ public class LaunchTool implements IMcpTool
                 return applied.errorJson;
             }
 
+            boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, false, projectName, applicationId);
             String launchError =
                 performLaunch(applied.config, updateBeforeLaunch, policy, portPolicy,
                     eclipseLaunchMode(mode));
@@ -1641,7 +1646,7 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
-            return echoOverrides(ToolResult.success()
+            return reportLaunchDialogs(echoOverrides(ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
@@ -1650,7 +1655,7 @@ public class LaunchTool implements IMcpTool
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, startingMessage(mode, false))
-                .toJson();
+                .toJson(), watchDialogs, EdtDialogs.getInstance());
         }
         catch (Exception e)
         {
@@ -1658,6 +1663,53 @@ public class LaunchTool implements IMcpTool
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
+    }
+
+    private static boolean dialogWatchNeeded(boolean updateBeforeLaunch, boolean attach,
+        String projectName, String applicationId)
+    {
+        if (!shouldWatchDialogs(updateBeforeLaunch, attach, ApplicationUpdateState.UNKNOWN)
+            || LaunchLifecycleUtils.workbenchDisplayOrNull() == null)
+        {
+            return false;
+        }
+        EdtDialogs.getInstance().ensureInstalled();
+        IApplicationManager manager = Activator.getDefault() != null
+            ? Activator.getDefault().getApplicationManager() : null;
+        if (manager == null || projectName == null || applicationId == null)
+        {
+            return true;
+        }
+        IProject project = ProjectContext.of(projectName).project();
+        var read = ApplicationSupport.readBounded("Read launch update state", applicationId, 200,
+            () -> manager.getApplication(project, applicationId)
+                .map(manager::getUpdateState).orElse(ApplicationUpdateState.UNKNOWN));
+        try
+        {
+            return shouldWatchDialogs(updateBeforeLaunch, attach,
+                read.concluded() ? read.valueOrRethrow() : ApplicationUpdateState.UNKNOWN);
+        }
+        catch (Exception e)
+        {
+            return true;
+        }
+    }
+
+    static boolean shouldWatchDialogs(boolean updateBeforeLaunch, boolean attach, ApplicationUpdateState state)
+    {
+        return !updateBeforeLaunch && !attach && state != ApplicationUpdateState.UPDATED;
+    }
+
+    static String reportLaunchDialogs(String result, boolean watch, EdtDialogs observer)
+    {
+        JsonArray dialogs = observer.awaitDialogs(watch, 750);
+        if (dialogs.isEmpty())
+        {
+            return result;
+        }
+        JsonObject response = JsonParser.parseString(result).getAsJsonObject();
+        response.add("edtDialogs", dialogs);
+        return response.toString();
     }
 
     /**

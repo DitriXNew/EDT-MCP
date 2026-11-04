@@ -132,6 +132,7 @@ public final class Toolsets
             + "MCP Server Tools preference tab to enable."); //$NON-NLS-1$
 
         assign(CORE,
+            "edt_dialog",
             "list_toolsets", "enable_toolset", //$NON-NLS-1$ //$NON-NLS-2$
             "get_tool_guide", "get_server_status", "get_edt_version", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "list_projects", "list_modules", "get_module_structure", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

@@ -500,7 +500,8 @@ public class LaunchToolTest
         assertEquals("Default true: silently apply the configuration->DB update before launching " //$NON-NLS-1$
             + "so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the " //$NON-NLS-1$
             + "dialog is auto-confirmed); false skips the update and the platform may then show " //$NON-NLS-1$
-            + "that modal. Ignored for Attach. A standalone-server configuration performs no " //$NON-NLS-1$
+            + "that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. " //$NON-NLS-1$
+            + "A standalone-server configuration performs no " //$NON-NLS-1$
             + "database update on this route even when omitted, and an explicit true is refused " //$NON-NLS-1$
             + "- run update_database separately.", description); //$NON-NLS-1$
         // Both halves must survive: the standalone carve-out, and the modal behaviour it

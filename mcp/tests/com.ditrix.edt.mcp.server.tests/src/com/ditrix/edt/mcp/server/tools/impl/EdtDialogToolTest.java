@@ -1,0 +1,300 @@
+/* Copyright (C) 2026 DitriX. Licensed under AGPL-3.0-or-later. */
+package com.ditrix.edt.mcp.server.tools.impl;
+
+import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.Shell;
+import org.junit.Before;
+import org.junit.Test;
+
+import com.ditrix.edt.mcp.server.UserSignal.SignalType;
+import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
+import com.ditrix.edt.mcp.server.ui.UserSignalDialog;
+import com.ditrix.edt.mcp.server.utils.EdtDialogs;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+/** Exercises the registered tool against real observation/press code with SWT widgets mocked. */
+public class EdtDialogToolTest
+{
+    private EdtDialogTool tool;
+    private Display display;
+    private Shell shell;
+    private Button button;
+    private EdtDialogs dialogs;
+    private final Map<Integer, Listener> filters = new HashMap<>();
+
+    @Before
+    public void setUp()
+    {
+        display = mock(Display.class);
+        when(display.getThread()).thenReturn(new Thread());
+        doAnswer(call -> { ((Runnable)call.getArgument(0)).run(); return null; })
+            .when(display).asyncExec(any(Runnable.class));
+        doAnswer(call -> { filters.put(call.getArgument(0), call.getArgument(1)); return null; })
+            .when(display).addFilter(anyInt(), any(Listener.class));
+        shell = mock(Shell.class);
+        when(shell.isVisible()).thenReturn(true);
+        when(shell.getStyle()).thenReturn(SWT.APPLICATION_MODAL);
+        when(shell.getText()).thenReturn("Application update");
+        when(display.getShells()).thenReturn(new Shell[] {shell});
+        Map<String, Object> data = new HashMap<>();
+        doAnswer(call -> { data.put(call.getArgument(0), call.getArgument(1)); return null; })
+            .when(shell).setData(anyString(), any());
+        when(shell.getData(anyString())).thenAnswer(call -> data.get(call.getArgument(0)));
+        button = mock(Button.class);
+        when(button.getStyle()).thenReturn(SWT.PUSH);
+        when(button.getText()).thenReturn("Run without update");
+        when(button.isEnabled()).thenReturn(true);
+        when(button.isVisible()).thenReturn(true);
+        Label body = mock(Label.class);
+        when(body.getText()).thenReturn("The application is not up to date.");
+        when(shell.getChildren()).thenReturn(new Control[] {body, button});
+        dialogs = new EdtDialogs(() -> display);
+        tool = new EdtDialogTool(dialogs);
+    }
+
+    private JsonObject list()
+    {
+        JsonObject response = JsonParser.parseString(tool.execute(Map.of("action", "list"))).getAsJsonObject();
+        assertTrue(response.toString(), response.get("success").getAsBoolean());
+        return response.getAsJsonArray("dialogs").get(0).getAsJsonObject();
+    }
+
+    private String press(JsonObject dialog, String label)
+    {
+        return tool.execute(Map.of("action", "press", "dialogId", dialog.get("dialogId").getAsString(),
+            "button", label));
+    }
+
+    @Test
+    public void contractAndValidation()
+    {
+        assertEquals("edt_dialog", tool.getName());
+        assertEquals(ResponseType.JSON, tool.getResponseType());
+        assertTrue(tool.getDescription().contains("get_tool_guide('edt_dialog')"));
+        JsonObject schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject();
+        assertEquals("[\"action\"]", schema.getAsJsonArray("required").toString());
+        assertEquals(3, schema.getAsJsonObject("properties").size());
+        assertTrue(tool.getOutputSchema().contains("answerable"));
+        assertTrue(tool.execute(Map.of()).contains("Use list or press"));
+        assertTrue(tool.execute(Map.of("action", "press")).contains("dialogId and button"));
+        assertTrue(tool.execute(Map.of("action", "list", "button", "Cancel")).contains("accepts no"));
+    }
+
+    @Test
+    public void englishApplicationUpdateListsAndPresses()
+    {
+        JsonObject dialog = list();
+        assertEquals("Application update", dialog.get("title").getAsString());
+        assertEquals("The application is not up to date.", dialog.get("message").getAsString());
+        assertEquals("[\"Run without update\"]", dialog.get("buttons").toString());
+        assertTrue(dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Run without update").contains("\"success\":true"));
+        verify(button).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    @Test
+    public void russianApplicationUpdateListsAndPresses()
+    {
+        String title = "Обновление приложения";
+        String label = "Обновить и запустить";
+        when(shell.getText()).thenReturn(title);
+        when(button.getText()).thenReturn(label);
+        JsonObject dialog = list();
+        assertEquals(title, dialog.get("title").getAsString());
+        assertEquals(label, dialog.getAsJsonArray("buttons").get(0).getAsString());
+        assertTrue(dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, label).contains("\"success\":true"));
+        verify(button).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    @Test
+    public void conflictUsesExistingBilingualMatcher()
+    {
+        for (String title : new String[] {"Infobase configuration changes", "Изменения конфигурации информационной базы"})
+        {
+            when(shell.getText()).thenReturn(title);
+            JsonObject dialog = list();
+            assertTrue(title, dialog.get("answerable").getAsBoolean());
+            assertTrue(press(dialog, "Run without update").contains("\"success\":true"));
+        }
+        verify(button, times(2)).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    @Test
+    public void unknownDialogIsVisibleButCannotBePressed()
+    {
+        when(shell.getText()).thenReturn("Unrecognized EDT question");
+        JsonObject dialog = list();
+        assertFalse(dialog.get("answerable").getAsBoolean());
+        assertEquals("ask the user to answer it in EDT", dialog.get("reason").getAsString());
+        assertTrue(press(dialog, "Run without update").contains("ask the user"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void consentIdentityWinsEvenWhenTitleLooksAllowlisted() throws Exception
+    {
+        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null);
+        Method configure = DestructiveConsentDialog.class.getDeclaredMethod("configureShell", Shell.class);
+        configure.setAccessible(true);
+        configure.invoke(consent, shell);
+        JsonObject dialog = list();
+        assertFalse(dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Run without update").contains("ask the user"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void userSignalIdentityWinsEvenWhenTitleLooksAllowlisted() throws Exception
+    {
+        UserSignalDialog signal = new UserSignalDialog(null, SignalType.CUSTOM, "Application update");
+        Method configure = UserSignalDialog.class.getDeclaredMethod("configureShell", Shell.class);
+        configure.setAccessible(true);
+        configure.invoke(signal, shell);
+        JsonObject dialog = list();
+        assertFalse(dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Run without update").contains("ask the user"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void staleIdCannotAddressReplacementOrReopenedShell()
+    {
+        JsonObject old = list();
+        Event hidden = new Event();
+        hidden.type = SWT.Hide;
+        hidden.widget = shell;
+        filters.get(SWT.Hide).handleEvent(hidden);
+        JsonObject replacement = list();
+        assertNotEquals(old.get("dialogId"), replacement.get("dialogId"));
+        assertTrue(press(old, "Run without update").contains("closed or been replaced"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void disposedShellAndWrongButtonRefuseWithoutClick()
+    {
+        JsonObject dialog = list();
+        String wrong = press(dialog, "run without update");
+        assertTrue(wrong, wrong.contains("Available labels: [Run without update]"));
+        when(shell.isDisposed()).thenReturn(true);
+        assertTrue(press(dialog, "Run without update").contains("list again"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test(timeout = 4000)
+    public void blockedUiBoundsListAndPressAndCancelsLatePress()
+    {
+        JsonObject dialog = list();
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        doAnswer(call -> { queued.set(call.getArgument(0)); return null; })
+            .when(display).asyncExec(any(Runnable.class));
+        long started = System.nanoTime();
+        assertTrue(tool.execute(Map.of("action", "list")).contains("TimeoutException"));
+        assertTrue(press(dialog, "Run without update").contains("TimeoutException"));
+        assertTrue("two bounded UI waits", System.nanoTime() - started < 3_000_000_000L);
+        queued.get().run();
+        verify(button, never()).notifyListeners(anyInt(), any());
+        assertTrue(dialogs.notice().contains("Application update"));
+    }
+
+    @Test
+    public void noModalMeansEmptyListAndNoNotice()
+    {
+        when(shell.getStyle()).thenReturn(SWT.SHELL_TRIM);
+        assertEquals("[]", JsonParser.parseString(tool.execute(Map.of("action", "list")))
+            .getAsJsonObject().get("dialogs").toString());
+        assertNull(dialogs.notice());
+    }
+
+    @Test
+    public void displayEventsMaintainNoticeWithoutUiReadOnCompletion()
+    {
+        when(display.getShells()).thenReturn(new Shell[0]);
+        tool.execute(Map.of("action", "list"));
+        assertNull(dialogs.notice());
+        Event event = new Event();
+        event.type = SWT.Show;
+        event.widget = shell;
+        filters.get(SWT.Show).handleEvent(event);
+        assertEquals("EDT dialog open: \"Application update\". Call edt_dialog with action=list.", dialogs.notice());
+        clearInvocations(display, shell);
+        dialogs.notice();
+        verifyZeroInteractions(display, shell);
+        event.type = SWT.Dispose;
+        filters.get(SWT.Dispose).handleEvent(event);
+        assertNull(dialogs.notice());
+    }
+
+    @Test
+    public void replacingDialogContentsInvalidatesIdEvenOnSameShell()
+    {
+        JsonObject old = list();
+        when(shell.getText()).thenReturn("Infobase configuration changes");
+        assertTrue(press(old, "Run without update").contains("changed or been replaced"));
+        assertNotEquals(old.get("dialogId"), list().get("dialogId"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+
+    @Test
+    public void disabledButtonRefusesAndBoundedWatchEndsWithoutDialog()
+    {
+        JsonObject dialog = list();
+        when(button.isEnabled()).thenReturn(false);
+        assertTrue(press(dialog, "Run without update").contains("exact enabled label"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+        when(display.getShells()).thenReturn(new Shell[0]);
+        when(shell.isVisible()).thenReturn(false);
+        tool.execute(Map.of("action", "list"));
+        long start = System.nanoTime();
+        assertEquals("[]", dialogs.awaitDialogs(true, 20).toString());
+        assertTrue(System.nanoTime() - start < 500_000_000L);
+    }
+
+    @Test(timeout = 3000)
+    public void blockedUiAlsoBoundsTheVeryFirstCall()
+    {
+        doNothing().when(display).asyncExec(any(Runnable.class));
+        assertTrue(tool.execute(Map.of("action", "list")).contains("TimeoutException"));
+        verify(display, never()).getShells();
+        assertNull(dialogs.notice());
+    }
+
+    @Test
+    public void failureAfterSelectionStartsReportsUnknownMutationOutcome()
+    {
+        JsonObject dialog = list();
+        doThrow(new IllegalStateException("Native callback failed"))
+            .when(button).notifyListeners(eq(SWT.Selection), any(Event.class));
+        JsonObject result = JsonParser.parseString(press(dialog, "Run without update")).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean());
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean());
+    }
+
+    @Test
+    public void unrecognizedHumanMarkerStillRefuses()
+    {
+        shell.setData(EdtDialogs.class.getName() + ".humanOnly", new Object());
+        JsonObject dialog = list();
+        assertFalse(dialog.get("answerable").getAsBoolean());
+        assertTrue(press(dialog, "Run without update").contains("ask the user"));
+        verify(button, never()).notifyListeners(anyInt(), any());
+    }
+}

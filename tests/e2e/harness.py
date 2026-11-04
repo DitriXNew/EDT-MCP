@@ -858,6 +858,8 @@ def _confirmed(args):
 # the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
 # apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
+    # A conflict-dialog Import press can rewrite project sources through EDT.
+    "edt_dialog",
     "sort_metadata", "create_metadata", "modify_metadata", "write_module_source",
     "apply_quick_fix", "build_external_objects",
     # The preview never writes; a confirmed clone writes only after validation and the hash check.
@@ -891,6 +893,7 @@ NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
 
 # Action-based writers share one exemption table. All other actions stay conservative.
 READ_ONLY_MODEL_ACTIONS = {
+    "edt_dialog": frozenset({"list"}),
     "dcs": frozenset({"get", "options"}),
     "business_process_route_map": frozenset({"get"}),
 }

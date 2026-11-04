@@ -77,6 +77,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ImportProjectFromFileTool;
 import com.ditrix.edt.mcp.server.tools.impl.InfobaseSessionsTool;
 import com.ditrix.edt.mcp.server.tools.impl.InfobaseExtensionsTool;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool;
+import com.ditrix.edt.mcp.server.tools.impl.EdtDialogTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListCommonPicturesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GitTool;
@@ -204,6 +205,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new InfobaseExtensionsTool());
         catalogue.add(new UpdateDatabaseTool());
         catalogue.add(new LaunchTool());
+        catalogue.add(new EdtDialogTool());
         catalogue.add(new ListConfigurationsTool());
         catalogue.add(new CreateLaunchConfigTool());
         catalogue.add(new DeleteLaunchConfigTool());
