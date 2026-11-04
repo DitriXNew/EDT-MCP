@@ -19,6 +19,7 @@ def fresh_harness():
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
     harness._OUTPUT_SCHEMAS = {tool: None for tool, _ in READS}  # Advertised without schemas.
+    harness._OUTPUT_SCHEMAS["sort_metadata"] = None
     harness._BASELINE_INVENTORY = []
     harness.wait_for_project_ready = mock.Mock(return_value=True)
     harness.all_fixtures_status = mock.Mock(return_value="")
