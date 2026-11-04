@@ -149,6 +149,16 @@ public class GetServerStatusToolTest
     }
 
     @Test
+    public void testOutputSchemaKeepsTransportsOptionalWithBothFlagsRequired()
+    {
+        JsonObject schema = JsonParser.parseString(new GetServerStatusTool().getOutputSchema()).getAsJsonObject();
+        assertEquals(JsonParser.parseString("[\"success\"]"), schema.getAsJsonArray("required"));
+        JsonObject transports = schema.getAsJsonObject("properties").getAsJsonObject("transports");
+        assertEquals("object", transports.get("type").getAsString());
+        assertEquals(JsonParser.parseString("[\"http\",\"ipc\"]"), transports.getAsJsonArray("required"));
+    }
+
+    @Test
     public void testExecuteIsWellFormedJsonObject()
     {
         // The snapshot is delivered as a JSON object; parse it to prove it is not a

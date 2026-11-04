@@ -108,7 +108,7 @@ public class GetServerStatusTool implements IMcpTool
             .objectProperty("transports", "Active MCP listeners; IPC exposes no secret or socket address",
                 JsonSchemaBuilder.object()
                     .booleanProperty("http", "Whether the HTTP listener is running", true)
-                    .booleanProperty("ipc", "Whether the local IPC listener is running", true), true)
+                    .booleanProperty("ipc", "Whether the local IPC listener is running", true), false)
             .stringProperty("protocolVersion", "MCP protocol version implemented by the server") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("pluginVersion", "Version of the EDT-MCP plugin") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("edtVersion", "Detected 1C:EDT version") //$NON-NLS-1$ //$NON-NLS-2$

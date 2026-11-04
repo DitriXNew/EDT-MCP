@@ -3462,8 +3462,7 @@
         }
       },
       "required": [
-        "success",
-        "transports"
+        "success"
       ],
       "type": "object"
     }

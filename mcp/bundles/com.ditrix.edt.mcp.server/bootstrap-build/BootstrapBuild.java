@@ -70,8 +70,16 @@ public final class BootstrapBuild
         try (JarOutputStream jar = new JarOutputStream(Files.newOutputStream(destination)))
         {
             addManifest(jar, entryManifest);
-            String name = "com/ditrix/edt/mcp/server/ipc/StdioEntry.class";
-            add(jar, name, Files.readAllBytes(classes.resolve(name)));
+            try (var paths = Files.list(classes.resolve("com/ditrix/edt/mcp/server/ipc")))
+            {
+                for (Path path : paths.filter(Files::isRegularFile).sorted().toList())
+                {
+                    String name = path.getFileName().toString();
+                    if (List.of("StdioEntry", "PrivatePaths").stream().anyMatch(type ->
+                        name.equals(type + ".class") || (name.startsWith(type + "$") && name.endsWith(".class"))))
+                    { add(jar, classes.relativize(path).toString().replace('\\', '/'), Files.readAllBytes(path)); }
+                }
+            }
             add(jar, "META-INF/LICENSE-edt-mcp.txt", Files.readAllBytes(Path.of(args[4])));
         }
         System.out.println("Embedded bootstrap generated from " + McpToolRegistry.getInstance().getToolCount() + " registered tools");

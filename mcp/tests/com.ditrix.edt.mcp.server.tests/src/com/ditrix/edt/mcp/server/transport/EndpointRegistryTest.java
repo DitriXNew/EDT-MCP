@@ -33,7 +33,7 @@ public class EndpointRegistryTest extends StdioTestSupport
         finally { if (process.isAlive()) { process.destroyForcibly(); } }
     }
 
-    private static synchronized Map<String, UserPrincipal> windowsAccounts() throws Exception
+    static synchronized Map<String, UserPrincipal> windowsAccounts() throws Exception
     {
         if (windowsAccounts != null) { return windowsAccounts; }
         String[] names = windowsScript("'S-1-5-18','S-1-5-32-544','S-1-1-0' | ForEach-Object {"
@@ -61,7 +61,7 @@ public class EndpointRegistryTest extends StdioTestSupport
         finally { view.setAcl(original); }
     }
 
-    private static AclEntry grant(UserPrincipal principal, Set<AclEntryPermission> permissions, boolean inherit)
+    static AclEntry grant(UserPrincipal principal, Set<AclEntryPermission> permissions, boolean inherit)
     {
         var entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(principal).setPermissions(permissions);
         if (inherit) { entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT); }

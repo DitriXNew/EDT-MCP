@@ -38,6 +38,8 @@ The same private root contains `ipc/` with one endpoint record per canonical wor
 
 IPC startup failure logs a warning and keeps HTTP available. `get_server_status` reports `transports.http` and `transports.ipc` without revealing the secret or socket path.
 
+The status response always emits `transports`. Its output schema keeps the field optional: only `success` is required at the top level. When `transports` is present, both `http` and `ipc` are required.
+
 ## Limits
 
 - Windowed EDT only. Headless execution and editor-free tools are outside this transport's scope.
