@@ -114,7 +114,7 @@ Field/shape notes:
 - **`action`** — `"modified"` on success; the quickest programmatic discriminator from an error envelope.
 - **`applied`** — the list of property names actually written (e.g. `comment`, `synonym`, the discovered enum prop, `type`). Assert membership here, not on the placeholder text.
 - **`persisted`** — the model write committed and the platform accepted a save task; since #406 the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is normally already written when you read this - though a drained queue proves nothing is still pending, not that the bytes are right (a platform-side write failure is logged, not reported here), and the wait is skipped where the export state cannot be observed.
-- **`fqn`** — echoes the addressed node.
+- **`fqn`** — canonical English type/member tokens with unchanged programmatic Names; write refusals use the same form. Test mixed-language addresses against the canonical echo.
 
 **Gotchas.**
 - **Validation is fail-fast and atomic.** Every property is checked *before* any mutation — one bad property in the array rejects the whole call and writes nothing. A rejected `modify_metadata` must leave **zero git diff** (the e2e tests assert `assert_no_diff`). If you ever see a partial write after a rejection, that's a bug.

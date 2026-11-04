@@ -53,19 +53,20 @@ Other args (optional): `full` (boolean, default false — pass `true` for the al
 ```
 Bilingual TYPE token works — `objectFqns=["Справочник.Catalog"]` returns the identical `## Catalog: Catalog` block (the Russian `Справочник` is normalized to the English singular `Catalog` via `MetadataTypeUtils.toEnglishSingular`; the object NAME `Catalog` is programmatic, never translated).
 
-A single bad FQN does NOT fail the call — it yields an informational `**Error:**` line *inside that FQN's body*, while good FQNs in the same array still format. Real output for `objectFqns=["Справочник.Catalog","Catalog.DoesNotExist"]` (second body only):
+A single bad FQN does not fail the call: valid entries still render, and per-object failures appear in a dedicated `## Errors` table at the end. For `objectFqns=["Справочник.Catalog","Catalog.DoesNotExist"]`, require the valid Catalog section plus this failure row:
 ```
----
+## Errors
 
-**Error:** Object not found: Catalog.DoesNotExist
-
----
+| FQN | Status | Reason |
+| --- | --- | --- |
+| Catalog.DoesNotExist | ERROR | Object not found: Catalog.DoesNotExist |
 ```
-An FQN with no dot gives the same in-body shape: `**Error:** Invalid FQN: <fqn>. Expected format: Type.Name (e.g. Catalog.Products)`.
+An invalid address likewise produces an `ERROR` row naming its FQN and reason; assert the table cells rather than inline error prose. Cells escape pipes and newlines.
 
 **Gotchas.**
+- **Form header.** Read `Catalog.Catalog.Form.ItemForm` using English and Russian structural tokens; both must render `# Form Structure: Catalog.Catalog.Form.ItemForm`. Preserve programmatic Names; never assert the EMF collection token `forms` in the header.
 - **`full=true` is a different, much larger shape (live-uncaptured here).** Basic mode emits `### Basic Properties` (Name/Synonym), a `### Synonym` language/value table, and compact 3-column collection tables (Attributes = Name|Synonym|Type; Forms = Name|Synonym|Form Type; Commands = Name|Synonym|Group). `full=true` replaces Basic Properties with an `### All Properties` reflection dump, expands Attributes to a **10-column** table (Name, Synonym, Type, Indexing, Fill Checking, Full Text Search, Password Mode, Multi Line, Quick Choice, Create On Input), and renders each tabular section as a `#### <TS name>` sub-block with its own properties table + nested `**Attributes:**` table. Standard attributes are emitted via a dedicated path, not the generic collection loop. If you change any of these tables, re-run — the synonym table format is also asserted by e2e (`tests/e2e/tools/test_get_metadata_details.py`, with the language-CODE echo in `test_create_metadata.py`).
-- **In-body `**Error:**` ≠ the structured error contract.** Per-FQN "Object not found" / "Invalid FQN" are plain Markdown lines inside the section body, and the overall call still succeeds (no `success`/`isError`). Do NOT assert on a JSON flag for these — match the `**Error:** Object not found:` substring. Genuine *tool-level* failures (below) arrive as `ToolResult.error(...)` JSON: `{"success":false,"error":"…"}` with `isError:true`.
+- **Per-object table errors differ from tool-level failures.** Match the dedicated `## Errors` table and its `FQN` / `Status` / `Reason` columns; the overall Markdown call still succeeds without a tool-error flag. Genuine tool-level failures arrive as `ToolResult.error(...)` JSON: `{"success":false,"error":"…"}` with MCP `isError:true`.
 - **Tool-level (structured) error triggers:** missing/empty `projectName` → `"projectName is required"`; missing/empty `objectFqns` → `"objectFqns is required (array of FQNs like 'Catalog.Products')"`; project not in workspace → `"Project not found: <name>"`; no configuration provider / no configuration model → `"Configuration provider not available"` / `"Could not get configuration for project: <name>"`; an exception on the UI thread → `ToolResult.error(e.getMessage())`. Success-path Markdown has no `success` field — assert on the `# Metadata Details:` heading or a table.
 - **Bilingual / synonym keying.** `language` and the per-object synonym are keyed by the language CODE (`en`/`ru`), never by the `Language` object's name (`MetadataLanguageUtils.resolveLanguageCode`). With no `language` arg, the default-language code is used; if the config has no default language it falls back to the first configured language's code (not a hardcoded `"ru"`). TestConfiguration is single-language `en`, so the `### Synonym` table shows one `en` row. An attribute with no synonym in the chosen language shows the first non-empty synonym, else blank — in the live output `TestSynAttr`/`BmTxTest` show synonyms but a `-` Type (untyped attributes).
 - **Multiple FQNs are independent.** Each FQN is formatted in its own `##` block separated by `---`; one not-found object does not abort the others. Use this to batch-inspect several objects in one call.

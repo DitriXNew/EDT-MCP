@@ -1,44 +1,34 @@
-# validate_query — how to test
+# validate_query — acceptance procedure
 
-**Purpose.** Validate a 1C:Enterprise query-language (QL) string against the platform's Xtext query parser **in the context of a project**, returning a `valid` flag plus per-issue diagnostics (severity, message, line/column/offset). It loads the text into a throwaway `.qldcs` Xtext resource, collects syntax errors from the resource diagnostics, then runs full semantic validation (`CheckMode.ALL`). The platform query parser is **dialect-aware** (Russian/English keywords). Read-only — it creates a temporary in-memory resource and unloads it; it never mutates the model.
+Use a ready, indexed project with EDT BSL/QL support. This is read-only; inspect `structuredContent` and leave the fixture unchanged.
 
-**Preconditions.** Live EDT + the target project open and indexed in the workspace (Xtext/QL infrastructure built; right after a `-clean` redeploy give the index a moment). Confirm `State=ready` via `list_projects` before trusting results. The tool runs on the **UI thread** (`Display.syncExec`) — avoid hammering it concurrently with other UI-thread tools. Requires the QL plugin (`com._1c.g5.v8.dt.ql.dcs`) present in the workbench; if absent the tool returns a structured error. No editor / cursor needed. Does not mutate; no revert required. `TestConfiguration` is sufficient (it has `Catalog.Catalog`, so a SELECT against it resolves fields semantically).
+## Text mode
 
-**Call (real).** Two calls — a small valid SELECT, then an intentionally broken query to exercise the error path. Params: `projectName` (required), `queryText` (required — the full 1C query text), `dcsMode` (optional boolean, default `false`; set true for Data Composition System queries to allow DCS-specific syntax).
-
-Valid query:
-```
-validate_query(projectName="TestConfiguration",
-               queryText="SELECT Ref, Description, Code FROM Catalog.Catalog WHERE Description LIKE &SearchString")
+```text
+validate_query(projectName="TestConfiguration", queryText="SELECT Ref FROM Catalog.Catalog")
+validate_query(projectName="TestConfiguration", queryText="SELECT FORM Catalog.Catalog WHEER")
 ```
 
-Intentionally broken query (`FORM` instead of `FROM`, garbage tail):
-```
-validate_query(projectName="TestConfiguration",
-               queryText="SELECT FORM Catalog.Catalog WHEER")
-```
+Require a complete `VALID` verdict for the first query and proven `INVALID` issues for the second. `success:true` means validation ran; `valid` is true only for complete validation without errors. Warnings alone do not invalidate it. Unresolved sources can yield `PARTIAL`; inspect `validationComplete`, `unresolvedSources`, `sources` and per-issue severity. A linked extension uses its own metadata plus the base configuration.
 
-**Result.** JSON (`ResponseType.JSON`). Top-level: `valid` (true iff zero issues), `success`, `dcsMode` (echoes the mode used), `errorCount`/`warningCount`/`infoCount`, and `issues` (array). Each issue: `severity` (`ERROR`/`WARNING`/`INFO`), `message`, and — only when meaningful — `line` (>0), `column` (>0), `offset` (>=0). Issues come from two sources merged into one list: resource syntax diagnostics (errors/warnings, offset always omitted i.e. `-1`) and semantic validator issues (carry `offset`).
+## Saved-module mode
 
-Valid query — real output:
-```json
-{"valid":true,"success":true,"warningCount":0,"infoCount":0,"issues":[],"errorCount":0,"dcsMode":false}
+Create a dedicated temporary CommonModule with `create_metadata` and save its source using `write_module_source`. Include a `BuildQuery` method containing a valid SELECT, a malformed static query, a SELECT-leading concatenation and a string such as `"SELECT file"`. Include a second method without queries. Use continuation lines and escaped quotes in the static literals. Do not change shared fixture modules or their search counts.
+
+```text
+validate_query(projectName="TestConfiguration", modulePath="CommonModules/QueryProbe/Module.bsl")
+validate_query(projectName="TestConfiguration", modulePath="CommonModules/QueryProbe/Module.bsl", method="buildquery")
 ```
 
-Broken query — real output:
-```json
-{"valid":false,"success":true,"warningCount":0,"infoCount":0,"issues":[
-  {"severity":"ERROR","message":"Not allowed use '.' and whitespaces in alias","line":1,"column":13,"offset":12},
-  {"severity":"ERROR","message":"Field 'FORM' not found","line":1,"column":8,"offset":7}],
- "errorCount":2,"dcsMode":false}
-```
-Key checks: `valid` mirrors `issues == []`; `errorCount`/`warningCount`/`infoCount` are recomputed by counting `issues` severities (they always agree with the array); `1`-based `line`/`column`; the parser surfaces both a syntax-level and a semantic ("Field 'FORM' not found") diagnostic for the malformed text. `success:true` even when `valid:false` — a query with errors is a *normal, informational* result, not a tool failure (see error contract below).
+- Read saved BSL, never an unsaved editor buffer. Omit `method` to include module-level literals; method lookup is case-insensitive.
+- Require `queries`, `skipped`, `foundCount`, `skippedCount`; there is no aggregate `valid`. Inspect each query's shared validation verdict and issues.
+- Require 1-based module `line`/`column` and module `offset` on mapped issues; `queryLine`/`queryColumn`/`queryOffset` retain native coordinates when supplied. Source-census offsets stay relative to decoded QL.
+- Require `dynamic` for concatenations/adjacent string parts and `no query structure` for keyword-leading nonqueries. Extraction accepts only standalone SELECT/ВЫБРАТЬ literals with the documented structural signals; it does not evaluate variables or runtime substitutions.
+- The empty method returns zero counts and a `no query literal found` message pointing to `queryText`. Counts describe extraction, not runtime-query coverage.
+- Repeat with Russian BSL/query keywords and programmatic method/object Names. Synonyms are not identifiers. `dcsMode:true` uses the same DCS validator in both input modes.
 
-**Gotchas.**
-- **`valid:false` is NOT a failure.** A query with diagnostics still returns `{"success":true, ...}` with no `isError`. The structured error contract (`{success:false, error:"..."}`, `isError:true`) is reserved for genuine tool failures only: empty `projectName` ("projectName is required"), empty `queryText` ("queryText is required"), unknown project ("Project not found: <name>"), a closed project ("Project is closed: <name>"), QL plugin missing ("QlDcs language support not available…"), or an internal load/validation exception ("Failed to load query text: …" / "Validation error: …"). Do not assert a JSON error for an invalid query — assert `valid:false` + the `issues` array.
-- **Param name is `queryText`, not `query`.** The schema and `execute()` both read `queryText`; passing `query` is silently ignored and you'll hit "queryText is required".
-- **`dcsMode` changes the grammar.** Default `false` validates a plain query. Set `true` only for queries embedded in a Data Composition Schema — it enables DCS-specific syntax (`{...}` field/parameter braces, `ВЫБОР`/expression extensions) via `DcsValidationModeOption` + alias pre-computation. A plain query is fine in either mode; a DCS query under `dcsMode:false` will report spurious errors. The mode used is echoed back in the result.
-- **Dialect-aware (bilingual).** The query parser accepts both Russian and English QL keywords (`ВЫБРАТЬ`/`SELECT`, `ИЗ`/`FROM`, `ГДЕ`/`WHERE`) and bilingual metadata type tokens (`Справочник.Catalog` / `Catalog.Catalog`); the object **NAME** segment is programmatic (use the exact `Name`). This is unlike `search_in_code` (a different family) which is literal/non-dialect-aware. Diagnostic **messages** come from the platform and may surface in the workbench's UI language.
-- **Project context matters for semantics.** Field/table resolution ("Field 'X' not found", unknown `Catalog.Foo`) depends on the project's metadata being indexed — run against a `ready` project. Pure syntax errors are reported regardless, but semantic checks need the built model.
-- **UI-thread + temp resource.** Each call builds a unique `mcp_validate_query_<timestamp>.qldcs` resource bound to the project and unloads it in `finally` — no file is left behind, nothing is committed. Because it's `syncExec` on the SWT display, don't fire many concurrent calls.
-- **Flaky output channel.** If the JSON arrives garbled, truncated, or as a bare `Error`/`Done` instead of the payload, do NOT retry-spam. Re-verify independently via the EDT log `D:\WS\EDT\.metadata\.log` (it records the full request/response) and confirm liveness (`:8765` / `get_edt_version`), then make ONE clean call. Note Gson keeps characters like `'` and `>=` RAW in the JSON text channel (`GsonProvider` uses `disableHtmlEscaping()`), so apostrophes in messages (e.g. `Field 'FORM' not found`) appear verbatim, not as `\uXXXX` — match on a delimiter-free substring (`not found`) for robustness, not the raw quoted form.
+## Refusals and cleanup
+
+Pass both/neither of `queryText` and `modulePath`, `method` without `modulePath`, blank/missing methods, nonexistent paths, and malformed stored BSL. Require actionable structured errors naming the input and a discovery tool or `queryText` fallback. A proven invalid query is an informational verdict, not a tool error; unavailable native validation is an error.
+
+For executable assertions use `tests/e2e/tools/test_validate_query.py`. Revert the temporary module through the orchestrator's fixture/model reset; confirm no fixture changes remain. For resource/schema details use `get_tool_guide('validate_query')`.
