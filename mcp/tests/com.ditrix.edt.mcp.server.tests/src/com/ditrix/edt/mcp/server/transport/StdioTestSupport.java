@@ -12,6 +12,8 @@ import com.google.gson.*;
 abstract class StdioTestSupport
 {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Before public void secureTemporaryDirectory() throws Exception
+    { PrivatePaths.directory(temporary.getRoot().toPath()); }
     protected EndpointRegistry registry() throws Exception
     { return new EndpointRegistry(temporary.newFolder().toPath(), temporary.newFolder().toPath()); }
     protected EndpointRegistry.Endpoint endpoint(EndpointRegistry registry, String generation, long pid)

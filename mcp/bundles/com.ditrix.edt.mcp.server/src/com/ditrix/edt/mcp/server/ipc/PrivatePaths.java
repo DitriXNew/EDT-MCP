@@ -7,14 +7,17 @@ package com.ditrix.edt.mcp.server.ipc;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /** Owner-only IPC storage. Never traverse symbolic links or Windows directory reparse points. */
 public final class PrivatePaths
 {
     private static volatile UserPrincipal currentOwner;
+    private static Set<UserPrincipal> windowsPrivilegedAccounts;
     private PrivatePaths() { }
 
     private static UserPrincipal owner(Path path) throws IOException
@@ -104,9 +107,60 @@ public final class PrivatePaths
         if (!Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isRegularFile())
         { throw new IOException("Expected a regular IPC file"); }
         verifyOwner(path);
-        if (posix(path) && Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS).stream()
-            .anyMatch(permission -> permission.name().startsWith("GROUP_") || permission.name().startsWith("OTHERS_")))
-        { throw new IOException("IPC files must be accessible only to their owner"); }
+        if (posix(path))
+        {
+            if (Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS).stream()
+                .anyMatch(permission -> permission.name().startsWith("GROUP_") || permission.name().startsWith("OTHERS_")))
+            { throw new IOException("IPC files must be accessible only to their owner"); }
+        }
+        else { verifyWindowsFileAcl(path); }
+    }
+
+    private static void verifyWindowsFileAcl(Path path) throws IOException
+    {
+        var view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) { throw new IOException("Private IPC files require POSIX permissions or Windows ACLs"); }
+        var entries = view.getAcl();
+        // Java also returns an empty list for an absent DACL, which grants everyone access.
+        if (entries.isEmpty()) { throw new IOException("IPC files require an explicit private DACL"); }
+        for (AclEntry entry : entries)
+        {
+            if (entry.type() == AclEntryType.ALLOW && !entry.flags().contains(AclEntryFlag.INHERIT_ONLY)
+                && !entry.permissions().isEmpty() && !entry.principal().equals(owner(path))
+                && !windowsPrivilegedAccounts(path).contains(entry.principal()))
+            { throw new IOException("IPC files must not grant access to other accounts"); }
+        }
+    }
+
+    private static synchronized Set<UserPrincipal> windowsPrivilegedAccounts(Path path) throws IOException
+    {
+        if (windowsPrivilegedAccounts != null) { return windowsPrivilegedAccounts; }
+        // Resolve well-known SIDs, since localized or renamed account names are not stable.
+        // Owner-only files need no helper process; other DACLs resolve these accounts once.
+        String script = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
+            + "'S-1-5-18','S-1-5-32-544' | ForEach-Object {"
+            + "([System.Security.Principal.SecurityIdentifier]::new($_)).Translate([System.Security.Principal.NTAccount]).Value}";
+        Process process = new ProcessBuilder(Path.of(System.getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
+            "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
+            Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE)))
+            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        try
+        {
+            if (!process.waitFor(3, TimeUnit.SECONDS) || process.exitValue() != 0)
+            { throw new IOException("Cannot resolve privileged Windows accounts for IPC file validation"); }
+            String[] names = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip().split("\\R");
+            if (names.length != 2) { throw new IOException("Invalid privileged Windows account lookup result"); }
+            var lookup = path.getFileSystem().getUserPrincipalLookupService();
+            windowsPrivilegedAccounts = Set.of(lookup.lookupPrincipalByName(names[0]), lookup.lookupPrincipalByName(names[1]));
+            return windowsPrivilegedAccounts;
+        }
+        catch (InterruptedException e)
+        { Thread.currentThread().interrupt(); throw new IOException("Windows IPC file validation interrupted"); }
+        finally
+        {
+            if (process.isAlive()) { process.destroyForcibly(); }
+            process.getInputStream().close(); process.getErrorStream().close(); process.getOutputStream().close();
+        }
     }
 
     public static FileChannel lockFile(Path path) throws IOException

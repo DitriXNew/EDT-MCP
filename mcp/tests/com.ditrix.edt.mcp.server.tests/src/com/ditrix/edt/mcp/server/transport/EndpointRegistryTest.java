@@ -4,6 +4,8 @@ import static org.junit.Assert.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.*;
+import java.lang.reflect.InvocationTargetException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -13,6 +15,112 @@ import com.google.gson.*;
 
 public class EndpointRegistryTest extends StdioTestSupport
 {
+    private static Map<String, UserPrincipal> windowsAccounts;
+
+    private static String windowsScript(String body) throws Exception
+    {
+        String script = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);" + body;
+        Process process = new ProcessBuilder(Path.of(System.getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
+            "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
+            Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE))).redirectErrorStream(true).start();
+        try
+        {
+            assertTrue("Windows ACL fixture command must finish", process.waitFor(5, TimeUnit.SECONDS));
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+            assertEquals(output, 0, process.exitValue());
+            return output;
+        }
+        finally { if (process.isAlive()) { process.destroyForcibly(); } }
+    }
+
+    private static synchronized Map<String, UserPrincipal> windowsAccounts() throws Exception
+    {
+        if (windowsAccounts != null) { return windowsAccounts; }
+        String[] names = windowsScript("'S-1-5-18','S-1-5-32-544','S-1-1-0' | ForEach-Object {"
+            + "([System.Security.Principal.SecurityIdentifier]::new($_)).Translate([System.Security.Principal.NTAccount]).Value}").split("\\R");
+        assertEquals(3, names.length);
+        var lookup = FileSystems.getDefault().getUserPrincipalLookupService();
+        windowsAccounts = Map.of("system", lookup.lookupPrincipalByName(names[0]),
+            "administrators", lookup.lookupPrincipalByName(names[1]), "everyone", lookup.lookupPrincipalByName(names[2]));
+        return windowsAccounts;
+    }
+
+    @Test public void windowsRejectsAnUnspecifiedDaclRatherThanTreatingItAsPrivate() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var file = temporary.newFile().toPath(); String literal = "'" + file.toString().replace("'", "''") + "'";
+        var view = Files.getFileAttributeView(file, AclFileAttributeView.class); var original = view.getAcl();
+        try
+        {
+            windowsScript("$acl=[System.IO.File]::GetAccessControl(" + literal + ");"
+                + "$acl.SetSecurityDescriptorSddlForm('D:NO_ACCESS_CONTROL',[System.Security.AccessControl.AccessControlSections]::Access);"
+                + "[System.IO.File]::SetAccessControl(" + literal + ",$acl)");
+            assertTrue("Java maps an unspecified DACL to an empty list", view.getAcl().isEmpty());
+            assertThrows(IOException.class, () -> PrivatePaths.verifyFile(file));
+        }
+        finally { view.setAcl(original); }
+    }
+
+    private static AclEntry grant(UserPrincipal principal, Set<AclEntryPermission> permissions, boolean inherit)
+    {
+        var entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(principal).setPermissions(permissions);
+        if (inherit) { entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT); }
+        return entry.build();
+    }
+
+    @Test public void windowsAcceptsInheritedSystemAndAdministratorsAlongsideOwner() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var directory = temporary.newFolder().toPath();
+        var accounts = windowsAccounts(); var full = EnumSet.allOf(AclEntryPermission.class);
+        Files.getFileAttributeView(directory, AclFileAttributeView.class).setAcl(List.of(
+            grant(Files.getOwner(directory), full, true), grant(accounts.get("system"), full, true),
+            grant(accounts.get("administrators"), full, true)));
+        var file = directory.resolve("normal-profile-file"); Files.writeString(file, "unchanged");
+        var acl = Files.getFileAttributeView(file, AclFileAttributeView.class);
+        var before = acl.getAcl();
+        assertTrue(before.stream().anyMatch(e -> e.principal().equals(accounts.get("system"))));
+        assertTrue(before.stream().anyMatch(e -> e.principal().equals(accounts.get("administrators"))));
+        PrivatePaths.verifyFile(file);
+        assertEquals("Validation must preserve normal profile ACEs", before, acl.getAcl());
+        assertEquals("unchanged", Files.readString(file));
+    }
+
+    @Test public void windowsRejectsForeignReadWriteAndInheritedFileGrantsBeforeJarReuse() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var foreign = windowsAccounts().get("everyone");
+        var writeJar = StdioPluginSupport.class.getDeclaredMethod("writeJar", Path.class, byte[].class);
+        writeJar.setAccessible(true);
+        for (var permission : List.of(AclEntryPermission.READ_DATA, AclEntryPermission.WRITE_DATA))
+        {
+            var directory = temporary.newFolder().toPath();
+            var directoryAcl = Files.getFileAttributeView(directory, AclFileAttributeView.class);
+            var entries = new ArrayList<>(directoryAcl.getAcl());
+            entries.add(grant(foreign, Set.of(permission), true)); directoryAcl.setAcl(entries);
+            var file = directory.resolve("cached.jar"); byte[] contents = "byte-identical cached jar".getBytes(StandardCharsets.UTF_8);
+            Files.write(file, contents);
+            var fileAcl = Files.getFileAttributeView(file, AclFileAttributeView.class);
+            assertTrue(fileAcl.getAcl().stream().anyMatch(e -> e.principal().equals(foreign)));
+            assertThrows("An inherited foreign grant must be refused", IOException.class, () -> PrivatePaths.verifyFile(file));
+            InvocationTargetException failure = assertThrows(InvocationTargetException.class, () -> writeJar.invoke(null, file, contents));
+            assertTrue("Identical bytes must not bypass ACL validation", failure.getCause() instanceof IOException);
+            fileAcl.setAcl(List.of(grant(Files.getOwner(file), EnumSet.allOf(AclEntryPermission.class), false),
+                grant(foreign, Set.of(permission), false)));
+            assertThrows("An explicit foreign grant must be refused", IOException.class, () -> PrivatePaths.verifyFile(file));
+        }
+    }
+
+    @Test public void windowsRejectsReadableEndpointRecordBeforeReturningTheSecret() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var registry = registry(); registry.publish(endpoint(registry, "secure", ProcessHandle.current().pid()));
+        var acl = Files.getFileAttributeView(registry.recordPath(), AclFileAttributeView.class);
+        var entries = new ArrayList<>(acl.getAcl());
+        entries.add(grant(windowsAccounts().get("everyone"), Set.of(AclEntryPermission.READ_DATA), false)); acl.setAcl(entries);
+        assertThrows(IOException.class, registry::read);
+    }
+
     @Test public void malformedRecordNeverExposesItsContentsThroughAnException() throws Exception
     {
         var registry = registry();

@@ -56,7 +56,7 @@ public final class StartupCoordinator
                     boolean recent = claim != null && Instant.parse(claim.requested()).plusSeconds(180).isAfter(Instant.now());
                     boolean live = claim != null && claim.process() != null
                         && EndpointRegistry.sameProcess(claim.process().pid(), claim.process().startTime());
-                    if (recent) { return STARTING; }
+                    if (recent && (claim.process() == null || live)) { return STARTING; }
                     if (live) { return "EDT is running but IPC is not ready. Ask the user to inspect the EDT window for a blocking dialog."; }
                 }
                 // A missing listener must never cause a second EDT against an already-open workspace.
