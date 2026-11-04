@@ -15,7 +15,6 @@ import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.resource.IEObjectDescription;
 
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -38,6 +37,7 @@ import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 
 import org.eclipse.emf.ecore.resource.ResourceSet;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
@@ -111,8 +111,7 @@ public class PlatformDocumentationService
     {
         AtomicReference<String> resultRef = new AtomicReference<>();
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result = getTypeDocumentationInternal(typeName, memberName, memberType,
@@ -1477,8 +1476,7 @@ public class PlatformDocumentationService
     {
         AtomicReference<String> resultRef = new AtomicReference<>();
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result = getBuiltinFunctionDocumentationInternal(functionName, useRussian);

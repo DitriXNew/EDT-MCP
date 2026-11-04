@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -238,23 +239,22 @@ public class DcsTool implements IMcpTool
             return shapeError;
         }
         Integer limit = requestedLimit(format, hasLimit, rawLimit);
-        Display display = Display.getDefault();
-        if (display == null || display.isDisposed())
+        if (!ReadToolExecution.defaultDisplayAvailable())
         {
-            return ToolResult.error("EDT workbench display is not available for dcs target '" + rawFqn //$NON-NLS-1$
-                + "'. Open the project in EDT and retry action='" + action + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("EDT workbench display is not available for dcs target '" + rawFqn
+                + "'. Open the project in EDT and retry action='" + action + "'.").toJson();
         }
         AtomicReference<String> result = new AtomicReference<>();
         WriteScope scope = null;
         Runnable handoff;
         if (ACTION_GET.equals(action))
         {
-            handoff = () -> display.syncExec(() -> result.set(executeGet(projectName,
+            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> result.set(executeGet(projectName,
                 parsed.address(), type, language, format, limit, offset)));
         }
         else if (ACTION_OPTIONS.equals(action))
         {
-            handoff = () -> display.syncExec(() -> result.set(executeOptions(projectName,
+            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> result.set(executeOptions(projectName,
                 parsed.address(), type, language, limit, offset)));
         }
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
@@ -264,7 +264,7 @@ public class DcsTool implements IMcpTool
                 : JsonParser.parseString(body).getAsJsonObject();
             WriteScope writeScope = new WriteScope();
             scope = writeScope;
-            handoff = () -> display.syncExec(() -> WriteScope.runWithScope(writeScope,
+            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> WriteScope.runWithScope(writeScope,
                 () -> result.set(executeWrite(projectName, parsed.address(), action, type,
                     parsedBody, expectedHash, language))));
         }

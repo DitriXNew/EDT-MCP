@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.swt.graphics.ImageData;
-import org.eclipse.swt.widgets.Display;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -106,14 +106,11 @@ public class GetFormScreenshotTool implements IMcpTool
             return ToolResult.error("projectName is required when formPath is specified").toJson(); //$NON-NLS-1$
         }
 
-        Display display = Display.getDefault();
-        if (display == null || display.isDisposed())
+        AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
+        if (!ReadToolExecution.dispatchRendering(() -> resultRef.set(captureScreenshot(projectName, formPath, showElement, refresh))))
         {
             return ToolResult.error("Display is not available").toJson(); //$NON-NLS-1$
         }
-
-        AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
-        display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, showElement, refresh)));
 
         CaptureResult result = resultRef.get();
         if (!result.isSuccess())

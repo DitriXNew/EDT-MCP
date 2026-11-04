@@ -2125,6 +2125,31 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void testHeadlessOrdinaryDeleteCannotSucceedOverAStaleConfigurationFile()
+    {
+        String previous = System.getProperty("eclipse.application");
+        try
+        {
+            System.setProperty("eclipse.application", com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID);
+            GenericDeleteFixture fixture = genericDelete(new ExportOrderRecorder(),
+                DestructiveConsentGate.ConsentDecision.ALLOW, null,
+                (projectName, file, container, target) -> DeleteMetadataTool.RegistrationState.PRESENT);
+            String raw = fixture.run("Configuration", true, false);
+            JsonObject result = JsonParser.parseString(fixture.tool.refreshAfterExportAwait(
+                Map.of("projectName", "NoSuchHeadlessProject"), raw, true)).getAsJsonObject();
+            assertFalse(result.toString(), result.get("success").getAsBoolean());
+            assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+            assertEquals("src/Configuration/Configuration.mdo", result.get("registeringFile").getAsString());
+            assertTrue(result.get("error").getAsString().contains("resync_to_disk"));
+        }
+        finally
+        {
+            if (previous == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", previous);
+        }
+    }
+
+    @Test
     public void testConfigurationRegistrationCheckReadsTheRegistrationElementOnly() throws Exception
     {
         Element stale = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$

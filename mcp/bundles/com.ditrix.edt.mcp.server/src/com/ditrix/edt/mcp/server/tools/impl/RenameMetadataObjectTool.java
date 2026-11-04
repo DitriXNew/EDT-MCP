@@ -13,8 +13,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
+import com.ditrix.edt.mcp.server.HostKind;
+import com.ditrix.edt.mcp.server.tools.base.WriteExportBarrier;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -431,9 +436,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         // Resolve the workbench only INSIDE the bounded action. Preview settling, the hand-off and
         // the unchanged EDT pipeline all belong to the registry worker, never the HTTP caller.
         IRenameAction action = progress -> {
-            Display display = PlatformUI.getWorkbench().getDisplay();
             AtomicReference<String> resultRef = new AtomicReference<>();
-            display.syncExec(() -> {
+            ReadToolExecution.dispatch(() -> {
                 try
                 {
                     resultRef.set(new MetadataRenameService(excludeText).rename(projectName,
@@ -445,6 +449,21 @@ public class RenameMetadataObjectTool implements IMcpTool
                     resultRef.set(ToolResult.error(e.getMessage()).toJson());
                 }
             });
+            if (HostKind.current() == HostKind.HEADLESS && progress.getPhase() == RenameProgress.Phase.APPLIED)
+            {
+                // Native rename exports the object; explicitly export its registering root before answering.
+                WriteScope scope = new WriteScope();
+                AtomicBoolean queued = new AtomicBoolean();
+                WriteScope.runWithScope(scope, () -> queued.set(BmTransactions.forceExportToDisk(
+                    ProjectContext.of(projectName).project(), "Configuration")));
+                if (!queued.get() || !WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS,
+                    WriteExportBarrier.PLATFORM).drained())
+                {
+                    return ToolResult.error("Rename changed the model, but Configuration.mdo export was not confirmed. "
+                        + "Use resync_to_disk and inspect the files before retrying or committing.")
+                        .put("mutationCommitted", true).toJson();
+                }
+            }
             return resultRef.get();
         };
         if (!confirm)

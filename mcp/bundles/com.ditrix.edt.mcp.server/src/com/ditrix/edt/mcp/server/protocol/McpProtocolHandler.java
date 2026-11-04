@@ -509,7 +509,7 @@ public class McpProtocolHandler
         // would record an empty answer as the tool's output - and enablement is the one input to
         // the outputSchema promise that can change UNDER a client (a JSON tool listed with its
         // schema, switched off before the next call), which only an error result is exempt from.
-        if (!toolRegistry.isToolEnabled(toolName))
+        if (HostKind.current() != HostKind.HEADLESS && !toolRegistry.isToolEnabled(toolName))
         {
             String msg = "Tool '" + toolName + "' is disabled by the user. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "If this functionality is needed, ask the user to enable it: " //$NON-NLS-1$

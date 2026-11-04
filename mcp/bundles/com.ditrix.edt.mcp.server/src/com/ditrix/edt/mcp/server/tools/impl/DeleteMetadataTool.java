@@ -91,6 +91,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.tools.base.WriteExportBarrier;
+import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
@@ -1347,7 +1349,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put(McpKeys.ACTION, VAL_EXECUTED)
                 .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(fqn)) //$NON-NLS-1$
                 .put("forced", force); //$NON-NLS-1$
-            if (force)
+            if (force || com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS)
             {
                 String registeringFile = registeringFilePath(containerFqn);
                 if (containerFqn != null && !containerFqn.isEmpty())
@@ -1494,7 +1497,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return GsonProvider.toJson(object);
         }
         if (!VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
-            || !object.has("forced") || !object.get("forced").getAsBoolean() //$NON-NLS-1$ //$NON-NLS-2$
+            || (!object.has("forced") || !object.get("forced").getAsBoolean()) //$NON-NLS-1$ //$NON-NLS-2$
+                && com.ditrix.edt.mcp.server.HostKind.current() != com.ditrix.edt.mcp.server.HostKind.HEADLESS
             || !object.has(KEY_REGISTERING_CONTAINER))
         {
             return registrationTarget == null ? result : GsonProvider.toJson(object);
@@ -1507,6 +1511,24 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String registeringContainer = resultString(object, KEY_REGISTERING_CONTAINER);
         RegistrationState state = registeringFile == null ? RegistrationState.UNVERIFIABLE
             : registrationVerifier.verify(projectName, registeringFile, registeringContainer, targetFqn);
+        if (state != RegistrationState.ABSENT && com.ditrix.edt.mcp.server.HostKind.current()
+            == com.ditrix.edt.mcp.server.HostKind.HEADLESS)
+        {
+            // A drained queue does not prove the root's bytes; retry its native export once, off SWT/BM.
+            var context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            if (registeringFile != null && context.exists() && submitContainerExport(context.project(), registeringContainer))
+            {
+                BuildUtils.waitForDiskExport(context.project(), WriteExportBarrier.DEADLINE_MS);
+                state = registrationVerifier.verify(projectName, registeringFile, registeringContainer, targetFqn);
+            }
+            if (state != RegistrationState.ABSENT)
+            {
+                return ToolResult.errorAfterMutation("The node was deleted from the model, but '" + registeringFile
+                    + "' still registers it or could not be read. Use resync_to_disk and inspect the file "
+                    + "before retrying or committing.").put(KEY_REGISTERING_FILE, registeringFile)
+                    .put(KEY_REGISTERING_CONTAINER, registeringContainer).toJson();
+            }
+        }
         if (state == RegistrationState.ABSENT)
         {
             object.remove(KEY_REGISTERING_FILE);

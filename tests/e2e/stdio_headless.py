@@ -9,7 +9,11 @@ import time
 
 from stdio_client import StdioClient, discover
 from harness import Result
-from read_host_contracts import MOVED_TOOLS, run_contracts
+from read_host_contracts import MOVED_TOOLS, run_contracts, run_runtime_preconditions
+from headless_development_contracts import (READ_TOOLS, WRITE_TOOLS, run_metadata_writes, seed_and_read_modules,
+                                           run_designer_writes, run_additional_reads,
+                                           prepare_quick_fix_fixture, run_quick_fix,
+                                           run_adoption, run_auxiliary_writes, run_registration_writes)
 
 
 APPLICATION = "com.ditrix.edt.mcp.server.stdioHost"
@@ -35,6 +39,7 @@ def host_environment(project):
     environment["EDT_MCP_IMPORT_PROJECTS"] = str(project)
     # Prove stdioOnly wins even over the explicit HTTP override.
     environment["EDT_MCP_AUTO_START"] = "true"
+    environment["EDT_MCP_TOOL_PRESET"] = "analysis-only"
     return environment
 
 
@@ -58,10 +63,17 @@ def main():
     shutil.copytree(Path(__file__).resolve().parents[1] / "SupportedConfiguration", project)
     read_project = root / "read-project"
     shutil.copytree(Path(__file__).resolve().parents[1] / "TestConfiguration", read_project)
+    prepare_quick_fix_fixture(read_project)
+    extension = root / "extension"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "tests", extension)
     log = root / "host.log"
     with log.open("wb") as output:
         environment = host_environment(project)
+        platform_home = root / "platform-home"
+        platform_home.mkdir()
+        environment["HOME"] = str(platform_home)
         environment["EDT_MCP_IMPORT_PROJECTS"] += os.pathsep + str(read_project)
+        environment["EDT_MCP_IMPORT_PROJECTS"] += os.pathsep + str(extension)
         host = subprocess.Popen(launch_command(java, install, workspace), env=environment,
                                 stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
         client = None
@@ -81,16 +93,36 @@ def main():
                                   "-data", str(workspace), "-headless"])
             client.initialize()
             offline = client.request("tools/list")["result"]["tools"]
-            assert "delete_project" not in {tool["name"] for tool in offline}
-            status = call(client, "get_server_status", {})["structuredContent"]
+            assert {"git", "create_metadata", "delete_metadata", "rename_metadata_object"} <= {tool["name"] for tool in offline}
+            assert set(WRITE_TOOLS) <= {tool["name"] for tool in offline}
+            while True:
+                response = client.request("tools/call", {"name": "get_server_status", "arguments": {}})
+                result = response.get("result", {})
+                if "error" not in response and not result.get("isError"):
+                    break
+                payload = result.get("structuredContent")
+                if not isinstance(payload, dict):
+                    try:
+                        payload = json.loads(result["content"][0]["text"])
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        payload = {}
+                message = payload.get("error", "") if isinstance(payload, dict) else ""
+                if not message.startswith("EDT is connecting."):
+                    raise AssertionError("Headless status failed: " + json.dumps(response))
+                if host.poll() is not None or time.monotonic() >= deadline:
+                    raise AssertionError("Headless host did not finish connecting; inspect " + str(log))
+                time.sleep(1)
+            status = result["structuredContent"]
             assert status["hostKind"] == "HEADLESS"
             assert status["transports"] == {"http": False, "ipc": True}
             live = client.request("tools/list")["result"]["tools"]
             assert set(MOVED_TOOLS) <= {tool["name"] for tool in live}
+            assert set(READ_TOOLS) <= {tool["name"] for tool in live}
+            assert set(WRITE_TOOLS) <= {tool["name"] for tool in live}
             while True:
                 projects = call(client, "list_projects", {"format": "json"})["structuredContent"]["projects"]
                 ready = {p["name"] for p in projects if p["state"] == "ready"}
-                if {"SupportedConfiguration", "TestConfiguration"} <= ready:
+                if {"SupportedConfiguration", "TestConfiguration", "TestConfiguration.tests"} <= ready:
                     break
                 if time.monotonic() >= deadline:
                     raise AssertionError("Headless project context did not become ready")
@@ -99,8 +131,23 @@ def main():
             content = read.get("content", [])
             rendered = "\n".join(part.get("text", part.get("resource", {}).get("text", "")) for part in content)
             assert "No common pictures found." in rendered, "Unexpected BM result for the small fixture"
-            run_contracts(lambda name, arguments: Result({"result": call(client, name, arguments)}), "HEADLESS")
-            refused = client.request("tools/call", {"name": "delete_project", "arguments": {}})["result"]
+            invoke = lambda name, arguments: Result({"result": call(client, name, arguments)})
+            run_contracts(invoke, "HEADLESS")
+            run_metadata_writes(invoke, read_project, extension)
+            seed_and_read_modules(invoke, read_project)
+            run_designer_writes(invoke, read_project)
+            run_additional_reads(invoke)
+            run_quick_fix(invoke, read_project)
+            run_adoption(invoke, read_project, extension)
+            run_auxiliary_writes(invoke, read_project, workspace)
+            run_registration_writes(invoke, workspace, platform_home / ".1C/1cestart/ibases.v8i")
+            def invoke_runtime(name, arguments):
+                response = client.request("tools/call", {"name": name, "arguments": arguments})
+                if "error" in response:
+                    raise AssertionError("Runtime contract RPC failed: " + json.dumps(response))
+                return Result(response)
+            run_runtime_preconditions(invoke_runtime)
+            refused = client.request("tools/call", {"name": "open_editor", "arguments": {}})["result"]
             assert refused["isError"] is True and "Remove -headless" in json.dumps(refused)
             client.close()
             client = None
@@ -112,7 +159,7 @@ def main():
             assert "EDT MCP headless host failed" not in workspace_log
             assert "Failed to auto-start MCP Server" not in workspace_log
             assert "MCP Server auto-started on port" not in workspace_log
-            print("stdio headless: no display, imported project, real BM read through bootstrap, filtered catalog, refusal, pure stdout, idle save PASS")
+            print("stdio headless: real BSL/BM reads, confirmed writes checked on disk, read-only preset bypass, UI refusal, pure stdout, idle save PASS")
         finally:
             if client is not None:
                 client.close()

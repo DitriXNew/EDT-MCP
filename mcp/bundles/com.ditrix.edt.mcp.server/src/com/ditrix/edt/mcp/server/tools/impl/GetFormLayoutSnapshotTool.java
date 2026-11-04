@@ -6,7 +6,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.swt.widgets.Display;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -84,15 +84,12 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
             return service.errorYaml("projectName is required when formPath is specified"); //$NON-NLS-1$
         }
 
-        Display display = Display.getDefault();
-        if (display == null || display.isDisposed())
+        AtomicReference<String> resultRef = new AtomicReference<>();
+        if (!ReadToolExecution.dispatchRendering(() -> resultRef.set(service.captureLayoutSnapshot(projectName, formPath, refresh, mode,
+            showElement))))
         {
             return service.errorYaml("Display is not available"); //$NON-NLS-1$
         }
-
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        display.syncExec(() -> resultRef.set(service.captureLayoutSnapshot(projectName, formPath, refresh, mode,
-            showElement)));
         return resultRef.get();
     }
 }

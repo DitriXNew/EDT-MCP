@@ -1217,7 +1217,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         List<String> missing = findMissingMdoFiles(projectRoot, fqns);
         // Display.getCurrent() is null off the UI thread (and in headless tests, where
         // no SWT display thread exists); only then is the plain sleep path safe.
-        Display display = Display.getCurrent();
+        Display display = com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? null : Display.getCurrent();
         while (!missing.isEmpty() && System.currentTimeMillis() < deadline)
         {
             if (display != null)

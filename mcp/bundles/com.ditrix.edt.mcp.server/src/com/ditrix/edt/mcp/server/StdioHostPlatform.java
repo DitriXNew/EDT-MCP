@@ -14,11 +14,16 @@ import com.ditrix.edt.mcp.server.transport.StdioPluginSupport;
 final class StdioHostPlatform implements StdioHostApplication.Runtime
 {
     private Location location;
+    private org.osgi.framework.ServiceRegistration<?> questions;
     @Override public boolean lockWorkspace() throws Exception {
         location = Platform.getInstanceLocation();
         return location != null && location.isSet() && location.lock();
     }
     @Override public void initialize() {
+        if (HostKind.current() == HostKind.HEADLESS) {
+            questions = com.ditrix.edt.mcp.server.utils.HeadlessPlatformQuestions.register(
+                org.osgi.framework.FrameworkUtil.getBundle(StdioHostPlatform.class).getBundleContext());
+        }
         ServiceInitialization.startInitialization();
         ServiceInitialization.join();
     }
@@ -35,6 +40,9 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         ResourcesPlugin.getWorkspace().save(true, new NullProgressMonitor());
         Activator.logInfo("EDT MCP headless workspace saved");
     }
-    @Override public void release() { location.release(); }
+    @Override public void release() {
+        try { if (questions != null) { questions.unregister(); } }
+        finally { questions = null; location.release(); }
+    }
     @Override public void failure(String message, Throwable error) { Activator.logError(message, error); }
 }

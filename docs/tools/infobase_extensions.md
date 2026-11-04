@@ -45,7 +45,7 @@ blocks writes. A Designer session is reported only by kind; it is not assumed to
   effective flags, expected version, source path, complete inventory and SHA-256 of the staged `.cfe`.
   Changed inputs require a fresh preview. A stale hash is rejected before
   consent or mutation; per-session consent allowances do not bypass this check.
-  The existing destructive-consent policy also applies; `confirm=true` does not bypass it.
+  Windowed consent also applies; `confirm=true` does not bypass it. The headless host always allows.
 - `timeoutSeconds` defaults 120 (10..600). Application lookup has its own 30-second bound.
 
 ## Calls

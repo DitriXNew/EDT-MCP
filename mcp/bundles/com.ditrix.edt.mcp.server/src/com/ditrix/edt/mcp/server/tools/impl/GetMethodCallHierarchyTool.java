@@ -31,7 +31,6 @@ import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
@@ -43,6 +42,7 @@ import com._1c.g5.v8.dt.bsl.model.Invocation;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -370,11 +370,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     private String runOnDisplay(String projectName, String modulePath, RequestArgs request)
     {
         AtomicReference<String> resultRef = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                resultRef.set(dispatch(projectName, modulePath, request));
+                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> dispatch(projectName, modulePath, request)));
             }
             catch (Exception e)
             {
@@ -975,16 +974,15 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
             }
 
-            Display display = PlatformUI.getWorkbench().getDisplay();
             RootResolution root = new RootResolution();
-            display.syncExec(() -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
+            ReadToolExecution.dispatchRead(projectName, NAME, () -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
             if (root.error != null)
             {
                 return root.error;
             }
 
             TransitiveContext context =
-                new TransitiveContext(ctx.project(), projectName, root.resourceSet, display);
+                new TransitiveContext(ctx.project(), projectName, root.resourceSet);
             long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
             BooleanSupplier expired = () -> System.nanoTime() - deadline >= 0;
 
@@ -1067,7 +1065,6 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         final IProject project;
         final String projectName;
         final ResourceSet resourceSet;
-        final Display display;
 
         /**
          * Paths already counted in each diagnostic category. The walk re-reads and re-scans the
@@ -1083,12 +1080,11 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         /** Paths already counted as unverified; see {@link #unreadable}. */
         final Set<String> unverified = new HashSet<>();
 
-        TransitiveContext(IProject project, String projectName, ResourceSet resourceSet, Display display)
+        TransitiveContext(IProject project, String projectName, ResourceSet resourceSet)
         {
             this.project = project;
             this.projectName = projectName;
             this.resourceSet = resourceSet;
-            this.display = display;
         }
     }
 
@@ -1219,7 +1215,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             List<IFile> chunk = candidates.subList(from, Math.min(from + UI_CHUNK_SIZE, candidates.size()));
             boolean[] chunkCut = { false };
-            ctx.display.syncExec(() -> chunkCut[0] = matchChunk(ctx, chunk, byName, found, diag, expired));
+            ReadToolExecution.dispatchRead(ctx.projectName, NAME, () -> chunkCut[0] = matchChunk(ctx, chunk, byName, found, diag, expired));
             if (chunkCut[0])
             {
                 cutShort = true;

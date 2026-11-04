@@ -9,6 +9,42 @@ import com.ditrix.edt.mcp.server.HostKind;
 
 public class ReadToolExecutionTest
 {
+    @Test public void headlessOptionalDispatchAndRenderingNeverCreateSwt() throws Exception
+    {
+        String previous = System.getProperty("eclipse.application");
+        try
+        {
+            System.setProperty("eclipse.application", HostKind.APPLICATION_ID);
+            Thread caller = Thread.currentThread();
+            ReadToolExecution.dispatchOnDefaultDisplay(() -> assertSame(caller, Thread.currentThread()));
+            assertTrue(ReadToolExecution.dispatchAsync(() -> assertSame(caller, Thread.currentThread())));
+            assertTrue(ReadToolExecution.defaultDisplayAvailable());
+            assertFalse(ReadToolExecution.dispatchRendering(() -> fail("Headless renderer reached SWT")));
+        }
+        finally
+        {
+            if (previous == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", previous);
+        }
+    }
+
+    @Test public void callerThreadReadRetainsBmBoundaryForEnglishAndCyrillicNames() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            Thread caller = Thread.currentThread();
+            for (String name : new String[] { "EnglishName", "Код" })
+            {
+                ReadToolExecution.dispatchRead(fixture.name(), "headless read " + name, () -> {
+                    assertSame(caller, Thread.currentThread());
+                    assertTrue(fixture.depth > 0);
+                    assertTrue(fixture.config.getCommonModules().stream().anyMatch(m -> m.getName().equals(name)));
+                });
+            }
+            assertEquals(2, fixture.reads);
+        }
+    }
+
     @Test public void headlessDispatchCannotReachUiAndKeepsTheCallingThread()
     {
         Thread caller = Thread.currentThread();

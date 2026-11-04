@@ -19,10 +19,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -241,7 +241,6 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         WriteScope scope = new WriteScope();
-        Display display = PlatformUI.getWorkbench().getDisplay();
         try
         {
             Runnable uiThreadWork = () -> WriteScope.runWithScope(scope, () -> {
@@ -263,7 +262,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             if (boundMs > 0L)
             {
                 BoundedJob.Result bounded = BoundedJob.run(getName() + ": UI-thread work", boundMs, //$NON-NLS-1$
-                    monitor -> display.syncExec(uiThreadWork));
+                    monitor -> ReadToolExecution.dispatch(uiThreadWork));
                 if (bounded.getOutcome() != BoundedJob.Outcome.COMPLETED)
                 {
                     // The caller is bounded, not SWT. The UI runnable may still record a commit or
@@ -283,7 +282,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             }
             else
             {
-                display.syncExec(uiThreadWork);
+                ReadToolExecution.dispatch(uiThreadWork);
             }
 
             // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's

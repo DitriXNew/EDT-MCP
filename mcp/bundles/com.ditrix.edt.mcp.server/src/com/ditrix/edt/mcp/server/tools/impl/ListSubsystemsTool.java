@@ -13,10 +13,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -111,11 +111,10 @@ public class ListSubsystemsTool implements IMcpTool
         final int maxResults = limit;
         final String lang = language;
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                resultRef.set(listSubsystemsInternal(projectName, filter, recursiveMode, maxResults, lang));
+                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> listSubsystemsInternal(projectName, filter, recursiveMode, maxResults, lang)));
             }
             catch (Exception e)
             {

@@ -330,6 +330,10 @@ In EDT, open **Window > Preferences > MCP Server > General** and clear **Enable 
 
 On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves that windowed EDT running. Add the explicit `-headless` argument to request an optional host without a window on the next cold start. Its catalog excludes mandatory UI tools, and it saves and exits after 30 idle minutes by default. Existing hosts are shared regardless of client mode. Linux supports attachment to a running host. Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 
+**What the headless host can do.** Everything except five tools that need a real window: `get_content_assist`, `open_editor`, `get_form_screenshot`, `get_form_layout_snapshot` and `get_template_screenshot`. BSL analysis, metadata and form writes, rename, delete and database update all run without a window. `get_symbol_info` returns the signature and parameters without the editor hover documentation.
+
+**There is nothing to agree to on this host.** Per-tool disabling, read-only presets and the destructive-consent window do not apply, so adding `-headless` to a client configuration removes those restrictions for that agent. Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
+
 ### VS Code / GitHub Copilot
 
 Create `.vscode/mcp.json`:
@@ -1016,7 +1020,7 @@ The MCP server is a **local developer tool** and is secured for that model:
 
 ### Destructive-operation consent
 
-Before a **destructive** operation, the server can ask **you** (the human at the EDT
+On a **windowed EDT host**, before a destructive operation the server can ask **you** (the human at the EDT
 workbench) to confirm — so the AI cannot silently delete data or terminate live sessions.
 The gated tools are `clone_metadata_object`, `delete_metadata`, `rename_metadata_object`, `delete_project`,
 `delete_infobase`, `update_database`, `infobase_sessions`, `evaluate_expression` (arbitrary BSL in the running 1C app —
@@ -1039,7 +1043,7 @@ Configure it in **Window → Preferences → MCP Server**:
 - **Per-tool checkbox** (Tools tab) — active only at the *Ask, except allowed tools* level: tick a tool
   to let it run destructively without a prompt.
 
-**Automation / CI bypass.** Because the confirmation dialog would block a headless or automated run,
+**Windowed automation / CI bypass.** To allow unattended calls on a windowed EDT host,
 set the environment variable **`EDT_MCP_DESTRUCTIVE_CONSENT=allow`** on the EDT process before launch —
 it overrides the preference and lets every gated operation proceed without a dialog (the same knob the
 e2e suite uses). Every such allow is logged with the tool name and its preview, so an unattended run
@@ -1052,11 +1056,11 @@ leave no commit or reflog behind, so that line is the only record of what they h
 dialog always sees the whole command, redacted or not. The dialog only ever appears on a live UI
 session at the *Ask* level.
 
-**A headless EDT REFUSES a gated operation** (it still never blocks): with no workbench window there is
-nobody to ask, and the gate's job is to stop a destructive write that no human agreed to — so consent
-for an unattended run has to come from the operator at launch, via the environment variable above. The
-error names it. Previously the absence of a display *granted* consent instead, which meant an agent
-could remove the gate simply by starting EDT headless.
+**The explicit headless host always allows destructive operations**, with or without
+`EDT_MCP_DESTRUCTIVE_CONSENT`. It also ignores per-tool disabling and read-only presets.
+Preview/confirm protocols and tool preconditions still apply; autosort remains the user's setting.
+The decision uses `HostKind`, not display availability: a headless client attached to windowed EDT
+keeps every windowed gate, and a windowed EDT without a live shell still refuses.
 
 **The prompt is time-bounded.** A confirmation dialog waits at most **120 seconds** for a human to
 answer (below common MCP client request budgets, so a caller gets an actionable error instead of its

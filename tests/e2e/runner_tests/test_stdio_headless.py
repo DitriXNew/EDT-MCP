@@ -28,6 +28,7 @@ class HeadlessDriverTest(unittest.TestCase):
                 def __init__(self, command):
                     if "-headless" not in command:
                         raise AssertionError("Missing explicit headless client selection")
+                    self.status_requests = 0
 
                 def initialize(self):
                     pass
@@ -37,17 +38,21 @@ class HeadlessDriverTest(unittest.TestCase):
 
                 def request(self, method, params=None):
                     if method == "tools/list":
-                        return {"result": {"tools": [{"name": name} for name in C.MOVED_TOOLS]}}
+                        return {"result": {"tools": [{"name": name} for name in (*C.MOVED_TOOLS, *S.READ_TOOLS, *S.WRITE_TOOLS)]}}
                     name, arguments = params["name"], params["arguments"]
                     calls.append((name, arguments))
                     if name == "get_server_status":
+                        self.status_requests += 1
+                        if self.status_requests == 1:
+                            return {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps({
+                                "success": False, "error": "EDT is connecting. Retry the same call in about 2 seconds. No tool ran."})}]}}
                         result = {"structuredContent": {"hostKind": "HEADLESS", "transports": {"http": False, "ipc": True}}}
                     elif name == "list_projects":
                         result = {"structuredContent": {"projects": [{"name": project, "state": "ready"}
-                                  for project in ("SupportedConfiguration", "TestConfiguration")]}}
+                                  for project in ("SupportedConfiguration", "TestConfiguration", "TestConfiguration.tests")]}}
                     elif name == "list_common_pictures":
                         result = {"content": [{"text": "No common pictures found."}]}
-                    elif name == "delete_project":
+                    elif name == "open_editor":
                         result = {"isError": True, "content": [{"text": "Remove -headless"}]}
                     elif name == "list_modules" and arguments == {"projectName": "TestConfiguration"}:
                         result = {"content": [{"text": "CommonModules/Calc/Module.bsl\n"
@@ -56,6 +61,8 @@ class HeadlessDriverTest(unittest.TestCase):
                         matches = [case for case in cases.values() if case["tool"] == name and case["arguments"] == arguments]
                         if len(matches) != 1:
                             raise AssertionError("Unexpected read request")
+                        if name == "get_symbol_info":
+                            matches = [case for case in json.loads(C.HEADLESS_BASELINE.read_text(encoding="utf-8"))["cases"].values() if case["arguments"] == arguments]
                         text = matches[0]["response"]["text"]
                         if name == "read_module_source":
                             text = text.partition("\n## Extension interception\n")[0]
@@ -82,12 +89,25 @@ class HeadlessDriverTest(unittest.TestCase):
                  patch.object(S, "discover", return_value=(root / "bootstrap.jar", "identity")), \
                  patch.object(S, "StdioClient", Client), \
                  patch.object(S.subprocess, "Popen", return_value=Host()) as popen, \
+                 patch.object(S, "run_metadata_writes"), \
+                 patch.object(S, "prepare_quick_fix_fixture"), \
+                 patch.object(S, "run_quick_fix"), \
+                 patch.object(S, "run_adoption"), \
+                 patch.object(S, "run_auxiliary_writes"), \
+                 patch.object(S, "run_registration_writes") as registrations, \
+                 patch.object(S, "run_runtime_preconditions") as runtime, \
+                 patch.object(S, "seed_and_read_modules"), \
+                 patch.object(S, "run_designer_writes"), \
+                 patch.object(S, "run_additional_reads"), \
                  patch("builtins.print"):
                 S.main()
             environment = popen.call_args.kwargs["env"]
-            self.assertEqual(2, len(environment["EDT_MCP_IMPORT_PROJECTS"].split(os.pathsep)))
+            self.assertEqual(3, len(environment["EDT_MCP_IMPORT_PROJECTS"].split(os.pathsep)))
+            self.assertEqual(2, sum(name == "get_server_status" for name, _ in calls))
+            registrations.assert_called_once()
+            runtime.assert_called_once()
             reads = [(name, arguments) for name, arguments in calls if name in (*C.MOVED_TOOLS, "read_module_source")]
-            self.assertEqual(17, len(reads))
+            self.assertEqual(23, len(reads))
             self.assertIn("Вычисление", json.dumps(reads, ensure_ascii=False))
 
     def test_launch_selects_our_application_and_suppresses_http_without_xvfb(self):

@@ -39,7 +39,7 @@ public class HeadlessBslResourceTest
         assertNotNull("Native BM resource set provider", provider.get(BmAwareResourceSetProvider.class));
     }
 
-    @Test public void nativeAstReadKeepsBslToolsRestrictedUntilCoreServicesAreProven() throws Exception
+    @Test public void unitRuntimeLacksVersionServiceButDoesNotClassifyRealHosts() throws Exception
     {
         var provider = nativeProvider();
         var set = provider.get(BmAwareResourceSetProvider.class).get((IProject)null);
@@ -57,11 +57,15 @@ public class HeadlessBslResourceTest
             .contains("IRuntimeVersionSupport") && frame.getMethodName().equals("getRuntimeVersionOrDefault")));
         assertTrue(trace.toString(), trace.stream().anyMatch(frame -> frame.getClassName()
             .endsWith("BslDerivedStateComputer") && frame.getMethodName().equals("installEnvironments")));
-        for (String tool : new String[] { "read_method_source", "get_module_structure", "get_symbol_info" })
+        for (String tool : new String[] { "read_method_source", "get_module_structure" })
         {
-            assertEquals(tool, com.ditrix.edt.mcp.server.tools.HostToolCapabilities.Capability.WINDOWED_ONLY,
+            assertEquals(tool, com.ditrix.edt.mcp.server.tools.HostToolCapabilities.Capability.HEADLESS,
                 com.ditrix.edt.mcp.server.tools.HostToolCapabilities.requireEntry(tool).capability());
+            assertTrue(com.ditrix.edt.mcp.server.tools.HostToolCapabilities.requireEntry(tool)
+                .reason().contains("real headless probe"));
         }
+        assertEquals(com.ditrix.edt.mcp.server.tools.HostToolCapabilities.Capability.HEADLESS_DEGRADED,
+            com.ditrix.edt.mcp.server.tools.HostToolCapabilities.requireEntry("get_symbol_info").capability());
     }
 
     @Test public void standaloneRegistrationCannotReplaceTheNativeProbe() throws Exception

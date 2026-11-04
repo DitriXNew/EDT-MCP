@@ -204,6 +204,13 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? com.ditrix.edt.mcp.server.utils.HeadlessInfobaseUpdate.runBounded(() -> executeRequest(params))
+            : executeRequest(params);
+    }
+
+    private String executeRequest(Map<String, String> params)
+    {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
@@ -844,6 +851,8 @@ public class UpdateDatabaseTool implements IMcpTool
             // Create execution context with the active Shell so EDT can parent
             // its dialogs. Shared SWT-grab lives in LaunchLifecycleUtils.
             ExecutionContext context = new ExecutionContext();
+            context.setProperty(com.ditrix.edt.mcp.server.utils.HeadlessInfobaseUpdate.EXTERNAL_CHANGES,
+                externalChanges);
             Shell shell = LaunchLifecycleUtils.grabActiveShell();
             if (shell != null)
             {

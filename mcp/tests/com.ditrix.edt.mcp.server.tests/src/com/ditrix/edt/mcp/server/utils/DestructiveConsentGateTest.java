@@ -40,6 +40,26 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.Outcome;
  */
 public class DestructiveConsentGateTest
 {
+    @Test
+    public void explicitHeadlessHostAlwaysAllowsEveryGatedTool()
+    {
+        String previous = System.getProperty("eclipse.application");
+        try
+        {
+            System.setProperty("eclipse.application", com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID);
+            for (String name : DestructiveConsentGate.GATED_TOOLS)
+            {
+                assertEquals(name, ConsentDecision.ALLOW,
+                    DestructiveConsentGate.getInstance().requireConsent(name, null));
+            }
+        }
+        finally
+        {
+            if (previous == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", previous);
+        }
+    }
+
     private static final String TOOL = "delete_metadata"; //$NON-NLS-1$
 
     @After

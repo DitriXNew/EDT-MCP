@@ -17,7 +17,7 @@ List or change EDT validation checks; switch, create, copy or delete check-setti
 
 ## Guide
 Inspect or change a project's EDT validation checks and its active check-settings profile.
-Read the current values first. `set` and `switch` ask for consent when they change anything.
+Read the current values first. Consent prompts apply to windowed EDT; the headless host always allows. `set` and `switch` ask for consent when they change anything.
 `createProfile`, `copyProfile`, and destructive `deleteProfile` also ask for consent;
 `list`, `profiles`, and effective no-ops do not. The tool is disabled in the Analysis Only
 and Code Review presets because it includes writes.

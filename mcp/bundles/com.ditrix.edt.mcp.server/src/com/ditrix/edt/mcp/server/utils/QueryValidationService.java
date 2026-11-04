@@ -95,8 +95,7 @@ public class QueryValidationService
     /** Dispatch precedes the BM read boundary; headless tests substitute only the display. */
     protected void dispatch(Runnable work)
     {
-        if (Display.getCurrent() != null) work.run();
-        else Display.getDefault().syncExec(work);
+        ReadToolExecution.dispatchOnDefaultDisplay(work);
     }
 
     private static String validationScope(QlDcsResource resource, IV8Project v8Project)
