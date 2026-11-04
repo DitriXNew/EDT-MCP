@@ -104,9 +104,14 @@ public final class PrivatePaths
 
     public static void verifyOwner(Path path) throws IOException
     {
-        if (!Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).equals(owner(path)))
+        UserPrincipal fileOwner = Files.getOwner(path, LinkOption.NOFOLLOW_LINKS), account = owner(path);
+        Set<UserPrincipal> privileged = fileOwner.equals(account) || posix(path) ? Set.of() : windowsPrivilegedAccounts(path);
+        if (!isTrustedOwner(fileOwner, account, privileged))
         { throw new IOException("IPC storage belongs to another account"); }
     }
+
+    public static boolean isTrustedOwner(UserPrincipal fileOwner, UserPrincipal account, Set<UserPrincipal> privilegedAccounts)
+    { return fileOwner.equals(account) || privilegedAccounts.contains(fileOwner); }
 
     public static void verifyFile(Path path) throws IOException
     {
@@ -147,7 +152,7 @@ public final class PrivatePaths
     {
         if (windowsPrivilegedAccounts != null) { return windowsPrivilegedAccounts; }
         // Resolve well-known SIDs, since localized or renamed account names are not stable.
-        // Owner-only storage needs no helper process; other DACLs resolve these accounts once.
+        // Mismatched Windows owners and non-user ACEs share this cached lookup.
         String script = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
             + "'S-1-5-18','S-1-5-32-544' | ForEach-Object {"
             + "([System.Security.Principal.SecurityIdentifier]::new($_)).Translate([System.Security.Principal.NTAccount]).Value}";

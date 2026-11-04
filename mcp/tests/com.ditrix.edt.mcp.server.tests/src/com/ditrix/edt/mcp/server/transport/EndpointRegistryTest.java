@@ -16,6 +16,32 @@ import com.google.gson.*;
 public class EndpointRegistryTest extends StdioTestSupport
 {
     private static Map<String, UserPrincipal> windowsAccounts;
+    private static final UserPrincipal ACCOUNT = () -> "ordinary-user";
+    private static final UserPrincipal ADMINISTRATORS = () -> "BUILTIN\\Administrators";
+    private static final UserPrincipal SYSTEM = () -> "NT AUTHORITY\\SYSTEM";
+    private static final UserPrincipal OTHER_ACCOUNT = () -> "another-ordinary-user";
+    private static final Set<UserPrincipal> PRIVILEGED = Set.of(ADMINISTRATORS, SYSTEM);
+
+    @Test public void ownershipAcceptsTheCurrentAccount()
+    {
+        assertTrue(PrivatePaths.isTrustedOwner(ACCOUNT, ACCOUNT, Set.of()));
+        assertTrue(PrivatePaths.isTrustedOwner(ACCOUNT, ACCOUNT, PRIVILEGED));
+    }
+
+    @Test public void windowsOwnershipAcceptsAdministrators()
+    { assertTrue(PrivatePaths.isTrustedOwner(ADMINISTRATORS, ACCOUNT, PRIVILEGED)); }
+
+    @Test public void windowsOwnershipAcceptsSystem()
+    { assertTrue(PrivatePaths.isTrustedOwner(SYSTEM, ACCOUNT, PRIVILEGED)); }
+
+    @Test public void ownershipRejectsAnotherOrdinaryAccount()
+    { assertFalse(PrivatePaths.isTrustedOwner(OTHER_ACCOUNT, ACCOUNT, PRIVILEGED)); }
+
+    @Test public void posixOwnershipRejectsPrivilegedLookingNames()
+    {
+        assertFalse(PrivatePaths.isTrustedOwner(ADMINISTRATORS, ACCOUNT, Set.of()));
+        assertFalse(PrivatePaths.isTrustedOwner(SYSTEM, ACCOUNT, Set.of()));
+    }
 
     private static String windowsScript(String body) throws Exception
     {
