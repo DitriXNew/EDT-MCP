@@ -19,8 +19,8 @@ SymbolInfoService resolves in layers:
      "| **Signature** | ... |", "| **Export** | Yes/No |", "| **Lines** | a - b |".
   3. Headless EMF fallback (getSymbolInfoViaEmf) when no workbench window exists.
 
-The hover *text* is environment-dependent (UI locale, which hover is configured,
-and a known annotation-hover quirk on some DECLARATION positions). What is stable
+The hover *text* is environment-dependent (UI locale and which hover is configured).
+Annotation positions include the check message and the resolved symbol. What is stable
 across ALL paths is the resolved SYMBOL NAME: for our fixture that distinctive
 token is "Add". So the happy paths point at the `Add` call site and the parameter
 read inside the body (the clean-hover case per the testing reference) and assert
@@ -54,6 +54,8 @@ Real execute()/getSymbolInfo() error paths exercised in the negative matrix:
                                       (hasTokenAtPosition pre-check; NOT is_error)
 """
 
+import re
+
 from harness import (
     call,
     assert_ok,
@@ -68,6 +70,25 @@ from harness import (
 
 # The Calc fixture module (canonical modulePath, src/-relative).
 CALC_MODULE = "CommonModules/Calc/Module.bsl"
+
+
+@e2e_test(tool="get_symbol_info", kind="read")
+def test_annotation_hover_at_marker_declaration_returns_real_text():
+    """Regression: EDT 2026.2.2 returned BslAnnotationInfo@hash at L1 C9."""
+    r = call("get_symbol_info", {
+        "projectName": PROJECT,
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "line": 1,
+        "column": 9,
+    })
+    assert_ok(r, "annotation hover at the Маркер declaration (L1 C9)")
+    assert_not_contains(r.text, "BslAnnotationInfo", "Java hover class must not escape")
+    assert not re.search(r"@[0-9a-fA-F]+", r.text), r.text
+    body = r.text.split("---", 2)[-1].strip()
+    assert_contains(body, "Маркер", "the annotation must not hide the resolved symbol")
+    assert "Function" in body or "Функция" in body, body
+    assert_not_contains(body, "No symbol", "a declaration must resolve to real text")
+    assert_no_diff()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
