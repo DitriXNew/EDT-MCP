@@ -72,7 +72,7 @@ Member (attribute) on an existing object — no synonym:
 ```
 Field meaning (from the e2e contract):
 - **`action`** — always `created` on success; the quickest programmatic discriminator from an error envelope.
-- **`fqn`** — the **normalized** full name (canonical English type/kind tokens + the programmatic Name), e.g. `Catalog.…` even if the call used `Справочник.…`.
+- **`fqn`** — canonical English type/kind tokens with unchanged programmatic Names, including batch rows, follow-up hints and write-guard refusals. Test Russian/English addresses against the same canonical FQN, not the raw input.
 - **`kind`** — the concrete created EClass: `Catalog` / `Document` / `InformationRegister` … for a top object; `CatalogAttribute`, `InformationRegisterResource`, etc. for a member.
 - **`name`** — the programmatic Name of the created node (the last FQN segment).
 - **`persisted`** — `true` once the platform accepted a save task for the owning top object's `.mdo`. Since #406 the tool then waits for the export queue to drain before answering, so a success normally means the write has already run - but a drained queue only means nothing is still pending, not that the bytes are right (EDT logs a per-file write failure and completes anyway), and the wait is skipped where the export state cannot be observed.

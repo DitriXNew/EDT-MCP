@@ -125,10 +125,10 @@ Generic-property success (structured payload):
 
 Field/shape notes:
 - **`success`** — test the boolean success flag; errors carry `success:false`.
-- **`action`** — `"modified"` for these successful property and Role-rights writes.
-- **`applied`** — a string array for generic property writes; an object `{rights, templates, roleProperties}` of integer counts for Role payloads. The declared `oneOf` admits both shapes. Assert names or counts in the structured payload.
+- **`action`** — `"modified"` on success; the quickest programmatic discriminator from an error envelope.
+- **`applied`** — a string array for generic property writes (e.g. `comment`, `synonym`, the discovered enum prop, `type`); an object `{rights, templates, roleProperties}` of integer counts for Role payloads. The declared `oneOf` admits both shapes. Assert names or counts in the structured payload, not on the placeholder text.
 - **`persisted`** — the model write committed and the platform accepted a save task; the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is normally already written when you read this - though a drained queue proves nothing is still pending, not that the bytes are right (a platform-side write failure is logged, not reported here), and the wait is skipped where the export state cannot be observed.
-- **`fqn`** — echoes the addressed node.
+- **`fqn`** — canonical English type/member tokens with unchanged programmatic Names; write refusals use the same form. Test mixed-language addresses against the canonical echo.
 
 **Gotchas.**
 - **Generic-property validation is fail-fast and atomic.** Every property is checked *before* any mutation — one bad property in the array rejects the whole call and writes nothing. A rejected generic-property batch must leave **zero git diff** (the e2e tests assert `assert_no_diff`). If you ever see a partial write after a rejection, that's a bug.

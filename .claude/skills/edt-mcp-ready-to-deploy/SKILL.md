@@ -19,6 +19,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 2. **Tests written** (the ratchets fail the build otherwise)
    - New/changed tool → an `XxxToolTest` (unit) **and** `tests/e2e/tools/test_<tool>.py` (e2e).
    - Changed metadata/code resolution → a bilingual case (English `Name`, Russian `Name`, synonym). (`edt-mcp-bilingual`.)
+   - Persistence changes → assert submitted exports on disk before another MCP call, then model read-back; verify post-commit error markers. Transport/history changes → cover malformed names, capped error status/stats and identity-safe interruption; check status-bar overlap manually. Module-query changes → cover both dialects, mapped locations and explicit skips.
 
 3. **Build + unit (Tier 1)** — `bash source/compile.sh` → **BUILD SUCCESS** + every ratchet green (`BuiltInToolTestCoverageTest`, `ToolContractConsistencyTest`, e2e coverage ratchet). Toolchain isn't on PATH — pass `--java-home`/`--maven-home`.
    - **Run the FULL unit suite before pushing, on top of current master** (merge `origin/master` first). A targeted `-Dtest=` run and a green live stand both miss the build ratchets that new work trips most often:
