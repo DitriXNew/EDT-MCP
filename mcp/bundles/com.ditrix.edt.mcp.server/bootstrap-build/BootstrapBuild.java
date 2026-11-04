@@ -41,6 +41,11 @@ public final class BootstrapBuild
                 { add(jar, classes.relativize(path).toString().replace('\\', '/'), Files.readAllBytes(path)); }
             }
             add(jar, "bootstrap-catalog.json", catalog.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (String name : List.of("ToolResult", "GsonProvider"))
+            {
+                String resource = "com/ditrix/edt/mcp/server/protocol/" + name + ".class";
+                add(jar, resource, Files.readAllBytes(classes.resolve(resource)));
+            }
             add(jar, "META-INF/LICENSE-gson.txt", Files.readAllBytes(Path.of(args[3], "APACHE-2.0.txt")));
             add(jar, "META-INF/NOTICE-gson.txt", ("Gson\nCopyright 2008 Google Inc.\n"
                 + "https://github.com/google/gson\nLicensed under Apache License 2.0; see LICENSE-gson.txt.\n")

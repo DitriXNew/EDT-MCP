@@ -21,6 +21,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CompletableFuture;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
@@ -30,6 +32,7 @@ import com.google.gson.JsonParser;
 /** Plain Java entry point loaded by 1cedtc -startup. No Eclipse, OSGi, HTTP or TCP. */
 public final class StdioBootstrap implements AutoCloseable
 {
+    static final long ATTACH_WAIT_MS = 2000;
     @FunctionalInterface public interface RegistryProvider { EndpointRegistry open() throws IOException; }
     private final RegistryProvider registries;
     private final StartupCoordinator.Starter starter;
@@ -42,7 +45,8 @@ public final class StdioBootstrap implements AutoCloseable
     private record Pending(JsonElement id, boolean toolCall, JsonFrames.Socket owner) { }
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private volatile JsonFrames.Socket connection;
-    private volatile String status = "EDT is starting. Retry the tool call shortly. This call has not executed.";
+    private volatile String status = "EDT is connecting. Retry the same call in about 2 seconds. No tool ran.";
+    private CompletableFuture<Void> preparation;
     private JsonObject initialize;
     private boolean initialized;
     private volatile boolean closed;
@@ -144,21 +148,7 @@ public final class StdioBootstrap implements AutoCloseable
         if (method.equals("ping")) { send(success(id, new JsonObject())); return; }
         if (!initialized) { send(error(id, -32600, "Initialize this MCP connection first")); return; }
         JsonFrames.Socket current = connection;
-        if (current != null)
-        {
-            if (pending.values().stream().anyMatch(call -> idKey(call.id()).equals(idKey(id))))
-            { send(error(id, -32600, "Duplicate outstanding request id")); return; }
-            if (pending.size() >= 128) { send(error(id, -32000, "Too many outstanding EDT requests")); return; }
-            // Use transport-owned string ids on IPC; the shared legacy dispatcher parses numeric ids
-            // through Double. Preserve the external id exactly, including integers beyond 2^53.
-            String key = "request-" + UUID.randomUUID();
-            pending.put(key, new Pending(id.deepCopy(), method.equals("tools/call"), current));
-            if (connection != current) { disconnected(current); return; }
-            JsonObject forwarded = request.deepCopy(); forwarded.addProperty("id", key);
-            try { current.write(forwarded.toString()); }
-            catch (IOException e) { disconnected(current); }
-            return;
-        }
+        if (current != null) { forward(request, id, current); return; }
         if (method.equals("tools/list"))
         {
             JsonObject result = catalog.getAsJsonObject("tools").deepCopy();
@@ -177,9 +167,38 @@ public final class StdioBootstrap implements AutoCloseable
         for (var tool : catalog.getAsJsonObject("tools").getAsJsonArray("tools"))
         { known |= tool.getAsJsonObject().get("name").getAsString().equals(name); }
         if (!known) { send(error(id, -32601, "Unknown tool; use tools/list")); return; }
-        // Never save a tool call for later. The agent must explicitly retry, including writes.
-        send(toolError(id, status));
-        if (attaching.compareAndSet(false, true)) { worker.execute(this::attachOrStart); }
+        try { prepareConnection().get(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS); }
+        catch (java.util.concurrent.TimeoutException e) { /* No invocation is retained by preparation. */ }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        catch (java.util.concurrent.ExecutionException e) { /* Preparation sets the actionable refusal. */ }
+        current = connection;
+        if (current != null) { forward(request, id, current); }
+        else { send(toolError(id, status)); }
+    }
+
+    private void forward(JsonObject request, JsonElement id, JsonFrames.Socket current) throws IOException
+    {
+        if (pending.values().stream().anyMatch(call -> idKey(call.id()).equals(idKey(id))))
+        { send(error(id, -32600, "Duplicate outstanding request id")); return; }
+        if (pending.size() >= 128) { send(error(id, -32000, "Too many outstanding EDT requests")); return; }
+        // IPC-owned string ids preserve external numeric ids beyond the dispatcher's Double precision.
+        String key = "request-" + UUID.randomUUID();
+        pending.put(key, new Pending(id.deepCopy(), "tools/call".equals(request.get("method").getAsString()), current));
+        if (connection != current) { disconnected(current); return; }
+        JsonObject forwarded = request.deepCopy(); forwarded.addProperty("id", key);
+        try { current.write(forwarded.toString()); }
+        catch (IOException e) { disconnected(current); }
+    }
+
+    private synchronized CompletableFuture<Void> prepareConnection()
+    {
+        if (attaching.compareAndSet(false, true))
+        {
+            preparation = new CompletableFuture<>();
+            CompletableFuture<Void> ready = preparation;
+            worker.execute(() -> attachOrStart(ready));
+        }
+        return preparation;
     }
 
     private boolean structuredOptOut()
@@ -197,19 +216,26 @@ public final class StdioBootstrap implements AutoCloseable
     private static boolean isString(JsonElement value)
     { return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString(); }
 
-    private void attachOrStart()
+    private void attachOrStart(CompletableFuture<Void> prepared)
     {
         try
         {
             var registry = registries.open();
             var endpoint = registry.read();
             if (endpoint == null || !EndpointRegistry.live(endpoint))
-            { status = new StartupCoordinator(registry, starter).ensureStarted(); return; }
+            {
+                if (!starter.supportsStartup())
+                { status = StartupCoordinator.OPEN_WORKSPACE; return; }
+                status = StartupCoordinator.STARTING;
+                prepared.complete(null);
+                status = new StartupCoordinator(registry, starter).ensureStarted();
+                return;
+            }
             if (!EndpointRegistry.workspaceKey(Path.of(endpoint.workspace())).equals(EndpointRegistry.workspaceKey(registry.workspace())))
             { throw new IOException("EDT endpoint workspace identity does not match"); }
             JsonFrames.Socket socket = new JsonFrames.Socket(SocketChannel.open(StandardProtocolFamily.UNIX));
             // A wedged listener must not hang the client's bootstrap or leak attach workers.
-            var timeout = java.util.concurrent.CompletableFuture.delayedExecutor(3, TimeUnit.SECONDS);
+            var timeout = CompletableFuture.delayedExecutor(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS);
             AtomicBoolean ready = new AtomicBoolean();
             timeout.execute(() -> { if (!ready.get()) { try { socket.close(); } catch (IOException ignored) { } } });
             try
@@ -231,8 +257,9 @@ public final class StdioBootstrap implements AutoCloseable
             }
             catch (Exception e) { socket.close(); throw e; }
         }
-        catch (Exception e) { status = "EDT connection/start failed: " + e.getMessage() + ". This call has not executed."; }
-        finally { attaching.set(false); }
+        catch (Exception e)
+        { status = "EDT connection/start failed: " + e.getMessage() + ". Ask the user to check the EDT window, then retry the same call. No tool ran."; }
+        finally { prepared.complete(null); attaching.set(false); }
     }
 
     private void connect(JsonFrames.Socket socket, EndpointRegistry.Endpoint endpoint) throws IOException
@@ -300,7 +327,7 @@ public final class StdioBootstrap implements AutoCloseable
     }
     public static String toolError(JsonElement id, String message)
     {
-        JsonObject text = new JsonObject(); text.addProperty("type", "text"); text.addProperty("text", message);
+        JsonObject text = new JsonObject(); text.addProperty("type", "text"); text.addProperty("text", ToolResult.error(message).toJson());
         JsonArray content = new JsonArray(); content.add(text);
         JsonObject result = new JsonObject(); result.addProperty("isError", true); result.add("content", content);
         return success(id, result);

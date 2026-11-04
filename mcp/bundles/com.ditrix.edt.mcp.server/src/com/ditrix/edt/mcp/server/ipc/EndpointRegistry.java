@@ -11,20 +11,9 @@ import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.AclEntry;
-import java.nio.file.attribute.AclEntryFlag;
-import java.nio.file.attribute.AclEntryPermission;
-import java.nio.file.attribute.AclEntryType;
-import java.nio.file.attribute.AclFileAttributeView;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.HexFormat;
-import java.util.List;
-import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 
 import com.google.gson.Gson;
@@ -38,13 +27,18 @@ public final class EndpointRegistry
     private final String key;
     private final Path workspace;
     public record Endpoint(String workspace, String generation, long pid, String startTime,
-        String pluginVersion, int ipcVersion, String socket, String secret) { }
+        String pluginVersion, int ipcVersion, String socket, String secret, String bootstrap)
+    {
+        public Endpoint(String workspace, String generation, long pid, String startTime,
+            String pluginVersion, int ipcVersion, String socket, String secret)
+        { this(workspace, generation, pid, startTime, pluginVersion, ipcVersion, socket, secret, null); }
+        @Override public String toString() { return "Endpoint[generation=" + generation + ", pid=" + pid + ", ipcVersion=" + ipcVersion + "]"; }
+    }
 
     /** The caller provisions a private directory before constructing the record store. */
     public EndpointRegistry(Path directory, Path workspace) throws IOException
     {
-        if (!directory.isAbsolute() || !Files.isDirectory(directory) || Files.isSymbolicLink(directory))
-        { throw new IOException("Endpoint registry requires an existing absolute private directory"); }
+        PrivatePaths.verifyDirectory(directory);
         this.directory = directory;
         this.workspace = workspace.toRealPath();
         key = workspaceKey(workspace);
@@ -52,30 +46,21 @@ public final class EndpointRegistry
 
     public static Path userDirectory() throws IOException
     {
-        String local = System.getenv("LOCALAPPDATA");
-        if (local == null || local.isBlank()) { throw new IOException("LOCALAPPDATA is required on Windows"); }
-        return privateDirectory(Path.of(local, "EDT-MCP"));
+        return privateDirectory(userPath(System.getProperty("os.name"), System.getenv(), Path.of(System.getProperty("user.home"))));
+    }
+
+    public static Path userPath(String os, java.util.Map<String, String> environment, Path home) throws IOException
+    {
+        String base = environment.get(os.startsWith("Windows") ? "LOCALAPPDATA" : "XDG_RUNTIME_DIR");
+        if (base != null && !base.isBlank()) { return Path.of(base).resolve(os.startsWith("Windows") ? "EDT-MCP" : "edt-mcp"); }
+        if (os.startsWith("Windows")) { throw new IOException("LOCALAPPDATA is required on Windows"); }
+        base = environment.get("XDG_STATE_HOME");
+        return (base != null && !base.isBlank() ? Path.of(base) : home.resolve(".local/state")).resolve("edt-mcp");
     }
 
     public static Path privateDirectory(Path directory) throws IOException
     {
-        if (!directory.isAbsolute()) { throw new IOException("Private directory must be absolute"); }
-        Files.createDirectories(directory);
-        if (Files.isSymbolicLink(directory)) { throw new IOException("Private directory must not be a link"); }
-        AclFileAttributeView acl = Files.getFileAttributeView(directory, AclFileAttributeView.class,
-            LinkOption.NOFOLLOW_LINKS);
-        if (acl != null)
-        {
-            String account = ProcessHandle.current().info().user().orElseThrow(
-                () -> new IOException("Cannot determine the current Windows account"));
-            var owner = directory.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(account);
-            if (!Files.getOwner(directory).equals(owner)) { throw new IOException("Private directory has another owner"); }
-            acl.setAcl(List.of(AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(owner)
-                .setPermissions(EnumSet.allOf(AclEntryPermission.class))
-                .setFlags(AclEntryFlag.DIRECTORY_INHERIT, AclEntryFlag.FILE_INHERIT).build()));
-        }
-        else { Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------")); }
-        return directory;
+        return PrivatePaths.directory(directory);
     }
 
     public static String workspaceKey(Path workspace) throws IOException
@@ -98,7 +83,9 @@ public final class EndpointRegistry
 
     public Endpoint read() throws IOException
     {
-        if (!Files.exists(recordPath())) { return null; }
+        PrivatePaths.verifyDirectory(directory);
+        if (!Files.exists(recordPath(), LinkOption.NOFOLLOW_LINKS)) { return null; }
+        PrivatePaths.verifyFile(recordPath());
         try
         {
             if (Files.size(recordPath()) > 16384) { throw new IOException("Oversized endpoint record"); }
@@ -106,14 +93,20 @@ public final class EndpointRegistry
             if (record == null || record.generation() == null || record.secret() == null
                 || record.socket() == null || record.startTime() == null || record.workspace() == null)
             { throw new IOException("Incomplete endpoint record"); }
+            if (!workspaceKey(Path.of(record.workspace())).equals(key)
+                || !Path.of(record.socket()).isAbsolute()
+                || !Path.of(record.socket()).getParent().equals(directory))
+            { throw new IOException("Endpoint identity does not match this private workspace registry"); }
+            PrivatePaths.noLinks(Path.of(record.socket()));
+            if (Files.exists(Path.of(record.socket()), LinkOption.NOFOLLOW_LINKS)) { PrivatePaths.verifyOwner(Path.of(record.socket())); }
             return record;
         }
-        catch (RuntimeException e) { throw new IOException("Invalid endpoint record", e); }
+        catch (RuntimeException e) { throw new IOException("Invalid endpoint record"); }
     }
 
     public void publish(Endpoint endpoint) throws IOException
     {
-        try (FileChannel channel = FileChannel.open(lockPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        try (FileChannel channel = PrivatePaths.lockFile(lockPath());
              FileLock lock = channel.lock())
         {
             Endpoint previous = read();
@@ -128,7 +121,7 @@ public final class EndpointRegistry
 
     public boolean remove(String generation) throws IOException
     {
-        try (FileChannel channel = FileChannel.open(lockPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        try (FileChannel channel = PrivatePaths.lockFile(lockPath());
              FileLock lock = channel.lock())
         {
             Endpoint current = read();
@@ -139,13 +132,7 @@ public final class EndpointRegistry
 
     public static void atomicWrite(Path destination, String text) throws IOException
     {
-        Path temporary = destination.resolveSibling(destination.getFileName() + "." + UUID.randomUUID() + ".tmp");
-        try
-        {
-            Files.writeString(temporary, text, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
-            Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        }
-        finally { Files.deleteIfExists(temporary); }
+        PrivatePaths.atomicWrite(destination, text.getBytes(StandardCharsets.UTF_8));
     }
 
     public static boolean live(Endpoint endpoint)

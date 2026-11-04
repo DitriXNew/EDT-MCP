@@ -40,6 +40,9 @@ public final class IpcListener implements AutoCloseable
     });
 
     public IpcListener(EndpointRegistry registry, String pluginVersion) throws IOException
+    { this(registry, pluginVersion, null); }
+
+    public IpcListener(EndpointRegistry registry, String pluginVersion, Path bootstrap) throws IOException
     {
         this.registry = registry;
         String generation = UUID.randomUUID().toString();
@@ -49,11 +52,14 @@ public final class IpcListener implements AutoCloseable
         byte[] secret = new byte[32]; new SecureRandom().nextBytes(secret);
         endpoint = new EndpointRegistry.Endpoint(registry.workspace().toString(), generation,
             ProcessHandle.current().pid(), ProcessHandle.current().info().startInstant().orElseThrow().toString(),
-            pluginVersion, EndpointRegistry.IPC_VERSION, socket.toString(), Base64.getEncoder().encodeToString(secret));
+            pluginVersion, EndpointRegistry.IPC_VERSION, socket.toString(), Base64.getEncoder().encodeToString(secret),
+            bootstrap == null ? null : bootstrap.toString());
         server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
         try
         {
             server.bind(UnixDomainSocketAddress.of(socket));
+            if (com.ditrix.edt.mcp.server.ipc.PrivatePaths.posix(socket))
+            { Files.setPosixFilePermissions(socket, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")); }
             registry.publish(endpoint);
         }
         catch (IOException | RuntimeException e)
@@ -65,6 +71,8 @@ public final class IpcListener implements AutoCloseable
         Thread acceptor = new Thread(this::accept, "edt-mcp-ipc-listener");
         acceptor.setDaemon(true); acceptor.start();
     }
+
+    public boolean isRunning() { return server.isOpen(); }
 
     private void accept()
     {

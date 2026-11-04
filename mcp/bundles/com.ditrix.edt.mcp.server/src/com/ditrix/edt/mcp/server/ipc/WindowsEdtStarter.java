@@ -27,6 +27,7 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
     public static void checkRuntime(Path install) throws IOException
     {
         if (Runtime.version().feature() < 17) { throw new IOException("EDT MCP requires Java 17 or newer; use the EDT launcher or -vm."); }
+        if (!System.getProperty("os.name").startsWith("Windows")) { return; }
         int required = 17;
         for (String line : Files.readAllLines(install.resolve("1cedt.ini")))
         {
@@ -50,9 +51,11 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
         return createDetached(command, install);
     }
 
+    @Override public boolean supportsStartup() { return System.getProperty("os.name").startsWith("Windows"); }
+
     public static StartupCoordinator.Started createDetached(List<String> command, Path workingDirectory) throws Exception
     {
-        if (!System.getProperty("os.name").startsWith("Windows")) { throw new IOException("The stdio pilot supports windowed Windows EDT only"); }
+        if (!System.getProperty("os.name").startsWith("Windows")) { throw new IOException(StartupCoordinator.OPEN_WORKSPACE); }
         String commandLine = command.stream().map(WindowsEdtStarter::quote).collect(java.util.stream.Collectors.joining(" "));
         String script = "$ErrorActionPreference='Stop';$s=([wmiclass]'Win32_ProcessStartup').CreateInstance();"
             + "$s.ShowWindow=1;$s.CreateFlags=16777216;$r=([wmiclass]'Win32_Process').Create("

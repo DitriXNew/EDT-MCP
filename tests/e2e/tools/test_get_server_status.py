@@ -7,7 +7,7 @@ map. ResponseType is JSON, so the real payload is a dict in r.structured (NOT
 r.text — for a JSON tool r.text is just the placeholder/content text).
 
 It returns a fixed snapshot of the running server:
-  port, running, protocolVersion, pluginVersion, edtVersion,
+  port, running, transports { http, ipc }, protocolVersion, pluginVersion, edtVersion,
   enabledTools, totalTools, plainTextMode, checksFolderConfigured, authEnabled,
   formRenderFlags { nativeFormLayoutRender, nativeFormBufferedLayoutRender }.
 
@@ -64,6 +64,14 @@ def test_returns_live_server_snapshot_and_does_not_mutate():
         raise AssertionError(
             "get_server_status must return a JSON object in structuredContent; got: %r"
             % (s,))
+
+    transports = s.get("transports")
+    if not isinstance(transports, dict) or transports.get("http") is not True:
+        raise AssertionError("HTTP e2e requires an active HTTP transport")
+    if not isinstance(transports.get("ipc"), bool):
+        raise AssertionError("IPC listener status must be a boolean")
+    if set(transports) != {"http", "ipc"}:
+        raise AssertionError("Transport status must contain only listener booleans")
 
     # --- the server is LIVE: prove we hit the running-server branch, not the
     # headless fallback. A no-op/headless-stubbed tool would report running=false.
@@ -139,7 +147,7 @@ def test_returns_live_server_snapshot_and_does_not_mutate():
     # SECURITY contract: the snapshot must NEVER leak the raw auth token or the
     # checks-folder path — only the derived booleans above. Assert no token/path
     # key sneaked into the payload.
-    for forbidden in ("authToken", "token", "checksFolder"):
+    for forbidden in ("authToken", "token", "checksFolder", "secret", "socket"):
         if forbidden in s:
             raise AssertionError(
                 "snapshot must NOT expose %r (security: booleans only); snapshot=%r"

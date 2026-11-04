@@ -3444,10 +3444,26 @@
         },
         "totalTools": {
           "type": "integer"
+        },
+        "transports": {
+          "properties": {
+            "http": {
+              "type": "boolean"
+            },
+            "ipc": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "http",
+            "ipc"
+          ],
+          "type": "object"
         }
       },
       "required": [
-        "success"
+        "success",
+        "transports"
       ],
       "type": "object"
     }

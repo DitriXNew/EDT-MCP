@@ -10,6 +10,8 @@ A self-diagnosis snapshot of the running MCP server. Reach for it when something
 None.
 
 ## What you get
+
+`transports.http` and `transports.ipc` report whether the HTTP and local IPC listeners are up. `running` is true when either listener is up. `port` retains the configured or last bound HTTP port; it indicates an active listener only when `transports.http` is true. An EDT started by stdio normally reports HTTP false and IPC true. No socket path or handshake secret is returned.
 JSON with: `port`, `running`, `protocolVersion`, `pluginVersion`, `edtVersion`, `enabledTools` / `totalTools`, `plainTextMode`, `checksFolderConfigured`, `authEnabled`, and `formRenderFlags`. The latter contains `nativeFormLayoutRender` followed by `nativeFormBufferedLayoutRender`. Each flag always has `atStartup` (`on`, `off`, or `unknown`), sampled when the MCP plugin activates. The bundle is lazily activated, but EDT reads these modes once from system properties at class initialization. Each flag can also have `requested`, the raw system-property string currently set (omitted when unset). Changing a property later does not reconfigure EDT's renderer or its offscreen handler; changing the launch flag requires an EDT restart. On Windows, `get_form_screenshot` requires `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`; it is disabled by default because this flag makes EDT's own form designer show a grey rectangle instead of the form for the whole session (EDT behaviour). Linux and macOS already buffer native rendering. `get_form_layout_snapshot` does not require the buffered-render flag.
 
 ## Notes & gotchas

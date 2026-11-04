@@ -17,10 +17,17 @@ import com.google.gson.Gson;
 /** Serializes first-call starts across bootstrap processes. A durable claim survives the client. */
 public final class StartupCoordinator
 {
+    public static final String STARTING = "EDT is starting. Retry the same call in about 15 seconds. No tool ran.";
+    public static final String OPEN_WORKSPACE = "Automatic EDT startup is supported only on Windows. "
+        + "Ask the user to open this workspace in EDT, then retry the same call. No tool ran.";
     private static final Gson JSON = new Gson();
     public record Started(long pid, String startTime) { }
     private record Claim(String requested, Started process) { }
-    @FunctionalInterface public interface Starter { Started start() throws Exception; }
+    @FunctionalInterface public interface Starter
+    {
+        Started start() throws Exception;
+        default boolean supportsStartup() { return true; }
+    }
     private final EndpointRegistry registry;
     private final Starter starter;
     public StartupCoordinator(EndpointRegistry registry, Starter starter)
@@ -28,26 +35,28 @@ public final class StartupCoordinator
 
     public String ensureStarted() throws Exception
     {
-        try (FileChannel channel = FileChannel.open(registry.lockPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE))
+        if (!starter.supportsStartup()) { return OPEN_WORKSPACE; }
+        try (FileChannel channel = PrivatePaths.lockFile(registry.lockPath()))
         {
             FileLock acquired;
             try { acquired = channel.tryLock(); }
-            catch (OverlappingFileLockException e) { return "EDT is starting. Retry the tool call shortly."; }
-            if (acquired == null) { return "EDT is starting. Retry the tool call shortly."; }
+            catch (OverlappingFileLockException e) { return STARTING; }
+            if (acquired == null) { return STARTING; }
             try (FileLock lock = acquired)
             {
                 var endpoint = registry.read();
                 if (endpoint != null && EndpointRegistry.live(endpoint))
-                { return "EDT is running; waiting for its IPC listener. Retry the tool call shortly."; }
+                { return "EDT is connecting. Retry the same call in about 2 seconds. No tool ran."; }
                 if (Files.exists(registry.claimPath()))
                 {
+                    PrivatePaths.verifyFile(registry.claimPath());
                     Claim claim;
                     try { claim = JSON.fromJson(Files.readString(registry.claimPath()), Claim.class); }
                     catch (RuntimeException e) { throw new IOException("Invalid EDT startup claim", e); }
                     boolean recent = claim != null && Instant.parse(claim.requested()).plusSeconds(180).isAfter(Instant.now());
                     boolean live = claim != null && claim.process() != null
                         && EndpointRegistry.sameProcess(claim.process().pid(), claim.process().startTime());
-                    if (recent) { return "EDT is starting. Retry the tool call shortly."; }
+                    if (recent) { return STARTING; }
                     if (live) { return "EDT is running but IPC is not ready. Ask the user to inspect the EDT window for a blocking dialog."; }
                 }
                 // A missing listener must never cause a second EDT against an already-open workspace.
@@ -67,7 +76,7 @@ public final class StartupCoordinator
                 // Keep the claim if the provider outcome is uncertain. Never blindly retry a launch.
                 Started process = starter.start();
                 EndpointRegistry.atomicWrite(registry.claimPath(), JSON.toJson(new Claim(Instant.now().toString(), process)));
-                return "EDT is starting. Retry the tool call shortly. This call has not executed.";
+                return STARTING;
             }
         }
     }

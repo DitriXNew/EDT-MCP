@@ -1,6 +1,5 @@
 [![GitHub all releases](https://img.shields.io/github/downloads/DitriXNew/EDT-MCP/total)](https://github.com/DitriXNew/EDT-MCP/releases)
 
-Windows stdio pilot: [setup, bundled bootstrap and current acceptance limits](docs/stdio-pilot.md).
 
 [![Build & Unit Tests](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/build.yml)
 [![Proxy](https://github.com/DitriXNew/EDT-MCP/actions/workflows/proxy.yml/badge.svg)](https://github.com/DitriXNew/EDT-MCP/actions/workflows/proxy.yml)
@@ -41,7 +40,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 
 ## Features
 
-- 🔧 **MCP Protocol 2025-11-25** - Streamable HTTP transport with SSE support
+- 🔧 **MCP Protocol 2025-11-25** - Streamable HTTP with SSE and bundled stdio transport
 - 📊 **Project Information** - List workspace projects and configuration properties
 - 🔴 **Error Reporting** - Get errors, warnings, problem summaries with filters
 - 📝 **Check Descriptions** - Get check documentation from markdown files
@@ -316,13 +315,19 @@ two management tools) appears in `tools/list`. To use more tools:
 
 The server pushes `notifications/tools/list_changed` whenever that surface changes —
 after `enable_toolset` reveals a toolset, and after the **Tools** tab enables or
-disables tools — but only to a client holding an open SSE stream. A client without one
+disables tools — through an open SSE stream or an attached stdio connection. A client without one
 must re-list after enabling (the `enable_toolset` response says so). A hidden tool is
 only hidden from `tools/list`; it remains callable by name. These progressive-disclosure
 toolsets are distinct from the **Tool Groups** above (which the Tools tab uses to
 enable/disable tools persistently).
 
 ## Connecting AI Assistants
+
+### stdio
+
+In EDT, open **Window > Preferences > MCP Server > General** and click **Copy stdio .mcp.json**. Merge the ready entry into your client's configuration. The bootstrap ships inside the plugin, uses explicit installation/workspace paths and EDT's Java, and connects locally without a TCP port.
+
+On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves EDT running. Linux supports attachment to an already open EDT. Limits: windowed only, Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 
 ### VS Code / GitHub Copilot
 
@@ -372,7 +377,7 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 ### Claude Desktop
 
-`claude_desktop_config.json` accepts only stdio servers (a `command`), not a direct `url`, so bridge the HTTP endpoint with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (requires [Node.js](https://nodejs.org/)):
+Copy the bundled [stdio configuration](docs/stdio.md) into `claude_desktop_config.json`. To bridge an existing HTTP endpoint instead, [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) requires [Node.js](https://nodejs.org/):
 ```json
 {
   "mcpServers": {

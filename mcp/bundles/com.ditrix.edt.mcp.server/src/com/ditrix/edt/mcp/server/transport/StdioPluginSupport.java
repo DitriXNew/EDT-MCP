@@ -8,32 +8,38 @@ package com.ditrix.edt.mcp.server.transport;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.eclipse.core.runtime.Platform;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
+import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
+import com.ditrix.edt.mcp.server.utils.Log;
 
 /** Plugin lifecycle adapter and read-only client configuration export. */
 public final class StdioPluginSupport
 {
-    private static IpcListener listener;
+    private static volatile IpcListener listener;
     private StdioPluginSupport() { }
 
     public static synchronized void start()
     {
-        if (listener != null || !System.getProperty("os.name").startsWith("Windows")) { return; }
+        if (listener != null) { return; }
+        Path bootstrap = null;
+        try { bootstrap = extractBootstrap(); }
+        catch (Exception e) { Log.warning("Cannot extract the stdio bootstrap (" + e.getClass().getSimpleName() + "); HTTP is unaffected."); }
         try
         {
-            extractBootstrap();
             Path workspace = Path.of(Platform.getInstanceLocation().getURL().toURI()).toRealPath();
             listener = new IpcListener(new EndpointRegistry(EndpointRegistry.privateDirectory(
                 EndpointRegistry.userDirectory().resolve("ipc")), workspace),
-                Activator.getDefault().getBundle().getVersion().toString());
+                Activator.getDefault().getBundle().getVersion().toString(), bootstrap);
             Activator.logInfo("EDT MCP IPC listener started for " + workspace);
         }
-        catch (Exception e) { Activator.logError("Cannot start EDT MCP IPC listener", e); }
+        catch (Exception e) { Log.warning("Cannot start EDT MCP IPC listener (" + e.getClass().getSimpleName() + "); HTTP is unaffected."); }
     }
+
+    public static boolean isIpcRunning()
+    { IpcListener current = listener; return current != null && current.isRunning(); }
 
     public static synchronized void stop()
     {
@@ -49,11 +55,10 @@ public final class StdioPluginSupport
         Path install;
         try { install = Path.of(Platform.getInstallLocation().getURL().toURI()).toRealPath(); }
         catch (java.net.URISyntaxException e) { throw new IOException(e); }
-        Path directory = EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("bootstrap")
-            .resolve(EndpointRegistry.workspaceKey(install)));
+        Path root = EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("bootstrap"));
+        Path directory = EndpointRegistry.privateDirectory(root.resolve(EndpointRegistry.workspaceKey(install)));
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
-        try (var channel = java.nio.channels.FileChannel.open(directory.resolve("extract.lock"),
-            java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE);
+        try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
              var lock = channel.lock())
         {
             byte[] runtime = embedded("edt-mcp-runtime.jar");
@@ -76,16 +81,18 @@ public final class StdioPluginSupport
 
     private static void writeJar(Path destination, byte[] bytes) throws IOException
     {
-        if (Files.exists(destination) && java.util.Arrays.equals(Files.readAllBytes(destination), bytes)) { return; }
-        Path temporary = Files.createTempFile(destination.getParent(), "bootstrap-", ".jar");
+        PrivatePaths.noLinks(destination);
+        if (Files.exists(destination))
+        {
+            PrivatePaths.verifyFile(destination);
+            if (java.util.Arrays.equals(Files.readAllBytes(destination), bytes)) { return; }
+        }
         try
         {
-            Files.write(temporary, bytes);
-            try { Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            catch (java.nio.file.AccessDeniedException e)
-            { throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen EDT Preferences > MCP Server > General.", e); }
+            PrivatePaths.atomicWrite(destination, bytes);
         }
-        finally { Files.deleteIfExists(temporary); }
+        catch (java.nio.file.AccessDeniedException e)
+        { throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", e); }
     }
 
     public static String clientConfiguration() throws Exception
@@ -93,12 +100,15 @@ public final class StdioPluginSupport
         Path install = Path.of(Platform.getInstallLocation().getURL().toURI()).toRealPath();
         Path workspace = Path.of(Platform.getInstanceLocation().getURL().toURI()).toRealPath();
         Path configuration = Path.of(Platform.getConfigurationLocation().getURL().toURI()).toRealPath();
-        var arguments = List.of("--launcher.ini", install.resolve("1cedt.ini").toString(), "--launcher.suppressErrors",
+        boolean windows = System.getProperty("os.name").startsWith("Windows");
+        var arguments = windows ? List.of("--launcher.ini", install.resolve("1cedt.ini").toString(), "--launcher.suppressErrors",
             "-nosplash", "-vm", Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
             "-configuration", configuration.toString(),
-            "-startup", extractBootstrap().toString(), "-install", install.toString(), "-data", workspace.toString());
+            "-startup", extractBootstrap().toString(), "-install", install.toString(), "-data", workspace.toString())
+            : List.of("-jar", extractBootstrap().toString(), "-install", install.toString(), "-data", workspace.toString());
         return new com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(java.util.Map.of(
             "mcpServers", java.util.Map.of("edt", java.util.Map.of("type", "stdio",
-                "command", install.resolve("1cedtc.exe").toString(), "args", arguments))));
+                "command", windows ? install.resolve("1cedtc.exe").toString()
+                    : Path.of(System.getProperty("java.home"), "bin", "java").toString(), "args", arguments))));
     }
 }
