@@ -22,6 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.IpcHandshake;
 import com.ditrix.edt.mcp.server.ipc.JsonFrames;
@@ -31,6 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 public final class IpcListener implements AutoCloseable
 {
     private final EndpointRegistry registry;
+    private final McpServer mcpServer;
     private final EndpointRegistry.Endpoint endpoint;
     private final ServerSocketChannel server;
     private final Set<JsonFrames.Socket> peers = ConcurrentHashMap.newKeySet();
@@ -43,8 +46,13 @@ public final class IpcListener implements AutoCloseable
     { this(registry, pluginVersion, null); }
 
     public IpcListener(EndpointRegistry registry, String pluginVersion, Path bootstrap) throws IOException
+    { this(registry, pluginVersion, bootstrap, Activator.getDefault() != null
+        ? Activator.getDefault().getMcpServer() : new McpServer()); }
+
+    IpcListener(EndpointRegistry registry, String pluginVersion, Path bootstrap, McpServer mcpServer) throws IOException
     {
         this.registry = registry;
+        this.mcpServer = mcpServer;
         String generation = UUID.randomUUID().toString();
         Path socket = registry.directory().resolve("s-" + generation.substring(0, 12));
         if (socket.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 100)
@@ -100,13 +108,15 @@ public final class IpcListener implements AutoCloseable
             if (!IpcHandshake.accepts(peer.read(), endpoint)) { return; }
             peer.write("{\"accepted\":true}");
             timeout.cancel(false);
-            IpcConnection connection = new IpcConnection(new McpProtocolHandler(), json -> {
+            try (IpcConnection connection = new IpcConnection(mcpServer, new McpProtocolHandler(), json -> {
                 try { peer.write(json); } catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
-            });
-            notification = connection::toolsChanged;
-            ToolsChangedListeners.add(notification);
-            String frame;
-            while ((frame = peer.read()) != null) { connection.accept(frame); }
+            }))
+            {
+                notification = connection::toolsChanged;
+                ToolsChangedListeners.add(notification);
+                String frame;
+                while ((frame = peer.read()) != null) { connection.accept(frame); }
+            }
         }
         catch (IOException | RuntimeException e) { /* A dropped connection never repeats a tool call. */ }
         finally

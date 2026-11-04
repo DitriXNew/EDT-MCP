@@ -29,19 +29,25 @@ public class IpcConnectionTest extends StdioTestSupport
         try
         {
             registry.replaceAll(List.of(tool));
-            List<String> a = new ArrayList<>(), b = new ArrayList<>();
+            List<String> a = new CopyOnWriteArrayList<>(), b = new CopyOnWriteArrayList<>();
             // Also exercise the explicit-capabilities overload against ONE shared dispatcher.
             var shared = new McpProtocolHandler();
-            var first = new IpcConnection(shared, a::add); var second = new IpcConnection(shared, b::add);
-            first.accept(init(10, true)); second.accept(init(20, false));
-            first.accept(initialized()); second.accept(initialized());
-            first.accept(call(11, "test_read")); second.accept(call(21, "test_read"));
-            var ar = JsonParser.parseString(a.get(1)).getAsJsonObject(); var br = JsonParser.parseString(b.get(1)).getAsJsonObject();
-            assertEquals(11, ar.get("id").getAsInt()); assertEquals(21, br.get("id").getAsInt());
-            assertFalse(ar.getAsJsonObject("result").has("structuredContent"));
-            assertTrue(br.getAsJsonObject("result").has("structuredContent"));
-            first.toolsChanged(); assertEquals(3, a.size()); assertEquals(2, b.size());
-            assertEquals("notifications/tools/list_changed", JsonParser.parseString(a.get(2)).getAsJsonObject().get("method").getAsString());
+            try (var first = new IpcConnection(new com.ditrix.edt.mcp.server.McpServer(), shared, a::add);
+                 var second = new IpcConnection(new com.ditrix.edt.mcp.server.McpServer(), shared, b::add))
+            {
+                first.accept(init(10, true)); second.accept(init(20, false));
+                first.accept(initialized()); second.accept(initialized());
+                first.accept(call(11, "test_read")); second.accept(call(21, "test_read"));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while ((a.size() < 2 || b.size() < 2) && System.nanoTime() < deadline) { Thread.sleep(5); }
+                assertEquals(2, a.size()); assertEquals(2, b.size());
+                var ar = JsonParser.parseString(a.get(1)).getAsJsonObject(); var br = JsonParser.parseString(b.get(1)).getAsJsonObject();
+                assertEquals(11, ar.get("id").getAsInt()); assertEquals(21, br.get("id").getAsInt());
+                assertFalse(ar.getAsJsonObject("result").has("structuredContent"));
+                assertTrue(br.getAsJsonObject("result").has("structuredContent"));
+                first.toolsChanged(); assertEquals(3, a.size()); assertEquals(2, b.size());
+                assertEquals("notifications/tools/list_changed", JsonParser.parseString(a.get(2)).getAsJsonObject().get("method").getAsString());
+            }
         }
         finally { registry.replaceAll(saved); }
     }

@@ -73,6 +73,11 @@ public class InterruptibleToolExecutor
     public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request, long startNanos, // NOSONAR propagates checked exceptions across the reflective boundary by design
         ClientCapabilities sessionCapabilities)
         throws Exception
+    { return execute(new ToolCallResponder.Http(exchange), requestBody, request, startNanos, sessionCapabilities); }
+
+    /** Shares response selection, history and identity-based slot cleanup across transports. */
+    public String execute(ToolCallResponder responder, String requestBody, JsonRpcRequest request, long startNanos,
+        ClientCapabilities sessionCapabilities) throws Exception // NOSONAR shares the HTTP exception boundary
     {
         Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
         String toolName = request != null && request.getToolName() != null ? request.getToolName() : "unknown"; //$NON-NLS-1$
@@ -80,7 +85,7 @@ public class InterruptibleToolExecutor
         // Create and register active tool call
         CallCapture capture = McpCallHistory.getInstance().beginCall(
             request != null ? request.getMethod() : null, toolName, requestBody, startNanos);
-        ActiveToolCall activeCall = new ActiveToolCall(exchange, toolName, requestId, capture);
+        ActiveToolCall activeCall = new ActiveToolCall(responder, toolName, requestId, capture);
         server.setActiveToolCall(activeCall);
 
         // Use a container to hold the result from the background thread

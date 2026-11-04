@@ -7,22 +7,17 @@
 package com.ditrix.edt.mcp.server;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.ditrix.edt.mcp.server.history.McpCallHistory.CallCapture;
+import com.ditrix.edt.mcp.server.transport.ToolCallResponder;
 
 import com.sun.net.httpserver.HttpExchange;
 
-/**
- * Represents an active MCP tool call that can be interrupted by user.
- * When user sends a signal (Cancel, Retry, etc.), the response is sent immediately
- * and the HTTP exchange is closed, while the EDT operation may continue in background.
- */
+/** Selects one transport response while an interrupted EDT operation may continue in the background. */
 public class ActiveToolCall
 {
-    private final HttpExchange exchange;
+    private final ToolCallResponder responder;
     private final String toolName;
     private final Object requestId;
     private final long startTime;
@@ -42,8 +37,11 @@ public class ActiveToolCall
     }
 
     public ActiveToolCall(HttpExchange exchange, String toolName, Object requestId, CallCapture historyCapture)
+    { this(new ToolCallResponder.Http(exchange), toolName, requestId, historyCapture); }
+
+    public ActiveToolCall(ToolCallResponder responder, String toolName, Object requestId, CallCapture historyCapture)
     {
-        this.exchange = exchange;
+        this.responder = responder;
         this.toolName = toolName;
         this.requestId = requestId;
         this.startTime = System.currentTimeMillis();
@@ -109,13 +107,7 @@ public class ActiveToolCall
         return responded.get();
     }
     
-    /**
-     * Sends a user signal response and closes the exchange.
-     * This interrupts the MCP call and returns control to the agent.
-     * 
-     * @param signal the user signal to send
-     * @return true if response was sent successfully
-     */
+    /** Sends the signal immediately if no response has been selected, returning control to the agent. */
     public synchronized boolean sendSignalResponse(UserSignal signal)
     {
         if (responded.getAndSet(true))
@@ -128,14 +120,7 @@ public class ActiveToolCall
         {
             String jsonResponse = buildSignalResponse(signal);
             
-            exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
-            byte[] responseBytes = jsonResponse.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, responseBytes.length);
-            
-            try (OutputStream os = exchange.getResponseBody())
-            {
-                os.write(responseBytes);
-            }
+            responder.send(jsonResponse);
 
             recordResponse(jsonResponse, true);
             
@@ -149,8 +134,7 @@ public class ActiveToolCall
         }
         finally
         {
-            // Always close exchange to prevent resource leak
-            exchange.close();
+            responder.close();
         }
     }
     
@@ -170,14 +154,7 @@ public class ActiveToolCall
         
         try
         {
-            exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
-            byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, responseBytes.length);
-            
-            try (OutputStream os = exchange.getResponseBody())
-            {
-                os.write(responseBytes);
-            }
+            responder.send(response);
             recordResponse(response, false);
             return true;
         }
@@ -188,8 +165,7 @@ public class ActiveToolCall
         }
         finally
         {
-            // Always close exchange to prevent resource leak
-            exchange.close();
+            responder.close();
         }
     }
     
