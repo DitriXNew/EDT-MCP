@@ -359,6 +359,78 @@ class RunAllRatchetTest(unittest.TestCase):
 
         reset.assert_not_called()
 
+    def _registered_first_test(self, name):
+        def test():
+            pass
+        test.__name__ = name
+        with mock.patch.object(HARNESS, "REGISTRY", []):
+            self.assertIs(test, HARNESS.e2e_test(tool="symbol", first=True)(test))
+            return HARNESS.REGISTRY[0]
+
+    def test_first_precedes_ordinary_tests_without_reordering_either_group(self):
+        first = self._registered_first_test("fresh_hover")
+        second = self._registered_first_test("fresh_pin")
+        ordinary = [{"tool": "alpha", "name": name} for name in ("a", "b", "c")]
+        selected = [ordinary[0], first, ordinary[1], second, ordinary[2]]
+
+        scheduled, held = RUN_ALL.schedule_tests(selected, selected)
+
+        self.assertEqual([first, second] + ordinary, scheduled)
+        self.assertEqual([], held)
+        self.assertEqual([ordinary[0], first, ordinary[1], second, ordinary[2]], selected)
+
+    def test_first_stays_in_its_owning_shard(self):
+        first = self._registered_first_test("fresh_hover")
+        ordinary = [{"tool": "alpha", "name": str(i)} for i in range(7)]
+        last = {"tool": "omega", "name": "deferred", "last": True}
+        registry = ordinary + [first, last]
+        expected = [[ordinary[0], ordinary[3], ordinary[6]],
+                    [first, ordinary[1], ordinary[4]],
+                    [ordinary[2], ordinary[5], last]]
+
+        for index, want in enumerate(expected, 1):
+            with self.subTest(shard=index):
+                selected = RUN_ALL.select_shard(registry, *RUN_ALL.parse_shard("%d/3" % index))
+                scheduled, held = RUN_ALL.schedule_tests(selected, registry, per_shard=True)
+                self.assertEqual(want, scheduled)
+                self.assertEqual({id(t) for t in selected}, {id(t) for t in scheduled})
+                self.assertEqual([], held)
+
+    def test_first_preserves_last_order_and_post_cleanup_ratchets(self):
+        first = self._registered_first_test("fresh_hover")
+        ordinary = [{"tool": "alpha", "name": name} for name in ("a", "b")]
+        last = [{"tool": "omega", "name": name, "last": True} for name in ("x", "y")]
+        ratchet = {"tool": "_edt_log_ratchet", "name": "audit", "last": True}
+        registry = [last[0], ordinary[0], ratchet, first, last[1], ordinary[1]]
+
+        for per_shard in (False, True):
+            with self.subTest(per_shard=per_shard):
+                selected = [t for t in registry if not per_shard or t is not ratchet]
+                scheduled, held = RUN_ALL.schedule_tests(selected, registry, per_shard)
+                self.assertEqual([first] + ordinary + last, scheduled)
+                self.assertEqual([ratchet], held)
+
+    def test_filtered_first_runs_only_when_selected(self):
+        first = self._registered_first_test("fresh_hover")
+        ordinary = {"tool": "alpha", "name": "ordinary"}
+        ratchet = {"tool": "_edt_log_ratchet", "name": "audit", "last": True}
+        registry = [ordinary, first, ratchet]
+
+        for per_shard in (False, True):
+            with self.subTest(per_shard=per_shard):
+                selected = [t for t in registry if "ordinary" in t["name"]]
+                scheduled, held = RUN_ALL.schedule_tests(selected, registry, per_shard)
+                self.assertEqual([ordinary], scheduled)
+                self.assertEqual([ratchet] if per_shard else [], held)
+                self.assertNotIn(first, scheduled)
+                selected = [t for t in registry if t["tool"] in ("alpha", "symbol")]
+                scheduled, held = RUN_ALL.schedule_tests(selected, registry, per_shard)
+                self.assertEqual([first, ordinary], scheduled)
+                self.assertEqual([ratchet] if per_shard else [], held)
+                scheduled, held = RUN_ALL.schedule_tests([first], registry, per_shard)
+                self.assertEqual([first], scheduled)
+                self.assertEqual([ratchet] if per_shard else [], held)
+
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}
         deferred = {"tool": "omega", "name": "last", "last": True}
