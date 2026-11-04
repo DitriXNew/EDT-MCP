@@ -75,7 +75,7 @@ public final class PrivatePaths
             try { Files.createDirectory(path, attributes(path.getParent(), true)); }
             catch (FileAlreadyExistsException e) { /* A competing owner must pass the same checks. */ }
         }
-        verifyDirectory(path);
+        verifyOwnedDirectory(path);
         if (posix(path)) { Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwx------")); }
         else
         {
@@ -84,10 +84,17 @@ public final class PrivatePaths
             @SuppressWarnings("unchecked") var entries = (List<AclEntry>)attributes(path, true)[0].value();
             acl.setAcl(entries);
         }
+        verifyDirectory(path);
         return path;
     }
 
     public static void verifyDirectory(Path path) throws IOException
+    {
+        verifyOwnedDirectory(path);
+        verifyAccess(path);
+    }
+
+    private static void verifyOwnedDirectory(Path path) throws IOException
     {
         noLinks(path);
         if (!Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory())
@@ -107,28 +114,32 @@ public final class PrivatePaths
         if (!Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isRegularFile())
         { throw new IOException("Expected a regular IPC file"); }
         verifyOwner(path);
+        verifyAccess(path);
+    }
+
+    private static void verifyAccess(Path path) throws IOException
+    {
         if (posix(path))
         {
             if (Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS).stream()
                 .anyMatch(permission -> permission.name().startsWith("GROUP_") || permission.name().startsWith("OTHERS_")))
-            { throw new IOException("IPC files must be accessible only to their owner"); }
+            { throw new IOException("IPC storage must be accessible only to its owner"); }
         }
-        else { verifyWindowsFileAcl(path); }
+        else { verifyWindowsAcl(path); }
     }
 
-    private static void verifyWindowsFileAcl(Path path) throws IOException
+    private static void verifyWindowsAcl(Path path) throws IOException
     {
         var view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-        if (view == null) { throw new IOException("Private IPC files require POSIX permissions or Windows ACLs"); }
+        if (view == null) { throw new IOException("Private IPC storage requires POSIX permissions or Windows ACLs"); }
         var entries = view.getAcl();
         // Java also returns an empty list for an absent DACL, which grants everyone access.
-        if (entries.isEmpty()) { throw new IOException("IPC files require an explicit private DACL"); }
+        if (entries.isEmpty()) { throw new IOException("IPC storage requires an explicit private DACL"); }
         for (AclEntry entry : entries)
         {
-            if (entry.type() == AclEntryType.ALLOW && !entry.flags().contains(AclEntryFlag.INHERIT_ONLY)
-                && !entry.permissions().isEmpty() && !entry.principal().equals(owner(path))
+            if (entry.type() == AclEntryType.ALLOW && !entry.principal().equals(owner(path))
                 && !windowsPrivilegedAccounts(path).contains(entry.principal()))
-            { throw new IOException("IPC files must not grant access to other accounts"); }
+            { throw new IOException("IPC storage must not grant access to other accounts"); }
         }
     }
 
@@ -136,7 +147,7 @@ public final class PrivatePaths
     {
         if (windowsPrivilegedAccounts != null) { return windowsPrivilegedAccounts; }
         // Resolve well-known SIDs, since localized or renamed account names are not stable.
-        // Owner-only files need no helper process; other DACLs resolve these accounts once.
+        // Owner-only storage needs no helper process; other DACLs resolve these accounts once.
         String script = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
             + "'S-1-5-18','S-1-5-32-544' | ForEach-Object {"
             + "([System.Security.Principal.SecurityIdentifier]::new($_)).Translate([System.Security.Principal.NTAccount]).Value}";
@@ -147,7 +158,7 @@ public final class PrivatePaths
         try
         {
             if (!process.waitFor(3, TimeUnit.SECONDS) || process.exitValue() != 0)
-            { throw new IOException("Cannot resolve privileged Windows accounts for IPC file validation"); }
+            { throw new IOException("Cannot resolve privileged Windows accounts for IPC storage validation"); }
             String[] names = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip().split("\\R");
             if (names.length != 2) { throw new IOException("Invalid privileged Windows account lookup result"); }
             var lookup = path.getFileSystem().getUserPrincipalLookupService();
@@ -155,7 +166,7 @@ public final class PrivatePaths
             return windowsPrivilegedAccounts;
         }
         catch (InterruptedException e)
-        { Thread.currentThread().interrupt(); throw new IOException("Windows IPC file validation interrupted"); }
+        { Thread.currentThread().interrupt(); throw new IOException("Windows IPC storage validation interrupted"); }
         finally
         {
             if (process.isAlive()) { process.destroyForcibly(); }

@@ -22,7 +22,9 @@ public final class StdioEntry
         try
         {
             Path directory = Path.of(StdioEntry.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getParent();
-            PrivatePaths.verifyDirectory(directory);
+            // Both platforms use <private root>/bootstrap/<install hash>.
+            for (Path path : new Path[]{directory, directory.getParent(), directory.getParent().getParent()})
+            { PrivatePaths.verifyDirectory(path); }
             Path pointer = directory.resolve("current");
             PrivatePaths.verifyFile(pointer);
             String name = Files.readString(pointer, StandardCharsets.UTF_8).trim();

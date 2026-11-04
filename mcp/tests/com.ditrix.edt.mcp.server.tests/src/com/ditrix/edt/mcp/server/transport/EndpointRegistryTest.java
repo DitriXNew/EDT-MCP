@@ -68,6 +68,82 @@ public class EndpointRegistryTest extends StdioTestSupport
         return entry.build();
     }
 
+    static void makeForeignWritable(Path directory) throws Exception
+    {
+        if (PrivatePaths.posix(directory))
+        { Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwxrwxrwx")); }
+        else
+        {
+            var view = Files.getFileAttributeView(directory, AclFileAttributeView.class);
+            var entries = new ArrayList<>(view.getAcl());
+            entries.add(grant(windowsAccounts().get("everyone"),
+                Set.of(AclEntryPermission.WRITE_DATA, AclEntryPermission.DELETE_CHILD), false));
+            view.setAcl(entries);
+        }
+    }
+
+    @Test public void refusesForeignDirectoryAccessAtEveryStorageOperation() throws Exception
+    {
+        var registry = registry(); registry.publish(endpoint(registry, "secure", ProcessHandle.current().pid()));
+        String original = Files.readString(registry.recordPath());
+        makeForeignWritable(registry.directory());
+        assertThrows(IOException.class, () -> PrivatePaths.verifyDirectory(registry.directory()));
+        assertThrows(IOException.class, () -> new EndpointRegistry(registry.directory(), registry.workspace()));
+        assertThrows(IOException.class, registry::read);
+        assertThrows(IOException.class, () -> { try (var channel = PrivatePaths.lockFile(registry.lockPath())) { } });
+        assertThrows(IOException.class, () -> EndpointRegistry.atomicWrite(registry.recordPath(), "refused"));
+        assertEquals(original, Files.readString(registry.recordPath()));
+    }
+
+    @Test public void directoryRepairsOwnedPermissionsBeforeStrictValidation() throws Exception
+    {
+        var directory = PrivatePaths.directory(temporary.newFolder().toPath()); var owner = Files.getOwner(directory);
+        makeForeignWritable(directory);
+        assertThrows(IOException.class, () -> PrivatePaths.verifyDirectory(directory));
+        assertEquals(directory, PrivatePaths.directory(directory));
+        PrivatePaths.verifyDirectory(directory); assertEquals(owner, Files.getOwner(directory));
+        if (PrivatePaths.posix(directory))
+        { assertEquals(PosixFilePermissions.fromString("rwx------"), Files.getPosixFilePermissions(directory)); }
+        else
+        {
+            assertTrue(Files.getFileAttributeView(directory, AclFileAttributeView.class).getAcl().stream()
+                .filter(entry -> entry.type() == AclEntryType.ALLOW).allMatch(entry -> entry.principal().equals(owner)));
+        }
+    }
+
+    @Test public void windowsRejectsAnUnspecifiedDirectoryDacl() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var directory = temporary.newFolder().toPath();
+        String literal = "'" + directory.toString().replace("'", "''") + "'";
+        var view = Files.getFileAttributeView(directory, AclFileAttributeView.class); var original = view.getAcl();
+        try
+        {
+            windowsScript("$acl=[System.IO.Directory]::GetAccessControl(" + literal + ");"
+                + "$acl.SetSecurityDescriptorSddlForm('D:NO_ACCESS_CONTROL',[System.Security.AccessControl.AccessControlSections]::Access);"
+                + "[System.IO.Directory]::SetAccessControl(" + literal + ",$acl)");
+            assertTrue("Java maps an unspecified DACL to an empty list", view.getAcl().isEmpty());
+            assertThrows(IOException.class, () -> PrivatePaths.verifyDirectory(directory));
+            PrivatePaths.directory(directory); PrivatePaths.verifyDirectory(directory);
+        }
+        finally { view.setAcl(original); }
+    }
+
+    @Test public void windowsRejectsForeignInheritOnlyGrantsOnFilesAndDirectories() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        for (Path path : List.of(temporary.newFolder().toPath(), temporary.newFile().toPath()))
+        {
+            var view = Files.getFileAttributeView(path, AclFileAttributeView.class);
+            var entries = new ArrayList<>(view.getAcl());
+            entries.add(AclEntry.newBuilder(grant(windowsAccounts().get("everyone"), Set.of(AclEntryPermission.WRITE_DATA), true))
+                .setFlags(AclEntryFlag.INHERIT_ONLY, AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
+            view.setAcl(entries);
+            if (Files.isDirectory(path)) { assertThrows(IOException.class, () -> PrivatePaths.verifyDirectory(path)); }
+            else { assertThrows(IOException.class, () -> PrivatePaths.verifyFile(path)); }
+        }
+    }
+
     @Test public void windowsAcceptsInheritedSystemAndAdministratorsAlongsideOwner() throws Exception
     {
         Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
@@ -77,6 +153,9 @@ public class EndpointRegistryTest extends StdioTestSupport
             grant(Files.getOwner(directory), full, true), grant(accounts.get("system"), full, true),
             grant(accounts.get("administrators"), full, true)));
         var file = directory.resolve("normal-profile-file"); Files.writeString(file, "unchanged");
+        var directoryAcl = Files.getFileAttributeView(directory, AclFileAttributeView.class).getAcl();
+        PrivatePaths.verifyDirectory(directory);
+        assertEquals(directoryAcl, Files.getFileAttributeView(directory, AclFileAttributeView.class).getAcl());
         var acl = Files.getFileAttributeView(file, AclFileAttributeView.class);
         var before = acl.getAcl();
         assertTrue(before.stream().anyMatch(e -> e.principal().equals(accounts.get("system"))));

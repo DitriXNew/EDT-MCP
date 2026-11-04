@@ -71,7 +71,12 @@ public class BootstrapPackagingTest extends StdioTestSupport
 
     private EntryFiles entryFiles() throws Exception
     {
-        Path directory = temporary.newFolder().toPath(); Path entry = directory.resolve("entry.jar");
+        Path root = EndpointRegistry.userPath(System.getProperty("os.name"),
+            Map.of("LOCALAPPDATA", temporary.newFolder().toString(),
+                "XDG_RUNTIME_DIR", temporary.newFolder().toString()), temporary.getRoot().toPath());
+        PrivatePaths.directory(root);
+        Path directory = PrivatePaths.directory(root.resolve("bootstrap/install"));
+        Path entry = directory.resolve("entry.jar");
         try (var input = StdioBootstrap.class.getResourceAsStream("/bootstrap/edt-mcp-bootstrap.jar"))
         {
             assertNotNull("Use the real entry jar built into the plugin", input); Files.copy(input, entry);
@@ -101,12 +106,34 @@ public class BootstrapPackagingTest extends StdioTestSupport
 
     @Test public void builtEntryExecutesAValidRuntimeWithOnlyTheEntryJarOnItsClasspath() throws Exception
     {
-        var files = entryFiles(); var result = runEntry(files);
+        var files = entryFiles();
+        EndpointRegistryTest.makeForeignWritable(files.directory().getParent().getParent().getParent());
+        var result = runEntry(files);
         assertTrue("Runtime marker must exist; stderr=" + result.stderr(), Files.exists(files.marker()));
         assertEquals("runtime executed", Files.readString(files.marker()));
         assertEquals(result.stderr(), 0, result.exit());
         assertEquals("", result.stdout()); assertEquals("", result.stderr());
     }
+
+    @Test public void builtEntryRejectsForeignWritableDirectoryBeforeRuntimeInitialization() throws Exception
+    {
+        var files = entryFiles(); EndpointRegistryTest.makeForeignWritable(files.directory());
+        assertRefused(files, runEntry(files));
+    }
+
+    private void assertForeignWritableAncestorRefused(int depth) throws Exception
+    {
+        var files = entryFiles(); Path ancestor = files.directory();
+        for (int level = 0; level < depth; level++) { ancestor = ancestor.getParent(); }
+        EndpointRegistryTest.makeForeignWritable(ancestor);
+        assertRefused(files, runEntry(files));
+    }
+
+    @Test public void builtEntryRejectsForeignWritableBootstrapParent() throws Exception
+    { assertForeignWritableAncestorRefused(1); }
+
+    @Test public void builtEntryRejectsForeignWritableStorageRoot() throws Exception
+    { assertForeignWritableAncestorRefused(2); }
 
     @Test public void builtEntryRejectsRuntimeBytesThatDoNotMatchTheirContentAddress() throws Exception
     {

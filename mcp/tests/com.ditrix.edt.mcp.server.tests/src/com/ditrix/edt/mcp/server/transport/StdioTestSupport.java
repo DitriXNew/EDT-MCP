@@ -15,7 +15,7 @@ abstract class StdioTestSupport
     @Before public void secureTemporaryDirectory() throws Exception
     { PrivatePaths.directory(temporary.getRoot().toPath()); }
     protected EndpointRegistry registry() throws Exception
-    { return new EndpointRegistry(temporary.newFolder().toPath(), temporary.newFolder().toPath()); }
+    { return new EndpointRegistry(PrivatePaths.directory(temporary.newFolder().toPath()), temporary.newFolder().toPath()); }
     protected EndpointRegistry.Endpoint endpoint(EndpointRegistry registry, String generation, long pid)
     {
         return new EndpointRegistry.Endpoint(registry.workspace().toString(), generation, pid,
