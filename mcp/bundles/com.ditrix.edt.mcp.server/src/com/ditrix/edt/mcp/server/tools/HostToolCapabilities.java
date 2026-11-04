@@ -121,6 +121,7 @@ public final class HostToolCapabilities
         define("translate_configuration", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("get_translation_project_info", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("sort_metadata", Capability.WINDOWED_ONLY, "AbstractMetadataWriteTool dispatches to the UI thread");
+        define("edt_dialog", Capability.WINDOWED_ONLY, "Reads and presses SWT shells of the workbench display");
     }
 
     private HostToolCapabilities() { }

@@ -49,6 +49,7 @@ public class UserSignalDialog extends Dialog
     protected void configureShell(Shell newShell)
     {
         super.configureShell(newShell);
+        com.ditrix.edt.mcp.server.utils.EdtDialogs.protect(newShell);
         newShell.setText(title);
     }
     
