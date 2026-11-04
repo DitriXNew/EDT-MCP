@@ -281,17 +281,17 @@ public class ExportConfigurationToFileTool implements IMcpTool
         ProjectContext ctx = ProjectContext.of(projectName);
         if (!ctx.exists())
         {
-            return Target.error(ProjectContext.notFoundMessage(projectName));
+            return Target.failed(ProjectContext.notFoundMessage(projectName));
         }
         if (!ctx.isOpen())
         {
-            return Target.error("Project is closed: " + projectName //$NON-NLS-1$
+            return Target.failed("Project is closed: " + projectName //$NON-NLS-1$
                 + ". Open it in EDT, then retry."); //$NON-NLS-1$
         }
         IV8ProjectManager v8Projects = Activator.getDefault().getV8ProjectManager();
         if (v8Projects == null)
         {
-            return Target.error("EDT's project manager is not available yet; retry once EDT " //$NON-NLS-1$
+            return Target.failed("EDT's project manager is not available yet; retry once EDT " //$NON-NLS-1$
                 + "has finished starting."); //$NON-NLS-1$
         }
         IProject project = ctx.project();
@@ -302,7 +302,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         if (!(v8Project instanceof IConfigurationProject))
         {
-            return Target.error("Project '" + projectName + "' is not a configuration or " //$NON-NLS-1$ //$NON-NLS-2$
+            return Target.failed("Project '" + projectName + "' is not a configuration or " //$NON-NLS-1$ //$NON-NLS-2$
                 + "extension project. " + NAME + " dumps a configuration (.cf) or an extension " //$NON-NLS-1$ //$NON-NLS-2$
                 + "(.cfe) from an application's infobase; list_projects shows each project's kind."); //$NON-NLS-1$
         }
@@ -366,7 +366,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         if (unresolvedByProjectName != null)
         {
-            return Target.error("Extension project '" + unresolvedByProjectName.project().getName() //$NON-NLS-1$
+            return Target.failed("Extension project '" + unresolvedByProjectName.project().getName() //$NON-NLS-1$
                 + "' is not loaded yet, so the configuration name the infobase knows it by is unknown. " //$NON-NLS-1$
                 + "Nothing was exported. Wait for the project with wait_for_project_ready, then retry."); //$NON-NLS-1$
         }
@@ -379,14 +379,14 @@ public class ExportConfigurationToFileTool implements IMcpTool
         IProject base = extension.getParentProject();
         if (base == null || !base.exists() || !base.isOpen())
         {
-            return Target.error("Extension project '" + project.getName() + "' has no open base " //$NON-NLS-1$ //$NON-NLS-2$
+            return Target.failed("Extension project '" + project.getName() + "' has no open base " //$NON-NLS-1$ //$NON-NLS-2$
                 + "configuration project, and the infobase belongs to that project's application. " //$NON-NLS-1$
                 + "Open or link the base project, then retry."); //$NON-NLS-1$
         }
         String name = ConfigurationFileExportSupport.configurationName(project, extension);
         if (name == null)
         {
-            return Target.error("The extension name of project '" + project.getName() //$NON-NLS-1$
+            return Target.failed("The extension name of project '" + project.getName() //$NON-NLS-1$
                 + "' could not be read - its model is not ready. Wait until list_projects shows " //$NON-NLS-1$
                 + "it ready, or pass projectName='" + base.getName() //$NON-NLS-1$
                 + "' with extensionName set to the extension's name."); //$NON-NLS-1$
@@ -394,7 +394,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         if (requestedExtension != null && !requestedExtension.equalsIgnoreCase(name)
             && !requestedExtension.equalsIgnoreCase(project.getName()))
         {
-            return Target.error("projectName '" + project.getName() + "' is the project of " //$NON-NLS-1$ //$NON-NLS-2$
+            return Target.failed("projectName '" + project.getName() + "' is the project of " //$NON-NLS-1$ //$NON-NLS-2$
                 + "extension '" + name + "', but extensionName is '" + requestedExtension //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. Omit extensionName, or pass projectName='" + base.getName() //$NON-NLS-1$
                 + "' to export another extension of that configuration."); //$NON-NLS-1$
@@ -964,7 +964,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
             this.error = error;
         }
 
-        static Target error(String message)
+        static Target failed(String message)
         {
             return new Target(null, null, null, message);
         }

@@ -383,7 +383,8 @@ public final class InfobaseAuthDialogSuppressor
         }
         try
         {
-            display.syncExec(() -> installOnUiThread(display));
+            BoundedUiCall.dispatch(BoundedUiCall.executorOrNull(display),
+                () -> installOnUiThread(display), 0, BoundedUiCall.UiThreadPolicy.RUN_INLINE);
         }
         catch (SWTException e)
         {

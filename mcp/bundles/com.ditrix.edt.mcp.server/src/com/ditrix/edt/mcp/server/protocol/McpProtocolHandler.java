@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.EdtDialogs;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
 import com.ditrix.edt.mcp.server.utils.privacy.PiiRedactor;
@@ -148,8 +149,7 @@ public class McpProtocolHandler
      * / ping / resources) flows, so the request/response HISTORY recorder (#254) is
      * hooked here — once per message, in a {@code finally}, and strictly guarded so
      * it can never alter the returned response nor propagate a failure onto the wire
-     * path. The returned value is {@link #dispatch(JsonRpcRequest, ClientCapabilities)}'s EXACT String (no
-     * envelope re-serialization).
+     * path. Dispatch bytes are preserved unless an open-dialog notice is attached.
      * <p>
      * The request is parsed ONCE here and the parsed form is reused for both dispatch
      * and the recorder, so a large tool-call payload is never parsed twice on this hot
@@ -221,8 +221,17 @@ public class McpProtocolHandler
         String response = null;
         try
         {
+            boolean reportDialogs = shouldReportDialogNotice(request);
+            if (reportDialogs)
+            {
+                EdtDialogs.getInstance().ensureInstalled();
+            }
             response = dispatch(request,
                 sessionCapabilities != null ? sessionCapabilities : clientCapabilities.get());
+            if (reportDialogs)
+            {
+                response = appendDialogNotice(response, dialogNotice());
+            }
         }
         finally
         {
@@ -230,8 +239,7 @@ public class McpProtocolHandler
             // Best-effort and strictly non-intrusive: a recorder failure, a
             // null/unparseable request, a notification's null response, or a missing
             // plugin context (Activator.getDefault()==null during a shutdown race or
-            // in a headless unit test) are ALL swallowed here so the returned value —
-            // dispatch's exact String — is never altered.
+            // in a headless unit test) are ALL swallowed here so the selected response is unchanged.
             try
             {
                 long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
@@ -1501,8 +1509,58 @@ public class McpProtocolHandler
     }
 
     /**
-     * Checks whether tool result is a JSON error payload (ToolResult.error JSON).
+     * Reads the cached dialog notice without dispatching to the UI thread.
      */
+    String dialogNotice()
+    {
+        return EdtDialogs.getInstance().notice();
+    }
+
+    private static boolean shouldReportDialogNotice(JsonRpcRequest request)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.WINDOWED
+            && request != null && McpConstants.METHOD_TOOLS_CALL.equals(request.getMethod())
+            && !"get_server_status".equals(request.getToolName())
+            && !"edt_dialog".equals(request.getToolName());
+    }
+
+    static String appendDialogNotice(String response, String notice)
+    {
+        if (notice == null || response == null)
+        {
+            return response;
+        }
+        try
+        {
+            JsonObject envelope = JsonParser.parseString(response).getAsJsonObject();
+            JsonObject text = new JsonObject();
+            text.addProperty("type", "text");
+            text.addProperty("text", notice);
+            if (envelope.has("result"))
+            {
+                envelope.getAsJsonObject("result").getAsJsonArray("content").add(text);
+            }
+            else if (envelope.has("error"))
+            {
+                JsonObject error = envelope.getAsJsonObject("error");
+                String message = error.has("message") && !error.get("message").isJsonNull()
+                    ? error.get("message").getAsString() : "Tool call failed";
+                error.addProperty("message", message + "\n" + notice);
+            }
+            else
+            {
+                throw new IllegalArgumentException("Missing tool response result or error");
+            }
+            return GsonProvider.toJson(envelope);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Could not append EDT dialog notice; preserving the original response: "
+                + e.getClass().getSimpleName());
+            return response;
+        }
+    }
+
     private boolean isJsonErrorPayload(String result)
     {
         return ToolResult.isErrorPayload(result);

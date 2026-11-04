@@ -83,6 +83,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public final class StandaloneServerStateRecovery
 {
     private static final int ABANDONED_LAUNCH_STATUS_CODE = 0x4C4143;
+    private static final int ABANDONED_LAUNCH_WITH_RECOVERY_STATUS_CODE = 0x4C4152;
 
     /**
      * EDT's refusal, verbatim and NOT localized (it is a hardcoded {@code IllegalStateException}
@@ -291,8 +292,7 @@ public final class StandaloneServerStateRecovery
     {
         return launchWithRecovery(config, mode, monitor,
             () -> "Launch of '" + config.getName() + "' was abandoned by EDT " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(the launch delegate cancelled it); no reason was logged. " //$NON-NLS-1$
-                + "Check the EDT error log."); //$NON-NLS-1$
+                + "(the launch delegate cancelled it); no reason was logged."); //$NON-NLS-1$
     }
 
     /** Starts a launch and classifies abandonment while its stopped server can still be restored. */
@@ -420,14 +420,21 @@ public final class StandaloneServerStateRecovery
     {
         return failure != null && failure.getStatus() != null
             && Activator.PLUGIN_ID.equals(failure.getStatus().getPlugin())
-            && failure.getStatus().getCode() == ABANDONED_LAUNCH_STATUS_CODE;
+            && (failure.getStatus().getCode() == ABANDONED_LAUNCH_STATUS_CODE
+                || failure.getStatus().getCode() == ABANDONED_LAUNCH_WITH_RECOVERY_STATUS_CODE);
     }
 
-    /** Preserves the abandonment classification while adding recovery detail. */
+    /** Whether cancellation has no appended recovery or restoration outcome. */
+    public static boolean isPlainAbandonedLaunch(CoreException failure)
+    {
+        return isAbandonedLaunch(failure) && failure.getStatus().getCode() == ABANDONED_LAUNCH_STATUS_CODE;
+    }
+
+    /** Preserves broad abandonment while marking appended recovery detail as non-plain. */
     private static IStatus failureStatus(String message, Throwable failure)
     {
         int code = failure instanceof CoreException && isAbandonedLaunch((CoreException)failure)
-            ? ABANDONED_LAUNCH_STATUS_CODE : 0;
+            ? ABANDONED_LAUNCH_WITH_RECOVERY_STATUS_CODE : 0;
         return new Status(IStatus.ERROR, Activator.PLUGIN_ID, code, message, failure);
     }
 

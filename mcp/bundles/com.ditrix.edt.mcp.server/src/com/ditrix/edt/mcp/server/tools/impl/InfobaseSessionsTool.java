@@ -806,7 +806,7 @@ public class InfobaseSessionsTool implements IMcpTool
             {
                 if (isDesignerSession(session))
                 {
-                    return Selection.error("A Designer/configurator session may be terminated only " //$NON-NLS-1$
+                    return Selection.failed("A Designer/configurator session may be terminated only " //$NON-NLS-1$
                         + "by its exact full UUID, not its numeric session-id."); //$NON-NLS-1$
                 }
                 return Selection.of(List.of(session));
@@ -817,7 +817,7 @@ public class InfobaseSessionsTool implements IMcpTool
         {
             InfobaseSessionErrorProjection.identifier(session).ifPresent(available::add);
         }
-        return Selection.error("Session '" + requestedSessionId //$NON-NLS-1$
+        return Selection.failed("Session '" + requestedSessionId //$NON-NLS-1$
             + "' was not found in the readable session list. Available session identifiers: " //$NON-NLS-1$
             + (available.isEmpty() ? "none" : String.join(", ", available)) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
@@ -927,7 +927,7 @@ public class InfobaseSessionsTool implements IMcpTool
             return new Selection(sessions, null);
         }
 
-        static Selection error(String error)
+        static Selection failed(String error)
         {
             return new Selection(List.of(), error);
         }

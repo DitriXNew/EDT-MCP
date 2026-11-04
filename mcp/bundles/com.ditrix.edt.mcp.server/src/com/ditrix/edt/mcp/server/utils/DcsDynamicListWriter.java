@@ -7,10 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import org.eclipse.emf.common.util.Enumerator;
 
@@ -25,6 +22,7 @@ import com._1c.g5.v8.dt.form.model.DynamicListKeyType;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -40,7 +38,7 @@ public final class DcsDynamicListWriter
 {
     /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
     private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
-        ThreadLocal.withInitial(ParseScratch::new);
+        new ThreadLocal<>();
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
 
@@ -70,6 +68,17 @@ public final class DcsDynamicListWriter
 
     /** Live-project planner variant with named style/palette color resolution. */
     public static synchronized Result plan(DynamicListExtInfo current, String action, String type,
+        DcsAddress address, JsonObject body, DcsWriter.TypeResolver typeResolver,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        try (var scope = ThreadLocalScope.openIfAbsent(PARSE_SCRATCH, ParseScratch::new))
+        {
+            return planScoped(current, action, type, address, body, typeResolver, languages, version, namedColors);
+        }
+    }
+
+    private static Result planScoped(DynamicListExtInfo current, String action, String type,
         DcsAddress address, JsonObject body, DcsWriter.TypeResolver typeResolver,
         DcsPresentationParser.LanguageContext languages, Version version,
         StyleValueBuilder.NamedColorResolver namedColors)
@@ -125,7 +134,7 @@ public final class DcsDynamicListWriter
                 return Result.failure("type='dynamicList' targets the bare form-attribute root; got '" //$NON-NLS-1$
                     + address + "'. Remove the '#/...' fragment."); //$NON-NLS-1$
             }
-            String members = checkMembers(body, "dynamic-list body", //$NON-NLS-1$
+            String members = JsonUtils.unknownMemberError(body, "dynamic-list body", //$NON-NLS-1$
                 "queryText", "customQuery", "mainTable", "dynamicDataRead", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "autoFillAvailableFields", "autoSaveUserSettings", //$NON-NLS-1$ //$NON-NLS-2$
                 "getInvisibleFieldPresentations", "keyType", "keyField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -367,20 +376,6 @@ public final class DcsDynamicListWriter
     private static void copy(JsonObject source, JsonObject target, String member)
     {
         if (source.has(member)) target.add(member, source.get(member).deepCopy());
-    }
-
-    private static String checkMembers(JsonObject body, String path, String... accepted)
-    {
-        Set<String> allowed = new LinkedHashSet<>(Arrays.asList(accepted));
-        for (String member : body.keySet())
-        {
-            if (!allowed.contains(member))
-            {
-                return "Unknown member '" + member + "' in " + path + ". Accepted members: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + String.join(", ", allowed) + ". Remove '" + member + "' or use one of them."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            }
-        }
-        return null;
     }
 
     private static ParseScratch parseScratch()

@@ -4626,7 +4626,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     static final class FolderRemoval
     {
-        private static final String FAMILY = "family"; //$NON-NLS-1$
+        private static final String KEY_FAMILY = "family"; //$NON-NLS-1$
         private static final String OWNER_FQN = "ownerFqn"; //$NON-NLS-1$
         private static final String FORM_NAME = "formName"; //$NON-NLS-1$
 
@@ -4645,7 +4645,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         JsonObject toJson()
         {
             JsonObject json = new JsonObject();
-            json.addProperty(FAMILY, family);
+            json.addProperty(KEY_FAMILY, family);
             json.addProperty(OWNER_FQN, ownerFqn);
             json.addProperty(FORM_NAME, formName);
             return json;
@@ -4659,7 +4659,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 return null;
             }
             JsonObject json = element.getAsJsonObject();
-            JsonElement family = json.get(FAMILY);
+            JsonElement family = json.get(KEY_FAMILY);
             JsonElement owner = json.get(OWNER_FQN);
             JsonElement name = json.get(FORM_NAME);
             if (family == null || !family.isJsonPrimitive() || name == null || !name.isJsonPrimitive()

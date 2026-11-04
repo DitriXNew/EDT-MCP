@@ -94,7 +94,7 @@ def select_shard(tests, index, total):
 
 
 def schedule_tests(selected, registry, per_shard=False):
-    """Return (ordinary/deferred loop tests, post-cleanup EDT-log ratchets).
+    """Return (first/ordinary/deferred loop tests, post-cleanup EDT-log ratchets).
 
     The log ratchet is registered as a testcase, but cannot execute in the ordinary loop: final
     cleanup makes MCP calls too, so running it there certifies an unfinished log. A shard always
@@ -107,7 +107,8 @@ def schedule_tests(selected, registry, per_shard=False):
                 and t["tool"] == "_edt_log_ratchet"]
     ordinary = [t for t in selected if t not in ratchets
                 and t["tool"] != "_edt_log_ratchet"]
-    return ([t for t in ordinary if not t.get("last")]
+    return ([t for t in ordinary if t.get("first") and not t.get("last")]
+            + [t for t in ordinary if not t.get("first") and not t.get("last")]
             + [t for t in ordinary if t.get("last")], ratchets)
 
 
@@ -424,9 +425,8 @@ def main():
     shard_note = ""
     if shard_total > 1:
         shard_note = " [shard %d/%d of %d selected]" % (shard_index, shard_total, len(tests))
-    # Ordinary deferred tests keep registry order at the end of the main loop. The EDT-log ratchet
-    # is held one step longer: final_cleanup below still calls the plugin, so only a check AFTER it
-    # covers the complete run. It remains an ordinary result/JUnit testcase, not runner output.
+    # Prioritize first tests within this selection; deferred tests stay at the end of the loop.
+    # Hold the EDT-log ratchet until after final_cleanup so it covers the complete run.
     tests, log_ratchets = schedule_tests(selected, harness.REGISTRY, shard_total > 1)
 
     print("EDT-MCP e2e: %d test(s)%s against %s, project=%s"

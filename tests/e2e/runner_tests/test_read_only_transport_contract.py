@@ -9,9 +9,10 @@ import urllib.error
 
 
 HARNESS_PATH = Path(__file__).resolve().parents[1] / "harness.py"
-READS = (("business_process_route_map", "get"), ("dcs", "get"), ("dcs", "options"))
+READS = (("business_process_route_map", "get"), ("dcs", "get"), ("dcs", "options"),
+         ("edt_dialog", "list"))
 WRITES = (("business_process_route_map", "replace"), ("business_process_route_map", "remove"),
-          ("dcs", "replace"))
+          ("dcs", "replace"), ("edt_dialog", "press"))
 
 
 def fresh_harness():

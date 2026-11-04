@@ -109,17 +109,6 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
     private static final DateTimeFormatter TIME_FORMAT =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault()); //$NON-NLS-1$
 
-    // Response-envelope keys for the UI status classifier. This mirrors the
-    // package-private StatsAggregator.isErrorResponse contract (a JSON-RPC top-level
-    // error, or a tool result with isError:true / success:false); the aggregator's
-    // method is not visible from this package, so the small classifier is duplicated
-    // here for the Status column and MUST stay in sync with it.
-    private static final String KEY_ERROR = "error"; //$NON-NLS-1$
-    private static final String KEY_RESULT = "result"; //$NON-NLS-1$
-    private static final String KEY_IS_ERROR = "isError"; //$NON-NLS-1$
-    private static final String KEY_STRUCTURED_CONTENT = "structuredContent"; //$NON-NLS-1$
-    private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
-
     private final McpCallHistory history = McpCallHistory.getInstance();
 
     /** Pretty-printer for the JSON detail pane (own instance, HTML-escaping off). */
@@ -949,7 +938,7 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
 
     /**
      * UI error classifier for a whole record: {@code true} when its recorded response
-     * is an error outcome per {@link #isErrorResponse(String)}. A {@code null} record
+     * is an error outcome per {@link StatsAggregator#isErrorRecord(McpCallRecord)}. A {@code null} record
      * is not an error. Shared by the Status column and the errors-only filter so the
      * two can never disagree.
      *
@@ -1059,69 +1048,6 @@ public class McpHistoryView extends ViewPart implements McpCallHistory.HistoryLi
                 .append(" (").append(ts.getApproxTokensDisplay()).append(')'); //$NON-NLS-1$
         }
         return sb.toString();
-    }
-
-    /**
-     * UI status classifier mirroring the package-private
-     * {@code StatsAggregator.isErrorResponse}: a JSON-RPC top-level {@code error}
-     * object, or a tool result carrying {@code isError:true} /
-     * {@code success:false} (matched structurally, never by substring). Any parse
-     * failure or non-object payload is treated as a non-error.
-     */
-    private static boolean isErrorResponse(String responseJson)
-    {
-        if (responseJson == null)
-        {
-            return false;
-        }
-        String trimmed = responseJson.trim();
-        if (trimmed.isEmpty())
-        {
-            return false;
-        }
-        try
-        {
-            JsonElement element = JsonParser.parseString(trimmed);
-            if (!element.isJsonObject())
-            {
-                return false;
-            }
-            JsonObject obj = element.getAsJsonObject();
-            if (obj.has(KEY_ERROR) && obj.get(KEY_ERROR).isJsonObject())
-            {
-                return true;
-            }
-            JsonElement resultEl = obj.get(KEY_RESULT);
-            if (resultEl != null && resultEl.isJsonObject())
-            {
-                JsonObject result = resultEl.getAsJsonObject();
-                if (isBool(result, KEY_IS_ERROR, true))
-                {
-                    return true;
-                }
-                JsonElement sc = result.get(KEY_STRUCTURED_CONTENT);
-                if (sc != null && sc.isJsonObject() && isBool(sc.getAsJsonObject(), KEY_SUCCESS, false))
-                {
-                    return true;
-                }
-                if (isBool(result, KEY_SUCCESS, false))
-                {
-                    return true;
-                }
-            }
-            return isBool(obj, KEY_SUCCESS, false);
-        }
-        catch (RuntimeException e) // NOSONAR a non-JSON payload is classified as non-error, never thrown
-        {
-            return false;
-        }
-    }
-
-    private static boolean isBool(JsonObject obj, String key, boolean expected)
-    {
-        JsonElement el = obj.get(key);
-        return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isBoolean()
-            && el.getAsBoolean() == expected;
     }
 
     private static ImageDescriptor pluginImage(String path)

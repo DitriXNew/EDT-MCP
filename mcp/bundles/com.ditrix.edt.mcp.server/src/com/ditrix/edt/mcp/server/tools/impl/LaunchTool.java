@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.EdtDialogs;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchAbortReason;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -55,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
@@ -168,7 +170,7 @@ public class LaunchTool implements IMcpTool
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
                     + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
-                    + "modal. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
+                    + "modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
                     + "update on this route even when omitted, and an explicit true is refused - run " //$NON-NLS-1$
                     + "update_database separately.") //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
@@ -240,6 +242,7 @@ public class LaunchTool implements IMcpTool
                 + "alreadyRunning short-circuit. Poll debug_status for asynchronous-launch readiness.") //$NON-NLS-1$
             .booleanProperty(KEY_STANDALONE_SERVER_PORTS_REASSIGNED,
                 "True when EDT moved a standalone server to free ports and rewrote its configuration") //$NON-NLS-1$
+            .objectArrayProperty("edtDialogs", "EDT modal dialogs observed shortly after dispatch; call edt_dialog to answer")
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message") //$NON-NLS-1$
             .build();
     }
@@ -523,6 +526,7 @@ public class LaunchTool implements IMcpTool
                 return applied.errorJson;
             }
 
+            boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, isAttach, configProject, effectiveAppId);
             String launchError = performLaunch(applied.config, updateBeforeLaunch,
                 isAttach ? null : policy, isAttach ? null : portPolicy,
                 eclipseLaunchMode(mode));
@@ -532,8 +536,8 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
-            return buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
-                overrides, prepared, mode);
+            return reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
+                overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance());
         }
         catch (Exception e)
         {
@@ -1620,6 +1624,7 @@ public class LaunchTool implements IMcpTool
                 return applied.errorJson;
             }
 
+            boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, false, projectName, applicationId);
             String launchError =
                 performLaunch(applied.config, updateBeforeLaunch, policy, portPolicy,
                     eclipseLaunchMode(mode));
@@ -1629,7 +1634,7 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
-            return echoOverrides(ToolResult.success()
+            return reportLaunchDialogs(echoOverrides(ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
@@ -1638,7 +1643,7 @@ public class LaunchTool implements IMcpTool
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, startingMessage(mode, false))
-                .toJson();
+                .toJson(), watchDialogs, EdtDialogs.getInstance());
         }
         catch (Exception e)
         {
@@ -1646,6 +1651,53 @@ public class LaunchTool implements IMcpTool
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
+    }
+
+    private static boolean dialogWatchNeeded(boolean updateBeforeLaunch, boolean attach,
+        String projectName, String applicationId)
+    {
+        if (!shouldWatchDialogs(updateBeforeLaunch, attach, ApplicationUpdateState.UNKNOWN)
+            || LaunchLifecycleUtils.workbenchDisplayOrNull() == null)
+        {
+            return false;
+        }
+        EdtDialogs.getInstance().ensureInstalled();
+        IApplicationManager manager = Activator.getDefault() != null
+            ? Activator.getDefault().getApplicationManager() : null;
+        if (manager == null || projectName == null || applicationId == null)
+        {
+            return true;
+        }
+        IProject project = ProjectContext.of(projectName).project();
+        var read = ApplicationSupport.readBounded("Read launch update state", applicationId, 200,
+            () -> manager.getApplication(project, applicationId)
+                .map(manager::getUpdateState).orElse(ApplicationUpdateState.UNKNOWN));
+        try
+        {
+            return shouldWatchDialogs(updateBeforeLaunch, attach,
+                read.concluded() ? read.valueOrRethrow() : ApplicationUpdateState.UNKNOWN);
+        }
+        catch (Exception e)
+        {
+            return true;
+        }
+    }
+
+    static boolean shouldWatchDialogs(boolean updateBeforeLaunch, boolean attach, ApplicationUpdateState state)
+    {
+        return !updateBeforeLaunch && !attach && state != ApplicationUpdateState.UPDATED;
+    }
+
+    static String reportLaunchDialogs(String result, boolean watch, EdtDialogs observer)
+    {
+        JsonArray dialogs = observer.awaitDialogs(watch, 750);
+        if (dialogs.isEmpty())
+        {
+            return result;
+        }
+        JsonObject response = JsonParser.parseString(result).getAsJsonObject();
+        response.add("edtDialogs", dialogs);
+        return response.toString();
     }
 
     /**
@@ -2118,7 +2170,7 @@ public class LaunchTool implements IMcpTool
             + "' was abandoned by EDT (the launch delegate cancelled it)"; //$NON-NLS-1$
         if (reason == null || reason.isEmpty())
         {
-            return prefix + "; no reason was logged. Check the EDT error log."; //$NON-NLS-1$
+            return prefix + "; no reason was logged."; //$NON-NLS-1$
         }
         return prefix + ". EDT logged while it ran: " + reason //$NON-NLS-1$
             + ". That error may belong to another operation running at the same time."; //$NON-NLS-1$
@@ -2414,16 +2466,14 @@ public class LaunchTool implements IMcpTool
      * the same flags the asyncExec dispatch used), runs the launch, and ALWAYS
      * releases any acquired arm in {@code finally} — both calls are thread-safe from a Job thread.
      *
-     * <p>Never throws: a Job that dies on an uncaught exception fails silently for
-     * the MCP caller, so EVERY failure — {@link CoreException} or any other
-     * {@link Throwable} — is logged to the EDT error log and returned as an error
-     * {@link IStatus} (visible as the Job's result in the Progress view).
+     * <p>Failures are logged and returned as ERROR; a plain unreasoned delegate cancellation
+     * is recorded and returned as CANCEL without an error-log entry.
      *
      * @param config the launch configuration to start
      * @param autoConfirmUpdateDialog arm the "Application update" matcher
      * @param monitor the Job's progress monitor, passed through to
      *        {@code config.launch} so the Progress view shows the delegate's steps
-     * @return {@link Status#OK_STATUS} on success, else an error status
+     * @return OK on success, CANCEL on plain unreasoned delegate cancellation, else an error status
      */
     static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy, IProgressMonitor monitor)
@@ -2547,9 +2597,16 @@ public class LaunchTool implements IMcpTool
             }
             if (StandaloneServerStateRecovery.isAbandonedLaunch(e))
             {
+                long accessDialogsAfter = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
                 String message = appendAccessSettingsDialogFailure(e.getMessage(),
-                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                    accessDialogsBefore, accessDialogsAfter);
                 recordAsyncFailure(config, message);
+                if (StandaloneServerStateRecovery.isPlainAbandonedLaunch(e)
+                    && abortReason.reason() == null && accessDialogsAfter == accessDialogsBefore)
+                {
+                    Activator.logInfo("launch cancelled asynchronously: " + message); //$NON-NLS-1$
+                    return new Status(IStatus.CANCEL, Activator.PLUGIN_ID, message);
+                }
                 Activator.logError(ERR_ASYNC_PREFIX + message, e);
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message, e);
             }

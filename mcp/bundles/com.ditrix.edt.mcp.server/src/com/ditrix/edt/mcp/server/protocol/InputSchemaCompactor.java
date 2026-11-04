@@ -126,6 +126,8 @@ public final class InputSchemaCompactor
     private static Map<String, Set<String>> buildKeepList()
     {
         Map<String, Set<String>> keep = new HashMap<>();
+        // Conditional press arguments and exact-label semantics are absent from scalar schemas.
+        keep.put("edt_dialog", asSet("dialogId", "button"));
         // XOR input modes and the method's conditional scope must survive schema compaction.
         keep.put("validate_query", asSet("queryText", "method"));
         // Level address shape and conditional mode semantics cannot be expressed by these scalar schemas.

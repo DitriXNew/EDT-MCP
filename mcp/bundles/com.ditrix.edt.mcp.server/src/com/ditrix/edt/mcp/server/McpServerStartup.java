@@ -32,6 +32,7 @@ public class McpServerStartup implements IStartup
     @Override
     public void earlyStartup()
     {
+        com.ditrix.edt.mcp.server.utils.EdtDialogs.getInstance().ensureInstalled();
         new McpCoreStartup(this::getEnvironmentVariable).start();
 
         if (shouldStartHttp(Activator.getDefault().getPreferenceStore(), getEnvironmentVariable(ENV_AUTO_START),
