@@ -43,7 +43,9 @@ Press only the choice the user requested. The tool never arms automatic confirma
 Pressing cannot be undone by this tool; recover changed sources through your normal version
 control workflow. Cancel or Run without update avoids applying that update.
 
-For the lock question, **Cancel** aborts the update; **Retry** retries the exclusive lock
+For the lock question, **Cancel** aborts only the update: a launch that started it still
+starts on the old configuration, so check `debug_status` and call `terminate_launch` if it
+must not run. **Retry** retries the exclusive lock
 after sessions are gone; **Dynamic update** applies without interrupting users, so new
 sessions get the change. Use `infobase_sessions` for standalone-server infobases.
 File-infobase sessions cannot be listed there: ask the user to close clients or stop
