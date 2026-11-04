@@ -382,6 +382,12 @@ public class ModulePathCaseRoundTwoTest
     @Test
     public void readResponseEchoesCanonicalModulePath() throws Exception
     {
+        var models = mock(com._1c.g5.v8.dt.core.platform.IBmModelManager.class);
+        var bmModel = mock(com._1c.g5.v8.bm.integration.IBmModel.class);
+        when(Activator.getDefault().getBmModelManager()).thenReturn(models);
+        when(models.getModel(tree.project)).thenReturn(bmModel);
+        when(bmModel.executeReadonlyTask(any())).thenAnswer(inv ->
+            ((com._1c.g5.v8.bm.integration.IBmTask<?>)inv.getArgument(0)).execute(null, null));
         tree.module("src/" + CANONICAL, "// canonical\n");
         String response = new ReadModuleSourceTool().execute(params(Map.of()));
         assertTrue(response, response.contains("module: " + CANONICAL + "\n"));
@@ -406,6 +412,46 @@ public class ModulePathCaseRoundTwoTest
         assertTrue(selected, selected.contains("module: " + CANONICAL + "\n"));
         verify(model).getResource(URI.createPlatformResourceURI(
             "/CaseFixture/source/" + CANONICAL, true), true);
+    }
+
+    @Test
+    public void absoluteSourceFooterReadsTheSelectedFilesBmModel() throws Exception
+    {
+        IFile selected = tree.module("source/" + CANONICAL, "// selected foreign module\n");
+        IProject foreign = mock(IProject.class);
+        when(foreign.getName()).thenReturn("Foreign");
+        when(selected.getProject()).thenReturn(foreign);
+        when(selected.getFullPath()).thenReturn(new Path("/Foreign/source/" + CANONICAL));
+        when(ResourcesPlugin.getWorkspace().getRoot().findFilesForLocationURI(any(java.net.URI.class)))
+            .thenReturn(new IFile[] {selected});
+        var managers = mock(com._1c.g5.v8.dt.core.platform.IBmModelManager.class);
+        when(Activator.getDefault().getBmModelManager()).thenReturn(managers);
+        AtomicReference<IProject> activeModel = new AtomicReference<>();
+        for (IProject project : new IProject[] {tree.project, foreign})
+        {
+            var bm = mock(com._1c.g5.v8.bm.integration.IBmModel.class);
+            when(managers.getModel(project)).thenReturn(bm);
+            when(bm.executeReadonlyTask(any())).thenAnswer(inv -> {
+                activeModel.set(project);
+                try { return ((com._1c.g5.v8.bm.integration.IBmTask<?>)inv.getArgument(0)).execute(null, null); }
+                finally { activeModel.set(null); }
+            });
+        }
+        var provider = mock(BmAwareResourceSetProvider.class);
+        var set = mock(ResourceSet.class);
+        var resource = mock(Resource.class);
+        when(provider.get(foreign)).thenReturn(set);
+        when(Activator.getDefault().getResourceSetProvider()).thenReturn(provider);
+        when(resource.getContents()).thenReturn(new BasicEList<>());
+        when(set.getResource(any(URI.class), anyBoolean())).thenAnswer(inv -> {
+            assertSame("The footer must use the selected file's model", foreign, activeModel.get());
+            return resource;
+        });
+        Map<String, String> arguments = params(Map.of());
+        arguments.put("modulePath", "C:/case550/foreign/Module.bsl");
+        String response = new ReadModuleSourceTool().execute(arguments);
+        assertTrue(response, response.contains("// selected foreign module"));
+        verify(set).getResource(URI.createPlatformResourceURI("/Foreign/source/" + CANONICAL, true), true);
     }
 
     @Test

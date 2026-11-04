@@ -119,6 +119,9 @@ public class HeadlessBootstrapTest extends StdioTestSupport
                 if (!entry.getName().equals("bootstrap-catalog.json")) { continue; }
                 JsonObject catalog = JsonParser.parseString(new String(jar.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
                 JsonObject capabilities = catalog.getAsJsonObject("hostCapabilities"); assertNotNull(capabilities);
+                for (String name : List.of("get_metadata_objects", "get_metadata_details", "list_modules")) {
+                    assertEquals(name, "HEADLESS", capabilities.get(name).getAsString());
+                }
                 assertEquals(HostToolCapabilities.entries().keySet(), capabilities.keySet());
                 for (var tool : catalog.getAsJsonObject("tools").getAsJsonArray("tools")) {
                     String name = tool.getAsJsonObject().get("name").getAsString();

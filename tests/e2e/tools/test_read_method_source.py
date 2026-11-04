@@ -365,3 +365,10 @@ def test_missing_methodname_errors_clearly():
     assert_error_quality(e, names=["methodName"], suggests=[],
                          ctx="missing methodName names the param")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_read_method_source
+    contract_read_method_source(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

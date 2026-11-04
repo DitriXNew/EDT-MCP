@@ -408,3 +408,10 @@ def test_nonexistent_module_errors_and_names_path():
     assert_error_quality(e, names=[bad, "File not found", PROJECT], suggests=[],
                          ctx="non-existent module names the bad path and project")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="get_symbol_info", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_get_symbol_info
+    contract_get_symbol_info(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

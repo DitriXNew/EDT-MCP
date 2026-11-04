@@ -8,6 +8,8 @@ import subprocess
 import time
 
 from stdio_client import StdioClient, discover
+from harness import Result
+from read_host_contracts import MOVED_TOOLS, run_contracts
 
 
 APPLICATION = "com.ditrix.edt.mcp.server.stdioHost"
@@ -54,9 +56,13 @@ def main():
     workspace.mkdir()
     project = root / "project"
     shutil.copytree(Path(__file__).resolve().parents[1] / "SupportedConfiguration", project)
+    read_project = root / "read-project"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "TestConfiguration", read_project)
     log = root / "host.log"
     with log.open("wb") as output:
-        host = subprocess.Popen(launch_command(java, install, workspace), env=host_environment(project),
+        environment = host_environment(project)
+        environment["EDT_MCP_IMPORT_PROJECTS"] += os.pathsep + str(read_project)
+        host = subprocess.Popen(launch_command(java, install, workspace), env=environment,
                                 stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
         client = None
         try:
@@ -80,10 +86,11 @@ def main():
             assert status["hostKind"] == "HEADLESS"
             assert status["transports"] == {"http": False, "ipc": True}
             live = client.request("tools/list")["result"]["tools"]
-            assert "get_metadata_objects" not in {tool["name"] for tool in live}
+            assert set(MOVED_TOOLS) <= {tool["name"] for tool in live}
             while True:
                 projects = call(client, "list_projects", {"format": "json"})["structuredContent"]["projects"]
-                if any(p["name"] == "SupportedConfiguration" and p["state"] == "ready" for p in projects):
+                ready = {p["name"] for p in projects if p["state"] == "ready"}
+                if {"SupportedConfiguration", "TestConfiguration"} <= ready:
                     break
                 if time.monotonic() >= deadline:
                     raise AssertionError("Headless project context did not become ready")
@@ -92,6 +99,7 @@ def main():
             content = read.get("content", [])
             rendered = "\n".join(part.get("text", part.get("resource", {}).get("text", "")) for part in content)
             assert "No common pictures found." in rendered, "Unexpected BM result for the small fixture"
+            run_contracts(lambda name, arguments: Result({"result": call(client, name, arguments)}), "HEADLESS")
             refused = client.request("tools/call", {"name": "delete_project", "arguments": {}})["result"]
             assert refused["isError"] is True and "Remove -headless" in json.dumps(refused)
             client.close()

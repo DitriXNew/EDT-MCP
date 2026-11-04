@@ -14,8 +14,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EStructuralFeature;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -23,7 +21,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
-import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -172,7 +171,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         int limit = JsonUtils.extractIntArgument(params, LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
 
-        // Execute on UI thread
+        // Preserve windowed dispatch; headless reads stay on the calling thread.
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String mdType = metadataType;
         final boolean useTextFilter = hasFilter(textFilter);
@@ -181,17 +180,16 @@ public class GetMetadataObjectsTool implements IMcpTool
         final int maxResults = limit;
         final String lang = language; // null means use config default
         
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                String result = getMetadataObjectsInternal(projectName, mdType, filter, filterMode,
-                    maxResults, lang);
+                String result = ReadToolExecution.read(projectName, NAME,
+                    () -> getMetadataObjectsInternal(projectName, mdType, filter, filterMode, maxResults, lang));
                 resultRef.set(result);
             }
             catch (Exception e)
             {
-                Activator.logError("Error getting metadata objects", e); //$NON-NLS-1$
+                Refusals.log("Error getting metadata objects", e); //$NON-NLS-1$
                 // NOT e.getMessage(): the failure actually seen here was a NullPointerException,
                 // whose message is null, so the caller was handed "Unknown error" - a dead end for
                 // anyone, and worse for an agent that cannot read the EDT log. PlatformFailures
@@ -208,7 +206,7 @@ public class GetMetadataObjectsTool implements IMcpTool
     }
     
     /**
-     * Internal implementation that runs on UI thread.
+     * Reads metadata under the caller's BM boundary.
      */
     private String getMetadataObjectsInternal(String projectName, String metadataType,
         String filter, FilterMode filterMode, int limit, String language)

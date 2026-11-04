@@ -449,4 +449,34 @@ public class ReadModuleSourceToolTest
         assertFalse("body must exclude the preceding line", result.contains("alpha\n")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("body must exclude the following line", result.contains("gamma\n")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+    @Test public void headlessWholeAndRangeReadsNeverEnterTheUiFooter() throws Exception
+    {
+        java.util.List<String> uiFailures = new java.util.ArrayList<>();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().contains("interception footer unavailable")) { uiFailures.add(status.getMessage()); }
+        };
+        org.eclipse.core.runtime.Platform.addLogListener(listener);
+        try
+        {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            for (String name : new String[] { "EnglishName", "Код" })
+            {
+                String path = "CommonModules/" + name + "/Module.bsl";
+                String whole = fixture.call(new ReadModuleSourceTool(), Map.of("modulePath", path));
+                assertTrue(whole, whole.contains("Функция Маркер() Экспорт"));
+                assertTrue(whole, whole.contains("Возврат 1;"));
+                String range = fixture.call(new ReadModuleSourceTool(), Map.of("modulePath", path, "startLine", "2", "endLine", "2"));
+                assertTrue(range, range.contains("Возврат 1;"));
+                assertFalse(range, range.contains("Функция Маркер()"));
+                assertFalse(whole, whole.contains("Extension interception"));
+                assertEquals(whole, fixture.callWindowed(new ReadModuleSourceTool(), Map.of("modulePath", path)));
+                assertEquals(range, fixture.callWindowed(new ReadModuleSourceTool(),
+                    Map.of("modulePath", path, "startLine", "2", "endLine", "2")));
+            }
+        }
+        assertTrue("A no-workbench read must never attempt the UI footer: " + uiFailures, uiFailures.isEmpty());
+        }
+        finally { org.eclipse.core.runtime.Platform.removeLogListener(listener); }
+    }
 }

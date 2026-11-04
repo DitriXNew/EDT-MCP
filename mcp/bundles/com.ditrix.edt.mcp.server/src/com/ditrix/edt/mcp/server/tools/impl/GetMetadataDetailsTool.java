@@ -15,12 +15,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
@@ -41,7 +38,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.xdto.model.Package;
-import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -49,6 +45,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
@@ -201,7 +199,7 @@ public class GetMetadataDetailsTool implements IMcpTool
 
         boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
 
-        // Execute on UI thread
+        // Preserve windowed dispatch; headless reads stay on the calling thread.
         AtomicReference<String> resultRef = new AtomicReference<>();
         final List<String> fqns = objectFqns;
         final boolean fullMode = full;
@@ -209,8 +207,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         final String lang = language;
         final int roleOffset = roleObjectOffset;
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result =
@@ -219,7 +216,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             }
             catch (Exception e)
             {
-                Activator.logError("Error getting metadata details", e); //$NON-NLS-1$
+                Refusals.log("Error getting metadata details", e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
         });
@@ -228,52 +225,24 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
     
     /**
-     * Internal implementation that runs on UI thread.
+     * Reads metadata under the caller's BM boundary.
      */
     private String getMetadataDetailsInternal(String projectName, List<String> objectFqns,
                                                boolean full, boolean assignable, String language,
                                                int roleObjectOffset)
     {
-        // Resolve the project and its configuration
-        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
-        if (!resolved.ok())
+        ProjectContext project = ProjectContext.of(projectName);
+        if (!project.exists())
         {
-            return resolved.errorJson();
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
         }
-        IProject project = resolved.project();
-        Configuration config = resolved.configuration();
-        
-        // Determine language CODE for synonyms (the synonym map is keyed by code,
-        // e.g. "ru"/"en", not by the Language object's name). Asked of the SCOPE, so an
-        // external-objects project with no base configuration still defaults to the language its
-        // own manifest declares instead of to nothing. May be null when the project declares no
-        // language at all; downstream synonym lookup tolerates that.
-        String effectiveLanguage = resolved.scope().resolveLanguageCode(language);
-
-        // The BM model is needed only to render a FORM's structure (a cross-model hop into the
-        // editable Form content); resolved best-effort (a form FQN with no model reports a failure).
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
-
-        // An object's ORIGIN (core vs extension-adopted vs extension-own) is resolved
-        // against the project type, computed once for the whole request.
-        boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
-
+        ReadSetup setup = ReadToolExecution.readModel(project.project(), NAME,
+            model -> prepareRead(projectName, full, assignable, language, roleObjectOffset, model));
+        if (setup.error() != null) { return setup.error(); }
+        RenderContext ctx = setup.context();
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        // Per-object outcomes are split into two channels so a structural client
-        // can tell a failed object from data: successfully resolved objects render
-        // as data in the body, while failures are collected and emitted as a
-        // dedicated, clearly-delimited machine-readable table at the end. A
-        // per-object failure is NOT a whole-call failure, so it stays in this
-        // success body (the top-level ToolResult.error channel above is reserved
-        // for whole-call failures such as a missing project or configuration).
         List<String[]> failures = new ArrayList<>();
-
-        // Per-request render context, constant across every FQN in the loop.
-        RenderContext ctx = new RenderContext(project, resolved.scope(), bmModel, effectiveLanguage,
-            full, assignable, isExtensionProject, roleObjectOffset);
 
         // Process each FQN
         for (String fqn : objectFqns)
@@ -289,13 +258,71 @@ public class GetMetadataDetailsTool implements IMcpTool
         return sb.toString();
     }
 
-    /**
-     * Renders a single FQN of the request into {@code sb}, or records a {@code {fqn, reason}}
-     * row in {@code failures} when it cannot be resolved. Extracted verbatim from the
-     * {@link #getMetadataDetailsInternal} loop body; a per-object failure is not a whole-call
-     * failure, so this method never throws on a resolution miss. Package-visible for tests.
-     */
+    private record ReadSetup(RenderContext context, String error) { }
+
+    private ReadSetup prepareRead(String projectName, boolean full, boolean assignable,
+        String language, int roleObjectOffset, IBmModel bmModel)
+    {
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
+        if (!resolved.ok())
+        {
+            return new ReadSetup(null, resolved.errorJson());
+        }
+        IProject project = resolved.project();
+
+        // Synonyms use language codes; an external-object scope supplies its own default.
+        String effectiveLanguage = resolved.scope().resolveLanguageCode(language);
+
+        // An object's ORIGIN (core vs extension-adopted vs extension-own) is resolved
+        // against the project type, computed once for the whole request.
+        boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
+
+        return new ReadSetup(new RenderContext(project, resolved.scope(), bmModel, effectiveLanguage,
+            full, assignable, isExtensionProject, roleObjectOffset), null);
+    }
+
+    private record LazyContent(String template, String xdto) { }
+    private record ContentIds(Long template, Long xdto) { }
+
+    private LazyContent prepareContent(String fqn, RenderContext ctx)
+    {
+        if (ctx.assignable) { return new LazyContent(null, null); }
+        ContentIds ids = BmTransactions.read(ctx.bmModel, "MetadataContentIds", (tx, monitor) -> {
+            var node = MetadataNodeResolver.resolveExisting(ctx.scope, fqn);
+            if (node == null || !(node.object instanceof IBmObject bm)) { return new ContentIds(null, null); }
+            return new ContentIds(node.object instanceof BasicTemplate ? bm.bmGetId() : null,
+                node.object instanceof XDTOPackage ? bm.bmGetId() : null);
+        });
+        String template = null;
+        if (ids.template() != null)
+        {
+            template = renderTemplateText(ctx.project, ctx.bmModel, ids.template(), fqn);
+            if (template == null)
+            {
+                template = renderTemplateDcs(ctx.bmModel, ids.template(), fqn, ctx.effectiveLanguage);
+            }
+        }
+        String xdto = ids.xdto() == null ? null : renderXdtoPackageStructure(ctx.bmModel, ids.xdto(), fqn);
+        return new LazyContent(template, xdto);
+    }
+
+    /** Render one FQN inside BM; lazy materialization completes before opening the read task. */
     void processFqn(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
+    {
+        if (ctx.bmModel == null)
+        {
+            processFqnRead(fqn, sb, failures, ctx, new LazyContent(null, null));
+            return;
+        }
+        LazyContent content = prepareContent(fqn, ctx);
+        BmTransactions.read(ctx.bmModel, NAME, (tx, monitor) -> {
+            processFqnRead(fqn, sb, failures, ctx, content);
+            return null;
+        });
+    }
+
+    private void processFqnRead(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx,
+        LazyContent content)
     {
         // A section's command interface renders its commands by panel group (issue #666). Checked
         // first: it is its own top object, and no other view has anything to say about it.
@@ -350,27 +377,9 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
-        String textTemplate = renderTemplateTextIfApplicable(ctx.project, ctx.scope, ctx.bmModel, fqn);
-        if (textTemplate != null)
+        if (content.template() != null)
         {
-            sb.append(textTemplate);
-            sb.append(SECTION_SEPARATOR);
-            return;
-        }
-
-        // A FQN that addresses a TEMPLATE whose content is a DataCompositionSchema (a report's DCS
-        // template, a common template, or an object-owned template - issue #267) renders the
-        // schema's STRUCTURE (data sources / data sets / calculated fields / total fields /
-        // parameters / the default settings variant) via the cross-model hop
-        // (DcsStructureReader), mirroring the FORM branch above. Resolved through the shared
-        // MetadataNodeResolver (handles both the 2-part CommonTemplate FQN and the 4-part
-        // owned-template FQN, bilingually - the same resolver TemplateScreenshotHelper uses), so
-        // this does not duplicate FQN navigation. Other templates fall through: a common template
-        // renders its own basic info; an owned template is refused by the member-address check below.
-        String dcsStructure = renderTemplateDcsIfApplicable(ctx.scope, ctx.bmModel, fqn, ctx.effectiveLanguage);
-        if (dcsStructure != null)
-        {
-            sb.append(dcsStructure);
+            sb.append(content.template());
             sb.append(SECTION_SEPARATOR);
             return;
         }
@@ -465,14 +474,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         // cross-model hop (XdtoStructureReader), APPENDED after the standard property block (unlike
         // the template/DCS branch above, the package's own properties - namespace, comment, synonym -
         // stay useful, so this augments rather than replaces the generic render).
-        if (mdObject instanceof XDTOPackage)
-        {
-            String xdtoStructure = renderXdtoPackageStructure(ctx.bmModel, (XDTOPackage)mdObject, fqn);
-            if (xdtoStructure != null)
-            {
-                sb.append(xdtoStructure);
-            }
-        }
+        if (content.xdto() != null) { sb.append(content.xdto()); }
         // ORIGIN footer: core / core (adopted) / extension. For a base
         // configuration this is always "core"; for an extension it distinguishes
         // an adopted base object from one the extension itself owns.
@@ -852,13 +854,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         sb.append(MarkdownUtils.tableRow("Action period is base", nullableYesNo(actionPeriodIsBase))); //$NON-NLS-1$
     }
 
-    /**
-     * Immutable per-request render context threaded through {@link #processFqn}: the resolution
-     * ROOT, the (best-effort) BM model used only for a form's cross-model hop, the
-     * effective synonym language code and the three rendering flags. Computed once in
-     * {@link #getMetadataDetailsInternal} and constant across every FQN. Bundles the parameters
-     * without changing any value or rendering behaviour.
-     */
+    /** Per-request scope, captured BM model and detached rendering options. */
     static final class RenderContext
     {
         /** Workspace project used to obtain the form edit/read scaffold. */
@@ -1297,19 +1293,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /** Read the file-backed text under a BM boundary, without changing the model or the file. */
-    private static String renderTemplateTextIfApplicable(IProject project, MetadataScope scope,
-        IBmModel bmModel, String fqn)
+    private static String renderTemplateText(IProject project, IBmModel bmModel, long templateId, String fqn)
     {
-        if (bmModel == null)
-        {
-            return null;
-        }
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, fqn);
-        if (node == null || !(node.object instanceof BasicTemplate) || !(node.object instanceof IBmObject))
-        {
-            return null;
-        }
-        long templateId = ((IBmObject)node.object).bmGetId();
         return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsTextTemplate", (tx, monitor) ->
         {
             Object object = tx.getObjectById(templateId);
@@ -1324,42 +1309,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         });
     }
 
-    /**
-     * Renders a template's Data Composition Schema STRUCTURE for a template FQN whose content is a
-     * {@link DataCompositionSchema} (issue #267): resolves the FQN to its {@link BasicTemplate} via the
-     * shared {@link MetadataNodeResolver} (handles a 2-part common template and a 4-part owned-object
-     * template, bilingually - the same resolver {@code TemplateScreenshotHelper} uses for the analogous
-     * SpreadsheetDocument-template screenshot), then inside a {@link BmTransactions#executeAndRollback}
-     * boundary re-fetches it by its BM id and reads its content. A write-capable-but-rolled-back
-     * transaction is required here (not a plain read) because {@code BasicTemplate.getTemplate()} lazily
-     * materializes the content from the separate, lazily-loaded {@code .dcs} resource - a model-write side
-     * effect - mirroring {@code TemplateScreenshotHelper.renderTemplate}'s reasoning for a
-     * SpreadsheetDocument template; every edit the lazy materialization makes is discarded when the
-     * transaction returns, so this pure read never persists anything.
-     *
-     * @param scope the resolution root of the project (configuration, or external-objects roots)
-     * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
-     * @param fqn the requested FQN (not yet normalized)
-     * @param language the resolved title/presentation language CODE (may be {@code null})
-     * @return the rendered Markdown, or {@code null} when the FQN does not resolve to a template, the BM
-     *         model is unavailable, or the resolved template's content is NOT a
-     *         {@link DataCompositionSchema} (a {@code null} content, a {@code SpreadsheetDocument} print
-     *         form, etc.) - {@code null} means "not applicable here": the caller checks for a member
-     *         address before the generic object-resolution render.
-     */
-    private static String renderTemplateDcsIfApplicable(MetadataScope scope, IBmModel bmModel, String fqn,
-        String language)
+    /** Lazy DCS materialization needs a rollback task, outside the ordinary read transaction. */
+    private static String renderTemplateDcs(IBmModel bmModel, long templateBmId, String fqn, String language)
     {
-        if (bmModel == null)
-        {
-            return null;
-        }
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, fqn);
-        if (node == null || !(node.object instanceof BasicTemplate) || !(node.object instanceof IBmObject))
-        {
-            return null;
-        }
-        final long templateBmId = ((IBmObject)node.object).bmGetId();
         final String normalized = MetadataTypeUtils.normalizeFqn(fqn);
         return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsTemplateDcs", (tx, monitor) -> //$NON-NLS-1$
         {
@@ -1374,24 +1326,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         });
     }
 
-    /**
-     * Renders an XDTOPackage's CONTENT (object types with their properties, package-global properties,
-     * value types, dependencies - issue #183 stream 1) via {@link XdtoStructureReader}: re-fetches the
-     * package inside a {@link BmTransactions#executeAndRollback} boundary (required, not a plain read -
-     * {@code XDTOPackage.getPackage()} lazily materializes the content from the separate, lazily-loaded
-     * {@code .xdto} resource, a model-write side effect, exactly like {@code BasicTemplate.getTemplate()}
-     * for the DCS branch above) and renders it. Returns {@code null} only when the BM model or the
-     * package's BM id is unavailable (never - a resolved {@code mdObject} is always a real BM object);
-     * an XDTOPackage with NO content yet still renders the "(no package content)" note, matching
-     * {@link XdtoStructureReader#render}'s null-content contract.
-     */
-    private static String renderXdtoPackageStructure(IBmModel bmModel, XDTOPackage pkg, String fqn)
+    /** Lazy XDTO materialization retains its rollback boundary and never persists changes. */
+    private static String renderXdtoPackageStructure(IBmModel bmModel, long pkgBmId, String fqn)
     {
-        if (bmModel == null || !(pkg instanceof IBmObject))
-        {
-            return null;
-        }
-        final long pkgBmId = ((IBmObject)pkg).bmGetId();
         final String normalized = MetadataTypeUtils.normalizeFqn(fqn);
         return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsXdtoPackage", (tx, monitor) -> //$NON-NLS-1$
         {

@@ -52,6 +52,15 @@ public class HostToolCapabilitiesTest
         catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("unclassified_future_tool")); }
     }
 
+    @Test public void migratedMetadataReadsHaveExplicitTestEvidence() {
+        for (String name : List.of("get_metadata_objects", "get_metadata_details", "list_modules")) {
+            var entry = HostToolCapabilities.requireEntry(name);
+            assertEquals(name, HostToolCapabilities.Capability.HEADLESS, entry.capability());
+            assertTrue(entry.reason(), entry.reason().contains("ToolTest"));
+            assertTrue(entry.reason(), entry.reason().contains("without a workbench"));
+        }
+    }
+
     @Test public void codeAuditIncludesNewToolAndDoesNotCopyResearchGuesses() {
         assertEquals(HostToolCapabilities.Capability.WINDOWED_ONLY, HostToolCapabilities.entries().get("sort_metadata").capability());
         assertEquals(HostToolCapabilities.Capability.HEADLESS, HostToolCapabilities.entries().get("export_configuration_to_file").capability());
