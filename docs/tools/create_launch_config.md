@@ -36,6 +36,8 @@ Run mode vs debug mode is chosen at launch time (the mode string), never a diffe
 Set `automatedTestingMode="TESTCLIENT"` to persist the platform's `/TESTCLIENT` mode.
 `automatedTestingPort=1540` sets the `-TPort` connection port (integer 1..65535);
 omitting it leaves the native attribute unset, so EDT uses **1538** for this new config.
+The response includes the effective TESTCLIENT port, read from the saved configuration
+or defaulting to **1538**. These are launch settings, not confirmation of a listening socket.
 Mode values are case-insensitive and stored as `TESTCLIENT` / `TESTMANAGER`.
 
 `automatedTestingMode="TESTMANAGER"` persists test-manager mode, which has no port.

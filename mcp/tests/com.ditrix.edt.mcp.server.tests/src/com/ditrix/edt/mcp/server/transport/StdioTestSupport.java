@@ -31,6 +31,23 @@ abstract class StdioTestSupport
         fail("Missing output: " + text + " in " + output.toString(StandardCharsets.UTF_8));
     }
 
+    protected static void assertRefusal(ByteArrayOutputStream output, int id, String text) throws Exception
+    {
+        var frames = new ByteArrayInputStream(output.toByteArray()); String frame;
+        while ((frame = JsonFrames.read(frames)) != null)
+        {
+            var response = JsonParser.parseString(frame).getAsJsonObject();
+            if (!response.has("id") || response.get("id").getAsInt() != id) { continue; }
+            var result = response.getAsJsonObject("result");
+            assertTrue(result.get("isError").getAsBoolean());
+            var payload = JsonParser.parseString(result.getAsJsonArray("content").get(0)
+                .getAsJsonObject().get("text").getAsString()).getAsJsonObject();
+            assertFalse(payload.get("success").getAsBoolean());
+            assertEquals(text, payload.get("error").getAsString()); return;
+        }
+        fail("Missing response for " + id);
+    }
+
     protected static JsonObject catalog()
     {
         return JsonParser.parseString("{\"versions\":[\"2025-11-25\"],\"initialize\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tools\":{\"listChanged\":true}},\"serverInfo\":{\"name\":\"test\",\"version\":\"1\"}},\"tools\":{\"tools\":[{\"name\":\"read\",\"inputSchema\":{\"type\":\"object\"}}]}}").getAsJsonObject();

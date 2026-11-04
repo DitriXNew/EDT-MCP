@@ -22,6 +22,99 @@ public class BootstrapPackagingTest extends StdioTestSupport
     private record EntryFiles(Path directory, Path entry, Path runtime, Path marker) { }
     private record Execution(int exit, String stdout, String stderr) { }
 
+    private Execution runBootstrap(String... args) throws Exception
+    { return runBootstrapInput("", args); }
+
+    private Execution runBootstrapInput(String input, String... args) throws Exception
+    {
+        Path directory = temporary.newFolder().toPath(), runtime = directory.resolve("runtime.jar");
+        try (var resource = StdioBootstrap.class.getResourceAsStream("/bootstrap/edt-mcp-runtime.jar"))
+        { assertNotNull(resource); Files.copy(resource, runtime); }
+        var command = new ArrayList<>(List.of(jdkBinary("java").toString(), "-cp", runtime.toString(),
+            "com.ditrix.edt.mcp.server.ipc.StdioBootstrap"));
+        command.addAll(List.of(args)); return executeInput(directory, input, command.toArray(String[]::new));
+    }
+
+    @Test public void missingInstallNamesTheOptionAndConfigurationFix() throws Exception
+    {
+        Path missing = temporary.getRoot().toPath().resolve("no-such-edt");
+        var result = runBootstrap("-install", missing.toString(), "-data", temporary.getRoot().toString());
+        assertEquals(1, result.exit()); assertEquals("", result.stdout());
+        assertEquals("EDT MCP bootstrap: -install path does not exist: " + missing
+            + ". Set -install to the EDT installation directory in .mcp.json." + System.lineSeparator(), result.stderr());
+    }
+
+    @Test public void installFileNamesTheOptionAndConfigurationFix() throws Exception
+    {
+        Path file = temporary.newFile("not-an-install").toPath();
+        var result = runBootstrap("-install", file.toString(), "-data", temporary.getRoot().toString());
+        assertEquals(1, result.exit()); assertEquals("", result.stdout());
+        assertEquals("EDT MCP bootstrap: -install is not a directory: " + file
+            + ". Set -install to the EDT installation directory in .mcp.json." + System.lineSeparator(), result.stderr());
+    }
+
+    @Test public void invalidMainOptionsNameTheOptionAndConfigurationFix() throws Exception
+    {
+        Path install = temporary.newFolder().toPath(); Files.writeString(install.resolve("1cedt.ini"), "");
+        for (String option : List.of("-data", "-configuration"))
+        {
+            var result = option.equals("-data") ? runBootstrap("-install", install.toString(), "-data", ".")
+                : runBootstrap("-install", install.toString(), "-data", temporary.getRoot().toString(), option, ".");
+            assertEquals(1, result.exit()); assertEquals("", result.stdout());
+            assertEquals("EDT MCP bootstrap: " + option + " must be an absolute path: ."
+                + " Set an absolute directory path in .mcp.json." + System.lineSeparator(), result.stderr());
+        }
+    }
+
+    @Test public void unreadableOrMalformedInstallIniNamesTheInstallFix() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        Path install = temporary.newFolder().toPath();
+        for (boolean malformed : List.of(false, true))
+        {
+            if (malformed) { Files.writeString(install.resolve("1cedt.ini"), "-Dosgi.requiredJavaVersion=invalid\n"); }
+            var result = runBootstrap("-install", install.toString(), "-data", temporary.getRoot().toString());
+            assertEquals(1, result.exit()); assertEquals("", result.stdout());
+            assertTrue(result.stderr(), result.stderr().startsWith("EDT MCP bootstrap: Cannot use -install " + install + ": "));
+            assertTrue(result.stderr(), result.stderr().endsWith("Set -install to the EDT installation directory in .mcp.json." + System.lineSeparator()));
+        }
+    }
+
+    @Test public void tooOldJavaPreservesVmAdviceWithoutInstallAdvice() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        Path install = temporary.newFolder().toPath(); int required = Runtime.version().feature() + 1;
+        Files.writeString(install.resolve("1cedt.ini"), "-Dosgi.requiredJavaVersion=" + required + "\n");
+        var result = runBootstrap("-install", install.toString(), "-data", temporary.getRoot().toString());
+        assertEquals(1, result.exit()); assertEquals("", result.stdout());
+        assertEquals("EDT MCP bootstrap: This EDT install requires Java " + required
+            + "; select it with the EDT launcher -vm option." + System.lineSeparator(), result.stderr());
+        assertFalse(result.stderr(), result.stderr().contains("-install"));
+    }
+
+    @Test public void malformedRequiredJavaVersionKeepsInstallAdviceWithOneFullStop() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        Path install = temporary.newFolder().toPath(), ini = install.resolve("1cedt.ini");
+        Files.writeString(ini, "-Dosgi.requiredJavaVersion=invalid\n");
+        var result = runBootstrap("-install", install.toString(), "-data", temporary.getRoot().toString());
+        assertEquals(1, result.exit()); assertEquals("", result.stdout());
+        assertEquals("EDT MCP bootstrap: Cannot use -install " + install
+            + ": Invalid -Dosgi.requiredJavaVersion value 'invalid' in " + ini
+            + ". Set -install to the EDT installation directory in .mcp.json." + System.lineSeparator(), result.stderr());
+        assertFalse(result.stderr(), result.stderr().contains(".."));
+    }
+
+    @Test public void truncatedStdioFrameNamesClientConnectionAndFrameFix() throws Exception
+    {
+        Path install = temporary.newFolder().toPath(); Files.writeString(install.resolve("1cedt.ini"), "");
+        var result = runBootstrapInput("{", "-install", install.toString(), "-data", temporary.getRoot().toString());
+        assertEquals(1, result.exit()); assertEquals("", result.stdout());
+        assertEquals("EDT MCP bootstrap: MCP stdio transport failed: Truncated JSON-RPC frame. "
+            + "Check the client's stdio connection and newline-delimited UTF-8 JSON-RPC frames."
+            + System.lineSeparator(), result.stderr());
+    }
+
     private static Path jdkBinary(String name)
     {
         return Path.of(System.getProperty("java.home"), "bin", name
@@ -29,14 +122,18 @@ public class BootstrapPackagingTest extends StdioTestSupport
     }
 
     private static Execution execute(Path directory, String... command) throws Exception
+    { return executeInput(directory, "", command); }
+
+    private static Execution executeInput(Path directory, String input, String... command) throws Exception
     {
         Path stdout = directory.resolve("stdout"), stderr = directory.resolve("stderr");
         var builder = new ProcessBuilder(command).redirectOutput(stdout.toFile()).redirectError(stderr.toFile());
         for (String variable : List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"))
         { builder.environment().remove(variable); }
-        Process process = builder.start(); process.getOutputStream().close();
+        Process process = builder.start();
         try
         {
+            try (var stdin = process.getOutputStream()) { stdin.write(input.getBytes(StandardCharsets.UTF_8)); }
             assertTrue("Owned child JVM must finish", process.waitFor(20, TimeUnit.SECONDS));
             return new Execution(process.exitValue(), Files.readString(stdout), Files.readString(stderr));
         }
