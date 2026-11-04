@@ -14,6 +14,8 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Predicate;
 
+import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
+import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
@@ -53,6 +55,12 @@ public final class InfobaseExtensionLifecycle
     public interface WriteGuard
     {
         void check() throws Exception;
+    }
+
+    @FunctionalInterface
+    interface StagingParent
+    {
+        Path directory() throws java.io.IOException;
     }
 
     private InfobaseExtensionLifecycle()
@@ -127,6 +135,12 @@ public final class InfobaseExtensionLifecycle
     public static ToolResult execute(Request request, Target target, Backend backend, Predicate<ConsentPreview> consent,
         WriteGuard guard, Runnable mutationEntered) throws Exception
     {
+        return execute(request, target, backend, consent, guard, mutationEntered, EndpointRegistry::userDirectory);
+    }
+
+    static ToolResult execute(Request request, Target target, Backend backend, Predicate<ConsentPreview> consent,
+        WriteGuard guard, Runnable mutationEntered, StagingParent stagingParent) throws Exception
+    {
         List<Extension> before = checked(backend.read());
         if ("list".equals(request.action()))
         {
@@ -149,12 +163,14 @@ public final class InfobaseExtensionLifecycle
         boolean safe = request.safeMode() != null ? request.safeMode() : install || previous.safeMode();
         boolean protection = request.protectionFromDangerousActions() != null
             ? request.protectionFromDangerousActions() : install || previous.protectionFromDangerousActions();
+        Path stagedDirectory = null;
         Path staged = null;
         try
         {
             if (!uninstall)
             {
-                staged = Files.createTempFile("edt-mcp-extension-", ".cfe");
+                stagedDirectory = PrivatePaths.temporaryDirectory(stagingParent.directory(), "edt-mcp-extension-");
+                staged = Files.createTempFile(stagedDirectory, "extension-", ".cfe");
                 stageCfe(request.cfePath(), staged);
             }
             String artifactHash = staged == null ? null : sha256(staged);
@@ -267,6 +283,14 @@ public final class InfobaseExtensionLifecycle
                 catch (java.io.IOException e)
                 {
                     com.ditrix.edt.mcp.server.Activator.logWarning("Could not remove staged .cfe file: " + staged);
+                }
+            }
+            if (stagedDirectory != null)
+            {
+                try { Files.deleteIfExists(stagedDirectory); }
+                catch (java.io.IOException e)
+                {
+                    com.ditrix.edt.mcp.server.Activator.logWarning("Could not remove staged .cfe directory: " + stagedDirectory);
                 }
             }
         }

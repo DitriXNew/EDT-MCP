@@ -139,10 +139,15 @@ public class InfobaseExtensionLifecycleTest
             request.protectionFromDangerousActions(), request.expectedVersion(), confirm, expectedHash);
     }
 
-    private static ToolResult execute(Request request, Fake backend, Predicate<ConsentPreview> consent,
+    private ToolResult execute(Request request, Fake backend, Predicate<ConsentPreview> consent,
         InfobaseExtensionLifecycle.WriteGuard guard, Runnable mutationEntered) throws Exception
     {
-        return InfobaseExtensionLifecycle.execute(request, TARGET, backend, consent, guard, mutationEntered);
+        return InfobaseExtensionLifecycle.execute(request, TARGET, backend, consent, guard, mutationEntered, this::stagingParent);
+    }
+
+    private Path stagingParent() throws java.io.IOException
+    {
+        return com.ditrix.edt.mcp.server.ipc.PrivatePaths.directory(folder.getRoot().toPath().resolve("staging"));
     }
 
     private Request previewed(Request request, Fake backend) throws Exception
@@ -158,6 +163,37 @@ public class InfobaseExtensionLifecycleTest
     private static JsonObject json(ToolResult result)
     {
         return JsonParser.parseString(result.toJson()).getAsJsonObject();
+    }
+
+    @Test public void stagedArtifactHasAPrivateParentAndCleansItAfterSuccess() throws Exception
+    {
+        assertPrivateStaging(false);
+    }
+
+    @Test public void stagedArtifactHasAPrivateParentAndCleansItAfterFailure() throws Exception
+    {
+        assertPrivateStaging(true);
+    }
+
+    private void assertPrivateStaging(boolean failUpdate) throws Exception
+    {
+        Fake backend = new Fake()
+        {
+            @Override public void load(Path file, String name) throws Exception
+            {
+                assertNotEquals("The staged artifact must not be a direct child of the shared temp directory",
+                    Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize(), file.getParent());
+                assertEquals(stagingParent(), file.getParent().getParent());
+                com.ditrix.edt.mcp.server.ipc.PrivatePaths.verifyDirectory(file.getParent());
+                super.load(file, name);
+            }
+        };
+        backend.failUpdate = failUpdate;
+        JsonObject result = run(request("install", true), backend);
+        assertEquals(result.toString(), !failUpdate, result.get("success").getAsBoolean());
+        assertNotNull(backend.loadedPath);
+        assertFalse(Files.exists(backend.loadedPath));
+        assertFalse(Files.exists(backend.loadedPath.getParent()));
     }
 
     @Test public void listReadsActualFlagsAndEmptyInventory() throws Exception
@@ -331,7 +367,7 @@ public class InfobaseExtensionLifecycleTest
         {
             JsonObject result = json(InfobaseExtensionLifecycle.execute(original, changed, backend,
                 consent -> { fail("changed target asked consent"); return false; },
-                () -> fail("changed target guarded a write"), () -> fail("changed target entered mutation")));
+                () -> fail("changed target guarded a write"), () -> fail("changed target entered mutation"), this::stagingParent));
             assertFalse(result.toString(), result.get("success").getAsBoolean());
         }
         // Effective true defaults and explicit true are the same approved operation.
@@ -554,20 +590,24 @@ public class InfobaseExtensionLifecycleTest
         }
     }
 
-    private static Path stagedCopyContaining(String content) throws Exception
+    private Path stagedCopyContaining(String content) throws Exception
     {
         // Match this invocation's unique payload; never alter another worker's staged file.
-        try (var candidates = Files.newDirectoryStream(Path.of(System.getProperty("java.io.tmpdir")),
-            "edt-mcp-extension-*.cfe"))
+        try (var candidates = Files.newDirectoryStream(stagingParent(),
+            "edt-mcp-extension-*"))
         {
-            for (Path candidate : candidates)
+            for (Path directory : candidates)
             {
-                try
+                if (!Files.isDirectory(directory)) continue;
+                try (var files = Files.newDirectoryStream(directory, "*.cfe"))
                 {
-                    if (Files.isReadable(candidate) && Files.size(candidate) == content.length()
-                        && Files.readString(candidate).equals(content))
+                    for (Path candidate : files)
                     {
-                        return candidate;
+                        if (Files.isReadable(candidate) && Files.size(candidate) == content.length()
+                            && Files.readString(candidate).equals(content))
+                        {
+                            return candidate;
+                        }
                     }
                 }
                 catch (java.nio.file.NoSuchFileException e)

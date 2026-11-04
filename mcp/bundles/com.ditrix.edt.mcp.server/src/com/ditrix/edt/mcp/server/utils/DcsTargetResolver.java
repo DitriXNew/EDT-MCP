@@ -182,7 +182,7 @@ public final class DcsTargetResolver
     {
         if (address == null)
         {
-            return RootClassification.failure(new Failure(FailureCode.UNSUPPORTED_ROOT, null, null,
+            return RootClassification.failed(new Failure(FailureCode.UNSUPPORTED_ROOT, null, null,
                 unsupportedRootMessage(null)));
         }
         String normalized = MetadataTypeUtils.normalizeFqn(address.rootFqn());
@@ -215,7 +215,7 @@ public final class DcsTargetResolver
         {
             return RootClassification.success(TargetKind.DYNAMIC_LIST, normalized, ref);
         }
-        return RootClassification.failure(new Failure(FailureCode.UNSUPPORTED_ROOT, normalized, null,
+        return RootClassification.failed(new Failure(FailureCode.UNSUPPORTED_ROOT, normalized, null,
             unsupportedRootMessage(normalized)));
     }
 
@@ -294,7 +294,7 @@ public final class DcsTargetResolver
             EObject txObject = tx.getObjectById(reportBm.bmGetId());
             if (!DcsMainSchemaOwner.supports(txObject))
             {
-                return DcsInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
+                return DcsInspection.failed(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
                     classification.normalizedRoot, typeName(txObject),
                     ownerType + " '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' disappeared before its DCS " //$NON-NLS-1$
@@ -350,7 +350,7 @@ public final class DcsTargetResolver
             EObject txObject = tx.getObjectById(templateBm.bmGetId());
             if (!(txObject instanceof BasicTemplate))
             {
-                return DcsInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
+                return DcsInspection.failed(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
                     classification.normalizedRoot, typeName(txObject),
                     "Template '" + classification.normalizedRoot + "' disappeared before its content " //$NON-NLS-1$ //$NON-NLS-2$
                         + "could be read. Re-run dcs action=get.")); //$NON-NLS-1$
@@ -398,7 +398,7 @@ public final class DcsTargetResolver
             EObject txMdForm = tx.getObjectById(mdFormBm.bmGetId());
             if (txMdForm == null)
             {
-                return DynamicListInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
+                return DynamicListInspection.failed(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
                     classification.normalizedRoot, null,
                     "Form for dynamic-list target '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' disappeared before it could be read. Re-run dcs action=get.")); //$NON-NLS-1$
@@ -406,7 +406,7 @@ public final class DcsTargetResolver
             EObject form = FormElementWriter.getEditableForm(txMdForm);
             if (form == null)
             {
-                return DynamicListInspection.failure(new Failure(FailureCode.FORM_CONTENT_UNAVAILABLE,
+                return DynamicListInspection.failed(new Failure(FailureCode.FORM_CONTENT_UNAVAILABLE,
                     classification.normalizedRoot, null,
                     "Form for dynamic-list target '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' has no editable managed-form content. Open and save it in the form designer, " //$NON-NLS-1$
@@ -415,7 +415,7 @@ public final class DcsTargetResolver
             EObject attribute = FormElementWriter.resolveFormMember(form, classification.formMemberRef);
             if (attribute == null)
             {
-                return DynamicListInspection.failure(new Failure(FailureCode.TARGET_NOT_FOUND,
+                return DynamicListInspection.failed(new Failure(FailureCode.TARGET_NOT_FOUND,
                     classification.normalizedRoot, null,
                     "Form attribute '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' was not found. Verify its programmatic Name with get_metadata_details.")); //$NON-NLS-1$
@@ -429,7 +429,7 @@ public final class DcsTargetResolver
                     return inspectDynamicList(form, attribute, null, null,
                         classification.normalizedRoot);
                 }
-                return DynamicListInspection.failure(new Failure(FailureCode.NOT_DYNAMIC_LIST,
+                return DynamicListInspection.failed(new Failure(FailureCode.NOT_DYNAMIC_LIST,
                     classification.normalizedRoot, actual,
                     notDynamicListMessage(classification.normalizedRoot, actual)));
             }
@@ -437,7 +437,7 @@ public final class DcsTargetResolver
             if (settings != null && !(settings instanceof DataCompositionSettings))
             {
                 String settingsType = typeName(settings);
-                return DynamicListInspection.failure(new Failure(FailureCode.WRONG_TARGET_TYPE,
+                return DynamicListInspection.failed(new Failure(FailureCode.WRONG_TARGET_TYPE,
                     classification.normalizedRoot, settingsType,
                     "Dynamic-list settings for '" + classification.normalizedRoot + "' are '" //$NON-NLS-1$ //$NON-NLS-2$
                         + settingsType + "', not DataCompositionSettings. Re-save the form in EDT, " //$NON-NLS-1$
@@ -484,7 +484,7 @@ public final class DcsTargetResolver
             EObject content = txMdForm == null ? null : FormElementWriter.getEditableForm(txMdForm);
             if (!(content instanceof Form))
             {
-                return FormInspection.failure(new Failure(FailureCode.FORM_CONTENT_UNAVAILABLE,
+                return FormInspection.failed(new Failure(FailureCode.FORM_CONTENT_UNAVAILABLE,
                     classification.normalizedRoot, typeName(content),
                     "Form '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' has no editable managed-form content. Open and save it in the form " //$NON-NLS-1$
@@ -493,7 +493,7 @@ public final class DcsTargetResolver
             String contentFqn = ownTopFqn(content);
             if (contentFqn == null)
             {
-                return FormInspection.failure(new Failure(FailureCode.BM_OBJECT_UNAVAILABLE,
+                return FormInspection.failed(new Failure(FailureCode.BM_OBJECT_UNAVAILABLE,
                     classification.normalizedRoot, typeName(content),
                     "Editable content Form for '" + classification.normalizedRoot //$NON-NLS-1$
                         + "' has no top-object FQN to export. Re-open and save the form, then retry.")); //$NON-NLS-1$
@@ -528,7 +528,7 @@ public final class DcsTargetResolver
         if (content != null && !(content instanceof DataCompositionSchema))
         {
             String actual = typeName(content);
-            return DcsInspection.failure(new Failure(FailureCode.WRONG_TARGET_TYPE, fqn, actual,
+            return DcsInspection.failed(new Failure(FailureCode.WRONG_TARGET_TYPE, fqn, actual,
                 nonDcsTemplateMessage(fqn, actual)));
         }
         if (content == null && !declaresDcs)
@@ -536,7 +536,7 @@ public final class DcsTargetResolver
             String declared = template.getTemplateType() == null
                 ? "no content; declared template type is unset" //$NON-NLS-1$
                 : "no content; declared template type is " + template.getTemplateType().getName(); //$NON-NLS-1$
-            return DcsInspection.failure(new Failure(FailureCode.WRONG_TARGET_TYPE, fqn, declared,
+            return DcsInspection.failed(new Failure(FailureCode.WRONG_TARGET_TYPE, fqn, declared,
                 nonDcsTemplateMessage(fqn, declared)));
         }
 
@@ -870,7 +870,7 @@ public final class DcsTargetResolver
             return new FormInspection(fqn, null);
         }
 
-        static FormInspection failure(Failure failure)
+        static FormInspection failed(Failure failure)
         {
             return new FormInspection(null, failure);
         }
@@ -959,7 +959,7 @@ public final class DcsTargetResolver
             return new RootClassification(kind, normalizedRoot, formMemberRef, null);
         }
 
-        static RootClassification failure(Failure failure)
+        static RootClassification failed(Failure failure)
         {
             return new RootClassification(null, failure.fqn(), null, failure);
         }
@@ -981,7 +981,7 @@ public final class DcsTargetResolver
             return new DcsInspection();
         }
 
-        static DcsInspection failure(Failure failure)
+        static DcsInspection failed(Failure failure)
         {
             DcsInspection result = new DcsInspection();
             result.failure = failure;
@@ -1001,7 +1001,7 @@ public final class DcsTargetResolver
         String formContentFqn;
         String settingsCarrierFqn;
 
-        static DynamicListInspection failure(Failure failure)
+        static DynamicListInspection failed(Failure failure)
         {
             DynamicListInspection result = new DynamicListInspection();
             result.failure = failure;
