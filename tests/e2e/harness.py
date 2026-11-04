@@ -3608,8 +3608,11 @@ def wait_until_no_running_launch(config_name=None, timeout=60):
 REGISTRY = []
 
 
-def e2e_test(tool, kind="read", last=False):
+def e2e_test(tool, kind="read", last=False, first=False):
     """Register a test function. kind: 'read' | 'write' | 'action'.
+
+    first=True runs before ordinary tests within the selected shard. Use it only for a test
+    whose exact pin needs an EDT that no earlier test has changed.
 
     last=True defers the test to the END of the run. Use it only when the SUBJECT of the test
     is the run itself rather than one tool's behaviour - the EDT-log ratchet, which can only
@@ -3619,6 +3622,6 @@ def e2e_test(tool, kind="read", last=False):
     """
     def deco(fn):
         REGISTRY.append({"func": fn, "tool": tool, "kind": kind, "name": fn.__name__,
-                         "last": last})
+                         "last": last, "first": first})
         return fn
     return deco
