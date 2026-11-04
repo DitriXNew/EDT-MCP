@@ -87,7 +87,7 @@ Execute (`confirm=true`):
 
 Field meaning:
 - **`action`** — `"preview"` (no confirm) or `"executed"` (confirm=true). The quickest discriminator between the two phases.
-- **`fqn`** — the resolved/echoed target FQN (normalized before resolution, so the echo may differ from a raw lowercase / alias input). The e2e suite asserts the response echoes the requested `fqn`.
+- **`fqn`** — canonical English type/member tokens with unchanged programmatic Names, including preview/execute echoes, hints and write refusals. Scope hashes include the canonical address and the removal scope; equivalent Russian/English spellings must share the token.
 - **`refactoringTitle`** — the refactoring title (preview only).
 - **`items`** — refactoring items: `name`, `optional`, `checked` (preview only).
 - **`blockingReferences`** — one entry per blocking cleanup problem: `referencingObject` (the artifact that points at the target), `reference` (the EMF feature name), `targetObject` (the node being deleted). Listed in the preview; also the refusal list (action='blocked') / dangler list (forced execute).

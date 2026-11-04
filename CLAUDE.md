@@ -34,10 +34,10 @@ The `edt-mcp-*` skills carry the "how to do it right"; each one's description sa
 | Where | Why it's dangerous | Do this before editing |
 |---|---|---|
 | `RenameMetadataObjectTool` | **Cascading edits across the whole configuration** — BSL, forms, metadata. A mistake = mass corruption. | Run on a test config; verify the cascade scope; only on an explicit request. |
-| BM write tools (`create_metadata`/`modify_metadata`/`delete_metadata` — all FQN-addressed — + `rename_metadata_object` + `adopt_metadata_object`) | Model mutation + transactions + cascade + disk export. | Check the transaction boundary and reversibility; force-export the TOP object. |
+| BM write tools (`create_metadata`/`modify_metadata`/`delete_metadata` — all FQN-addressed — + `rename_metadata_object` + `adopt_metadata_object` + `dcs`) | Model mutation + transactions + cascade + disk export. | Export the TOP object; metadata writes and `dcs` share `WriteExportBarrier`. Await outside SWT/BM transactions; preserve post-commit error markers. |
 | `update_database`, `delete_metadata` (confirm-preview), `delete_project` | Destructive / irreversible. | Only on an explicit user request. |
 | `clean_project` | A rebuild/revalidation — discards UNSAVED model changes (recoverable, NOT destructive). | Save unsaved edits first; otherwise safe. |
-| `McpServer` (~1000 lines) | Transport + SSE + interruption + tool registry tangled together. | Change one responsibility without touching the others. |
+| `McpServer` (~1000 lines) | Transport + SSE + interruption + tool registry tangled together. | Change one responsibility without touching the others. Clear the interrupt slot by call identity; classify history status before truncation. |
 | `Activator` | Service-locator hub + static logging — almost everything depends on it. | Be careful with init/dispose order and signatures. |
 | `tags/*` ↔ `groups/*` | Mirror stacks with no shared base. | Change both features in sync (until the shared base is extracted). |
 | Form rendering (`get_form_screenshot`, `get_form_layout_snapshot`) | Depends on a JVM flag + native/Java render mode. **A blank result ≠ a code bug.** | Check the memory/skill about the JVM flag before "fixing" it. |

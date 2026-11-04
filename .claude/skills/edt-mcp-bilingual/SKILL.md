@@ -20,12 +20,15 @@ The synonym is an `EMap<String,String>` whose key is the **language code** (`"ru
 
 - The object name (the segment after the type) is a **programmatic identifier**, resolved by `getName()` (see `MetadataTypeUtils.findObject`). A synonym is NOT accepted as an identifier.
 - The TYPE token (Справочник/Catalog, Документ/Document …) is bilingual, handled by `MetadataTypeUtils` (`toEnglishSingular`, `normalizeFqn`, `getAllFqnVariants`).
+- Say it honestly in the schema description: "only the TYPE token may be Russian/English; the object name is a programmatic identifier, not a synonym." Don't mislead with "Russian names supported".
+- Render write refusals and create/modify/delete echoes with `MetadataTypeUtils.toCanonicalEnglishFqn`; preserve every Name, including names resembling kind tokens. Form-structure headings use `Catalog.X.Form.Y`, never an EMF collection token such as `forms`.
 - Collection levels also accept Russian KIND tokens through `MetadataOrdering.resolve`; keep programmatic Names distinct from synonyms. Use `MdNameNormalizer.normalizeYo` for ordinary Name sorting; autosort-governed lists use the native comparator unchanged.
 
 ## 3. Writing a synonym — symmetric, through the shared resolver
 
 - When creating an object/attribute, if a synonym is given, write `getSynonym().put(resolveLanguageCode(...), synonym)`.
 - A write tool must **return** the written `synonym`+`language` in its response (symmetry with read tools).
+- DCS LocalString output values accept a bare string, `{kind:"string",value:...}`, or a PresentationSpec language map. Map keys must be declared language codes; `{}` clears the text. Reuse the shared appearance parser for field and conditional appearance.
 
 ## 4. BSL: ru/en dialects
 
@@ -36,6 +39,8 @@ The synonym is an `EMap<String,String>` whose key is the **language code** (`"ru
 ## 5. 1C queries are bilingual
 
 Query keywords have ru/en dialects (SELECT/ВЫБРАТЬ, FROM/ИЗ, WHERE/ГДЕ). `validate_query` delegates to the platform parser (dialect-aware) — don't assume a single dialect; keep UTF-8 when passing query text.
+
+For saved modules, use `ModuleQueryExtractor`: SELECT-leading literals in either dialect, case-insensitive method lookup, decoded continuations/quotes, and module-mapped diagnostics. Do not reconstruct concatenated or runtime-generated queries; report skips and offer `queryText`.
 
 ## Test invariant
 

@@ -32,6 +32,8 @@ Use `JsonUtils.parseIntegralInt` for exact integer validation and render whole t
 
 - Errors only via `ToolResult.error(...)` (machine-readable: success=false + message/code). Never return a bare `"Error: …"` / `"Project not found"` string, never let an exception escape the tool.
 - "project not found" — one text/shape through the shared `ProjectContext` resolver.
+- Reject absent/null/blank `tools/call` `params.name` before registry lookup with JSON-RPC `-32602` and a `tools/list` hint; a nonblank unknown name remains `-32601`. These are protocol errors, not tool-result errors.
+- Describe platform exceptions through `PlatformFailures.describe`; add the bad input and recovery action at the call site.
 
 ## Output format
 
@@ -39,6 +41,8 @@ Use `JsonUtils.parseIntegralInt` for exact integer validation and render whole t
 - JSON fields use one style (don't mix camelCase/snake_case in similar responses).
 - Ordering responses report observed model order and moves, not the planned permutation; check optional autosort policy before manual-order writes. Governed responses share `autosort:{plugin,governs,setting,order,effect,userAction}` plus the same plain message; omit the block when inactive. `setting` is a human scope; `userAction` asks the user through verified EDT UI labels and forbids agent preference changes.
 - not-found — one semantics: an empty list for "list", an error for "get a specific one". Don't mix null/empty/error.
+- Canonicalize create/modify/delete FQN echoes, preview/batch rows, follow-up hints and write-guard refusals with `MetadataTypeUtils.toCanonicalEnglishFqn`: English structural tokens, unchanged programmatic Names. Delete scope hashes use the canonical address as well as the removal scope.
+- Base success claims on observed effects: XML export requires a new or proven rewritten `Configuration.xml` (newer mtime or changed size/digest). Export submission is not completion; `dcs` requires an observed shared export drain. An error after a committed write carries `mutationCommitted`; recover/read back before retrying.
 - Mutation reports must follow read-back: a successful native call or deletion identity alone does not prove the resulting state. Infobase writers share `InfobaseBindings` and report `preservedBindings`, `restoredBindings`, `removedBindings`, and `unrestoredBindings`; incomplete recovery is an error. Claim removal only after observing the old binding gone. UUID-wide cleanup requires confirmed global deregistration; partial dissociation remains project-scoped.
 - Infobase recovery keeps differing non-null choices and restores cleared bindings; manual clears during the call are restored too. Do not infer user intent from preference/launch listeners. Explicit `setDefault=true` wins for the target project's default.
 
@@ -75,6 +79,7 @@ Through `ToolResult`/`JsonUtils` and the shared markdown-table builder, not a ha
 
 ## Schema ↔ code ↔ README
 
+- For mode-dependent JSON results, keep branch-specific output keys optional unless present in every branch. `validate_query` text mode has a top-level verdict; module mode has per-literal verdicts in `queries` plus `skipped` and counts. Extraction counts do not prove runtime-query coverage.
 - `BuiltInToolRegistrar` is the source of truth for the tool set; the README catalog + the e2e golden (`tests/e2e/tools_list.golden.json`) must match it. A new tool changes the golden → regenerate (`EDT_MCP_UPDATE_GOLDEN=1`).
 - Every tool: a non-empty meaningful description and a description for every parameter.
 

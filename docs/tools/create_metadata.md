@@ -23,7 +23,7 @@ Add a new metadata object or member to a configuration. Autosort places governed
 | targetNamespace | — | string | XDTOPackage top-object only. URI namespace for the new package; a non-empty namespace is required for the package to be valid. Defaults to 'http://example.org/<Name>' when omitted. Create-time-only. Ignored for other types. |
 
 ## Guide
-Creates one metadata node addressed by a 1C full-name FQN, then force-exports the affected top object to its `.mdo` on disk so the change survives a refresh / clean_project / EDT restart. Replaces the former create_metadata_object (top-level) and add_metadata_attribute (member) tools.
+Creates one metadata node by FQN and force-exports its top object to disk. Echoes, batch rows, follow-up hints and write refusals use English structural FQN tokens, preserving programmatic Names. Replaces create_metadata_object (top-level) and add_metadata_attribute (member).
 
 ## Addressing (the FQN tells the tool what to create)
 - Top object: `Type.Name`, e.g. `Catalog.Products`.

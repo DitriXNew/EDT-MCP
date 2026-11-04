@@ -19,6 +19,14 @@ Before testing an index, inspect the destination with `sort_metadata`:
 ```json
 {"projectName":"TestConfiguration","fqn":"Catalog.E2EPosition.Attributes","mode":"list"}
 ```
+Field meaning (from the e2e contract):
+- **`action`** — always `created` on success; the quickest programmatic discriminator from an error envelope.
+- **`fqn`** — canonical English type/kind tokens with unchanged programmatic Names, including batch rows, follow-up hints and write-guard refusals. Test Russian/English addresses against the same canonical FQN, not the raw input.
+- **`kind`** — the concrete created EClass: `Catalog` / `Document` / `InformationRegister` … for a top object; `CatalogAttribute`, `InformationRegisterResource`, etc. for a member.
+- **`name`** — the programmatic Name of the created node (the last FQN segment).
+- **`persisted`** — `true` once the platform accepted a save task for the owning top object's `.mdo`. Since #406 the tool then waits for the export queue to drain before answering, so a success normally means the write has already run - but a drained queue only means nothing is still pending, not that the bytes are right (EDT logs a per-file write failure and completes anyway), and the wait is skipped where the export state cannot be observed.
+- **`synonym` / `language`** — present **only** when a `synonym` property was supplied; `language` is the resolved language **CODE** used as the synonym-map key. Emitted together or not at all.
+- **`message`** — fixed success message pointing at `get_project_errors` / `revalidate_objects`.
 
 Presence of an `autosort` block requires an actionable insertion refusal with no new member or disk change. Repeat the index test on an ungoverned collection such as enum values. A top-level index is likewise refused when `Configuration.Catalogs` is governed; omission preserves default creation and reports that the plugin places the new object alphabetically. Both outcomes share the six-field notice and user-action message; require the verified EDT UI path, an instruction to ask the user, and a prohibition on agent setting changes. No block is emitted when ungoverned. Never change project preferences to make a test pass.
 

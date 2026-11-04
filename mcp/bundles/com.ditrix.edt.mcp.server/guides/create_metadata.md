@@ -1,4 +1,4 @@
-Creates one metadata node addressed by a 1C full-name FQN, then force-exports the affected top object to its `.mdo` on disk so the change survives a refresh / clean_project / EDT restart. Replaces the former create_metadata_object (top-level) and add_metadata_attribute (member) tools.
+Creates one metadata node by FQN and force-exports its top object to disk. Echoes, batch rows, follow-up hints and write refusals use English structural FQN tokens, preserving programmatic Names. Replaces create_metadata_object (top-level) and add_metadata_attribute (member).
 
 ## Addressing (the FQN tells the tool what to create)
 - Top object: `Type.Name`, e.g. `Catalog.Products`.

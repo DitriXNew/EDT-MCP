@@ -7,6 +7,8 @@ This is a CASCADING, hard-to-reverse deletion: a wrong target can mass-edit BSL,
 Use to remove an existing node and have EDT clean up the references it can: that covers a top-level object AND its mdclass members (attribute / tabular section / dimension / resource / enum value). A form object, a form member and an XDTO package member are removed from their own container instead, with no CROSS-object cascade (only the owner's own pointers, such as a default-form setting, are cleaned) - see their sections below. To rename instead use rename_metadata_object; to create use create_metadata.
 
 ## Two-phase workflow
+Echoes, previews, follow-up hints and write refusals use canonical English type/member tokens with unchanged programmatic Names. Scope hashes include this canonical address and the removal scope, so equivalent Russian/English spellings yield the same token.
+
 1. Preview (confirm omitted / false): returns the refactoring title and items, then splits EDT's problems. Genuine incoming references (`CleanReferenceProblem`) are listed under `blockingReferences` / `blockingReferencesCount`; every other problem is a platform prohibition under `platformProhibitions` / `platformProhibitionsCount`. Either category sets `blocking=true`, and a confirm=true delete would be refused unless force=true - except a vendor-support lock (a prohibition with `supportLock=true`), which force does not override. Nothing is modified.
 2. Execute (confirm=true): performs the delete refactoring. If either category is non-empty and force is not set, or any prohibition is a vendor-support lock, the delete is REFUSED with action='blocked' and both categories remain separate (nothing is changed). Otherwise returns action='executed'.
 

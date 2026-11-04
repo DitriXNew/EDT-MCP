@@ -20,6 +20,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - `language` - language **code** (`en`/`ru`) used for the synonym columns. Defaults to the configuration's default language; the synonym map is keyed by code, not by the language's display name. For a ROLE FQN it ALSO selects the language of the RIGHT names in the rights matrix and of the RLS section's `Right` / `Fields` columns (`Read` / `Чтение`, `Update` / `Изменение`), so a role's matrix is read in Russian right names by passing `ru`.
 
 ## Output
+- Form-structure headings use canonical English structural tokens (`# Form Structure: Catalog.X.Form.Y`), preserving programmatic Names regardless of the input token language; EMF collection names such as `forms` are not echoed.
 - Markdown, one section per resolved object, separated by `---`.
 - A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), an `Attribute columns` table (Attribute / Name / Synonym / Type) listing the columns of each collection-typed attribute, an `Additional columns` table (Attribute / Table path / Name / Synonym / Type) when there are any, a Commands table and an Event handlers section.
 - A template FQN whose content is a Data Composition Schema renders the schema's structure (see above) instead of an mdclass object section, headed `# Data Composition Schema: <fqn>`.

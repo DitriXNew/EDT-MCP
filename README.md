@@ -46,7 +46,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🔄 **Project Revalidation** - Trigger revalidation when validation gets stuck
 - 🔖 **Bookmarks & Tasks** - Access bookmarks and TODO/FIXME markers
 - 💡 **Content Assist** - Get type info, method hints and platform documentation at any code position
-- 🧪 **Query Validation** - Validate 1C query text in project context (syntax + semantic errors, optional DCS mode)
+- 🧪 **Query Validation** - Validate query text or saved module/method query literals in project context, with syntax/semantic diagnostics and optional DCS mode
 - 🧩 **BSL Code Analysis** - Browse modules, inspect structure, read/write methods, search code, and analyze call hierarchy
 - 🖼️ **Form Inspection** - Get PNG screenshots and YAML layout snapshots from the form WYSIWYG editor
 - 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1C clients
@@ -54,7 +54,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
-- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects, their members and managed-form elements with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- ✏️ **Metadata Refactoring** - Create objects/members and generate supported forms; rename resolved references across BSL and metadata; preview deletions and their cleanup scope. Container-only form/XDTO deletes have no cross-object cascade
 - 🧭 **Command Interface** - Read and edit a subsystem section's (or the main section's) command interface: command visibility, common and per role, placement into panel groups, and order within a group
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
@@ -177,6 +177,9 @@ The MCP server status bar shows real-time execution status with interactive cont
 
 When a tool is executing, you can send signals to the AI agent to interrupt the MCP call:
 
+The status bar targets the latest registered call. An older overlapping call cannot clear
+that slot when it finishes; after the latest call ends, older calls are not restored.
+
 | Button | Description | When to Use |
 |--------|-------------|-------------|
 | **Cancel Operation** | Stops the MCP call and notifies agent | When you want to cancel a long-running operation |
@@ -215,7 +218,9 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All **106 tools** are organized into 11 semantic groups; **103 are enabled by default**.
+All **106 tools** are organized into 11 preference groups; **103 are enabled by default**.
+These preference groups control enablement; the 12 progressive-disclosure toolsets in the
+[tool index](#available-tools) control visibility and have separate membership.
 `git`, `ask_workmate`, and `get_form_screenshot` are **disabled by default**. Enable
 them in **Window → Preferences → MCP Server → Tools**; `enable_toolset` only changes
 progressive-disclosure visibility and does not enable disabled tools:
@@ -280,14 +285,14 @@ Some tools have configurable default values for parameters like result limits. T
 
 | Tool | Parameter | Default | Range |
 |------|-----------|---------|-------|
-| `get_project_errors` | Result limit | 100 | 1–1000 |
-| `get_markers` | Result limit | 100 | 1–1000 |
-| `get_metadata_objects` | Result limit | 100 | 1–1000 |
-| `get_content_assist` | Result limit | 100 | 1–1000 |
-| `search_in_code` | Max results | 100 | 1–500 |
-| `search_in_code` | Context lines | 2 | 0–5 |
-| `read_module_source` | Max lines | 500 | 100–50000 |
-| `terminate_launch` | Termination timeout (sec) | 10 | 1–120 |
+| `get_project_errors` | `limit` | 100 | 1–1000 |
+| `get_markers` | `limit` | 100 | 1–1000 |
+| `get_metadata_objects` | `limit` | 100 | 1–1000 |
+| `get_content_assist` | `limit` | 100 | 1–1000 |
+| `search_in_code` | `limit` (`maxResults` deprecated) | 100 | 1–500 |
+| `search_in_code` | `contextLines` | 2 | 0–5 |
+| `read_module_source` | `maxLines` (preferences only) | 500 | 100–50000 |
+| `terminate_launch` | `timeout` (seconds) | 10 | 1–120 |
 
 Configure these in the Tools tab by selecting a tool that has configurable parameters — the parameter editors appear in the details panel below the tool tree.
 
@@ -551,12 +556,13 @@ distribution decisions described in the proxy README.
 ## Available Tools
 
 The full per-tool reference lives in **[docs/tools/](docs/tools/)** — one page per
-tool (what it does, every parameter, and how it works), generated from the live MCP
-server (`get_tool_guide`) so it never drifts from the code. Index below; re-generate
+tool (what it does, every parameter, and how it works), generated from the current MCP
+server (`get_tool_guide`). The usage summaries below are maintained prose; regeneration
+refreshes membership, grouping and full pages while preserving those summaries. Re-generate
 with `python docs/generate_tool_docs.py`.
 
 <!-- TOOLS-INDEX:START -->
-<!-- generated by docs/generate_tool_docs.py — do not edit by hand -->
+<!-- Membership/grouping generated by docs/generate_tool_docs.py; descriptions maintained here. -->
 
 **106 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
 
@@ -566,18 +572,18 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`enable_toolset`](docs/tools/enable_toolset.md) | Make additional MCP tool groups visible or hide them. Parameters and examples: get_tool_guide('enable_toolset'). |
-| [`get_edt_version`](docs/tools/get_edt_version.md) | Identify the installed 1C:EDT version. Parameters and examples: get_tool_guide('get_edt_version'). |
-| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect metadata objects and members, including managed-form root properties and structure, and a section's command interface. Parameters and examples: get_t… |
-| [`get_metadata_objects`](docs/tools/get_metadata_objects.md) | Discover metadata objects available in a 1C configuration. Parameters and examples: get_tool_guide('get_metadata_objects'). |
-| [`get_module_structure`](docs/tools/get_module_structure.md) | Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters and examples: get_tool_guide('get_module_structure'). |
-| [`get_server_status`](docs/tools/get_server_status.md) | Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status'). |
-| [`get_tool_guide`](docs/tools/get_tool_guide.md) | Retrieve detailed instructions for an MCP tool. mode=summary lists sections; section=<heading\|#anchor>; query=<text>. |
-| [`list_modules`](docs/tools/list_modules.md) | Discover BSL modules available in an EDT project. Parameters and examples: get_tool_guide('list_modules'). |
-| [`list_projects`](docs/tools/list_projects.md) | Discover projects available in the EDT workspace. Parameters and examples: get_tool_guide('list_projects'). |
-| [`list_toolsets`](docs/tools/list_toolsets.md) | Discover available groups of MCP tools and their visibility. Parameters and examples: get_tool_guide('list_toolsets'). |
-| [`read_module_source`](docs/tools/read_module_source.md) | Inspect the source of a complete BSL module. Parameters and examples: get_tool_guide('read_module_source'). |
-| [`search_in_code`](docs/tools/search_in_code.md) | Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other sp… |
+| [`enable_toolset`](docs/tools/enable_toolset.md) | Reveal the required `toolsets` IDs, or hide them with `disable=true` (default false), for progressive disclosure. This never enables a tool disabled in preferences; the core toolset stays visible. |
+| [`get_edt_version`](docs/tools/get_edt_version.md) | Return the installed 1C:EDT version as plain text; takes no parameters. |
+| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect `objectFqns` in a project; `full=false` gives compact details and `assignable=true` discovers writable properties and allowed values. Forms use canonical structure headings, roles support `roleObjectOffset`, and per-object failures appear in a dedicated `## Errors` table. |
+| [`get_metadata_objects`](docs/tools/get_metadata_objects.md) | List project metadata with `metadataType` (default all), optional `nameFilter` or `textFilter` (mutually exclusive), and synonym `language`. Names are programmatic identifiers; `textFilter` also searches the selected synonym; the factory `limit` is 100, maximum 1000. |
+| [`get_module_structure`](docs/tools/get_module_structure.md) | Inspect one `modulePath` for methods, regions and execution contexts. `responseFormat` defaults to concise; choose detailed for full signatures, and opt into `includeVariables` or `includeComments` (both false by default). |
+| [`get_server_status`](docs/tools/get_server_status.md) | Return a JSON snapshot of server configuration, capabilities and environment diagnostics, including form-render support. Takes no parameters; use it to diagnose the running EDT instance. |
+| [`get_tool_guide`](docs/tools/get_tool_guide.md) | Read instructions for `toolName`: full by default, `mode=summary` for parameters/headings, or a focused `section` or literal `query`. Choose only one selector; section names and anchors are accepted, and query needs at least two characters. |
+| [`list_modules`](docs/tools/list_modules.md) | Discover project BSL module paths, optionally narrowed by `metadataType`, `objectName` or path `nameFilter`. `metadataType` defaults to all; `limit` defaults to 200, maximum 1000. |
+| [`list_projects`](docs/tools/list_projects.md) | List workspace projects with paths, open state and readiness/reason. `format=md` is the default; `format=json` returns structured `projects` rows for polling readiness. |
+| [`list_toolsets`](docs/tools/list_toolsets.md) | Return the progressive-disclosure toolset IDs, membership and visibility as JSON, including names not currently exposed by `tools/list`. Takes no parameters; use the IDs with `enable_toolset`. |
+| [`read_module_source`](docs/tools/read_module_source.md) | Read saved `modulePath` text, optionally using inclusive 1-based `startLine`/`endLine`; the preferences-only line cap defaults to 500. The fenced BSL response carries a whole-module `contentHash`, even for a range, for guarded writes. |
+| [`search_in_code`](docs/tools/search_in_code.md) | Search BSL with required `query`, literal and case-insensitive by default; opt into `isRegex` or `caseSensitive`. `outputMode` is full/count/files (default full), `limit` defaults to 100 (maximum 500; `maxResults` is deprecated), and matches are textual, not bilingual symbol resolution. |
 
 ### Metadata
 
@@ -585,24 +591,24 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Add a base-configuration object or member to an extension for customization. Parameters and examples: get_tool_guide('adopt_metadata_object'). |
-| [`clone_metadata_object`](docs/tools/clone_metadata_object.md) | Clone one metadata object with preview/hash, an optional name and explicitly selected incoming relations. |
-| [`business_process_route_map`](docs/tools/business_process_route_map.md) | Read, replace or remove a BusinessProcess route map. Call action='get' before replacing; replace discards all existing items, preserving point identity only… |
-| [`create_launch_config`](docs/tools/create_launch_config.md) | Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config'). |
-| [`sort_metadata`](docs/tools/sort_metadata.md) | Inspect or reorder metadata collections, respecting optional V8 code style autosort. |
-| [`create_metadata`](docs/tools/create_metadata.md) | Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata'). |
-| [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first;… |
-| [`delete_launch_config`](docs/tools/delete_launch_config.md) | Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Paramete… |
-| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata object/member by FQN, or atomically delete members of one form with `operations`; preview before confirming. |
-| [`export_common_picture`](docs/tools/export_common_picture.md) | Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture'). |
-| [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties'). |
-| [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content'). |
-| [`list_common_pictures`](docs/tools/list_common_pictures.md) | Inventory common pictures available in a 1C configuration. Parameters and examples: get_tool_guide('list_common_pictures'). |
-| [`list_configurations`](docs/tools/list_configurations.md) | Discover EDT runtime and server-side launch configurations. Parameters and examples: get_tool_guide('list_configurations'). |
-| [`list_subsystems`](docs/tools/list_subsystems.md) | Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems'). |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
-| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems -… |
-| [`search_in_dcs`](docs/tools/search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool… |
+| [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Adopt `fqn` from the BASE `projectName` into an extension; specify `extensionProjectName` when several extensions qualify. For form adoption, `includeReferencedPictures=true` also adopts referenced common pictures; it defaults to false. |
+| [`business_process_route_map`](docs/tools/business_process_route_map.md) | Read, replace or remove a `BusinessProcess` map using `projectName`, `fqn` and `action`; replacement requires both `points` and `connections`, even when empty. Read first: replacement discards omitted items, destructive changes require consent, and result items are arrays for get but counts for writes. |
+| [`clone_metadata_object`](docs/tools/clone_metadata_object.md) | Clone a top Catalog, Document, Report or DataProcessor within one plain configuration; `newName` is optional and `transfer` defaults to no incoming-relation transfers. Preview first, then repeat the same selection with `confirm=true` and `expectedHash`; copied code text is unchanged. |
+| [`create_launch_config`](docs/tools/create_launch_config.md) | Create a runtime-client configuration for `projectName` with `clientType=thin` by default (thick/web also supported) and an optional application/name. Native `automatedTestingMode` accepts TESTCLIENT/TESTMANAGER; `automatedTestingPort` is TESTCLIENT-only and defaults to 1538. |
+| [`create_metadata`](docs/tools/create_metadata.md) | Create a project object/member by `fqn`, with optional `properties`; echoes use canonical English structural tokens and `normalizeYo` defaults to true. Owned forms are empty unless `generateContent=true`; select `formType` (register default LIST, otherwise OBJECT), `objectFields` and `setAsDefault` as needed; CommonModules default to `commonModuleKind=Server`. |
+| [`dcs`](docs/tools/dcs.md) | Read or author schemas, settings, conditional appearance and dynamic lists by `fqn` plus optional pointer, with required `action` and `type`. Read first: replace/remove/index edits need `expectedHash`; bare-schema XML reads use a paged JSON envelope, query auto-fill is synchronous, and successful writes confirm export draining. |
+| [`delete_launch_config`](docs/tools/delete_launch_config.md) | Remove an unused runtime or attach configuration by exact `name`. `confirm=false` previews; repeat with `confirm=true` to delete, and terminate a running launch first. |
+| [`delete_metadata`](docs/tools/delete_metadata.md) | Preview then confirm deletion using either `fqn` or atomic single-form `operations`; `atomic` defaults to true. Refactoring cleans resolvable references, container-only form/XDTO deletes have no cross-object cascade, `force` never bypasses vendor support, and responses use canonical English FQNs. |
+| [`export_common_picture`](docs/tools/export_common_picture.md) | Inspect a CommonPicture `fqn` and its variant inventory as JSON. Omit `variant` for inventory only; best, svg or an exact entry name selects image bytes decoded to base64 PNG. |
+| [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Read configuration/extension identity, language, version and compatibility properties as YAML. `projectName` is optional; omission selects the first configuration project. |
+| [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Inspect one `subsystemFqn`, including nested subsystem chains, for properties, content objects and direct children. `recursive=false` by default; true also includes nested subsystem content, with synonyms selected by `language`. |
+| [`list_common_pictures`](docs/tools/list_common_pictures.md) | Inventory project common pictures and their raster/vector variants without returning image bytes. `language` selects synonyms; the factory `limit` is 100, maximum 1000; use `export_common_picture` to extract a variant. |
+| [`list_configurations`](docs/tools/list_configurations.md) | List launch configurations and running state as JSON, optionally filtered by exact `projectName`. `type` accepts all (default), client or attach; copy an exact configuration name for launch and credential operations. |
+| [`list_subsystems`](docs/tools/list_subsystems.md) | List subsystem FQNs, synonyms and membership counts; `recursive=true` includes nested subsystems by default. `nameFilter` searches programmatic Names, `language` selects synonyms, and the factory `limit` is 100, maximum 1000. |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Modify `fqn` using assignable `properties`, or the dedicated role (`rights`/`templates`/`roleProperties`), `content`, `commands` or `template` payloads. Discover values with `get_metadata_details(assignable=true)`; writes export affected content, echo canonical English FQNs, and normalize localized text with `normalizeYo=true` by default. |
+| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename `objectFqn` to `newName` through EDT refactoring; only resolved references are rewritten, so dynamic names can remain unchanged. Preview waits up to `waitSeconds=45` before returning a jobId; confirm synchronously, supplying `expectedHash` when skipping `disableIndices`, and keep `textOccurrences` (default include) consistent. |
+| [`search_in_dcs`](docs/tools/search_in_dcs.md) | Search saved `.dcs` files using `query`, literal and case-insensitive by default; optional `isRegex`, `fileMask` and `outputMode` (full/count/files) narrow the result. `limit` defaults to 100, maximum 500; recognized export layouts include a template FQN for `dcs`. |
+| [`sort_metadata`](docs/tools/sort_metadata.md) | List (`mode=list`) or reorder the collection level named by `fqn`: alphabetical by default, explicit `items`, or one object moved by `positions` or `before`/`after`; `recursive=true` also orders owned descendants. Reordering register dimensions, enum values or subsystem content changes behaviour; under active V8 code style autosort, manual orders are refused and the response tells the agent to ask the user. |
 
 ### Code
 
@@ -610,16 +616,16 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`find_references`](docs/tools/find_references.md) | Discover where a metadata object is used throughout the configuration and BSL code. Parameters and examples: get_tool_guide('find_references'). |
-| [`get_content_assist`](docs/tools/get_content_assist.md) | Find valid BSL completion suggestions at a source-code position. Parameters and examples: get_tool_guide('get_content_assist'). |
-| [`get_method_call_hierarchy`](docs/tools/get_method_call_hierarchy.md) | Trace which BSL methods call a method or are called by it; optional depth walks the chain transitively for impact analysis (callers only, max 5). Finds STATI… |
-| [`get_outgoing_structures`](docs/tools/get_outgoing_structures.md) | Discover the fields passed to outgoing or qualified BSL method calls. BEST-EFFORT and incomplete by design: only top-level LITERAL keys of the first argument… |
-| [`get_symbol_info`](docs/tools/get_symbol_info.md) | Inspect the type and documentation of a BSL symbol at its source location. Parameters and examples: get_tool_guide('get_symbol_info'). |
-| [`go_to_definition`](docs/tools/go_to_definition.md) | Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition'). |
-| [`open_editor`](docs/tools/open_editor.md) | Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examp… |
-| [`read_method_source`](docs/tools/read_method_source.md) | Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source'). |
-| [`validate_query`](docs/tools/validate_query.md) | Check a 1C query or stored BSL query literals for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query'). |
-| [`write_module_source`](docs/tools/write_module_source.md) | Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source'). |
+| [`find_references`](docs/tools/find_references.md) | Find indexed BSL/metadata usages of a top-level `objectFqn` in a project, grouped by reference kind. `limit` defaults to 100, maximum 500, and is a result-size hint whose overall reference cap is ten times that value. |
+| [`get_content_assist`](docs/tools/get_content_assist.md) | Get JSON completion proposals at 1-based `line`/`column` in `modulePath` (`filePath` is deprecated). Filter with comma-separated `contains`, page with `limit`/`offset`, and opt into `extendedDocumentation` (default false); the factory limit is 100, maximum 1000. |
+| [`get_method_call_hierarchy`](docs/tools/get_method_call_hierarchy.md) | Trace static BSL callers (default), callees or aggregated outgoing targets from `modulePath`; `methodName` is optional only for outgoing. Caller `depth` defaults to 1 and is capped at 5; above 1, `limit` budgets the walk, and missing dynamic calls never prove absence. |
+| [`get_outgoing_structures`](docs/tools/get_outgoing_structures.md) | Inspect `modulePath`, optionally scoped by `method` and call `qualifier`, for top-level literal Structure keys in outgoing calls; returns JSON. This flow-insensitive first-argument scan misses computed/constructor keys and deeper helper chains, so absence is not proof. |
+| [`get_symbol_info`](docs/tools/get_symbol_info.md) | Read inferred types, signatures and documentation at 1-based `line`/`column` in project `modulePath`. `filePath` remains a deprecated path alias; this is symbol inspection, not a textual name search. |
+| [`go_to_definition`](docs/tools/go_to_definition.md) | Resolve required `symbol` as Module.Method, a metadata FQN, or a bare method name with `modulePath`. `includeSource=true` by default returns the definition body alongside its location and signature. |
+| [`open_editor`](docs/tools/open_editor.md) | Open `fqn` OR `modulePath` for a project; optional `line` or `methodName` is exclusive and applies only to BSL. Requires Allow UI navigation (off by default); the workbench focus changes without saving content, with a five-second UI wait. |
+| [`read_method_source`](docs/tools/read_method_source.md) | Read one case-insensitive `methodName` from project `modulePath`, including its documentation and line range. The response carries a whole-module `contentHash` usable as `write_module_source.expectedHash`, rather than a per-method hash. |
+| [`validate_query`](docs/tools/validate_query.md) | Validate `queryText` OR saved `modulePath`, optionally restricted by case-insensitive `method`; `dcsMode` defaults to false. Text mode returns a verdict, module mode per-literal verdicts/mapped issues and skips; VALID/INVALID/PARTIAL describe validation, not query execution. |
+| [`write_module_source`](docs/tools/write_module_source.md) | Write required `source` to `modulePath` OR `objectName`/`moduleType`; default `mode=searchReplace` requires one `oldSource` match. Whole-file replace needs a lost-update guard or explicit overwrite for existing content; method modes require `methodName` and `expectedHash`, with syntax checking and invalid-character normalization enabled by default. |
 
 ### Debug
 
@@ -627,21 +633,21 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`debug_pause`](docs/tools/debug_pause.md) | Pause a running 1C debug session now and return where it is executing (thread and stack frames); unlike wait_for_break, it requests the suspend itself. Param… |
-| [`debug_status`](docs/tools/debug_status.md) | Check which EDT debug sessions are running or paused. Parameters and examples: get_tool_guide('debug_status'). |
-| [`evaluate_expression`](docs/tools/evaluate_expression.md) | Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this executes arbitrary code in the running application - it can change stat… |
-| [`get_applications`](docs/tools/get_applications.md) | Discover infobases connected to an EDT project. Parameters and examples: get_tool_guide('get_applications'). |
-| [`get_variables`](docs/tools/get_variables.md) | Inspect runtime variables in a paused debug frame. Parameters and examples: get_tool_guide('get_variables'). |
-| [`launch`](docs/tools/launch.md) | Start a 1C application in EDT debug (default) or run mode. An already-running session is NOT relaunched - the call short-circuits with alreadyRunning:true; r… |
-| [`list_breakpoints`](docs/tools/list_breakpoints.md) | Review configured BSL line breakpoints and workspace-wide break-on-error state. Full parameters and examples: call get_tool_guide('list_breakpoints'). |
-| [`remove_breakpoint`](docs/tools/remove_breakpoint.md) | Stop pausing execution at a BSL source breakpoint. Address it EITHER by breakpointId OR by modulePath together with lineNumber - every field is optional on i… |
-| [`resume`](docs/tools/resume.md) | Continue a paused 1C debug session. Parameters and examples: get_tool_guide('resume'). |
-| [`set_breakpoint`](docs/tools/set_breakpoint.md) | Pause BSL execution at a selected source line during debugging, optionally only while a condition holds or after a number of hits. Parameters and examples: g… |
-| [`set_error_breakpoint`](docs/tools/set_error_breakpoint.md) | Create, update, enable, or disable the workspace-wide BSL break-on-error breakpoint. Full parameters and examples: call get_tool_guide('set_error_breakpoint'). |
-| [`set_variable`](docs/tools/set_variable.md) | Change a variable while execution is paused in the debugger. WARNING: the value is EVALUATED as a BSL expression in the running application, so it can invoke… |
-| [`step`](docs/tools/step.md) | Advance paused debug execution one step. Parameters and examples: get_tool_guide('step'). |
-| [`terminate_launch`](docs/tools/terminate_launch.md) | Stop 1C sessions started by EDT. NOT two-phase for a single launch: selecting one (launchConfigurationName, or projectName + applicationId) stops it IMMEDIAT… |
-| [`wait_for_break`](docs/tools/wait_for_break.md) | Wait until a running 1C debug session reaches a breakpoint or other suspend event. Parameters and examples: get_tool_guide('wait_for_break'). |
+| [`debug_pause`](docs/tools/debug_pause.md) | Actively suspend a running debug session, then return its thread and stack frames. `applicationId` may be omitted only for a single active session; `timeout` defaults to 10 seconds, maximum 600. |
+| [`debug_status`](docs/tools/debug_status.md) | List active debug sessions and suspended/running state as JSON; optional `applicationId` narrows the snapshot. Use its session IDs to target pause, resume and breakpoint inspection. |
+| [`evaluate_expression`](docs/tools/evaluate_expression.md) | Evaluate required BSL `expression` in the paused frame selected by `frameRef` and return its typed value. Evaluation executes application code and can mutate state; it is not a read-only watch. |
+| [`get_applications`](docs/tools/get_applications.md) | List a project's infobase applications, IDs and update state as JSON. The response also distinguishes resolved, absent and unknown default-application resolution; use the IDs for launch/update targets. |
+| [`get_variables`](docs/tools/get_variables.md) | Inspect a paused frame using `frameRef` or `threadId` with zero-based `frameIndex` (default 0). Use dot-separated `expandPath` to drill into a nested variable; returns typed JSON values. |
+| [`launch`](docs/tools/launch.md) | Start by `launchConfigurationName` OR `projectName` plus `applicationId`; runtime clients default to debug and `updateBeforeLaunch=true`. Existing sessions return `alreadyRunning` unless `restartIfRunning=true` terminates them first; external-object startup and native TESTCLIENT/TESTMANAGER options are supported, while attach/server targets have separate update restrictions. |
+| [`list_breakpoints`](docs/tools/list_breakpoints.md) | List line-breakpoint marker IDs, conditions and hit rules, plus workspace-wide break-on-error state, as JSON. `projectName` optionally filters line breakpoints; use the IDs to update or remove them. |
+| [`remove_breakpoint`](docs/tools/remove_breakpoint.md) | Remove a breakpoint by `breakpointId`, or by `modulePath` and 1-based `lineNumber` (with project context for relative paths). `module` is a deprecated alias; a call without an identifying target is refused. |
+| [`resume`](docs/tools/resume.md) | Continue a suspended debug thread by `threadId`, or a session by `applicationId`; omitting the session ID requires a single active debug session. Returns JSON state; execution continues until another suspend event. |
+| [`set_breakpoint`](docs/tools/set_breakpoint.md) | Create/update a breakpoint at `modulePath` and 1-based `lineNumber`; relative paths need `projectName`, and `module` is deprecated. Optional `condition` and positive `hitCount` narrow stops; `hitCondition` defaults to EQUALS and hit counts require 1C 8.3.24 or newer. |
+| [`set_error_breakpoint`](docs/tools/set_error_breakpoint.md) | Set required `enabled` for the workspace-wide BSL exception breakpoint. Omit `exceptionMessage` to keep its filter, pass an empty string to catch all, or supply a message template; disabling preserves the filter. |
+| [`set_variable`](docs/tools/set_variable.md) | Set required `variableName` to BSL `value` in a paused `frameRef`, or `threadId` with zero-based `frameIndex` (default 0); dotted variable paths reach nested members. The value is evaluated as code and can change state beyond that variable. |
+| [`step`](docs/tools/step.md) | Advance suspended `threadId` using required `kind=over`, into or out. Wait up to `timeout` (default 30 seconds) and return the resulting stack snapshot. |
+| [`terminate_launch`](docs/tools/terminate_launch.md) | Stop a named launch, or `projectName` plus `applicationId`, immediately; only `all=true` requires `confirm=true`. `timeout` defaults to 10 seconds, `force=false` avoids OS-kill escalation, and `includeAttach=true` disconnects attach sessions without stopping their server. |
+| [`wait_for_break`](docs/tools/wait_for_break.md) | Wait for a suspend event and return `threadId`, stable `frameRef` values and stack frames; it does not request a pause. `timeout` defaults to 60 seconds; `applicationId` is optional only when one debug session is active. |
 
 ### Testing
 
@@ -649,11 +655,11 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`ask_workmate`](docs/tools/ask_workmate.md) | Start a background question to the 1C:Workmate plugin and return its jobId. Hands the question to an EXTERNAL agent: by default (shareMcpTools) Workmate may… *(not enabled by default)* |
-| [`cancel_job`](docs/tools/cancel_job.md) | Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT confirm to see the owning tool, state and progress, then again with confirm=true… |
-| [`debug_yaxunit_tests`](docs/tools/debug_yaxunit_tests.md) | DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; the implementation is shared. DEBUG mode, so breakpoints fire: a short start returns… |
-| [`get_job_status`](docs/tools/get_job_status.md) | Poll any background job by the jobId its owning tool returned: state, progress journal and terminal result. Parameters and examples: get_tool_guide('get_job_… |
-| [`run_yaxunit_tests`](docs/tools/run_yaxunit_tests.md) | Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s): a short run r… |
+| [`ask_workmate`](docs/tools/ask_workmate.md) | Start a Workmate question or direct `workmateTool` call and poll its jobId; the default answer mode shares MCP tools and can read/change project content. `waitSeconds` defaults to 5, total `timeoutSeconds` to 300; chat mode renders the answer in EDT instead, and newer builds require project context. *(not enabled by default)* |
+| [`cancel_job`](docs/tools/cancel_job.md) | Preview cancellation for required `jobId`, then repeat with `confirm=true` to request it. A committed job can continue when its owning tool provides no destructive stop; cancellation is not a rollback guarantee. |
+| [`debug_yaxunit_tests`](docs/tools/debug_yaxunit_tests.md) | Deprecated alias of `run_yaxunit_tests(debug=true)` with the same launch target and test filters. An inline debug start returns a launch handle for `wait_for_break`; a Pending start returns jobId for `get_job_status`. |
+| [`get_job_status`](docs/tools/get_job_status.md) | Poll required `jobId` for owner, state, progress and terminal result. `waitSeconds` defaults to 5 (0..45); poll the existing job instead of repeating the owning tool's start call. |
+| [`run_yaxunit_tests`](docs/tools/run_yaxunit_tests.md) | Run filtered YAXUnit tests by named launch configuration OR project/application, with `updateBeforeLaunch=true` and `updateScope=all` by default. The start waits up to `timeout=45` seconds for a report, otherwise returns jobId to poll; completed starts run again, while `debug=true` returns a debug-launch handle instead. |
 
 ### Profiling
 
@@ -661,9 +667,9 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`get_profiling_results`](docs/tools/get_profiling_results.md) | Identify performance hotspots in executed BSL code. Returns the MOST RECENT measurement session GLOBALLY - applicationId only changes the reported active-sta… |
-| [`start_profiling`](docs/tools/start_profiling.md) | Measure execution time and coverage of BSL code in a debug session. Parameters and examples: get_tool_guide('start_profiling'). |
-| [`stop_profiling`](docs/tools/stop_profiling.md) | Finish measuring BSL performance in a debug session. Parameters and examples: get_tool_guide('stop_profiling'). |
+| [`get_profiling_results`](docs/tools/get_profiling_results.md) | Read the most recent measurement session GLOBALLY; `applicationId` only scopes the active-state flag, not the result data. Filter by `moduleFilter`/`minFrequency` (default 1); `responseFormat=concise` omits details that detailed mode includes. |
+| [`start_profiling`](docs/tools/start_profiling.md) | Start line-level profiling for required debug-session `applicationId`. Repeating an active start is idempotent (`started=false`), not a toggle; run the scenario, then stop profiling and read the results. |
+| [`stop_profiling`](docs/tools/stop_profiling.md) | Stop line-level profiling for required debug-session `applicationId`, preserving the collected measurement for `get_profiling_results`. Returns JSON active/stopped state and is safe to repeat when already inactive. |
 
 ### Forms
 
@@ -671,10 +677,10 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot'). |
-| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which… *(not enabled by default)* |
-| [`get_template_screenshot`](docs/tools/get_template_screenshot.md) | Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot'). |
-| [`validate_form_model`](docs/tools/validate_form_model.md) | Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no proce… |
+| [`get_form_layout_snapshot`](docs/tools/get_form_layout_snapshot.md) | Return calculated form bounds/properties as YAML text; use `formPath` plus `projectName`, or the active form editor when omitted. `refresh=true` and `mode=compact` are defaults; full includes all nodes, and `showElement` must have calculated bounds. |
+| [`get_form_screenshot`](docs/tools/get_form_screenshot.md) | Capture a form as PNG, using `formPath` plus `projectName` or the active editor; `showElement` selects enclosing pages and `refresh` defaults to false. Disabled by default; Windows requires `-DnativeFormBufferedLayoutRender=true`, which leaves the designer grey until EDT restarts without it. *(not enabled by default)* |
+| [`get_template_screenshot`](docs/tools/get_template_screenshot.md) | Render a SpreadsheetDocument print template as PNG using required `projectName` and `templatePath`. The path is a CommonTemplate or an owned Type.Owner.Template.Name FQN, not a filesystem path. |
+| [`validate_form_model`](docs/tools/validate_form_model.md) | Check one project `formFqn` directly in the current managed-form model, without mutation. Reports duplicate names/IDs, invalid bindings/handlers, missing extInfo and main-attribute defects immediately, independently of previously computed validation markers. |
 
 ### Tags
 
@@ -682,8 +688,8 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`get_objects_by_tags`](docs/tools/get_objects_by_tags.md) | Find metadata objects organized under selected tags. Parameters and examples: get_tool_guide('get_objects_by_tags'). |
-| [`get_tags`](docs/tools/get_tags.md) | Discover user-defined tags used to organize project metadata. Parameters and examples: get_tool_guide('get_tags'). |
+| [`get_objects_by_tags`](docs/tools/get_objects_by_tags.md) | List project objects carrying ANY name in required `tags`; this is an OR filter. `limit` defaults to 100 objects per tag, not one overall page. |
+| [`get_tags`](docs/tools/get_tags.md) | List user-defined tags for required `projectName`, including their usage counts. Read-only discovery for `get_objects_by_tags`; it does not create or assign tags. |
 
 ### Translation
 
@@ -691,9 +697,9 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`generate_translation_strings`](docs/tools/generate_translation_strings.md) | Collect translatable strings of a configuration and WRITE the generated keys into the project's translation storage (.lstr/.trans/.dict; storageId, default '… |
-| [`get_translation_project_info`](docs/tools/get_translation_project_info.md) | Inspect the translation setup of an EDT project. Parameters and examples: get_tool_guide('get_translation_project_info'). |
-| [`translate_configuration`](docs/tools/translate_configuration.md) | SYNCHRONIZE a 1C configuration's translated artifacts with the target languages. Does NOT translate anything itself: it regenerates the artifacts from transl… |
+| [`generate_translation_strings`](docs/tools/generate_translation_strings.md) | Write translatable keys for required project/`targetLanguages` into LanguageTool storage (`storageId=edit:default`). `collectInterface`/`collectModel` default true, `collectModelType=ANY` and `fillUpType=NOT_FILLUP`; FROM_PROVIDER needs `providerId`, and this operation changes project files. |
+| [`get_translation_project_info`](docs/tools/get_translation_project_info.md) | Inspect required `projectName` for LanguageTool translation storages, providers and their IDs. Read-only Markdown output supplies the `storageId`/`providerId` choices for string generation; LanguageTool must be installed. |
+| [`translate_configuration`](docs/tools/translate_configuration.md) | Synchronize required project/`targetLanguages` artifacts from translations already present in bound LanguageTool dictionaries. This writes generated project artifacts and does not translate missing text; populate the dictionaries first. |
 
 ### Project
 
@@ -701,36 +707,36 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`apply_quick_fix`](docs/tools/apply_quick_fix.md) | Apply an EDT quick fix to a validation problem. Parameters and examples: get_tool_guide('apply_quick_fix'). |
-| [`build_external_objects`](docs/tools/build_external_objects.md) | Compile external 1C data processors and reports into deployable files. NOT self-contained: the project needs an associated infobase AND a resolvable 1C runti… |
-| [`clean_project`](docs/tools/clean_project.md) | Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK -> MODEL; slow, and it DISCARDS unsaved in-memory model edits -… |
-| [`create_git_branch`](docs/tools/create_git_branch.md) | Start isolated work on a new Git branch for an EDT project. Parameters and examples: get_tool_guide('create_git_branch'). |
-| [`create_infobase`](docs/tools/create_infobase.md) | Create a file infobase or register an existing file/cluster infobase and bind it to an EDT project. EDT may open a Designer connection during binding when a… |
-| [`create_project`](docs/tools/create_project.md) | Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project'). |
-| [`delete_infobase`](docs/tools/delete_infobase.md) | Remove a project's infobase or its standalone-server registration, optionally deleting the database files. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once… |
-| [`delete_project`](docs/tools/delete_project.md) | Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview,… |
-| [`export_configuration_to_file`](docs/tools/export_configuration_to_file.md) | Export the configuration (.cf) or an extension (.cfe) FROM an application's infobase to a file via the 1C thick client - the infobase's content, not the proj… |
-| [`export_configuration_to_xml`](docs/tools/export_configuration_to_xml.md) | Export an EDT configuration into 1C XML files. Parameters and examples: get_tool_guide('export_configuration_to_xml'). |
-| [`get_check_description`](docs/tools/get_check_description.md) | Understand an EDT validation rule and how to fix its diagnostic. Parameters and examples: get_tool_guide('get_check_description'). |
-| [`get_event_log`](docs/tools/get_event_log.md) | Investigate infobase activity and errors through its event log. Reads the LEGACY text format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLi… |
-| [`get_markers`](docs/tools/get_markers.md) | Find bookmarks and TODO-style task markers in the workspace. Parameters and examples: get_tool_guide('get_markers'). |
-| [`get_mcp_history`](docs/tools/get_mcp_history.md) | Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. Parameters and examples: get_tool_guide('get_mcp_history'). |
-| [`get_platform_documentation`](docs/tools/get_platform_documentation.md) | Look up a built-in 1C type or global function in the platform documentation. Returns headers and member names by default - pass responseFormat='detailed' for… |
-| [`get_problem_summary`](docs/tools/get_problem_summary.md) | See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary'). |
-| [`get_project_errors`](docs/tools/get_project_errors.md) | Find validation errors and warnings; detailed output includes saved text ranges, and exact-address calls return structured problem rows. |
-| [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Create an EDT project from exported 1C configuration XML files. Use platformVersion for the new project's runtime, derived from the dump by default (xmlVersi… |
-| [`import_project_from_file`](docs/tools/import_project_from_file.md) | Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report)… |
-| [`infobase_extensions`](docs/tools/infobase_extensions.md) | List installed infobase extensions and install, update or uninstall .cfe files. DESTRUCTIVE: call once WITHOUT confirm to preview a write, then with confirm=… |
-| [`infobase_sessions`](docs/tools/infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its… |
-| [`list_git_branches`](docs/tools/list_git_branches.md) | Inspect available Git branches and their EDT infobase bindings. Parameters and examples: get_tool_guide('list_git_branches'). |
-| [`project_checks`](docs/tools/project_checks.md) | List or change EDT validation checks; switch, create, copy or delete check-settings profiles. Writes ask for consent; profile deletion is destructive. Parame… |
-| [`resync_to_disk`](docs/tools/resync_to_disk.md) | Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling C… |
-| [`revalidate_objects`](docs/tools/revalidate_objects.md) | Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild… |
-| [`set_branch_infobase`](docs/tools/set_branch_infobase.md) | Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: get_tool_guide('set_branch_infobase'). |
-| [`set_infobase_credentials`](docs/tools/set_infobase_credentials.md) | STORE infobase credentials (user/password) in EDT settings so update_database and launch can authenticate. The secret PERSISTS beyond this call, and addressi… |
-| [`switch_git_branch`](docs/tools/switch_git_branch.md) | Change the active version of an EDT project through Git branch checkout. Parameters and examples: get_tool_guide('switch_git_branch'). |
-| [`update_database`](docs/tools/update_database.md) | Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear… |
-| [`validate_xdto_package`](docs/tools/validate_xdto_package.md) | Check an XDTO package for configuration validation problems. Reads the markers EDT computed EARLIER - it does not validate on demand, so a verdict right afte… |
+| [`apply_quick_fix`](docs/tools/apply_quick_fix.md) | Apply an official EDT fix to required `projectName` and exact case-insensitive `checkId`; narrow markers by `modulePath` and `line`. Ambiguous matches need 1-based `index`, multiple fixes need 1-based `variant`, and stale/out-of-range selectors are refused. |
+| [`build_external_objects`](docs/tools/build_external_objects.md) | Compile an external-object project to required `outputDir`, selecting `objectName` or ALL objects when omitted; needs an associated infobase and installed runtime. `recordBuildTime=true` also rewrites Comment/.mdo files; false avoids that mutation; the build returns JSON status. |
+| [`clean_project`](docs/tools/clean_project.md) | Rebuild DISK to MODEL and revalidate, discarding unsaved model edits; save first. Optional `projectName` limits the scope (omitted means all EDT projects); clean `timeout` defaults to 120 seconds per project, clamped to 10..3600, with revalidation waiting separately. |
+| [`create_git_branch`](docs/tools/create_git_branch.md) | Create required `branch` for `projectName` from `startPoint` (default HEAD); `checkout=false` leaves the working tree on the current branch. Optionally bind `applicationId` to the new context and set its default with `setDefault=true` (default false). |
+| [`create_infobase`](docs/tools/create_infobase.md) | Create a file base (`mode=create`, default) or register an existing file/cluster base (`mode=register`) for a project; `applicationKind` defaults to infobase and also supports standaloneServer. File/cluster target inputs are exclusive, `setDefault=false`, and supplied user/password/access settings persist in EDT. |
+| [`create_project`](docs/tools/create_project.md) | Create required `projectKind=configuration`, extension or externalObjects with `name`; extensions require `baseProjectName` and inherit runtime/script language. Configuration defaults are latest platform/Russian, external projects can seed `externalObject`, checks default on when available, and `autoSortTopObjects` is accepted but not applied. |
+| [`delete_infobase`](docs/tools/delete_infobase.md) | Preview then `confirm=true` to remove a project application selected by `applicationId` or `infobaseName`; explicit `registrationId` supports guarded registration-only cleanup. `deleteRegistration=true` by default; database files stay unless `deleteDatabaseFiles=true`, which is irreversible. |
+| [`delete_project`](docs/tools/delete_project.md) | Preview removal of required `projectName`, then repeat with `confirm=true`. `deleteContent=false` only unregisters the workspace project; true irreversibly deletes its files too. |
+| [`export_configuration_to_file`](docs/tools/export_configuration_to_file.md) | Export an infobase configuration/extension to required new `outputFile` (.cf/.cfe), using a project and optional application/extension selector; never overwrites. Out-of-date bases are refused unless `allowOutOfDate=true`; `waitSeconds=20` (0..45) bounds the call before a jobId is returned. |
+| [`export_configuration_to_xml`](docs/tools/export_configuration_to_xml.md) | Export project sources to required directory `outputPath`; creates missing directories and returns Markdown status. Success requires a new or proven rewritten `Configuration.xml`, not just a normal platform return or a stale existing root. |
+| [`get_check_description`](docs/tools/get_check_description.md) | Read documentation for required symbolic `checkId`, or a short UID resolved using `projectName`. Requires the folder-backed check-description feature (off by default); use the project errors' check code rather than inventing a filename. |
+| [`get_event_log`](docs/tools/get_event_log.md) | Read legacy 1Cv8.lgf/.lgp logs by project/application or overriding absolute `logDir`; SQLite .lgd is unsupported, and server bases require logDir. Filter/page JSON events with dates, user/event/severity and `limit`/`offset`; `order=date_asc` is default, and returned records may contain personal/business data. |
+| [`get_markers`](docs/tools/get_markers.md) | List bookmarks and TODO/FIXME/XXX/HACK tasks, optionally scoped by project/path and `markerKind`. `priority` filters tasks only and cannot accompany bookmark-only mode; the factory `limit` is 100, maximum 1000. |
+| [`get_mcp_history`](docs/tools/get_mcp_history.md) | Read recorded exchanges newest first with tool/status/time/duration filters; `limit=100`, `includeBodies=false` and `includeStats=false` are defaults. Status/statistics use the full delivered response before body capping, and background completion updates the same interrupted row without changing its delivered outcome. |
+| [`get_platform_documentation`](docs/tools/get_platform_documentation.md) | Look up required bilingual `typeName` in platform API docs, with `category=type` or builtin and optional member filters/project version. `language=en`, `responseFormat=concise` and `limit=50` (maximum 200) are defaults; detailed adds signatures, parameters and return types. |
+| [`get_problem_summary`](docs/tools/get_problem_summary.md) | Read validation problem counts by severity and project; omit `projectName` for all projects. Returns Markdown totals only; use `get_project_errors` for messages, locations and fix selectors. |
+| [`get_project_errors`](docs/tools/get_project_errors.md) | Read stored diagnostics with project/severity/check filters; `objects` is a loose substring filter, while exclusive `objectFqns` resolves exact addresses and returns JSON problem rows/report. Member addresses widen to their owner; `responseFormat=concise` and `limit=100` (maximum 1000) are defaults, with detailed adding stored ranges. |
+| [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Create NEW `projectName` from `importPath`; optional `projectNature` must match the dump and `platformVersion` defaults from it (`xmlVersion` is a deprecated alias). Extensions require `baseProjectName` and inherit runtime, main configurations refuse a base, and external objects may use one. |
+| [`import_project_from_file`](docs/tools/import_project_from_file.md) | Create NEW `projectName` from absolute .cf/.cfe/.epf/.erf `filePath` using an installed platform. A .cfe needs `baseProjectName`, .cf refuses it, external objects may use it; `waitSeconds=30` (0..45) returns a jobId when unfinished, so poll rather than restart. |
+| [`infobase_extensions`](docs/tools/infobase_extensions.md) | List (default), install, update or uninstall compiled extensions on explicit project/`applicationId`; writes need `extensionName` and install/update need `cfePath`. Preview then confirm with `expectedHash`; install safety flags default true, updates preserve them, and verified updates require a changed `expectedVersion`. |
+| [`infobase_sessions`](docs/tools/infobase_sessions.md) | List (default) or terminate sessions for a running standalone-server project/application; omission selects the project's default application. Termination needs `confirm=true` plus `sessionId` or `all=true`; bulk skips Designer, and targeting Designer requires its exact full UUID. |
+| [`list_git_branches`](docs/tools/list_git_branches.md) | List required project's local/remote-tracking branches, current or detached HEAD, and EDT branch-context infobase bindings. Read-only discovery for branch creation, checkout and binding; missing binding information is not proof that no binding exists. |
+| [`project_checks`](docs/tools/project_checks.md) | Inspect or edit project check settings using required `action`: list/set, profiles/switch, createProfile/copyProfile/deleteProfile. Listing pages default to 50 (maximum 100); `changes` is a JSON-array string, profile copy requires `from`, and effective writes require consent, with profile deletion destructive. |
+| [`resync_to_disk`](docs/tools/resync_to_disk.md) | Repair MODEL to DISK by exporting missing .mdo files and reporting dangling references/orphan role rights. Cleanup flags default false; `fullExport=true` requires `overwriteDiskEdits=true`, and optional `revalidate` defaults false; full export can overwrite external disk edits. |
+| [`revalidate_objects`](docs/tools/revalidate_objects.md) | Refresh and validate required `projectName`, optionally scoped by `objects` FQNs; omitted or empty objects means the whole project. Waits for current markers without clean_project's full rebuild or discarding unsaved model changes. |
+| [`set_branch_infobase`](docs/tools/set_branch_infobase.md) | Bind required project/`branch`/`applicationId` using `action=attach` (default) or detach. `setDefault=false` by default and applies only to attach; it associates an existing infobase and never creates one. |
+| [`set_infobase_credentials`](docs/tools/set_infobase_credentials.md) | Persist user/password/access for `launchConfigurationName` OR project/application; `access=INFOBASE` and an empty password are defaults, with OS auth also supported. Project/application updates the Designer agent only; selecting a runtime-client configuration also updates that client's authentication. |
+| [`switch_git_branch`](docs/tools/switch_git_branch.md) | Check out required local `branch` for `projectName` through EGit and update EDT's branch context/application binding. Requires a clean tracked working tree; remote-tracking names are refused, so create a local branch first. |
+| [`update_database`](docs/tools/update_database.md) | Preview then `confirm=true` for named launch configuration OR project/application; `fullUpdate=false` means incremental. Defaults terminate EDT-launched clients and check standalone sessions, enforce branch binding, answer external changes with override and port conflicts with cancel; disable these guards only explicitly. |
+| [`validate_xdto_package`](docs/tools/validate_xdto_package.md) | Read stored configuration-validation markers for project `fqn=XDTOPackage.Name`, reporting valid/problems/undecided with `limit=100` (maximum 1000). It does not validate on demand; run `revalidate_objects` first after edits. |
 
 ### Comparison
 
@@ -738,9 +744,9 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`compare_configurations`](docs/tools/compare_configurations.md) | Compare a project's working tree against two git revisions (three-way) and report which top objects differ. Read-only: it never merges and never writes the p… |
-| [`get_comparison_node`](docs/tools/get_comparison_node.md) | Expand one node of a comparison started by compare_configurations: three-way property table, form structure, module sections, support state and potential pro… |
-| [`merge_rules`](docs/tools/merge_rules.md) | Read or author EDT's merge-rules file - the per-node decisions a configuration comparison saves and re-applies when it is launched. Which container to write… |
+| [`compare_configurations`](docs/tools/compare_configurations.md) | Compare required project working tree against `otherRevision` and `ancestorRevision`; omitted `scope` means the whole configuration, and `waitSeconds=5` (0..25) returns a job snapshot. Poll by jobId, expand by comparisonId, and release a finished comparison with `releaseComparisonId` alone; the single slot is never a merge operation. |
+| [`get_comparison_node`](docs/tools/get_comparison_node.md) | Expand required `comparisonId` using `objectFqn` OR `nodeId`; `side=main`, `depth=1`, `limit=100` and `waitSeconds=10` are defaults. Returns three-way properties/structure and distinguishes unfinished subtrees from no differences; never merges. |
+| [`merge_rules`](docs/tools/merge_rules.md) | Read/write required `filePath` using `mode`; write lowercase .zip needs a live comparison, while .xml needs none and targets EDT 2026.1 only. `decisions` merge with optional `basedOn`, which must name the same file to overwrite it; explicit `comparisonId` requires a finished validation tree, otherwise unvalidated authoring is reported; no merge is executed. |
 
 ### Git
 
@@ -748,7 +754,7 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`git`](docs/tools/git.md) | Run a git command in a project's repository through the real git CLI, sent as a shell-style string. Only a whitelisted set of subcommands runs, and the write… *(not enabled by default)* |
+| [`git`](docs/tools/git.md) | Run required project `command` through the real Git CLI using parsed arguments, never a shell; only whitelisted subcommands run. Disabled by default in preferences, and write-capable commands change the repository; `enable_toolset` cannot enable it. *(not enabled by default)* |
 
 <!-- TOOLS-INDEX:END -->
 
@@ -851,10 +857,6 @@ See the `modify_metadata` tool guide for the payload rules.
 1C XDTO packages (`XDTOPackage`) can be authored end-to-end through MCP, down to their
 package-local structure, without hand-editing XML:
 
-- **`sort_metadata`** reads current EList order with `mode:"list"` or orders any ordered named metadata collection in a configuration or extension. `fqn` selects a level; `recursive:true` also sorts owned descendants. Explicit and move modes require a collection FQN. DIMENSIONS affect register indexes/query speed; enum values affect comparisons/ORDER BY; subsystem content affects command interface order. Reordered collections carry warnings; active V8 code style autosort sets the comparator and refuses manual order with a structured notice asking the user about the setting. See [the full contract](docs/tools/sort_metadata.md).
-- **`create_metadata.insertPosition`** optionally inserts at a 1-based index in the destination metadata collection (`1` = first). Values outside `1..size+1` are refused before writing; omission retains EDT's default insertion. Active autosort refuses an index and reports alphabetical placement on default creation. Only the user may change that setting. Form/XDTO content, predefined data and standalone external roots are outside this collection index contract.
-- **`create_metadata`** generates owned list, choice, record, and record-set forms through EDT with `generateContent=true` and `formType`. Registers default to `LIST`; `setAsDefault` assigns the matching model slot. Unsupported generation requests return an actionable error.
-
 - **`create_metadata`** / **`modify_metadata`** / **`delete_metadata`** address XDTO
   package members by FQN, layered on top of the existing top-level `XDTOPackage.<Name>`
   create/delete:
@@ -869,15 +871,14 @@ package-local structure, without hand-editing XML:
   explicit `{nsUri, name}` pair; optional `lowerBound`/`upperBound`, `nillable`,
   `fixed`+`default` round out the vocabulary. See `get_tool_guide('create_metadata')`
   for the full parameter list.
-- **`validate_xdto_package`** runs EDT's own configuration validation scoped to one
-  package and returns a one-line verdict — valid, problems found, or undecided when
-  nothing matched but a marker's location could not be resolved — plus any problems found
-  (e.g. a Property left referencing an ObjectType that was since deleted) — a thin, read-only wrapper over
-  `get_project_errors`, handy right after authoring or editing package members.
+- **`validate_xdto_package`** reads EDT's stored validation markers for one package and
+  returns valid, problems found, or undecided when a marker location could not be resolved,
+  plus the matching problems. It is a read-only wrapper over `get_project_errors`, not
+  on-demand validation: after authoring or editing members, run `revalidate_objects` first.
 
 ## Output Formats
 
-Each tool declares a response type (`IMcpTool.getResponseType()`). **The default — and the most common type — is Markdown**: any tool that does not override `getResponseType()` returns Markdown as an EmbeddedResource with `mimeType: text/markdown`. The non-default types are enumerated exhaustively below; everything not listed here is Markdown.
+Each tool declares a response type (`IMcpTool.getResponseType()`), with some selecting a format per call. **The default is Markdown**: a tool without a response-type override returns an EmbeddedResource with `mimeType: text/markdown`. The non-default types and per-call variants are enumerated below; everything else is Markdown.
 
 #### Response format policy (Markdown vs JSON)
 
@@ -902,11 +903,35 @@ Which tool families stay JSON, and why:
 
 Errors are reported the same way regardless of a tool's normal format — see the **Error contract** below.
 
-- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects` (which switches to JSON when called with `format='json'`), `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `search_in_dcs`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `debug_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `export_configuration_to_file`, `import_configuration_from_xml`, `import_project_from_file`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
+- **Markdown tools** (the default): tools without another response type below, delivered as an EmbeddedResource with `mimeType: text/markdown`. Examples include module/source reads, metadata details, code search, reference navigation, comparison, job polling, YAXUnit reports, XML import/export and translation tools.
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
-- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `infobase_sessions`, `infobase_extensions`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `set_error_breakpoint`, `remove_breakpoint`, `step`, `resume`, `debug_pause`, `wait_for_break`, `launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, `dcs` when called with `format="xml"`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `sort_metadata`, `modify_metadata`, `delete_metadata`).
+- **JSON tools** (return JSON with `structuredContent`): `adopt_metadata_object`, `apply_quick_fix`, `build_external_objects`, `business_process_route_map`, `clean_project`, `clone_metadata_object`, `create_git_branch`, `create_infobase`, `create_launch_config`, `create_metadata`, `create_project`, `debug_pause`, `debug_status`, `delete_infobase`, `delete_launch_config`, `delete_metadata`, `delete_project`, `enable_toolset`, `evaluate_expression`, `export_common_picture`, `get_applications`, `get_content_assist`, `get_event_log`, `get_mcp_history`, `get_outgoing_structures`, `get_profiling_results`, `get_server_status`, `get_variables`, `git`, `infobase_extensions`, `infobase_sessions`, `launch`, `list_breakpoints`, `list_configurations`, `list_toolsets`, `modify_metadata`, `project_checks`, `remove_breakpoint`, `resume`, `resync_to_disk`, `set_branch_infobase`, `set_breakpoint`, `set_error_breakpoint`, `set_infobase_credentials`, `set_variable`, `sort_metadata`, `start_profiling`, `step`, `stop_profiling`, `switch_git_branch`, `update_database`, `validate_form_model`, `validate_query`, `wait_for_break`.
+- **Per-call formats**: `list_projects` defaults to Markdown and returns JSON for `format=json`; `get_project_errors` returns JSON for nonempty `objectFqns` and Markdown otherwise; `dcs` defaults to Markdown and returns a JSON page envelope for bare-schema `get` with `format=xml`. Inspect the result mode before assuming one uniform envelope.
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
-- **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
+- **Image tools**: `get_form_screenshot` and `get_template_screenshot` return rendered PNG images as EmbeddedResources with an `image/*` `mimeType`.
+
+#### Saved-module query validation
+
+`validate_query` requires `projectName` and exactly one of `queryText` or `modulePath`.
+Use `modulePath="CommonModules/MyModule/Module.bsl"` to scan saved BSL, with optional
+case-insensitive `method="BuildQuery"` to restrict the scan. It extracts standalone
+SELECT/ВЫБРАТЬ literals, decodes continuations and escaped quotes, and returns per-literal
+verdicts in `queries` with diagnostics mapped to module lines. `skipped` reports dynamic
+concatenations and keyword-leading strings without query structure; an empty scan suggests
+`queryText`. Runtime substitutions are not reconstructed. `dcsMode` applies in either mode.
+
+#### DCS lifecycle and values
+
+Changing an empty template to `templateType=DataCompositionSchema` exports `Template.dcs`
+in that call; an empty schema supports `dcs get format="xml"`. Query data sets with
+`autoFillFields=true` fill fields and missing parameters synchronously before export.
+Explicit fields default auto-fill to false; otherwise it defaults to true.
+LocalString output values accept strings, `{kind:"string",value:...}`, and language maps;
+field and conditional `appearance` accept bare values or `{kind,value}`. Discover
+`role.periodType` and restriction dictionaries through `dcs action="options", type="field"`.
+Writes wait for export off the UI thread; `Export scheduled` is submission and
+`Export drained: true` confirms queue completion. A post-commit export failure carries
+`mutationCommitted`; check project state, resync and read back before retrying.
 
 #### DCS XML transfers
 
@@ -924,6 +949,23 @@ all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes 
 #### Error contract
 
 Whatever a tool's normal output format above, it reports a **failure** the same way: a JSON payload `{"success": false, "error": "<message>"}` that the server delivers as a structured tool error (`isError: true`) regardless of the declared response type. The `error` field is always present (a `null` exception message is coalesced to `Unknown error`) and the message carries no redundant `Error:` prefix. A client detects failure via `isError` / `success: false` and reads `error` for the reason — no markdown parsing required. Success and purely *informational* results (for example "No references found", or a not-found accompanied by a list of valid alternatives) stay in the tool's natural format.
+
+`tools/call` with absent, null or blank `params.name` returns JSON-RPC `-32602` with a
+`tools/list` hint; a nonblank unknown name returns `-32601`.
+
+Create/modify/delete echoes, previews, batch rows, follow-up hints and write-guard
+refusals use canonical English structural FQN tokens, preserving programmatic Names.
+Form-structure headings likewise use `Catalog.X.Form.Y`. Delete scope hashes include
+the canonical address, so equivalent Russian/English spellings share a token.
+
+`export_configuration_to_xml` reports success only when `Configuration.xml` is created
+or proven rewritten by this call (newer mtime or changed size/SHA-256). A stale root
+alone does not prove export; an unproven rewrite suggests a fresh output directory.
+
+`get_mcp_history` classifies status and error statistics from the full delivered response
+before capping stored bodies at 20000 characters. A capped body may be invalid JSON;
+use the recorded status. Background completion preserves that status and updates the
+same interrupted-call row without changing its delivered response or statistics.
 
 #### Tool annotations
 
