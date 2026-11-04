@@ -29,6 +29,9 @@ def response(text, *, error=False, structured=None):
 
 class BuildingRefusalChannelTest(unittest.TestCase):
     def setUp(self):
+        patch = mock.patch.object(HARNESS, "_OUTPUT_SCHEMAS", {"list_projects": None})
+        patch.start()
+        self.addCleanup(patch.stop)
         HARNESS._BUILDING_REFUSALS_SEEN.clear()
 
     def assert_no_retry(self, raw):

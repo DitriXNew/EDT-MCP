@@ -15,6 +15,7 @@ class RouteMapMutationContractTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("route_map_mutation_harness", HARNESS_PATH)
         self.harness = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.harness)
+        self.harness._OUTPUT_SCHEMAS = {TOOL: None, "dcs": None}  # Advertised without schemas.
         for name, value in (("_BASELINE_INVENTORY", []), ("wait_for_project_ready", mock.Mock(return_value=True)),
                             ("all_fixtures_status", mock.Mock(return_value="")),
                             ("_baseline_mismatch", mock.Mock(return_value=None))):

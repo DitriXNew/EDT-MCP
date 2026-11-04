@@ -385,6 +385,22 @@ public class JsonSchemaBuilder
     }
 
     /**
+     * Adds a property described by a composed or otherwise custom JSON Schema.
+     *
+     * @param name property name
+     * @param description property description
+     * @param propertySchema the property's schema, copied before adding the description
+     * @return this builder
+     */
+    public JsonSchemaBuilder property(String name, String description, Map<String, Object> propertySchema)
+    {
+        Map<String, Object> prop = new LinkedHashMap<>(propertySchema);
+        prop.put(KEY_DESCRIPTION, description);
+        properties.put(name, prop);
+        return this;
+    }
+
+    /**
      * Builds the schema as a JSON string.
      *
      * @return JSON schema string

@@ -566,6 +566,123 @@ def _is_transient_building(result):
     return bool(_BUILDING_REFUSAL_RE.search(result.error_text()))
 
 
+_OUTPUT_SCHEMAS = None
+
+
+def _output_schemas(refresh=False):
+    """Cache each advertised tool's contract, including explicit schema-free entries."""
+    global _OUTPUT_SCHEMAS
+    if refresh:
+        _OUTPUT_SCHEMAS = None
+    if _OUTPUT_SCHEMAS is None:
+        schemas, params, cursors = {}, {}, set()
+        while True:
+            raw = _post("tools/list", params)
+            page = raw.get("result", {})
+            if "error" in raw or not isinstance(page.get("tools"), list):
+                raise AssertionError("tools/list: cannot load outputSchema contracts: %r" % raw)
+            for tool in page["tools"]:
+                schemas[tool["name"]] = tool.get("outputSchema")
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
+            if cursor in cursors:
+                raise AssertionError("tools/list: repeated nextCursor %r" % cursor)
+            cursors.add(cursor)
+            params = {"cursor": cursor}
+        _OUTPUT_SCHEMAS = schemas
+    return _OUTPUT_SCHEMAS
+
+
+def validate_output_schema(value, schema, tool, path="$"):
+    """Validate the server's JSON Schema subset using only the standard library.
+
+    Annotation keywords do not constrain instances. Unknown validation keywords fail
+    closed so a new server schema feature cannot silently weaken this check.
+    """
+    def fail(rule, detail):
+        raise AssertionError("%s structuredContent %s: %s: %s" % (tool, path, rule, detail))
+
+    if isinstance(schema, bool):
+        if not schema:
+            fail("false schema", "no value is allowed")
+        return
+    supported = {"type", "properties", "items", "required", "enum", "additionalProperties",
+                 "oneOf", "anyOf", "description", "title", "$schema", "$id", "$comment",
+                 "default", "examples"}
+    for keyword in schema:
+        if keyword not in supported:
+            fail("unsupported schema keyword", keyword)
+    types = schema.get("type")
+    if types is not None:
+        types = types if isinstance(types, list) else [types]
+        matches = {"object": isinstance(value, dict), "array": isinstance(value, list),
+                   "string": isinstance(value, str), "boolean": isinstance(value, bool),
+                   "null": value is None,
+                   "integer": type(value) in (int, float) and value % 1 == 0,
+                   "number": type(value) in (int, float)}
+        if any(t not in matches for t in types):
+            fail("type", "unsupported type %r" % types)
+        if not any(matches[t] for t in types):
+            fail("type", "expected %r, got %s" % (types, type(value).__name__))
+    if "enum" in schema:
+        # Python equates True with 1, unlike JSON Schema. Compare JSON values recursively.
+        def equal(a, b):
+            if isinstance(a, bool) or isinstance(b, bool):
+                return type(a) is type(b) and a == b
+            if isinstance(a, list) and isinstance(b, list):
+                return len(a) == len(b) and all(equal(x, y) for x, y in zip(a, b))
+            if isinstance(a, dict) and isinstance(b, dict):
+                return a.keys() == b.keys() and all(equal(a[k], b[k]) for k in a)
+            return a == b
+        if not any(equal(value, candidate) for candidate in schema["enum"]):
+            fail("enum", "%r is not one of %r" % (value, schema["enum"]))
+    for keyword in ("oneOf", "anyOf"):
+        if keyword in schema:
+            count, errors = 0, []
+            for alternative in schema[keyword]:
+                try:
+                    validate_output_schema(value, alternative, tool, path)
+                    count += 1
+                except AssertionError as error:
+                    errors.append(str(error))
+            if (keyword == "oneOf" and count != 1) or (keyword == "anyOf" and count == 0):
+                fail(keyword, "%d matching alternatives; %s" % (count, "; ".join(errors)))
+    if isinstance(value, dict):
+        for name in schema.get("required", []):
+            if name not in value:
+                fail("required", "missing property %r" % name)
+        properties = schema.get("properties", {})
+        for name, member in value.items():
+            member_path = path + "[" + json.dumps(name, ensure_ascii=True) + "]"
+            if name in properties:
+                validate_output_schema(member, properties[name], tool, member_path)
+            elif "additionalProperties" in schema:
+                if schema["additionalProperties"] is False:
+                    raise AssertionError("%s structuredContent %s: additionalProperties: unexpected property"
+                                         % (tool, member_path))
+                validate_output_schema(member, schema["additionalProperties"], tool, member_path)
+    if isinstance(value, list) and "items" in schema:
+        for index, member in enumerate(value):
+            validate_output_schema(member, schema["items"], tool, "%s[%d]" % (path, index))
+
+
+def _validate_tool_output(tool, result):
+    if result.is_error or result.rpc_error or "structuredContent" not in result.result:
+        return
+    if isinstance(result.structured, dict) and result.structured.get("success") is False:
+        return
+    schemas = _output_schemas()
+    if tool not in schemas:
+        schemas = _output_schemas(refresh=True)
+    if tool not in schemas:
+        raise AssertionError("%s structuredContent $: outputSchema discovery: tool is not advertised "
+                             "by tools/list; enable its toolset before calling it" % tool)
+    schema = schemas[tool]
+    if schema is not None:
+        validate_output_schema(result.structured, schema, tool)
+
+
 def call(tool, arguments):
     """Send tools/call and return a Result.
 
@@ -575,6 +692,7 @@ def call(tool, arguments):
     until it clears stabilizes the slower matrix legs without masking a real success/error
     (which returns unchanged on the next attempt). Bounded by BUILDING_RETRY_TIMEOUT; on
     expiry the building refusal is returned so the test fails loudly rather than hanging."""
+    global _OUTPUT_SCHEMAS
     deadline = time.time() + BUILDING_RETRY_TIMEOUT
     attempt = 0
     # Record the attempt BEFORE issuing it, once for the whole retry loop. If the request dies
@@ -585,6 +703,8 @@ def call(tool, arguments):
     # Prove the body can be built before counting the attempt. If this raises, nothing left this
     # process, so no outcome exists for anyone to read back.
     json.dumps({"name": tool, "arguments": arguments})
+    if tool == "enable_toolset":
+        _OUTPUT_SCHEMAS = None
     _record_attempt(tool, arguments)
     while True:
         try:
@@ -608,6 +728,7 @@ def call(tool, arguments):
             _BUILDING_REFUSALS_SEEN.append(result.error_text())
         if not building or time.time() >= deadline:
             _record_outcome(tool, arguments, result.is_error, result.structured)
+            _validate_tool_output(tool, result)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
@@ -1312,7 +1433,10 @@ def initialize(capabilities=None):
     """MCP lifecycle handshake: initialize -> capture session id -> notifications/initialized.
 
     Per the 2025-06-18 / 2025-11-25 spec the client MUST send initialize first and
-    then the initialized notification before normal operations. Done once at startup."""
+    then the initialized notification before normal operations. Reset cached contracts
+    for the new session's capabilities and visible tools."""
+    global _OUTPUT_SCHEMAS
+    _OUTPUT_SCHEMAS = None
     result = _post("initialize", {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": capabilities or {},

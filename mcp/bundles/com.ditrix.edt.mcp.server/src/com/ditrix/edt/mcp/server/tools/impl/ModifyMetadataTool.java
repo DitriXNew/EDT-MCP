@@ -446,9 +446,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(McpKeys.ACTION, "'modified' on success; 'unchanged' when a 'commands' change " //$NON-NLS-1$
                 + "requested only what the section already had") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized FQN of the modified node") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
+            .property(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
-                + "the applied counts)") //$NON-NLS-1$
+                + "the applied counts)", //$NON-NLS-1$
+                Map.of("oneOf", List.of( //$NON-NLS-1$
+                    Map.of("type", "array", "items", Map.of("type", "string")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                    JsonSchemaBuilder.object()
+                        .integerProperty(KEY_RIGHTS, "Applied right values", true) //$NON-NLS-1$
+                        .integerProperty(KEY_TEMPLATES, "Applied template operations", true) //$NON-NLS-1$
+                        .integerProperty(KEY_ROLE_PROPERTIES, "Applied role properties", true) //$NON-NLS-1$
+                        .buildMap())))
             .stringProperty(KEY_LANGUAGE, "Language code a localized property was written under; " //$NON-NLS-1$
                 + "present only when this call wrote localized properties under exactly ONE code") //$NON-NLS-1$
             .stringArrayProperty(KEY_LOCALES_MISSING,
@@ -3760,17 +3767,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean exported = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         boolean persisted = exported && rightsFqn != null;
 
+        return roleRightsSuccess(normFqn, result.rights, result.templates, result.roleProperties, persisted);
+    }
+
+    /** Builds the Role branch's success envelope after applying and exporting its rights. */
+    static String roleRightsSuccess(String normFqn, int rights, int templates, int roleProperties,
+        boolean persisted)
+    {
         JsonObject applied = new JsonObject();
-        applied.addProperty(KEY_RIGHTS, result.rights);
-        applied.addProperty(KEY_TEMPLATES, result.templates);
-        applied.addProperty(KEY_ROLE_PROPERTIES, result.roleProperties);
+        applied.addProperty(KEY_RIGHTS, rights);
+        applied.addProperty(KEY_TEMPLATES, templates);
+        applied.addProperty(KEY_ROLE_PROPERTIES, roleProperties);
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified role " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " (rights: " + result.rights //$NON-NLS-1$ //$NON-NLS-2$
-                + ", templates: " + result.templates + ", roleProperties: " + result.roleProperties //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.MESSAGE, "Modified role " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " (rights: " + rights //$NON-NLS-1$ //$NON-NLS-2$
+                + ", templates: " + templates + ", roleProperties: " + roleProperties //$NON-NLS-1$ //$NON-NLS-2$
                 + ")") //$NON-NLS-1$
             .toJson();
     }
