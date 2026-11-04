@@ -8,14 +8,15 @@ state — NEVER the project tree — so every path asserts assert_no_diff.
 The live e2e server runs with progressive disclosure OFF by default, so revealing a
 toolset has no effect on tools/list here (all tools are already listed); these tests
 verify the tool's CONTRACT (required-arg + invalid-value errors, the enable/disable
-round-trip, core-is-ignored). The actual on/off filtering of tools/list is exercised
-in the live redeploy loop with EDT_MCP_PROGRESSIVE_DISCLOSURE=true.
+round-trip, core-is-ignored), including harness catalogue refresh. With progressive
+disclosure ON, the round-trip also checks that the hidden tags tools disappear.
 
 Each test restores the toolset state it changed (disable what it enabled) so the
 suite leaves the server's disclosure state as it found it.
 """
 
 from harness import (
+    _output_schemas,
     call,
     assert_ok,
     assert_error,
@@ -65,6 +66,7 @@ def test_enable_then_disable_roundtrip_does_not_mutate_disk():
     """Enabling a valid toolset succeeds (action=enabled, id in applied) and changes
     no files; disabling it again succeeds (action=disabled) — which also restores the
     server state so the suite leaves disclosure as it found it."""
+    before = _output_schemas()
     r = call("enable_toolset", {"toolsets": ROUNDTRIP_TOOLSET})
     assert_ok(r, "enable a valid toolset")
     sc = r.structured or {}
@@ -74,6 +76,9 @@ def test_enable_then_disable_roundtrip_does_not_mutate_disk():
         raise AssertionError("applied must list the enabled toolset: %r" % sc)
     if "visibleToolsets" not in sc:
         raise AssertionError("envelope must report visibleToolsets: %r" % sc)
+    enabled = _output_schemas()
+    assert enabled is not before, "enabling must refresh the harness catalogue"
+    assert "get_tags" in enabled, "the revealed tool must be advertised even without an outputSchema"
     assert_no_diff("enabling a toolset must not touch the project on disk")
 
     # Disable again: verifies the disable path AND restores the prior state.
@@ -81,6 +86,9 @@ def test_enable_then_disable_roundtrip_does_not_mutate_disk():
     assert_ok(r2, "disable the toolset again")
     if (r2.structured or {}).get("action") != "disabled":
         raise AssertionError("action must be 'disabled': %r" % r2.structured)
+    disabled = _output_schemas()
+    assert disabled is not enabled, "disabling must refresh the harness catalogue"
+    assert ("get_tags" in disabled) == (not sc["progressiveDisclosure"]), disabled
     assert_no_diff("disabling a toolset must not touch the project on disk")
 
 

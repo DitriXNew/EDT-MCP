@@ -48,7 +48,7 @@ Use `JsonUtils.parseIntegralInt` for exact integer validation and render whole t
 
 ### Response format policy (Markdown vs JSON)
 
-`structuredContent`/JSON is for the client to consume (UI rendering, verbatim round-trip of identifiers, a future `outputSchema`), NOT for the agent to read. **MARKDOWN is the default** (token-efficient, readable).
+`structuredContent`/JSON is for the client to consume (UI rendering, verbatim round-trip of identifiers, a declared `outputSchema`), NOT for the agent to read. **MARKDOWN is the default** (token-efficient, readable).
 
 A tool returns JSON only when its result carries:
 
@@ -82,6 +82,7 @@ Through `ToolResult`/`JsonUtils` and the shared markdown-table builder, not a ha
 - For mode-dependent JSON results, keep branch-specific output keys optional unless present in every branch. `validate_query` text mode has a top-level verdict; module mode has per-literal verdicts in `queries` plus `skipped` and counts. Extraction counts do not prove runtime-query coverage.
 - `BuiltInToolRegistrar` is the source of truth for the tool set; the README catalog + the e2e golden (`tests/e2e/tools_list.golden.json`) must match it. A new tool changes the golden → regenerate (`EDT_MCP_UPDATE_GOLDEN=1`).
 - Every tool: a non-empty meaningful description and a description for every parameter.
+- Match `outputSchema` to every successful `structuredContent` branch. Preserve response shapes in use; prefer precise `oneOf` for disjoint field shapes, with each branch's item types and required members. Build regression responses through production code.
 
 ## Class placement
 

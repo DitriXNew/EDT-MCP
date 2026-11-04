@@ -44,6 +44,9 @@ def _load_ratchet():
 class BuildingRefusalRecordTest(unittest.TestCase):
 
     def setUp(self):
+        patch = mock.patch.object(HARNESS, "_OUTPUT_SCHEMAS", {})
+        patch.start()
+        self.addCleanup(patch.stop)
         del HARNESS._BUILDING_REFUSALS_SEEN[:]
 
     def test_a_retried_refusal_is_recorded_and_the_final_answer_is_returned(self):

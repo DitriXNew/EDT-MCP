@@ -884,6 +884,8 @@ Each tool declares a response type (`IMcpTool.getResponseType()`), with some sel
 
 `structuredContent`/JSON exists for clients to consume, not for the agent to read: it is justified only by verbatim round-trip of identifiers, machine-structured positions, a declared `outputSchema`, or UI-rendered data. **Markdown is the default** because it is more token-efficient and directly readable.
 
+The e2e harness validates successful `structuredContent` against cached `tools/list` output schemas. Schemas preserve branch-specific shapes: `modify_metadata.applied` is a string array for property writes and an object of integer counts `{rights, templates, roleProperties}` for Role payloads.
+
 A tool returns **JSON** only when its result carries at least one of:
 
 - **(a) round-trip IDs** another tool consumes (e.g. a created object's FQN, a launch/application ID, a breakpoint ID);

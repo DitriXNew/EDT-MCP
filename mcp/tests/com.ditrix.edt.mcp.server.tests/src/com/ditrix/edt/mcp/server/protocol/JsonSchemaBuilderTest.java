@@ -198,4 +198,19 @@ public class JsonSchemaBuilderTest
         assertTrue(schema.contains("\"items\":{\"type\":\"object\"}"));
         assertTrue(schema.contains("\"required\":[\"configurations\"]"));
     }
+    @Test
+    public void testComposedPropertyCopiesSchemaAndPreservesAlternatives()
+    {
+        var alternatives = java.util.List.of(java.util.Map.of("type", "string"),
+            java.util.Map.of("type", "object"));
+        var property = new java.util.LinkedHashMap<String, Object>();
+        property.put("oneOf", alternatives);
+        var schema = JsonSchemaBuilder.object().property("value", "Either form", property).buildMap();
+        assertFalse(property.containsKey("description"));
+        var properties = (java.util.Map<?, ?>)schema.get("properties");
+        var value = (java.util.Map<?, ?>)properties.get("value");
+        assertEquals(alternatives, value.get("oneOf"));
+        assertEquals("Either form", value.get("description"));
+    }
+
 }
