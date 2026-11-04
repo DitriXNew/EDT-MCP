@@ -16,8 +16,11 @@ inspect subsequent dialogs; a successful press does not mean the launch/update h
 
 ## Scope and effects
 
-The initial allowlist reuses EDT-MCP's existing English/Russian recognition for
-**Application update** and **Infobase configuration changes**. Other dialogs carry
+The allowlist reuses EDT-MCP's existing English/Russian recognition for
+**Application update** and **Infobase configuration changes**. It also recognizes the
+exclusive-lock question: **Action selection** (or its Russian title) with exactly the
+Cancel, Retry and Dynamic update buttons in English, Russian or Ukrainian.
+Other dialogs, including **Restructure data** and other **Action selection** questions, carry
 `answerable:false` and `reason:"ask the user to answer it in EDT"`. Destructive-consent
 and user-signal dialogs are always human-only, even if their titles match the allowlist.
 
@@ -28,8 +31,15 @@ Press only the choice the user requested. The tool never arms automatic confirma
 Pressing cannot be undone by this tool; recover changed sources through your normal version
 control workflow. Cancel or Run without update avoids applying that update.
 
+For the lock question, **Cancel** aborts the update; **Retry** retries the exclusive lock
+after sessions are gone; **Dynamic update** applies without interrupting users, so new
+sessions get the change. Use `infobase_sessions` for standalone-server infobases.
+File-infobase sessions cannot be listed there: ask the user to close clients or stop
+your own launch.
+
 Tool responses include a short dialog notice only while an observed modal shell is open;
-`get_server_status` is unchanged. `launch(updateBeforeLaunch=false)` watches up to 750 ms
+`edt_dialog` itself and `get_server_status` omit this notice.
+`launch(updateBeforeLaunch=false)` watches up to 750 ms
 after dispatch when its application is not known to be UPDATED and returns `edtDialogs`
 if a modal appears. UPDATED launches skip that window. Later dialogs are visible through
 the notice or another list call. The notice reads cached UI events without waiting for SWT.

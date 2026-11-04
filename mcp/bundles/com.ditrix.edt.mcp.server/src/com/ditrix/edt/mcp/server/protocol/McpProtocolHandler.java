@@ -217,15 +217,14 @@ public class McpProtocolHandler
         String response = null;
         try
         {
-            if (request != null && McpConstants.METHOD_TOOLS_CALL.equals(request.getMethod())
-                && !"get_server_status".equals(request.getToolName()))
+            boolean reportDialogs = shouldReportDialogNotice(request);
+            if (reportDialogs)
             {
                 EdtDialogs.getInstance().ensureInstalled();
             }
             response = dispatch(request,
                 sessionCapabilities != null ? sessionCapabilities : clientCapabilities.get());
-            if (request != null && McpConstants.METHOD_TOOLS_CALL.equals(request.getMethod())
-                && !"get_server_status".equals(request.getToolName()))
+            if (reportDialogs)
             {
                 response = appendDialogNotice(response, dialogNotice());
             }
@@ -1502,28 +1501,48 @@ public class McpProtocolHandler
         return EdtDialogs.getInstance().notice();
     }
 
+    private static boolean shouldReportDialogNotice(JsonRpcRequest request)
+    {
+        return request != null && McpConstants.METHOD_TOOLS_CALL.equals(request.getMethod())
+            && !"get_server_status".equals(request.getToolName())
+            && !"edt_dialog".equals(request.getToolName());
+    }
+
     static String appendDialogNotice(String response, String notice)
     {
         if (notice == null || response == null)
         {
             return response;
         }
-        JsonObject envelope = JsonParser.parseString(response).getAsJsonObject();
-        JsonObject text = new JsonObject();
-        text.addProperty("type", "text");
-        text.addProperty("text", notice);
-        if (envelope.has("result"))
+        try
         {
-            envelope.getAsJsonObject("result").getAsJsonArray("content").add(text);
+            JsonObject envelope = JsonParser.parseString(response).getAsJsonObject();
+            JsonObject text = new JsonObject();
+            text.addProperty("type", "text");
+            text.addProperty("text", notice);
+            if (envelope.has("result"))
+            {
+                envelope.getAsJsonObject("result").getAsJsonArray("content").add(text);
+            }
+            else if (envelope.has("error"))
+            {
+                JsonObject error = envelope.getAsJsonObject("error");
+                String message = error.has("message") && !error.get("message").isJsonNull()
+                    ? error.get("message").getAsString() : "Tool call failed";
+                error.addProperty("message", message + "\n" + notice);
+            }
+            else
+            {
+                throw new IllegalArgumentException("Missing tool response result or error");
+            }
+            return GsonProvider.toJson(envelope);
         }
-        else if (envelope.has("error"))
+        catch (RuntimeException e)
         {
-            JsonObject error = envelope.getAsJsonObject("error");
-            String message = error.has("message") && !error.get("message").isJsonNull()
-                ? error.get("message").getAsString() : "Tool call failed";
-            error.addProperty("message", message + "\n" + notice);
+            Activator.logWarning("Could not append EDT dialog notice; preserving the original response: "
+                + e.getClass().getSimpleName());
+            return response;
         }
-        return GsonProvider.toJson(envelope);
     }
 
     private boolean isJsonErrorPayload(String result)

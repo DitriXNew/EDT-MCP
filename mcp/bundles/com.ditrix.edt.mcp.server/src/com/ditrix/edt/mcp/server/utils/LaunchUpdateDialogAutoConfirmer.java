@@ -240,6 +240,17 @@ public final class LaunchUpdateDialogAutoConfirmer
     static final Set<String> CONFLICT_TITLES = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList(CONFLICT_TITLE, CONFLICT_TITLE_RU)));
 
+    private static final String ACTION_SELECTION_TITLE_RU =
+        "\u0412\u044B\u0431\u043E\u0440 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044F"; //$NON-NLS-1$
+    private static final Set<Set<String>> EXCLUSIVE_LOCK_BUTTON_SETS = Set.of(
+        Set.of("Cancel", "Retry", "Dynamic update"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Set.of("\u041E\u0442\u043C\u0435\u043D\u0430", //$NON-NLS-1$
+            "\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C", //$NON-NLS-1$
+            "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0434\u0438\u043D\u0430\u043C\u0438\u0447\u0435\u0441\u043A\u0438"), //$NON-NLS-1$
+        Set.of("\u0412\u0456\u0434\u043C\u0456\u043D\u0438\u0442\u0438", //$NON-NLS-1$
+            "\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0438", //$NON-NLS-1$
+            "\u041E\u043D\u043E\u0432\u0438\u0442\u0438 \u0434\u0438\u043D\u0430\u043C\u0456\u0447\u043D\u043E")); //$NON-NLS-1$
+
     /**
      * Localized labels of the conflict modal's "Override" button
      * ({@code InfobaseUpdateConflictDialog_Override}, "\u041F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C") — keep the project
@@ -580,6 +591,13 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean isTargetTitle(String shellTitle)
     {
         return shellTitle != null && APPLICATION_UPDATE_TITLES.contains(shellTitle);
+    }
+
+    /** This generic Designer question channel is identifiable only with its complete button set. */
+    static boolean isExclusiveLockQuestion(String shellTitle, Set<String> buttonLabels)
+    {
+        return ("Action selection".equals(shellTitle) || ACTION_SELECTION_TITLE_RU.equals(shellTitle)) //$NON-NLS-1$
+            && buttonLabels != null && EXCLUSIVE_LOCK_BUTTON_SETS.contains(buttonLabels);
     }
 
     /**

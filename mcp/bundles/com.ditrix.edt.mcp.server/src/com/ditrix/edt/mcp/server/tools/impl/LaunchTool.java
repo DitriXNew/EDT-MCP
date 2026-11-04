@@ -2170,7 +2170,7 @@ public class LaunchTool implements IMcpTool
             + "' was abandoned by EDT (the launch delegate cancelled it)"; //$NON-NLS-1$
         if (reason == null || reason.isEmpty())
         {
-            return prefix + "; no reason was logged. Check the EDT error log."; //$NON-NLS-1$
+            return prefix + "; no reason was logged."; //$NON-NLS-1$
         }
         return prefix + ". EDT logged while it ran: " + reason //$NON-NLS-1$
             + ". That error may belong to another operation running at the same time."; //$NON-NLS-1$
@@ -2466,16 +2466,14 @@ public class LaunchTool implements IMcpTool
      * the same flags the asyncExec dispatch used), runs the launch, and ALWAYS
      * releases any acquired arm in {@code finally} — both calls are thread-safe from a Job thread.
      *
-     * <p>Never throws: a Job that dies on an uncaught exception fails silently for
-     * the MCP caller, so EVERY failure — {@link CoreException} or any other
-     * {@link Throwable} — is logged to the EDT error log and returned as an error
-     * {@link IStatus} (visible as the Job's result in the Progress view).
+     * <p>Failures are logged and returned as ERROR; an unreasoned delegate cancellation
+     * is recorded and returned as CANCEL without an error-log entry.
      *
      * @param config the launch configuration to start
      * @param autoConfirmUpdateDialog arm the "Application update" matcher
      * @param monitor the Job's progress monitor, passed through to
      *        {@code config.launch} so the Progress view shows the delegate's steps
-     * @return {@link Status#OK_STATUS} on success, else an error status
+     * @return OK on success, CANCEL on unreasoned delegate cancellation, else an error status
      */
     static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy, IProgressMonitor monitor)
@@ -2599,9 +2597,15 @@ public class LaunchTool implements IMcpTool
             }
             if (StandaloneServerStateRecovery.isAbandonedLaunch(e))
             {
+                long accessDialogsAfter = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
                 String message = appendAccessSettingsDialogFailure(e.getMessage(),
-                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                    accessDialogsBefore, accessDialogsAfter);
                 recordAsyncFailure(config, message);
+                if (abortReason.reason() == null && accessDialogsAfter == accessDialogsBefore)
+                {
+                    Activator.logInfo("launch cancelled asynchronously: " + message); //$NON-NLS-1$
+                    return new Status(IStatus.CANCEL, Activator.PLUGIN_ID, message);
+                }
                 Activator.logError(ERR_ASYNC_PREFIX + message, e);
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message, e);
             }

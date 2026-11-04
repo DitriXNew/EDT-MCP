@@ -9,6 +9,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -160,11 +161,12 @@ public class EdtDialogs
         return !shell.isDisposed() && shell.isVisible() && (shell.getStyle() & SWT.APPLICATION_MODAL) != 0;
     }
 
-    private static boolean answerable(Shell shell)
+    private static boolean answerable(Shell shell, Set<String> buttonLabels)
     {
         return shell.getData(HUMAN_KEY) == null
             && (LaunchUpdateDialogAutoConfirmer.isTargetTitle(shell.getText())
-                || LaunchUpdateDialogAutoConfirmer.isConflictTitle(shell.getText()));
+                || LaunchUpdateDialogAutoConfirmer.isConflictTitle(shell.getText())
+                || LaunchUpdateDialogAutoConfirmer.isExclusiveLockQuestion(shell.getText(), buttonLabels));
     }
 
     private void capture(Shell shell)
@@ -186,7 +188,7 @@ public class EdtDialogs
         JsonArray labels = new JsonArray();
         buttons.keySet().forEach(labels::add);
         data.add("buttons", labels);
-        boolean allowed = answerable(shell);
+        boolean allowed = answerable(shell, buttons.keySet());
         data.addProperty("answerable", allowed);
         if (!allowed)
         {
@@ -310,12 +312,12 @@ public class EdtDialogs
             return ToolResult.error("Dialog '" + dialogId
                 + "' has changed or been replaced. Call edt_dialog with action=list again.").toJson();
         }
-        if (!answerable(shell))
+        Map<String, List<Button>> buttons = new LinkedHashMap<>();
+        readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
+        if (!answerable(shell, buttons.keySet()))
         {
             return ToolResult.error("Dialog '" + dialogId + "': " + HUMAN_REASON + ".").toJson();
         }
-        Map<String, List<Button>> buttons = new LinkedHashMap<>();
-        readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
         List<Button> matches = buttons.get(label);
         if (matches == null || matches.size() != 1 || !matches.get(0).isEnabled()
             || !matches.get(0).isVisible())

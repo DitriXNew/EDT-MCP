@@ -215,8 +215,8 @@ public class LaunchAbortReasonTest
                 "Error synchronizing application Sales")); //$NON-NLS-1$
 
             assertEquals("Launch of 'Accounting launch' was abandoned by EDT " //$NON-NLS-1$
-                + "(the launch delegate cancelled it); no reason was logged. " //$NON-NLS-1$
-                + "Check the EDT error log.", abandonedMessage("Accounting launch", mine.reason())); //$NON-NLS-1$ //$NON-NLS-2$
+                + "(the launch delegate cancelled it); no reason was logged.", //$NON-NLS-1$
+                abandonedMessage("Accounting launch", mine.reason())); //$NON-NLS-1$
         }
     }
 

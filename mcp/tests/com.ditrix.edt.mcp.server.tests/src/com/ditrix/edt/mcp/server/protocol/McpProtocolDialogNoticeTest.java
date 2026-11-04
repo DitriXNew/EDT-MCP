@@ -4,11 +4,17 @@ package com.ditrix.edt.mcp.server.protocol;
 import static org.junit.Assert.*;
 
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
 import org.junit.After;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -90,6 +96,64 @@ public class McpProtocolDialogNoticeTest
     {
         assertEquals(call("get_server_status", "{\"success\":true}", null, false),
             call("get_server_status", "{\"success\":true}", NOTICE, false));
+    }
+
+    @Test
+    public void dialogListHasExactlyItsOwnContentWithNoticeSet()
+    {
+        assertEquals("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\","
+            + "\"text\":\"OK - dialogs: 1 - keys: success, dialogs\"}],\"structuredContent\":{\"success\":true,"
+            + "\"dialogs\":[{\"title\":\"Application update\"}]}}}",
+            call("edt_dialog", "{\"success\":true,\"dialogs\":[{\"title\":\"Application update\"}]}", NOTICE, false));
+    }
+
+    private static void unchangedWithOneWarning(String response)
+    {
+        List<IStatus> logs = new ArrayList<>();
+        ILogListener listener = (status, plugin) -> {
+            if (Activator.PLUGIN_ID.equals(status.getPlugin())) { logs.add(status); }
+        };
+        Platform.addLogListener(listener);
+        try
+        {
+            assertSame(response, McpProtocolHandler.appendDialogNotice(response, NOTICE));
+            assertEquals(logs.toString(), 1, logs.size());
+            assertEquals(IStatus.WARNING, logs.get(0).getSeverity());
+        }
+        finally
+        {
+            Platform.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void malformedEnvelopeIsUnchanged()
+    {
+        unchangedWithOneWarning(" {\"result\":{\"content\":{}}} ");
+    }
+
+    @Test
+    public void missingResultAndErrorIsUnchanged()
+    {
+        unchangedWithOneWarning(" {\"jsonrpc\":\"2.0\",\"id\":1} ");
+    }
+
+    @Test
+    public void missingContentIsUnchanged()
+    {
+        unchangedWithOneWarning(" {\"result\":{\"structuredContent\":{\"success\":true}}} ");
+    }
+
+    @Test
+    public void nonObjectResponseIsUnchanged()
+    {
+        unchangedWithOneWarning(" [1,2] ");
+    }
+
+    @Test
+    public void invalidJsonIsUnchanged()
+    {
+        unchangedWithOneWarning(" {broken ");
     }
 
     @Test

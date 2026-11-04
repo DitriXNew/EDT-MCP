@@ -224,6 +224,107 @@ public class EdtDialogToolTest
         assertNull(dialogs.notice());
     }
 
+    private Button[] question(String title, String... labels)
+    {
+        when(shell.getText()).thenReturn(title);
+        Button[] buttons = new Button[labels.length];
+        for (int i = 0; i < labels.length; i++)
+        {
+            buttons[i] = mock(Button.class);
+            when(buttons[i].getStyle()).thenReturn(SWT.PUSH);
+            when(buttons[i].getText()).thenReturn(labels[i]);
+            when(buttons[i].isEnabled()).thenReturn(true);
+            when(buttons[i].isVisible()).thenReturn(true);
+        }
+        when(shell.getChildren()).thenReturn(buttons);
+        return buttons;
+    }
+
+    private void lockQuestion(String title, String... labels)
+    {
+        Button[] buttons = question(title, labels);
+        for (int i = 0; i < labels.length; i++)
+        {
+            JsonObject dialog = list();
+            assertEquals(title, dialog.get("title").getAsString());
+            assertEquals(3, dialog.getAsJsonArray("buttons").size());
+            assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+            assertTrue(press(dialog, labels[i]).contains("\"success\":true"));
+            verify(buttons[i]).notifyListeners(eq(SWT.Selection), any(Event.class));
+        }
+    }
+
+    @Test
+    public void englishLockQuestionListsAndPressesEveryButton()
+    {
+        lockQuestion("Action selection", "Retry", "Dynamic update", "Cancel");
+    }
+
+    @Test
+    public void russianLockQuestionListsAndPressesEveryButton()
+    {
+        lockQuestion("Выбор действия", "Отмена", "Повторить", "Обновить динамически");
+    }
+
+    @Test
+    public void ukrainianLockQuestionListsAndPressesEveryButton()
+    {
+        lockQuestion("Action selection", "Відмінити", "Повторити", "Оновити динамічно");
+    }
+
+    private void assertQuestionRefuses(Button[] buttons)
+    {
+        JsonObject dialog = list();
+        assertFalse(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        assertEquals("ask the user to answer it in EDT", dialog.get("reason").getAsString());
+        assertTrue(press(dialog, buttons[0].getText()).contains("ask the user"));
+        for (Button candidate : buttons)
+        {
+            verify(candidate, never()).notifyListeners(anyInt(), any());
+        }
+    }
+
+    @Test
+    public void actionSelectionMissingButtonRefuses()
+    {
+        assertQuestionRefuses(question("Action selection", "Cancel", "Retry"));
+    }
+
+    @Test
+    public void actionSelectionExtraButtonRefuses()
+    {
+        assertQuestionRefuses(question("Action selection", "Cancel", "Retry", "Dynamic update", "Restructure data"));
+    }
+
+    @Test
+    public void actionSelectionWrongCaseRefuses()
+    {
+        assertQuestionRefuses(question("Action selection", "Cancel", "Retry", "dynamic update"));
+    }
+
+    @Test
+    public void actionSelectionRestructureRefuses()
+    {
+        assertQuestionRefuses(question("Action selection", "Cancel", "Retry", "Restructure data"));
+    }
+
+    @Test
+    public void lockButtonsWithOtherTitleRefuse()
+    {
+        assertQuestionRefuses(question("Action Selection", "Cancel", "Retry", "Dynamic update"));
+    }
+
+    @Test
+    public void consentIdentityWinsOverLockQuestion() throws Exception
+    {
+        Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
+        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null);
+        Method configure = DestructiveConsentDialog.class.getDeclaredMethod("configureShell", Shell.class);
+        configure.setAccessible(true);
+        configure.invoke(consent, shell);
+        assertQuestionRefuses(buttons);
+    }
+
     @Test
     public void displayEventsMaintainNoticeWithoutUiReadOnCompletion()
     {
