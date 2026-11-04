@@ -71,11 +71,8 @@ public class McpServerStartup implements IStartup
 
         com.ditrix.edt.mcp.server.transport.StdioPluginSupport.start();
 
-        // Auto-start when the preference is set OR the env override forces it.
-        boolean autoStart = "true".equalsIgnoreCase(getEnvironmentVariable(ENV_AUTO_START)) //$NON-NLS-1$
-            || Activator.getDefault().getPreferenceStore().getBoolean(PreferenceConstants.PREF_AUTO_START);
-
-        if (autoStart && !Boolean.getBoolean("edt.mcp.stdioOnly"))
+        if (shouldStartHttp(historyStore, getEnvironmentVariable(ENV_AUTO_START),
+            Boolean.getBoolean("edt.mcp.stdioOnly"))) //$NON-NLS-1$
         {
             int port = resolvePort();
 
@@ -92,6 +89,14 @@ public class McpServerStartup implements IStartup
 
         // Schedule a background check for a new plugin release (after 60 s delay)
         UpdateChecker.getInstance().scheduleCheck();
+    }
+
+    /** The CI override wins over saved preferences; stdio launches still suppress auto-start. */
+    static boolean shouldStartHttp(IPreferenceStore store, String environmentOverride, boolean stdioOnly)
+    {
+        return !stdioOnly && ("true".equalsIgnoreCase(environmentOverride) //$NON-NLS-1$
+            || (store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED)
+                && store.getBoolean(PreferenceConstants.PREF_AUTO_START)));
     }
 
     /** Reads launch overrides; package visibility allows startup tests without changing process env. */

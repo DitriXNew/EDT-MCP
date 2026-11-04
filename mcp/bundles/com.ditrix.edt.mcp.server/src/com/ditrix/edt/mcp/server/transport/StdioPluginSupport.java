@@ -57,19 +57,60 @@ public final class StdioPluginSupport
         catch (java.net.URISyntaxException e) { throw new IOException(e); }
         Path root = EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("bootstrap"));
         Path directory = EndpointRegistry.privateDirectory(root.resolve(EndpointRegistry.workspaceKey(install)));
+        return extractBootstrap(directory, embedded("edt-mcp-runtime.jar"), embedded("edt-mcp-bootstrap.jar"), Files::delete);
+    }
+
+    @FunctionalInterface
+    interface RuntimeDelete { void delete(Path runtime) throws IOException; }
+
+    static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete) throws IOException
+    {
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
         try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
              var lock = channel.lock())
         {
-            byte[] runtime = embedded("edt-mcp-runtime.jar");
             String hash;
             try { hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(runtime)); }
             catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
-            writeJar(directory.resolve(hash + ".jar"), runtime);
-            writeJar(destination, embedded("edt-mcp-bootstrap.jar"));
-            EndpointRegistry.atomicWrite(directory.resolve("current"), hash + ".jar\n");
+            String current = hash + ".jar", previous = runtimePointer(directory.resolve("current"));
+            // Re-extracting the same build must not discard the preceding generation.
+            if (current.equals(previous)) { previous = runtimePointer(directory.resolve("previous")); }
+            writeJar(directory.resolve(current), runtime);
+            writeJar(destination, entry);
+            EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
+            EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
+            cleanupRuntimes(directory, current, previous, delete);
             return destination;
         }
+    }
+
+    private static String runtimePointer(Path pointer) throws IOException
+    {
+        if (!Files.exists(pointer, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return null; }
+        PrivatePaths.verifyFile(pointer);
+        String name = Files.readString(pointer).trim();
+        return name.matches("[a-f0-9]{64}\\.jar") ? name : null;
+    }
+
+    private static void cleanupRuntimes(Path directory, String current, String previous, RuntimeDelete delete)
+    {
+        try
+        {
+            PrivatePaths.verifyDirectory(directory);
+            try (var files = Files.newDirectoryStream(directory))
+            {
+                for (Path file : files)
+                {
+                    String name = file.getFileName().toString();
+                    if (!name.matches("[a-f0-9]{64}\\.jar") || name.equals(current) || name.equals(previous)) { continue; }
+                    try { PrivatePaths.verifyFile(file); delete.delete(file); }
+                    catch (IOException e)
+                    { Log.debug("Cannot remove obsolete stdio runtime " + name + " (" + e.getClass().getSimpleName() + ")"); }
+                }
+            }
+        }
+        catch (IOException | java.nio.file.DirectoryIteratorException e)
+        { Log.debug("Cannot enumerate obsolete stdio runtimes (" + e.getClass().getSimpleName() + ")"); }
     }
 
     private static byte[] embedded(String name) throws IOException
