@@ -17,6 +17,7 @@ import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.IRegion;
 import org.eclipse.jface.text.ITextHover;
 import org.eclipse.jface.text.ITextHoverExtension2;
+import org.eclipse.jface.text.source.Annotation;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorInput;
@@ -32,6 +33,7 @@ import org.eclipse.xtext.resource.EObjectAtOffsetHelper;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
 import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.ui.editor.XtextEditor;
+import org.eclipse.xtext.ui.editor.hover.AnnotationWithQuickFixesHover.AnnotationInfo;
 import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 import org.eclipse.xtext.util.concurrent.IUnitOfWork;
 
@@ -47,6 +49,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
@@ -137,13 +140,13 @@ public class SymbolInfoService
             }
         });
 
-        String result = resultRef.get();
+        String result = meaningfulOrNull(resultRef.get());
 
         // If editor-based approach failed, try EMF fallback
         if (result == null || result.startsWith("Error: No active workbench") //$NON-NLS-1$
             || result.startsWith("Error: Could not open editor")) //$NON-NLS-1$
         {
-            String emfResult = getSymbolInfoViaEmf(project, filePath, line, column);
+            String emfResult = meaningfulOrNull(getSymbolInfoViaEmf(project, filePath, line, column));
             if (emfResult != null)
             {
                 result = emfResult;
@@ -331,6 +334,10 @@ public class SymbolInfoService
                 Object info2 = ((ITextHoverExtension2) textHover).getHoverInfo2(sourceViewer, hoverRegion);
                 if (info2 != null)
                 {
+                    if (info2 instanceof AnnotationInfo)
+                    {
+                        return getAnnotationHoverInfo(info2, sourceViewer, offset);
+                    }
                     String infoStr = extractHoverContent(info2);
                     if (infoStr != null && !infoStr.isEmpty())
                     {
@@ -349,10 +356,32 @@ public class SymbolInfoService
         }
         catch (Exception e)
         {
-            Activator.logWarning("Could not get hover info: " + e.getMessage()); //$NON-NLS-1$
+            Activator.logWarning("Could not get hover info; using symbol information: " + PlatformFailures.describe(e)); //$NON-NLS-1$
         }
 
         return null;
+    }
+
+    private String getAnnotationHoverInfo(Object info, ISourceViewer viewer, int offset) throws Exception
+    {
+        String message = null;
+        try
+        {
+            message = meaningfulOrNull(extractHoverContent(info));
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("Could not read annotation hover; using symbol information: " + PlatformFailures.describe(e)); //$NON-NLS-1$
+        }
+
+        String symbol = viewer.getDocument() instanceof IXtextDocument document
+            ? resolveEObjectInfoFromDocument(document, offset) : null;
+        if (symbol == null && message == null)
+        {
+            return null;
+        }
+        String annotation = "### Annotation\n\n" + (message != null ? message : "Message unavailable."); //$NON-NLS-1$ //$NON-NLS-2$
+        return symbol != null ? symbol + "\n\n" + annotation : annotation; //$NON-NLS-1$
     }
 
     /**
@@ -397,30 +426,33 @@ public class SymbolInfoService
      * The object may be a String, or an Xtext-specific hover information object
      * that contains HTML content.
      */
-    private String extractHoverContent(Object hoverInfo)
+    private String extractHoverContent(Object hoverInfo) throws Exception
     {
         if (hoverInfo instanceof String)
         {
             return (String) hoverInfo;
         }
 
-        // Try to get HTML content from Xtext hover objects via reflection
-        try
+        if (hoverInfo instanceof AnnotationInfo)
         {
-            // XtextBrowserInformationControlInput has getHtml() method
+            // BslAnnotationInfo inherits AnnotationInfo.annotation; EDT renders annotation.getText().
+            Object annotation = ReflectionUtils.getFieldValue(hoverInfo, "annotation"); //$NON-NLS-1$
+            if (annotation instanceof Annotation marker)
+            {
+                return marker.getText();
+            }
+            throw new IllegalStateException("Annotation hover has no readable annotation field"); //$NON-NLS-1$
+        }
+
+        if (ReflectionUtils.findMethod(hoverInfo.getClass(), "getHtml") != null) //$NON-NLS-1$
+        {
             Object html = ReflectionUtils.invokeMethod(hoverInfo, "getHtml"); //$NON-NLS-1$
             if (html instanceof String)
             {
                 return (String) html;
             }
         }
-        catch (Exception e)
-        {
-            // Try toString as last resort
-        }
-
-        // Try getInputElement and then toString
-        try
+        if (ReflectionUtils.findMethod(hoverInfo.getClass(), "getInputElement") != null) //$NON-NLS-1$
         {
             Object inputElement = ReflectionUtils.invokeMethod(hoverInfo, "getInputElement"); //$NON-NLS-1$
             if (inputElement != null)
@@ -428,33 +460,20 @@ public class SymbolInfoService
                 return meaningfulOrNull(inputElement.toString());
             }
         }
-        catch (Exception e)
-        {
-            // Ignore
-        }
-
-        // Last resort: the object's own toString. Some hovers (e.g. an
-        // annotation/quick-fix hover at a position carrying a validation marker, like
-        // BslAnnotationWithQuickFixesHover$BslAnnotationInfo) have no extractable text
-        // here and would yield a bare "ClassName@hexhash" — which is NOT useful symbol
-        // info and must not leak to the caller. Returning null lets the caller fall
-        // through to the real EObject/type resolution (Level 2) instead.
         return meaningfulOrNull(hoverInfo.toString());
     }
 
     /**
-     * Returns {@code s} unless it is null/blank or a bare {@code Object.toString()}
-     * reference ({@code ClassName@hexhash}), in which case it returns {@code null} so
-     * the caller treats the hover as "no content" and falls through to real symbol
-     * resolution rather than leaking a raw object reference.
+     * Drops blank content and object references, including Markdown-escaped references.
      */
     static String meaningfulOrNull(String s)
     {
-        if (s == null || s.trim().isEmpty() || s.matches("[\\w.$]+@[0-9a-fA-F]+")) //$NON-NLS-1$
+        if (s == null || s.trim().isEmpty())
         {
             return null;
         }
-        return s;
+        String unescaped = s.replace("\\", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        return PlatformFailures.withoutObjectIdentity(unescaped).equals(unescaped) ? s : null;
     }
 
     /**
@@ -988,9 +1007,9 @@ public class SymbolInfoService
      */
     private String cleanHtmlToMarkdown(String html)
     {
-        if (html == null || html.isEmpty())
+        if (meaningfulOrNull(html) == null)
         {
-            return ""; //$NON-NLS-1$
+            return null;
         }
 
         try
@@ -1008,13 +1027,13 @@ public class SymbolInfoService
             // Normalize excessive line breaks
             markdown = markdown.replaceAll("\n{3,}", "\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-            return markdown.trim();
+            return meaningfulOrNull(markdown.trim());
         }
         catch (Exception e)
         {
             Activator.logError("Error converting HTML to Markdown", e); //$NON-NLS-1$
             // Fallback: just strip tags
-            return html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            return meaningfulOrNull(html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         }
     }
 }
