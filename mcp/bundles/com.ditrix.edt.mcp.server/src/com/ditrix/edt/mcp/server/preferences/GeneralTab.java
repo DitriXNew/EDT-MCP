@@ -497,6 +497,15 @@ public class GeneralTab
             }
         });
 
+        Button copyStdio = new Button(infoBar, SWT.PUSH);
+        copyStdio.setText("Copy stdio .mcp.json"); //$NON-NLS-1$
+        copyStdio.setToolTipText("Copy the windowed Windows client configuration for this EDT installation and workspace."); //$NON-NLS-1$
+        copyStdio.addListener(SWT.Selection, event -> {
+            try { copyToClipboard(com.ditrix.edt.mcp.server.transport.StdioPluginSupport.clientConfiguration()); }
+            catch (Exception failure)
+            { MessageDialog.openError(composite.getShell(), "EDT MCP stdio", failure.getMessage()); } //$NON-NLS-1$
+        });
+
         // The line follows every input it is derived from while the page is open: the spinner, the
         // token field (an unsaved edit is called out), and whether a server is running
         // (updateButtons runs on every start/stop/restart).

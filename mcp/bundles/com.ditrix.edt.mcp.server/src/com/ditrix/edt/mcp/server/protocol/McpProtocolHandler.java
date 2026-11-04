@@ -1218,13 +1218,20 @@ public class McpProtocolHandler
      */
     private String buildToolsListResponse(Object requestId, ClientCapabilities capabilities)
     {
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId,
+            toolCatalog(toolRegistry.getVisibleTools(), capabilities)));
+    }
+
+    /** Shared schema rendering for the live dispatcher and the build-time offline catalog. */
+    public static ToolsListResult toolCatalog(java.util.Collection<IMcpTool> tools, ClientCapabilities capabilities)
+    {
         ToolsListResult result = new ToolsListResult();
         // Whether this client's tools/call will actually carry structuredContent. It depends only
         // on what the client declared at initialize, which cannot change under it - see
         // jsonDeliveryFor for why nothing mutable is allowed to reach this decision.
         boolean structured = advertisesOutputSchema(capabilities);
 
-        for (IMcpTool tool : toolRegistry.getVisibleTools())
+        for (IMcpTool tool : tools)
         {
             // Parse inputSchema from JSON string to JsonElement. The SHAPE a call is
             // built from goes over the wire; the prose around it stops here, except the
@@ -1251,7 +1258,7 @@ public class McpProtocolHandler
             result.addTool(tool.getName(), tool.getDescription(), schema, annotations, outputSchema);
         }
         
-        return GsonProvider.toJson(JsonRpcResponse.success(requestId, result));
+        return result;
     }
 
     /**

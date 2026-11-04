@@ -158,6 +158,7 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
+        com.ditrix.edt.mcp.server.transport.StdioPluginSupport.stop();
         if (bridgeRegistration != null)
         {
             bridgeRegistration.unregister();

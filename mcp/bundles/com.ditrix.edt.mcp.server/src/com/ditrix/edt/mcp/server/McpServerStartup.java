@@ -68,11 +68,13 @@ public class McpServerStartup implements IStartup
         // re-evaluate it and plugin shutdown can flush and close it.
         McpCallHistoryFileLog.reconfigure();
 
+        com.ditrix.edt.mcp.server.transport.StdioPluginSupport.start();
+
         // Auto-start when the preference is set OR the env override forces it.
         boolean autoStart = "true".equalsIgnoreCase(getEnvironmentVariable(ENV_AUTO_START)) //$NON-NLS-1$
             || Activator.getDefault().getPreferenceStore().getBoolean(PreferenceConstants.PREF_AUTO_START);
 
-        if (autoStart)
+        if (autoStart && !Boolean.getBoolean("edt.mcp.stdioOnly"))
         {
             int port = resolvePort();
 
