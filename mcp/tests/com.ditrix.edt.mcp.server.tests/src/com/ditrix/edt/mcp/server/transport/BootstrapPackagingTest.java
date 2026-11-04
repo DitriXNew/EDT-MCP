@@ -257,6 +257,120 @@ public class BootstrapPackagingTest extends StdioTestSupport
         assertRefused(files, runEntry(files));
     }
 
+    private final class PausedEntry implements AutoCloseable
+    {
+        final Path control;
+        final Process process;
+
+        PausedEntry(EntryFiles files) throws Exception
+        {
+            control = temporary.newFolder().toPath();
+            Path source = control.resolve("PauseEntry.java");
+            Files.writeString(source, """
+                import com.sun.jdi.*;
+                import com.sun.jdi.event.*;
+                import java.nio.file.*;
+                import java.util.concurrent.TimeUnit;
+                public class PauseEntry {
+                    public static void main(String[] args) throws Exception {
+                        Path control = Path.of(args[2]);
+                        var connector = Bootstrap.virtualMachineManager().defaultConnector();
+                        var options = connector.defaultArguments();
+                        options.get("main").setValue("com.ditrix.edt.mcp.server.ipc.StdioEntry");
+                        options.get("options").setValue("-cp \\\"" + args[0] + "\\\" -Dentry.marker=\\\"" + args[1] + "\\\"");
+                        options.get("home").setValue(System.getProperty("java.home"));
+                        var vm = connector.launch(options); var child = vm.process();
+                        try {
+                            var request = vm.eventRequestManager().createMethodEntryRequest();
+                            request.addClassFilter("java.net.URLClassLoader"); request.enable(); vm.resume();
+                            boolean paused = false;
+                            while (!paused) {
+                                var events = vm.eventQueue().remove(15000);
+                                if (events == null) { throw new AssertionError("Entry did not reach its loader"); }
+                                for (var event : events) {
+                                    if (event instanceof MethodEntryEvent method && method.method().isConstructor()) {
+                                        request.disable(); paused = true;
+                                        Files.writeString(control.resolve("paused"), "verified runtime, unopened loader");
+                                        if (System.in.read() != 'x') { throw new AssertionError("Missing resume signal"); }
+                                    }
+                                }
+                                events.resume();
+                            }
+                            vm.dispose();
+                            if (!child.waitFor(15, TimeUnit.SECONDS)) { throw new AssertionError("Entry did not finish"); }
+                            Files.writeString(control.resolve("exit"), Integer.toString(child.exitValue()));
+                            Files.write(control.resolve("stdout"), child.getInputStream().readAllBytes());
+                            Files.write(control.resolve("stderr"), child.getErrorStream().readAllBytes());
+                        } finally {
+                            if (child.isAlive()) { child.destroyForcibly(); child.waitFor(5, TimeUnit.SECONDS); }
+                        }
+                    }
+                }
+                """);
+            var builder = new ProcessBuilder(jdkBinary("java").toString(), "--add-modules", "jdk.jdi",
+                source.toString(), files.entry().toString(), files.marker().toString(), control.toString())
+                .redirectOutput(control.resolve("probe.stdout").toFile()).redirectError(control.resolve("probe.stderr").toFile());
+            for (String variable : List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"))
+            { builder.environment().remove(variable); }
+            process = builder.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            while (!Files.exists(control.resolve("paused")) && process.isAlive() && System.nanoTime() < deadline)
+            { Thread.sleep(10); }
+            if (!Files.exists(control.resolve("paused")))
+            {
+                close(); fail("Entry did not pause: " + Files.readString(control.resolve("probe.stderr")));
+            }
+        }
+
+        Execution resume() throws Exception
+        {
+            process.getOutputStream().write('x'); process.getOutputStream().close();
+            assertTrue("Debugger helper must finish", process.waitFor(20, TimeUnit.SECONDS));
+            assertEquals(Files.readString(control.resolve("probe.stderr")), 0, process.exitValue());
+            return new Execution(Integer.parseInt(Files.readString(control.resolve("exit"))),
+                Files.readString(control.resolve("stdout")), Files.readString(control.resolve("stderr")));
+        }
+
+        @Override public void close() throws Exception
+        {
+            process.getOutputStream().close();
+            if (!process.waitFor(5, TimeUnit.SECONDS)) { process.destroyForcibly(); process.waitFor(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test public void deletingVerifiedRuntimeBeforeLoaderOpensItMakesTheShippedEntryFail() throws Exception
+    {
+        var files = entryFiles();
+        try (var paused = new PausedEntry(files))
+        {
+            Files.delete(files.runtime());
+            StdioPluginSupportTest.assertListing(files.directory(), "current", "entry.jar");
+            var result = paused.resume(); assertRefused(files, result);
+            assertEquals("EDT MCP entry: com.ditrix.edt.mcp.server.ipc.StdioBootstrap" + System.lineSeparator(), result.stderr());
+        }
+    }
+
+    @Test public void cleanupPreservesVerifiedPredecessorUntilTheShippedEntryLoadsIt() throws Exception
+    {
+        var files = entryFiles(); byte[] stale = "obsolete runtime".getBytes(StandardCharsets.UTF_8);
+        String staleName = StdioPluginSupportTest.runtimeName(stale);
+        PrivatePaths.atomicWrite(files.directory().resolve(staleName), stale);
+        byte[] replacement = "next runtime".getBytes(StandardCharsets.UTF_8);
+        String current = StdioPluginSupportTest.runtimeName(replacement);
+        try (var paused = new PausedEntry(files))
+        {
+            byte[] entry = Files.readAllBytes(files.entry());
+            StdioPluginSupport.extractBootstrap(files.directory(), replacement, entry, Files::delete);
+            StdioPluginSupport.extractBootstrap(files.directory(), replacement, entry, Files::delete);
+            var result = paused.resume();
+            assertEquals(result.stderr(), 0, result.exit());
+            assertEquals("", result.stdout()); assertEquals("", result.stderr());
+            assertEquals("runtime executed", Files.readString(files.marker()));
+            StdioPluginSupportTest.assertListing(files.directory(), "current", "previous", "extract.lock",
+                "entry.jar", "edt-mcp-bootstrap.jar", current, files.runtime().getFileName().toString(), "executed.marker");
+        }
+    }
+
     @Test public void entryJarShipsItsCompletePrivatePathsFamilyWithoutRuntimeOrGsonClasses() throws Exception
     {
         var files = entryFiles(); var classes = new HashSet<String>();
