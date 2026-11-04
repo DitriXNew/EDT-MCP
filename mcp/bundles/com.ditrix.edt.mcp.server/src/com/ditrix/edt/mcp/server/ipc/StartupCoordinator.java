@@ -34,6 +34,9 @@ public final class StartupCoordinator
     { this.registry = registry; this.starter = starter; }
 
     public String ensureStarted() throws Exception
+    { return ensureStarted(() -> { }); }
+
+    public String ensureStarted(Runnable launching) throws Exception
     {
         if (!starter.supportsStartup()) { return OPEN_WORKSPACE; }
         try (FileChannel channel = PrivatePaths.lockFile(registry.lockPath()))
@@ -74,6 +77,7 @@ public final class StartupCoordinator
                 }
                 EndpointRegistry.atomicWrite(registry.claimPath(), JSON.toJson(new Claim(Instant.now().toString(), null)));
                 // Keep the claim if the provider outcome is uncertain. Never blindly retry a launch.
+                launching.run();
                 Started process = starter.start();
                 EndpointRegistry.atomicWrite(registry.claimPath(), JSON.toJson(new Claim(Instant.now().toString(), process)));
                 return STARTING;

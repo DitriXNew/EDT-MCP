@@ -64,7 +64,7 @@ public class StartupCoordinatorTest extends StdioTestSupport
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try
         {
-            Future<String> result = executor.submit(first::ensureStarted); assertTrue(entered.await(3, TimeUnit.SECONDS));
+            Future<String> result = executor.submit(() -> first.ensureStarted()); assertTrue(entered.await(3, TimeUnit.SECONDS));
             assertTrue(second.ensureStarted().contains("starting")); release.countDown();
             assertTrue(result.get(3, TimeUnit.SECONDS).contains("starting"));
             assertTrue(second.ensureStarted().contains("starting")); assertEquals(1, starts.get());
