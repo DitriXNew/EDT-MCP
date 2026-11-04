@@ -9,6 +9,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import org.eclipse.jface.preference.IPreferenceStore;
 
@@ -21,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
+import com.ditrix.edt.mcp.server.transport.StdioPluginSupport;
 import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
@@ -49,6 +52,16 @@ import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
  */
 public class GetServerStatusTool implements IMcpTool
 {
+    private final Supplier<McpServer> httpServer;
+    private final BooleanSupplier ipcRunning;
+
+    public GetServerStatusTool()
+    {
+        this(() -> Activator.getDefault() == null ? null : Activator.getDefault().getMcpServer(), StdioPluginSupport::isIpcRunning);
+    }
+
+    GetServerStatusTool(Supplier<McpServer> httpServer, BooleanSupplier ipcRunning)
+    { this.httpServer = httpServer; this.ipcRunning = ipcRunning; }
     public static final String NAME = "get_server_status"; //$NON-NLS-1$
 
     /** Form-render JVM flag: enables the offscreen buffered layout render. */
@@ -90,8 +103,12 @@ public class GetServerStatusTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("port", "TCP port the MCP server listens on") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty(KEY_RUNNING, "Whether the MCP server is currently running") //$NON-NLS-1$
+            .integerProperty("port", "HTTP configured or last bound TCP port; active only when transports.http is true") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_RUNNING, "Whether at least one MCP transport is listening") //$NON-NLS-1$
+            .objectProperty("transports", "Active MCP listeners; IPC exposes no secret or socket address",
+                JsonSchemaBuilder.object()
+                    .booleanProperty("http", "Whether the HTTP listener is running", true)
+                    .booleanProperty("ipc", "Whether the local IPC listener is running", true), false)
             .stringProperty("protocolVersion", "MCP protocol version implemented by the server") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("pluginVersion", "Version of the EDT-MCP plugin") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("edtVersion", "Detected 1C:EDT version") //$NON-NLS-1$ //$NON-NLS-2$
@@ -123,17 +140,12 @@ public class GetServerStatusTool implements IMcpTool
             ToolResult result = ToolResult.success();
 
             // Port: read from the live server when available; null-safe for headless.
-            McpServer server = activator != null ? activator.getMcpServer() : null;
-            if (server != null)
-            {
-                result.put("port", server.getPort()); //$NON-NLS-1$
-                result.put(KEY_RUNNING, server.isRunning());
-            }
-            else
-            {
-                result.put("port", PreferenceConstants.DEFAULT_PORT); //$NON-NLS-1$
-                result.put(KEY_RUNNING, false);
-            }
+            McpServer server = httpServer.get();
+            boolean http = server != null && server.isRunning();
+            boolean ipc = ipcRunning.getAsBoolean();
+            result.put("port", server == null ? PreferenceConstants.DEFAULT_PORT : server.getPort()); //$NON-NLS-1$
+            result.put(KEY_RUNNING, http || ipc);
+            result.put("transports", Map.of("http", http, "ipc", ipc));
 
             result.put("protocolVersion", McpConstants.PROTOCOL_VERSION); //$NON-NLS-1$
             result.put("pluginVersion", McpConstants.PLUGIN_VERSION); //$NON-NLS-1$

@@ -123,6 +123,7 @@ public final class SseStreamRegistry // NOSONAR intentional singleton (Eclipse s
      */
     public int notifyToolsListChanged()
     {
+        com.ditrix.edt.mcp.server.transport.ToolsChangedListeners.notifyChanged();
         return broadcast("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}"); //$NON-NLS-1$
     }
 

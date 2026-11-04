@@ -436,6 +436,14 @@ jobs:
           exit 1
       # ── end EDT setup ────────────────────────────────────────────────────────────
 
+      - name: Verify stdio attach transport
+        env:
+          E2E_PROJECT_READY_TIMEOUT: "1200"
+        run: |
+          export EDT_MCP_EDT_INSTALL="$RUNNER_TEMP/edt/eclipse"
+          export EDT_MCP_EDT_WORKSPACE="$RUNNER_TEMP/edt-ws"
+          python -u tests/e2e/stdio_transport.py
+
       - name: Run E2E tests
         env:
           # Cold cloud runner indexes the whole config from scratch (the EDT INSTALL is

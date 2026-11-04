@@ -133,6 +133,33 @@ public class InterruptibleToolExecutorTest
         }
     }
 
+    @Test public void normalSseCompletionKeepsItsStatusHeadersAndSingleEvent() throws Exception
+    {
+        try (Call call = new Call())
+        {
+            call.exchange.getRequestHeaders().add("Accept", "text/event-stream");
+            call.start(); call.release.countDown(); call.awaitRequest();
+            assertEquals("text/event-stream", call.exchange.getResponseHeaders().getFirst("Content-Type"));
+            assertEquals("event: message\nid: 1\ndata: " + RESULT + "\n\n", call.output.toString(StandardCharsets.UTF_8));
+            verify(call.exchange).sendResponseHeaders(eq(200), anyLong());
+        }
+    }
+
+    @Test public void interruptedSseRequestKeepsItsImmediateJsonResponse() throws Exception
+    {
+        try (Call call = new Call())
+        {
+            call.exchange.getRequestHeaders().add("Accept", "text/event-stream"); call.start();
+            assertTrue(call.server.interruptToolCall(new UserSignal(SignalType.BACKGROUND, "Return control")));
+            call.awaitRequest();
+            assertEquals("application/json", call.exchange.getResponseHeaders().getFirst("Content-Type"));
+            var response = com.google.gson.JsonParser.parseString(call.output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+            assertEquals(7, response.get("id").getAsInt()); assertTrue(response.getAsJsonObject("result").get("isError").getAsBoolean());
+            call.release.countDown(); call.awaitOperation();
+            verify(call.exchange).sendResponseHeaders(eq(200), anyLong()); verify(call.exchange, times(2)).close();
+        }
+    }
+
     private static final class Call implements AutoCloseable
     {
         final McpServer server = new McpServer();

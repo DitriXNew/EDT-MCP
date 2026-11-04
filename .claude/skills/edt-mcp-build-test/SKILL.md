@@ -9,6 +9,7 @@ description: How to build the EDT-MCP Eclipse plugin (Tycho/Maven) and run its u
 
 - Maven/Tycho reactor: `mcp/` (bom, bundles, features, repositories, targets, tests).
 - Unit tests: `mcp/tests/com.ditrix.edt.mcp.server.tests/src` (JUnit4, a plug-in fragment).
+- Stdio runtime: generated during `process-classes` from the live registrar/schemas, compiled for Java 17 and embedded in the plugin; packaging tests verify the shipped artifact.
 - E2E: `tests/e2e/run_all.py` + `tools/test_<tool>.py` (Python; runs the MCP server against `TestConfiguration/`).
 
 ## Build
@@ -27,6 +28,7 @@ bash source/compile.sh --skip-tests
 - The toolchain (JDK 25 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK25 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in README "Building from source".
 - **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
 - **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
+- When sharing a local Tycho cache, hold the shared build lock for the entire Maven process. With a warm cache, `mvn -o clean verify --batch-mode -T 1` is the offline equivalent; run the full suite without `-Dtest` before handoff. Discover toolchain/cache/lock paths locally.
 
 ## Live redeploy (Tier 2 — the only proof of runtime behaviour)
 
@@ -52,6 +54,8 @@ A green build proves Java logic; only a redeploy proves a tool's schema, descrip
 `tests/e2e/run_all.py` (+ `tools/test_<tool>.py`, one per tool) runs scenarios against the live server and `TestConfiguration/` with git-fixture isolation. The round-trip of Cyrillic synonyms and the synonym-keyed-by-language-code check live in `test_create_metadata.py` / `test_get_metadata_details.py`. A new tool — add `tools/test_<tool>.py`. Full guide: `edt-mcp-e2e-testing` (and `tests/e2e/SKILL.md`).
 
 ## Protocol conformance
+
+The focused `tests/e2e/stdio_transport.py` runner attaches two bootstrap processes to the live EDT used by HTTP e2e. Set explicit `EDT_MCP_EDT_INSTALL`, `EDT_MCP_EDT_WORKSPACE` and `JAVA_HOME`; it discovers the shipped jar through the private registry and uses `java -jar`, including on Linux CI. It verifies real calls, live catalog parity, UTF-8, per-client capabilities and EDT survival after EOF, reusing the harness's output-schema validation. It does not exercise Windows cold startup; verify that with the real client on the stand.
 
 A separate gate from the e2e business-logic suite: the official `modelcontextprotocol/conformance` suite validates the SERVER against the MCP wire spec (handshake, capabilities, session-id, `isError`, `ping`, SSE). Lives in `tests/conformance/` (`baseline.yml` pins the intentional gaps; `README.md` explains the layer split). Run: `npx @modelcontextprotocol/conformance@latest server --url http://127.0.0.1:8765/mcp --spec-version 2025-11-25 --expected-failures tests/conformance/baseline.yml`.
 

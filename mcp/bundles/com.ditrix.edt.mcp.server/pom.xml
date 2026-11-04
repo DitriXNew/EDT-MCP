@@ -28,6 +28,42 @@
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <dependencies>
+          <dependency><groupId>org.apache.ant</groupId><artifactId>ant</artifactId><version>1.10.15</version></dependency>
+          <dependency><groupId>org.apache.ant</groupId><artifactId>ant-launcher</artifactId><version>1.10.15</version></dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>embedded-stdio-bootstrap</id>
+            <phase>process-classes</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <mkdir dir="${project.build.directory}/bootstrap-build"/>
+                <javac srcdir="${project.basedir}/bootstrap-build" destdir="${project.build.directory}/bootstrap-build"
+                    release="17" encoding="UTF-8" includeantruntime="false">
+                  <classpath refid="maven.compile.classpath"/>
+                </javac>
+                <java classname="BootstrapBuild" fork="false" failonerror="true">
+                  <classpath>
+                    <path refid="maven.compile.classpath"/>
+                    <pathelement location="${project.build.directory}/bootstrap-build"/>
+                  </classpath>
+                  <arg value="${project.build.outputDirectory}"/>
+                  <arg value="${project.build.outputDirectory}/bootstrap/edt-mcp-bootstrap.jar"/>
+                  <arg value="${project.version}"/>
+                  <arg value="${project.basedir}/bootstrap-build"/>
+                  <arg value="${project.basedir}/../../../LICENSE"/>
+                </java>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <!-- `mvn -pl bundles/com.ditrix.edt.mcp.server jacoco:report` (after verify) turns the
            tests fragment's .exec into an XML report against THIS bundle's classes/sources.
            No execution binding: the bundle builds before the tests, so the report is a
