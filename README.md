@@ -327,7 +327,7 @@ enable/disable tools persistently).
 
 In EDT, open **Window > Preferences > MCP Server > General** and click **Copy stdio .mcp.json**. Merge the ready entry into your client's configuration. The bootstrap ships inside the plugin, uses explicit installation/workspace paths and EDT's Java, and connects locally without a TCP port.
 
-On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves EDT running. Linux supports attachment to an already open EDT. Limits: windowed only, Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
+On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves that windowed EDT running. Add the explicit `-headless` argument to request an optional host without a window on the next cold start. Its catalog excludes mandatory UI tools, and it saves and exits after 30 idle minutes by default. Existing hosts are shared regardless of client mode. Linux supports attachment to a running host. Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 
 ### VS Code / GitHub Copilot
 

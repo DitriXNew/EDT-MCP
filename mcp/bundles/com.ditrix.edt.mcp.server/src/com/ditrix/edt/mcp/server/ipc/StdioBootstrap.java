@@ -38,6 +38,7 @@ public final class StdioBootstrap implements AutoCloseable
     private final StartupCoordinator.Starter starter;
     private final OutputStream output;
     private final JsonObject catalog;
+    private final boolean headless;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "edt-mcp-attach"); t.setDaemon(true); return t;
     });
@@ -57,7 +58,13 @@ public final class StdioBootstrap implements AutoCloseable
 
     public StdioBootstrap(RegistryProvider registries, StartupCoordinator.Starter starter, OutputStream output,
         JsonObject catalog)
-    { this.registries = registries; this.starter = starter; this.output = output; this.catalog = catalog; }
+    { this(registries, starter, output, catalog, false); }
+
+    public StdioBootstrap(RegistryProvider registries, StartupCoordinator.Starter starter, OutputStream output,
+        JsonObject catalog, boolean headless)
+    { this.registries = registries; this.starter = starter; this.output = output; this.catalog = catalog; this.headless = headless; }
+
+    public static boolean headlessRequested(String[] args) { return java.util.Arrays.asList(args).contains("-headless"); }
 
     public static void main(String[] args)
     {
@@ -77,8 +84,8 @@ public final class StdioBootstrap implements AutoCloseable
                 Files.createDirectories(workspace);
                 return new EndpointRegistry(EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("ipc")), workspace);
             };
-            try (var bootstrap = new StdioBootstrap(registries, new WindowsEdtStarter(install, workspace, configuration),
-                System.out, catalog))
+            try (var bootstrap = new StdioBootstrap(registries, new WindowsEdtStarter(install, workspace, configuration, headlessRequested(args)),
+                System.out, catalog, headlessRequested(args)))
             {
                 var input = new BufferedInputStream(System.in);
                 String frame;
@@ -152,6 +159,15 @@ public final class StdioBootstrap implements AutoCloseable
         if (method.equals("tools/list"))
         {
             JsonObject result = catalog.getAsJsonObject("tools").deepCopy();
+            if (headless) {
+                JsonArray allowed = new JsonArray();
+                for (JsonElement tool : result.getAsJsonArray("tools")) {
+                    String name = tool.getAsJsonObject().get("name").getAsString();
+                    JsonObject hosts = catalog.getAsJsonObject("hostCapabilities");
+                    if (hosts != null && hosts.has(name) && !"WINDOWED_ONLY".equals(hosts.get(name).getAsString())) { allowed.add(tool); }
+                }
+                result.add("tools", allowed);
+            }
             if (structuredOptOut())
             { for (JsonElement tool : result.getAsJsonArray("tools")) { tool.getAsJsonObject().remove("outputSchema"); } }
             send(success(id, result)); return;
@@ -258,7 +274,8 @@ public final class StdioBootstrap implements AutoCloseable
             catch (Exception e) { socket.close(); throw e; }
         }
         catch (Exception e)
-        { status = "EDT connection/start failed: " + e.getMessage() + ". Ask the user to check the EDT window, then retry the same call. No tool ran."; }
+        { status = "EDT connection/start failed: " + e.getMessage() + (headless ? ". Ask the user to inspect the EDT workspace log, then retry the same call. No tool ran."
+            : ". Ask the user to check the EDT window, then retry the same call. No tool ran."); }
         finally { prepared.complete(null); attaching.set(false); }
     }
 

@@ -3424,6 +3424,9 @@
         "formRenderFlags": {
           "type": "object"
         },
+        "hostKind": {
+          "type": "string"
+        },
         "plainTextMode": {
           "type": "boolean"
         },

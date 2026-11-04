@@ -31,6 +31,20 @@ import com.google.gson.JsonParser;
  */
 public class GetServerStatusToolTest
 {
+    @Test public void reportsExplicitHostKind() {
+        String previous = System.getProperty("eclipse.application");
+        try {
+            for (String application : new String[]{"org.eclipse.ui.ide.workbench", com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID}) {
+                System.setProperty("eclipse.application", application);
+                JsonObject result = JsonParser.parseString(new GetServerStatusTool().execute(java.util.Map.of())).getAsJsonObject();
+                assertEquals(application.equals(com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID) ? "HEADLESS" : "WINDOWED", result.get("hostKind").getAsString());
+            }
+        }
+        finally {
+            if (previous == null) { System.clearProperty("eclipse.application"); } else { System.setProperty("eclipse.application", previous); }
+        }
+    }
+
     @Test public void reportsEachTransportAndNeverExposesIpcCredentials()
     {
         for (boolean http : new boolean[]{false, true})

@@ -6,6 +6,11 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HostKind;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.ui.progress.IProgressConstants;
 
@@ -39,8 +44,21 @@ public final class McpJobs
      */
     public static void schedule(Job job)
     {
-        markNoErrorDialog(job);
-        job.schedule();
+        if (HostKind.current() == HostKind.WINDOWED)
+        { markNoErrorDialog(job); }
+        var activator = Activator.getDefault();
+        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
+        if (lifetime == null) { job.schedule(); return; }
+        var lease = lifetime.tool();
+        if (lease == null) { throw new IllegalStateException("Headless EDT is shutting down"); }
+        var listener = new JobChangeAdapter() {
+            @Override public void done(IJobChangeEvent event) {
+                lease.close(); job.removeJobChangeListener(this);
+            }
+        };
+        job.addJobChangeListener(listener);
+        try { job.schedule(); }
+        catch (RuntimeException | Error e) { job.removeJobChangeListener(listener); lease.close(); throw e; }
     }
 
     /**

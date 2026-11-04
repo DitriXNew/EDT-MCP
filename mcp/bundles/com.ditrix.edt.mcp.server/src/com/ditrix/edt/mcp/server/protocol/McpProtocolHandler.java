@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.protocol;
 
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
+import com.ditrix.edt.mcp.server.HostKind;
+import com.ditrix.edt.mcp.server.tools.HostToolCapabilities;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -495,6 +499,12 @@ public class McpProtocolHandler
             return buildErrorResponse(McpConstants.ERROR_METHOD_NOT_FOUND, "Tool not found: " + toolName, requestId); //$NON-NLS-1$
         }
 
+        if (!HostToolCapabilities.availableOnCurrentHost(tool.getName()))
+        {
+            String payload = ToolResult.error(HostToolCapabilities.refusal(tool.getName())).toJson();
+            return buildToolCallResponse(tool, payload, null, isPlainTextMode(), requestId, extractToolParams(request), capabilities);
+        }
+
         // Check if tool is enabled. The refusal is flagged isError: nothing ran, so a success
         // would record an empty answer as the tool's output - and enablement is the one input to
         // the outputSchema promise that can change UNDER a client (a JSON tool listed with its
@@ -567,7 +577,8 @@ public class McpProtocolHandler
         // connect — a per-call arm would miss those. Idempotent + cheap after first install; no-op
         // headless. set_infobase_credentials provides the credentials so the dialog never needs to
         // appear on a correctly configured base.
-        InfobaseAuthDialogSuppressor.ensureInstalled();
+        if (HostKind.current() == HostKind.WINDOWED)
+        { InfobaseAuthDialogSuppressor.ensureInstalled(); }
         // Scope the auth-dialog suppression to tools that can actually reach an infobase
         // connection (issue #270): only a tool flagged connectsToInfobase() marks this
         // dispatch in-flight, so the suppressor auto-cancels an auth dialog raised during
@@ -576,13 +587,17 @@ public class McpProtocolHandler
         // by continuous MCP polling from read-only tools that never touch a connection.
         // markActivityEnd() runs in the finally below, guarded by the SAME flag, so the
         // start/end pair always stays balanced (end called iff start was called).
-        boolean connectsToInfobase = tool.connectsToInfobase();
+        boolean connectsToInfobase = tool.connectsToInfobase()
+            && HostKind.current() == HostKind.WINDOWED;
         if (connectsToInfobase)
         {
             InfobaseAuthDialogSuppressor.markActivityStart();
         }
-        try
+        HeadlessLifetime lifetime = Activator.getDefault() == null
+            ? null : Activator.getDefault().getHeadlessLifetime();
+        try (var lease = lifetime == null ? null : lifetime.tool())
         {
+            if (lifetime != null && lease == null) { return ToolResult.error("Headless EDT is shutting down; reconnect and retry a read.").toJson(); }
             result = tool.execute(params);
             threw = false;
             return result;

@@ -5,6 +5,8 @@
  */
 package com.ditrix.edt.mcp.server.transport;
 
+import com.ditrix.edt.mcp.server.utils.Log;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,7 +15,7 @@ import org.eclipse.core.runtime.Platform;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
-import com.ditrix.edt.mcp.server.utils.Log;
+
 
 /** Plugin lifecycle adapter and read-only client configuration export. */
 public final class StdioPluginSupport
@@ -26,7 +28,7 @@ public final class StdioPluginSupport
         if (listener != null) { return; }
         Path bootstrap = null;
         try { bootstrap = extractBootstrap(); }
-        catch (Exception e) { Log.warning("Cannot extract the stdio bootstrap (" + e.getClass().getSimpleName() + "); HTTP is unaffected."); }
+        catch (Exception e) { Log.warning("Cannot extract the stdio bootstrap (" + e.getClass().getSimpleName() + "); HTTP is unaffected.", e); }
         try
         {
             Path workspace = Path.of(Platform.getInstanceLocation().getURL().toURI()).toRealPath();
@@ -35,7 +37,7 @@ public final class StdioPluginSupport
                 Activator.getDefault().getBundle().getVersion().toString(), bootstrap);
             Activator.logInfo("EDT MCP IPC listener started for " + workspace);
         }
-        catch (Exception e) { Log.warning("Cannot start EDT MCP IPC listener (" + e.getClass().getSimpleName() + "); HTTP is unaffected."); }
+        catch (Exception e) { Log.warning("Cannot start EDT MCP IPC listener (" + e.getClass().getSimpleName() + "); HTTP is unaffected.", e); }
     }
 
     public static boolean isIpcRunning()

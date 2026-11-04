@@ -443,6 +443,7 @@ jobs:
           export EDT_MCP_EDT_INSTALL="$RUNNER_TEMP/edt/eclipse"
           export EDT_MCP_EDT_WORKSPACE="$RUNNER_TEMP/edt-ws"
           python -u tests/e2e/stdio_transport.py
+          python -u tests/e2e/stdio_headless.py
 
       - name: Run E2E tests
         env:
