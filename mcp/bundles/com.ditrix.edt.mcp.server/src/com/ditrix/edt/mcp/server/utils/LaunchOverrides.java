@@ -121,16 +121,11 @@ public final class LaunchOverrides
         return automatedTestingPort;
     }
 
-    /**
-     * @param config the configuration whose existing port is inherited when none is supplied
-     * @return the port EDT will read, including an inherited value or its default
-     * @throws CoreException if the stored port attribute cannot be read
-     */
+    /** Reads the effective port from the dispatched or saved configuration, including EDT's default. */
     public int effectiveAutomatedTestingPort(ILaunchConfiguration config) throws CoreException
     {
-        return automatedTestingPort != null ? automatedTestingPort
-            : config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER,
-                LaunchConfigUtils.DEFAULT_AUTOMATED_TESTING_PORT);
+        return config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER,
+            LaunchConfigUtils.DEFAULT_AUTOMATED_TESTING_PORT);
     }
 
     /** @return the {@code /C} startup option, or {@code null} / blank when unset. */

@@ -174,7 +174,8 @@ public class CreateLaunchConfigTool implements IMcpTool
                 LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT,
                 LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER)
             .integerProperty(KEY_AUTOMATED_TESTING_PORT,
-                "Explicit TESTCLIENT port persisted in the configuration; absent when omitted.") //$NON-NLS-1$
+                "Configured TESTCLIENT port from the saved configuration or EDT default 1538; absent without " //$NON-NLS-1$
+                    + "TESTCLIENT or when unreadable. This launch setting does not confirm a listening socket.") //$NON-NLS-1$
             .stringProperty("message", "Human-readable status message.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -289,9 +290,16 @@ public class CreateLaunchConfigTool implements IMcpTool
             if (testingOverrides.automatedTestingMode() != null)
             {
                 result.put(KEY_AUTOMATED_TESTING_MODE, testingOverrides.automatedTestingMode());
-                if (testingOverrides.automatedTestingPort() != null)
+                if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(testingOverrides.automatedTestingMode()))
                 {
-                    result.put(KEY_AUTOMATED_TESTING_PORT, testingOverrides.automatedTestingPort());
+                    try
+                    {
+                        result.put(KEY_AUTOMATED_TESTING_PORT, testingOverrides.effectiveAutomatedTestingPort(saved));
+                    }
+                    catch (CoreException e) // Response enrichment must not fail an already-saved configuration.
+                    {
+                        // Leave an unreadable port absent.
+                    }
                 }
             }
             return result.toJson();

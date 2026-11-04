@@ -27,7 +27,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Schema, early refusals and the effective endpoint reported to automated-testing clients. */
+/** Schema, early refusals and the configured settings reported to automated-testing clients. */
 public class LaunchToolAutomatedTestingTest
 {
     @Test
@@ -140,8 +140,10 @@ public class LaunchToolAutomatedTestingTest
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
         when(config.getName()).thenReturn("Client654");
-        when(config.getAttribute(PORT_ATTRIBUTE, 1538)).thenReturn(storedPort);
+        when(config.getAttribute(PORT_ATTRIBUTE, 1538)).thenReturn(port != null ? port : storedPort);
         LaunchOverrides request = overrides(null, mode, port);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_MODE, ""))
+            .thenReturn(request.automatedTestingMode());
         Method method = LaunchTool.class.getDeclaredMethod("buildLaunchSuccess", ILaunchConfiguration.class,
             String.class, boolean.class, String.class, String.class, LaunchOverrides.class,
             LaunchOverrides.Prepared.class, String.class);

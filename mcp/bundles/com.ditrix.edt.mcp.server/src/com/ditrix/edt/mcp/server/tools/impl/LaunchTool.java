@@ -228,11 +228,13 @@ public class LaunchTool implements IMcpTool
             .stringProperty(KEY_EXTERNAL_OBJECT_NAME,
                 "The external data processor / report this launch runs; absent when none was requested.") //$NON-NLS-1$
             .enumProperty(KEY_AUTOMATED_TESTING_MODE,
-                "Applied native EDT testing mode; absent when no override was requested.", //$NON-NLS-1$
+                "Effective native EDT testing setting from the dispatched configuration, saved or overridden; " //$NON-NLS-1$
+                    + "absent when unset, unreadable or no launch was dispatched. Does not confirm a testing listener is ready.", //$NON-NLS-1$
                 LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT,
                 LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER)
             .integerProperty(KEY_AUTOMATED_TESTING_PORT,
-                "Effective TESTCLIENT port, including the saved setting or EDT default 1538; absent for TESTMANAGER.") //$NON-NLS-1$
+                "Configured TESTCLIENT port, saved, overridden or EDT default 1538; absent without TESTCLIENT " //$NON-NLS-1$
+                    + "or when unreadable. Does not confirm a listening socket.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
                 "Effective launch mode; standalone servers report debug because EDT always starts them in debug mode") //$NON-NLS-1$
             .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
@@ -1427,10 +1429,7 @@ public class LaunchTool implements IMcpTool
         return null;
     }
 
-    /**
-     * Builds the by-name success response from the configuration actually dispatched,
-     * including the effective automated-testing endpoint of its working copy.
-     */
+    /** Builds the by-name response with testing settings from the dispatched configuration. */
     private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         String configProject, String effectiveAppId, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, String mode)
@@ -1472,37 +1471,26 @@ public class LaunchTool implements IMcpTool
             + "Poll debug_status until the session appears running, then use wait_for_break."; //$NON-NLS-1$
     }
 
-    /**
-     * Reports the applied overrides back on a successful launch.
-     *
-     * <p>Echoed rather than left implicit because the failure mode being guarded against is a
-     * launch that looks successful while the processor never ran: a response naming what it is
-     * running lets the caller - and the e2e suite - tell the two apart without reading the EDT
-     * log. Absent overrides add no keys, so an ordinary launch's payload is unchanged.</p>
-     *
-     * @param result the success payload being built
-     * @param overrides what the caller asked for
-     * @param prepared the validated overrides and resolved external object
-     * @param config the configuration or working copy dispatched to EDT
-     * @return the same payload, for chaining
-     */
+    /** Reports effective testing settings and applied startup overrides, without asserting readiness. */
     private static ToolResult echoOverrides(ToolResult result, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, ILaunchConfiguration config)
     {
-        if (!LaunchOverrides.blank(overrides.automatedTestingMode()))
+        try
         {
-            result.put(KEY_AUTOMATED_TESTING_MODE, overrides.automatedTestingMode());
-            if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(overrides.automatedTestingMode()))
+            String testingMode = config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_MODE, ""); //$NON-NLS-1$
+            if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(testingMode)
+                || LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_MANAGER.equals(testingMode))
             {
-                try
+                result.put(KEY_AUTOMATED_TESTING_MODE, testingMode);
+                if (LaunchConfigUtils.VALUE_AUTOMATED_TESTING_TEST_CLIENT.equals(testingMode))
                 {
                     result.put(KEY_AUTOMATED_TESTING_PORT, overrides.effectiveAutomatedTestingPort(config));
                 }
-                catch (CoreException e) // Response enrichment must not fail an already-dispatched launch.
-                {
-                    // Leave the port absent when its saved attribute cannot be read.
-                }
             }
+        }
+        catch (CoreException e) // Response enrichment must not fail an already-dispatched launch.
+        {
+            // Leave unreadable settings absent.
         }
         if (!LaunchOverrides.blank(overrides.startupOption()))
         {

@@ -18,6 +18,12 @@ import java.util.concurrent.TimeUnit;
 /** WMI creates the GUI outside the client's process tree and Job Object. No system Java or PATH. */
 public final class WindowsEdtStarter implements StartupCoordinator.Starter
 {
+    public static final class InstallationException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+        private InstallationException(String message, Exception cause) { super(message, cause); }
+    }
+
     private final Path install;
     private final Path workspace;
     private final Path configuration;
@@ -29,11 +35,22 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
         if (Runtime.version().feature() < 17) { throw new IOException("EDT MCP requires Java 17 or newer; use the EDT launcher or -vm."); }
         if (!System.getProperty("os.name").startsWith("Windows")) { return; }
         int required = 17;
-        for (String line : Files.readAllLines(install.resolve("1cedt.ini")))
+        Path ini = install.resolve("1cedt.ini");
+        String version = null;
+        try
         {
-            if (line.startsWith("-Dosgi.requiredJavaVersion="))
-            { required = Integer.parseInt(line.substring(line.indexOf('=') + 1).split("\\.")[0]); }
+            for (String line : Files.readAllLines(ini))
+            {
+                if (line.startsWith("-Dosgi.requiredJavaVersion="))
+                {
+                    version = line.substring(line.indexOf('=') + 1);
+                    required = Integer.parseInt(version.split("\\.", 2)[0]);
+                }
+            }
         }
+        catch (IOException e) { throw new InstallationException("Cannot read " + ini + ".", e); }
+        catch (NumberFormatException e)
+        { throw new InstallationException("Invalid -Dosgi.requiredJavaVersion value '" + version + "' in " + ini + ".", e); }
         if (Runtime.version().feature() < required)
         { throw new IOException("This EDT install requires Java " + required + "; select it with the EDT launcher -vm option."); }
     }

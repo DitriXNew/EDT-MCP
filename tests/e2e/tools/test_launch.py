@@ -87,7 +87,88 @@ from harness import (
     E2ESkip,
     _post,
     PROJECT,
+    calls_aborted,
+    any_launch_running,
+    wait_until_no_running_launch,
 )
+
+
+def _check_effective_testing_settings(stored_mode, stored_port, override_mode=None, override_port=None):
+    requires_live_infobase("starts and stops a client to verify effective launch settings")
+    name = "e2e_launch_testing_settings"
+    create_params = {"projectName": PROJECT, "name": name}
+    if stored_mode is not None:
+        create_params["automatedTestingMode"] = stored_mode
+    if stored_port is not None:
+        create_params["automatedTestingPort"] = stored_port
+    created = call("create_launch_config", create_params)
+    assert_ok(created, "save testing settings for launch")
+    try:
+        params = {"launchConfigurationName": name, "mode": "run", "restartIfRunning": True}
+        if override_mode is not None:
+            params["automatedTestingMode"] = override_mode
+        if override_port is not None:
+            params["automatedTestingPort"] = override_port
+        dispatched = False
+        try:
+            launched = call("launch", params)
+            assert_ok(launched, "launch with stored or overridden testing settings")
+            dispatched = True
+            sc = launched.structured
+            assert isinstance(sc, dict) and sc.get("status") == "launching", sc
+            expected_mode = override_mode or stored_mode
+            if expected_mode is None:
+                assert "automatedTestingMode" not in sc, sc
+            else:
+                assert sc.get("automatedTestingMode") == expected_mode, sc
+            if expected_mode == "TESTCLIENT":
+                expected_port = override_port or stored_port or 1538
+                assert sc.get("automatedTestingPort") == expected_port, sc
+            else:
+                assert "automatedTestingPort" not in sc, sc
+        finally:
+            if dispatched and not calls_aborted():
+                deadline = time.monotonic() + 120
+                while not any_launch_running(name):
+                    assert time.monotonic() < deadline, "dispatched client never appeared: " + name
+                stopped = call("terminate_launch", {"launchConfigurationName": name, "force": True})
+                assert_ok(stopped, "stop the client launched by this test")
+                assert wait_until_no_running_launch(name), "client is still running: " + name
+        assert_no_diff("launch settings must not change project sources")
+    finally:
+        if not calls_aborted():
+            deleted = call("delete_launch_config", {"name": name, "confirm": True})
+            assert_ok(deleted, "remove throwaway testing configuration")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_stored_testclient_reports_saved_port_without_override():
+    _check_effective_testing_settings("TESTCLIENT", 1550)
+
+
+@e2e_test(tool="launch", kind="action")
+def test_stored_testclient_reports_default_port_without_override():
+    _check_effective_testing_settings("TESTCLIENT", None)
+
+
+@e2e_test(tool="launch", kind="action")
+def test_testing_override_wins_over_stored_mode_and_port():
+    _check_effective_testing_settings("TESTCLIENT", 1550, "TESTCLIENT", 1540)
+
+
+@e2e_test(tool="launch", kind="action")
+def test_testing_override_switches_stored_manager_to_client():
+    _check_effective_testing_settings("TESTMANAGER", None, "TESTCLIENT", 1540)
+
+
+@e2e_test(tool="launch", kind="action")
+def test_stored_testmanager_reports_mode_without_port():
+    _check_effective_testing_settings("TESTMANAGER", None)
+
+
+@e2e_test(tool="launch", kind="action")
+def test_no_testing_setting_omits_mode_and_port():
+    _check_effective_testing_settings(None, None)
 
 
 @e2e_test(tool="launch", kind="action")
