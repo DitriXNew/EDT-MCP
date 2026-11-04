@@ -69,6 +69,15 @@ public class Messages extends NLS {
     public static String McpHistoryView_Top3None; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
     public static String McpHistoryView_Top3Prefix; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
 
+    public static String McpStatus_HttpRunning; // NOSONAR Eclipse NLS field
+    public static String McpStatus_HttpStopped; // NOSONAR Eclipse NLS field
+    public static String McpStatus_StdioReady; // NOSONAR Eclipse NLS field
+    public static String McpStatus_StdioUnavailable; // NOSONAR Eclipse NLS field
+
+    public static String McpStatus_Title; // NOSONAR Eclipse NLS field
+    public static String McpStatus_Executing; // NOSONAR Eclipse NLS field
+    public static String McpStatus_Tooltip; // NOSONAR Eclipse NLS field
+
     static {
         NLS.initializeMessages(BUNDLE_NAME, Messages.class);
     }

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -71,6 +72,20 @@ public class MessagesParityTest
     public void testPreferencesMessagesKeyParity() throws IOException
     {
         assertKeyParity(PREFS_EN, PREFS_RU);
+    }
+
+    @Test
+    public void testTransportControlsHaveEnglishSurfaceInBothLocales() throws IOException
+    {
+        for (String path : new String[] {PREFS_EN, PREFS_RU})
+        {
+            Properties messages = loadProperties(path);
+            assertEquals("Enable MCP over HTTP", messages.getProperty("GeneralTab_HttpEnabled"));
+            assertEquals("MCP over HTTP", messages.getProperty("GeneralTab_HttpGroup"));
+            assertEquals("Copy HTTP config", messages.getProperty("GeneralTab_CopyConfig"));
+            assertEquals("Copy stdio .mcp.json", messages.getProperty("GeneralTab_CopyStdioConfig"));
+            assertEquals("HTTP status:", messages.getProperty("GeneralTab_Status"));
+        }
     }
 
     /** The tag dialogs' NLS bundle: English keys == Russian keys. */
