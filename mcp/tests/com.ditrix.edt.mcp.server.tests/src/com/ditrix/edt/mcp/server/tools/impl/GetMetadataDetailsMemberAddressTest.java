@@ -308,9 +308,18 @@ public class GetMetadataDetailsMemberAddressTest
     {
         mockTemplate("Text");
         IBmModel model = mock(IBmModel.class);
+        int[] readDepth = {0};
+        when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
+            readDepth[0]++;
+            try { return ((com._1c.g5.v8.bm.integration.IBmTask<?>)inv.getArgument(0)).execute(null, null); }
+            finally { readDepth[0]--; }
+        });
         // Stub only the cross-model read; the real FQN dispatch and node resolution still run.
         String text = TemplateContentSupport.renderText("Catalog.Goods.Template.Text", "Hello\n");
-        when(model.executeAndRollback(any())).thenReturn(text);
+        when(model.executeAndRollback(any())).thenAnswer(inv -> {
+            assertEquals("Lazy materialization must not upgrade an active read", 0, readDepth[0]);
+            return text;
+        });
         Rendered result = render(scope(), "Catalog.Goods.Template.Text", false, false, model);
         assertTrue(result.markdown(), result.failures.isEmpty());
         assertEquals(text + "\n---\n\n", result.body);
@@ -322,10 +331,20 @@ public class GetMetadataDetailsMemberAddressTest
     {
         mockTemplate("Schema");
         IBmModel model = mock(IBmModel.class);
+        int[] readDepth = {0};
+        when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
+            readDepth[0]++;
+            try { return ((com._1c.g5.v8.bm.integration.IBmTask<?>)inv.getArgument(0)).execute(null, null); }
+            finally { readDepth[0]--; }
+        });
         String dcs = DcsStructureReader.render("Catalog.Goods.Template.Schema",
             DcsFactory.eINSTANCE.createDataCompositionSchema(), "en");
         // The text-template read is inapplicable, then the DCS read returns its document.
-        when(model.executeAndRollback(any())).thenReturn(null, dcs);
+        int[] contentReads = {0};
+        when(model.executeAndRollback(any())).thenAnswer(inv -> {
+            assertEquals("Lazy materialization must not upgrade an active read", 0, readDepth[0]);
+            return contentReads[0]++ == 0 ? null : dcs;
+        });
         Rendered result = render(scope(), "Catalog.Goods.Template.Schema", false, false, model);
         assertTrue(result.markdown(), result.failures.isEmpty());
         assertEquals(dcs + "\n---\n\n", result.body);

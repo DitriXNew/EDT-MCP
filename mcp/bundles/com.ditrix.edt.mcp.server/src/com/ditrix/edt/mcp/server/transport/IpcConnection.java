@@ -76,7 +76,8 @@ public final class IpcConnection implements AutoCloseable
                 String response;
                 try { response = executor.execute(responder, frame, request, start, client); }
                 catch (Exception e)
-                { response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
+                { com.ditrix.edt.mcp.server.Activator.logError("IPC tool execution failed", e);
+                  response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
                 if (response != null) { responder.send(response); }
             }
             catch (IOException | RuntimeException e) { close(); }

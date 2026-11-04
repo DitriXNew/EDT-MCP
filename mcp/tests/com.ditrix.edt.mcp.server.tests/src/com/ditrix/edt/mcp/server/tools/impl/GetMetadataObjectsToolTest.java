@@ -507,4 +507,23 @@ public class GetMetadataObjectsToolTest
         assertNull(tool.normalizeExternalMetadataType(""));  //$NON-NLS-1$
         assertNull(tool.normalizeExternalMetadataType(null));
     }
+    @Test public void headlessReadUsesBmAndLanguageCodeWithoutWorkbench() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            for (String type : new String[] { "CommonModule", "ОбщийМодуль" })
+            {
+                for (String name : new String[] { "EnglishName", "Код" })
+                {
+                    String result = fixture.call(new GetMetadataObjectsTool(), Map.of("metadataType", type, "nameFilter", name));
+                    assertTrue(result, result.contains("| " + name + " | Translated " + name + " |"));
+                    assertEquals(result, fixture.callWindowed(new GetMetadataObjectsTool(),
+                        Map.of("metadataType", type, "nameFilter", name)));
+                }
+            }
+            String refused = fixture.call(new GetMetadataObjectsTool(), Map.of("nameFilter", "Translated Код"));
+            assertFalse(refused, refused.contains("| Код |"));
+            assertTrue(fixture.reads >= 5);
+        }
+    }
 }

@@ -165,6 +165,11 @@ public class EdtServices
      */
     public void init(BundleContext context)
     {
+        init(context, true);
+    }
+
+    public void init(BundleContext context, boolean windowed)
+    {
         // Initialize service trackers
         runtimeRegistryTracker = new ServiceTracker<>(context, IRuntimeRegistry.class, null);
         runtimeRegistryTracker.open();
@@ -230,8 +235,11 @@ public class EdtServices
             new ServiceTracker<>(context, IInfobaseAssociationContextProvider.class, null);
         infobaseAssociationContextProviderTracker.open();
 
-        navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
-        navigatorStateProviderTracker.open();
+        if (windowed)
+        {
+            navigatorStateProviderTracker = new ServiceTracker<>(context, INavigatorContentProviderStateProvider.class, null);
+            navigatorStateProviderTracker.open();
+        }
 
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
@@ -239,8 +247,11 @@ public class EdtServices
         formRefactoringServiceTracker = new ServiceTracker<>(context, IFormRefactoringService.class, null);
         formRefactoringServiceTracker.open();
 
-        presentationServiceTracker = new ServiceTracker<>(context, IPresentationService.class, null);
-        presentationServiceTracker.open();
+        if (windowed)
+        {
+            presentationServiceTracker = new ServiceTracker<>(context, IPresentationService.class, null);
+            presentationServiceTracker.open();
+        }
 
         topObjectFqnGeneratorTracker = new ServiceTracker<>(context, ITopObjectFqnGenerator.class, null);
         topObjectFqnGeneratorTracker.open();

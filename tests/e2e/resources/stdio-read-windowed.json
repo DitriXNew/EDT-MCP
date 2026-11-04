@@ -1,0 +1,313 @@
+{
+  "commit": "802549c6c5165d1784e373638a8939c8af9d43f8",
+  "hostKind": "WINDOWED",
+  "project": "TestConfiguration",
+  "cases": {
+    "objects-CommonModule-Calc": {
+      "tool": "get_metadata_objects",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "CommonModule",
+        "nameFilter": "Calc",
+        "language": "en"
+      },
+      "response": {
+        "text": "## Configuration Metadata: TestConfiguration\n\n**Filter:** CommonModule\n**Total:** 1 objects\n\n| Name | Synonym | Comment | Type | ObjectModule | ManagerModule |\n| --- | --- | --- | --- | --- | --- |\n| Calc | Calc |  | CommonModule | Yes | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-CommonModule-Calc": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "CommonModule.Calc"
+        ],
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## CommonModule: Calc\n\n\n### Basic Properties\n\n| Property | Value |\n|---|---|\n| Name | Calc |\n| Synonym | Calc |\n\n### Synonym\n\n| Language | Value |\n|---|---|\n| en | Calc |\n\n### Properties\n\n| Property | Value |\n| --- | --- |\n| Server | Yes |\n| Server Call | No |\n| Client (Managed Application) | No |\n| Client (Ordinary Application) | No |\n| External Connection | No |\n| Global | No |\n| Privileged | No |\n| Return Values Reuse | DontUse |\n\n**Origin:** core\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "objects-ОбщийМодуль-Calc": {
+      "tool": "get_metadata_objects",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "ОбщийМодуль",
+        "nameFilter": "Calc",
+        "language": "en"
+      },
+      "response": {
+        "text": "## Configuration Metadata: TestConfiguration\n\n**Filter:** ОбщийМодуль\n**Total:** 1 objects\n\n| Name | Synonym | Comment | Type | ObjectModule | ManagerModule |\n| --- | --- | --- | --- | --- | --- |\n| Calc | Calc |  | CommonModule | Yes | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-ОбщийМодуль-Calc": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "ОбщийМодуль.Calc"
+        ],
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## CommonModule: Calc\n\n\n### Basic Properties\n\n| Property | Value |\n|---|---|\n| Name | Calc |\n| Synonym | Calc |\n\n### Synonym\n\n| Language | Value |\n|---|---|\n| en | Calc |\n\n### Properties\n\n| Property | Value |\n| --- | --- |\n| Server | Yes |\n| Server Call | No |\n| Client (Managed Application) | No |\n| Client (Ordinary Application) | No |\n| External Connection | No |\n| Global | No |\n| Privileged | No |\n| Return Values Reuse | DontUse |\n\n**Origin:** core\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "modules-Calc": {
+      "tool": "list_modules",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "commonModules",
+        "objectName": "Calc"
+      },
+      "response": {
+        "text": "## BSL Modules: TestConfiguration\n\n**Filter:** commonModules\n**Total:** 1 modules\n\n| Module Path | Module Type | Parent Type | Parent Name |\n| --- | --- | --- | --- |\n| CommonModules/Calc/Module.bsl | Module | CommonModule | Calc |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "method-Calc": {
+      "tool": "read_method_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "methodName": "Add"
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\ncontentHash: 86546d2111e587d6\nmethod: Add\ntype: Function\nexport: true\nstartLine: 1\nendLine: 3\ntotalLines: 7\n---\n```bsl\nФункция Add(A, B) Экспорт\n\tВозврат A + B;\nКонецФункции\n```\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "structure-Calc": {
+      "tool": "get_module_structure",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "detailed": true
+      },
+      "response": {
+        "text": "## Module Structure: CommonModules/Calc/Module.bsl\n\n**Total:** 1 procedures, 1 functions | **Lines:** 7\n\n### Methods\n\n| # | Type | Name | Export | Context | Lines | Region |\n|---|------|------|--------|---------|-------|--------|\n| 1 | Function | Add | Yes | - | 1-3 | - |\n| 2 | Procedure | Test | Yes | - | 5-7 | - |\n\n## Extension interception\n\n- `Test` <- intercepted by extension `TestConfiguration.tests`: `tests_Test` via `&ChangeAndValidate`\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "symbol-Calc": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\nline: 1\ncolumn: 2\n---\nFunction <[Number](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\* Add([A](^/param0), [B](^/param1))\n\nParameters:\n\nA <[Number](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\*\n\nB <[Number](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\*\n\n\\[Server, mobile application (server), mobile standalone server\\]\n\n\\* — calculated by the built-in language type system.",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "source-full-Calc": {
+      "tool": "read_module_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl"
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\ncontentHash: 86546d2111e587d6\nstartLine: 1\nendLine: 7\ntotalLines: 7\n---\n```bsl\nФункция Add(A, B) Экспорт\n\tВозврат A + B;\nКонецФункции\n\nПроцедура Test() Экспорт\n\tРезультат = Add(1, 2);\nКонецПроцедуры\n```\n\n## Extension interception\n\n- `Test` <- intercepted by extension `TestConfiguration.tests`: `tests_Test` via `&ChangeAndValidate`\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "source-range-Calc": {
+      "tool": "read_module_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "startLine": 1,
+        "endLine": 3
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\ncontentHash: 86546d2111e587d6\nstartLine: 1\nendLine: 3\ntotalLines: 7\n---\n```bsl\nФункция Add(A, B) Экспорт\n\tВозврат A + B;\nКонецФункции\n```\n\n## Extension interception\n\n- `Test` <- intercepted by extension `TestConfiguration.tests`: `tests_Test` via `&ChangeAndValidate`\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "objects-CommonModule-Вычисление": {
+      "tool": "get_metadata_objects",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "CommonModule",
+        "nameFilter": "Вычисление",
+        "language": "en"
+      },
+      "response": {
+        "text": "## Configuration Metadata: TestConfiguration\n\n**Filter:** CommonModule\n**Total:** 1 objects\n\n| Name | Synonym | Comment | Type | ObjectModule | ManagerModule |\n| --- | --- | --- | --- | --- | --- |\n| Вычисление | Calculation |  | CommonModule | Yes | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-CommonModule-Вычисление": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "CommonModule.Вычисление"
+        ],
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## CommonModule: Вычисление\n\n\n### Basic Properties\n\n| Property | Value |\n|---|---|\n| Name | Вычисление |\n| Synonym | Calculation |\n\n### Synonym\n\n| Language | Value |\n|---|---|\n| en | Calculation |\n\n### Properties\n\n| Property | Value |\n| --- | --- |\n| Server | Yes |\n| Server Call | No |\n| Client (Managed Application) | No |\n| Client (Ordinary Application) | No |\n| External Connection | No |\n| Global | No |\n| Privileged | No |\n| Return Values Reuse | DontUse |\n\n**Origin:** core\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "objects-ОбщийМодуль-Вычисление": {
+      "tool": "get_metadata_objects",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "ОбщийМодуль",
+        "nameFilter": "Вычисление",
+        "language": "en"
+      },
+      "response": {
+        "text": "## Configuration Metadata: TestConfiguration\n\n**Filter:** ОбщийМодуль\n**Total:** 1 objects\n\n| Name | Synonym | Comment | Type | ObjectModule | ManagerModule |\n| --- | --- | --- | --- | --- | --- |\n| Вычисление | Calculation |  | CommonModule | Yes | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-ОбщийМодуль-Вычисление": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "ОбщийМодуль.Вычисление"
+        ],
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## CommonModule: Вычисление\n\n\n### Basic Properties\n\n| Property | Value |\n|---|---|\n| Name | Вычисление |\n| Synonym | Calculation |\n\n### Synonym\n\n| Language | Value |\n|---|---|\n| en | Calculation |\n\n### Properties\n\n| Property | Value |\n| --- | --- |\n| Server | Yes |\n| Server Call | No |\n| Client (Managed Application) | No |\n| Client (Ordinary Application) | No |\n| External Connection | No |\n| Global | No |\n| Privileged | No |\n| Return Values Reuse | DontUse |\n\n**Origin:** core\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "modules-Вычисление": {
+      "tool": "list_modules",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "metadataType": "commonModules",
+        "objectName": "Вычисление"
+      },
+      "response": {
+        "text": "## BSL Modules: TestConfiguration\n\n**Filter:** commonModules\n**Total:** 1 modules\n\n| Module Path | Module Type | Parent Type | Parent Name |\n| --- | --- | --- | --- |\n| CommonModules/Вычисление/Module.bsl | Module | CommonModule | Вычисление |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "method-Вычисление": {
+      "tool": "read_method_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "methodName": "Маркер"
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\ncontentHash: 05ca289d439e57ad\nmethod: Маркер\ntype: Function\nexport: true\nstartLine: 1\nendLine: 3\ntotalLines: 3\n---\n```bsl\nФункция Маркер() Экспорт\n\tВозврат 1;\nКонецФункции\n```\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "structure-Вычисление": {
+      "tool": "get_module_structure",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "detailed": true
+      },
+      "response": {
+        "text": "## Module Structure: CommonModules/Вычисление/Module.bsl\n\n**Total:** 0 procedures, 1 functions | **Lines:** 3\n\n### Methods\n\n| # | Type | Name | Export | Context | Lines | Region |\n|---|------|------|--------|---------|-------|--------|\n| 1 | Function | Маркер | Yes | - | 1-3 | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "symbol-Вычисление": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\nline: 1\ncolumn: 2\n---\nFunction <[Number](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\* Маркер()\n\n\\[Server, mobile application (server), mobile standalone server\\]\n\n\\* — calculated by the built-in language type system.",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "source-full-Вычисление": {
+      "tool": "read_module_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl"
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\ncontentHash: 05ca289d439e57ad\nstartLine: 1\nendLine: 3\ntotalLines: 3\n---\n```bsl\nФункция Маркер() Экспорт\n\tВозврат 1;\nКонецФункции\n```\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "source-range-Вычисление": {
+      "tool": "read_module_source",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "startLine": 1,
+        "endLine": 3
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\ncontentHash: 05ca289d439e57ad\nstartLine: 1\nendLine: 3\ntotalLines: 3\n---\n```bsl\nФункция Маркер() Экспорт\n\tВозврат 1;\nКонецФункции\n```\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-full": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "Catalog.Catalog"
+        ],
+        "full": true,
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## Catalog: Catalog\n\n\n### All Properties\n\n| Property | Value |\n|---|---|\n| Uuid | 7b1423c7-b837-457a-b75d-a2b546573341 |\n| Name | Catalog |\n| Object Belonging | Native |\n| Use Standard Commands | Yes |\n| Input By String | Catalog.Catalog.StandardAttribute.Code, Catalog.Catalog.StandardAttribute.Description |\n| Search String Mode On Input By String | Begin |\n| Full Text Search On Input By String | DontUse |\n| Choice Data Get Mode On Input By String | Directly |\n| Based On |  |\n| Create On Input | Use |\n| Include Help In Contents | No |\n| Data Lock Fields |  |\n| Data Lock Control Mode | Managed |\n| Full Text Search | Use |\n| Data History | DontUse |\n| Hierarchical | No |\n| Hierarchy Type | HierarchyFoldersAndItems |\n| Limit Level Count | No |\n| Level Count | 2 |\n| Folders On Top | Yes |\n| Owners |  |\n| Subordination Use | ToItems |\n| Code Length | 9 |\n| Description Length | 25 |\n| Code Type | String |\n| Code Allowed Length | Variable |\n| Code Series | WholeCatalog |\n| Check Unique | Yes |\n| Autonumbering | Yes |\n| Default Presentation | AsDescription |\n| Predefined Data Update | Auto |\n| Edit Type | InDialog |\n| Quick Choice | No |\n| Choice Mode | BothWays |\n| Default Object Form | CatalogForm.ItemForm |\n| Choice History On Input | Auto |\n| Update Data History Immediately After Write | No |\n| Execute After Write Data History Version Processing | No |\n\n### Synonym\n\n| Language | Value |\n|---|---|\n| en | Catalog |\n\n### Attributes\n\n| Name | Synonym | Type | Indexing | Fill Checking | Full Text Search | Password Mode | Multi Line | Quick Choice | Create On Input |\n|---|---|---|---|---|---|---|---|---|---|\n| Attribute | Attribute | String | DontIndex | DontCheck | Use | No | No | Auto | Auto |\n\n### Forms\n\n| Name | Synonym | Form Type |\n|---|---|---|\n| ItemForm | Item form | Managed |\n\n### Templates\n\n| Name | Synonym | Type |\n|---|---|---|\n| Invoice | Invoice | - |\n\n**Origin:** core\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "details-assignable": {
+      "tool": "get_metadata_details",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "objectFqns": [
+          "Catalog.Catalog"
+        ],
+        "assignable": true,
+        "language": "en"
+      },
+      "response": {
+        "text": "# Metadata Details: TestConfiguration\n\n## Assignable properties: Catalog.Catalog\n\nSet these with `modify_metadata`. For an ENUM property the value must be one of the listed Allowed values; a FIELD_LIST property takes a JSON array of the listed field addresses (at most 25 are listed, then the rest is counted).\n\n| Property | Kind | Current | Allowed values |\n| --- | --- | --- | --- |\n| uuid | STRING | 7b1423c7-b837-457a-b75d-a2b546573341 |  |\n| name | STRING | Catalog |  |\n| synonym | LOCALIZED_STRING | en=Catalog |  |\n| comment | STRING |  |  |\n| objectBelonging | ENUM | Native | Native, Adopted |\n| extendedConfigurationObject | STRING |  |  |\n| useStandardCommands | BOOLEAN | true |  |\n| inputByString | FIELD_LIST | [\"Catalog.Catalog.StandardAttribute.Code\",\"Catalog.Catalog.StandardAttribute.Description\"] | Catalog.Catalog.StandardAttribute.Description, Catalog.Catalog.StandardAttribute.Code |\n| searchStringModeOnInputByString | ENUM | Begin | Begin, AnyPart |\n| fullTextSearchOnInputByString | ENUM | DontUse | Use, DontUse |\n| choiceDataGetModeOnInputByString | ENUM | Directly | Directly, Background |\n| basedOn | MANY_REFERENCE |  | metadata object |\n| createOnInput | ENUM | Use | Auto, DontUse, Use |\n| includeHelpInContents | BOOLEAN | false |  |\n| dataLockFields | FIELD_LIST | [] | Catalog.Catalog.StandardAttribute.DeletionMark, Catalog.Catalog.StandardAttribute.Description, Catalog.Catalog.StandardAttribute.Code, Catalog.Catalog.Attribute.Attribute |\n| dataLockControlMode | ENUM | Managed | Automatic, Managed, AutomaticAndManaged |\n| fullTextSearch | ENUM | Use | DontUse, Use |\n| objectPresentation | LOCALIZED_STRING |  |  |\n| extendedObjectPresentation | LOCALIZED_STRING |  |  |\n| listPresentation | LOCALIZED_STRING |  |  |\n| extendedListPresentation | LOCALIZED_STRING |  |  |\n| explanation | LOCALIZED_STRING |  |  |\n| dataHistory | ENUM | DontUse | DontUse, Use |\n| hierarchical | BOOLEAN | false |  |\n| hierarchyType | ENUM | HierarchyFoldersAndItems | HierarchyFoldersAndItems, HierarchyOfItems |\n| limitLevelCount | BOOLEAN | false |  |\n| levelCount | INTEGER | 2 |  |\n| foldersOnTop | BOOLEAN | true |  |\n| owners | MANY_REFERENCE |  | CatalogOwner |\n| subordinationUse | ENUM | ToItems | ToItems, ToFolders, ToFoldersAndItems |\n| codeLength | INTEGER | 9 |  |\n| descriptionLength | INTEGER | 25 |  |\n| codeType | ENUM | String | Number, String |\n| codeAllowedLength | ENUM | Variable | Fixed, Variable |\n| codeSeries | ENUM | WholeCatalog | WholeCatalog, WithinSubordination, WithinOwnerSubordination |\n| checkUnique | BOOLEAN | true |  |\n| autonumbering | BOOLEAN | true |  |\n| defaultPresentation | ENUM | AsDescription | AsCode, AsDescription |\n| predefinedDataUpdate | ENUM | Auto | Auto, AutoUpdate, DontAutoUpdate |\n| editType | ENUM | InDialog | InList, InDialog, BothWays |\n| quickChoice | BOOLEAN | false |  |\n| choiceMode | ENUM | BothWays | FromForm, QuickChoice, BothWays |\n| defaultObjectForm | REFERENCE | ItemForm | CatalogForm |\n| defaultFolderForm | REFERENCE |  | CatalogForm |\n| defaultListForm | REFERENCE |  | CatalogForm |\n| defaultChoiceForm | REFERENCE |  | CatalogForm |\n| defaultFolderChoiceForm | REFERENCE |  | CatalogForm |\n| auxiliaryObjectForm | REFERENCE |  | CatalogForm |\n| auxiliaryFolderForm | REFERENCE |  | CatalogForm |\n| auxiliaryListForm | REFERENCE |  | CatalogForm |\n| auxiliaryChoiceForm | REFERENCE |  | CatalogForm |\n| auxiliaryFolderChoiceForm | REFERENCE |  | CatalogForm |\n| choiceHistoryOnInput | ENUM | Auto | Auto, DontUse |\n| updateDataHistoryImmediatelyAfterWrite | BOOLEAN | false |  |\n| executeAfterWriteDataHistoryVersionProcessing | BOOLEAN | false |  |\n\n---\n\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    }
+  }
+}

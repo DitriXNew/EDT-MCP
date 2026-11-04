@@ -181,7 +181,9 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public Collection<IMcpTool> getVisibleTools()
     {
-        Collection<IMcpTool> enabled = getEnabledTools();
+        Collection<IMcpTool> enabled = getEnabledTools().stream()
+            .filter(tool -> HostToolCapabilities.availableOnCurrentHost(tool.getName()))
+            .collect(Collectors.toUnmodifiableList());
         if (!Toolsets.isProgressiveDisclosureEnabled())
         {
             return enabled;

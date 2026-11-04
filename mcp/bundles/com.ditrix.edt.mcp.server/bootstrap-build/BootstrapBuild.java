@@ -26,6 +26,12 @@ public final class BootstrapBuild
             McpToolRegistry.getInstance().getAllTools(), ClientCapabilities.ABSENT)));
         if (catalog.getAsJsonObject("tools").getAsJsonArray("tools").size() != McpToolRegistry.getInstance().getToolCount())
         { throw new IllegalStateException("Bootstrap catalog must include every registered schema"); }
+        JsonObject hostCapabilities = new JsonObject();
+        for (IMcpTool tool : McpToolRegistry.getInstance().getAllTools()) {
+            var entry = HostToolCapabilities.requireEntry(tool.getName());
+            hostCapabilities.addProperty(tool.getName(), entry.capability().name());
+        }
+        catalog.add("hostCapabilities", hostCapabilities);
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
         manifest.getMainAttributes().putValue("Main-Class", "com.ditrix.edt.mcp.server.ipc.StdioBootstrap");

@@ -13,7 +13,8 @@ Bundle-ClassPath: .,
  lib/copy-down-1.1.jar,
  lib/jsoup-1.17.2.jar,
  lib/snakeyaml-2.2.jar
-Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
+Require-Bundle: org.eclipse.equinox.app,
+ org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.core.resources;bundle-version="[3.18.0,4.0.0)",
  org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
  org.eclipse.jface;bundle-version="[3.30.0,4.0.0)",
@@ -25,7 +26,8 @@ Require-Bundle: org.eclipse.core.runtime;bundle-version="[3.30.0,4.0.0)",
  org.eclipse.egit.core;bundle-version="[6.8.0,8.0.0)"
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server
-Import-Package: com._1c.g5.designer.ssh.client,
+Import-Package: org.eclipse.osgi.service.datalocation,
+ com._1c.g5.designer.ssh.client,
  com._1c.g5.designer.ssh.client.operation,
  com._1c.g5.modeling.xml,
  com._1c.g5.modeling.xml.linking,

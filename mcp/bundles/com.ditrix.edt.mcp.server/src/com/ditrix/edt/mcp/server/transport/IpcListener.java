@@ -5,6 +5,8 @@
  */
 package com.ditrix.edt.mcp.server.transport;
 
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.StandardProtocolFamily;
@@ -34,6 +36,7 @@ public final class IpcListener implements AutoCloseable
 {
     private final EndpointRegistry registry;
     private final McpServer mcpServer;
+    private final HeadlessLifetime lifetime;
     private final EndpointRegistry.Endpoint endpoint;
     private final ServerSocketChannel server;
     private final Set<JsonFrames.Socket> peers = ConcurrentHashMap.newKeySet();
@@ -53,6 +56,7 @@ public final class IpcListener implements AutoCloseable
     {
         this.registry = registry;
         this.mcpServer = mcpServer;
+        this.lifetime = Activator.getDefault() == null ? null : Activator.getDefault().getHeadlessLifetime();
         String generation = UUID.randomUUID().toString();
         Path socket = registry.directory().resolve("s-" + generation.substring(0, 12));
         if (socket.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 100)
@@ -91,8 +95,10 @@ public final class IpcListener implements AutoCloseable
                 SocketChannel channel = server.accept();
                 if (!slots.tryAcquire()) { channel.close(); continue; }
                 JsonFrames.Socket peer = new JsonFrames.Socket(channel);
+                var lease = lifetime == null ? null : lifetime.connect();
+                if (lifetime != null && lease == null) { peer.close(); slots.release(); continue; }
                 peers.add(peer);
-                Thread thread = new Thread(() -> serve(peer), "edt-mcp-ipc-peer");
+                Thread thread = new Thread(() -> { try (lease) { serve(peer); } }, "edt-mcp-ipc-peer");
                 thread.setDaemon(true); thread.start();
             }
             catch (IOException e) { return; }

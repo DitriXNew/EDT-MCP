@@ -70,6 +70,8 @@ public class Activator extends AbstractUIPlugin
     /** MCP Server instance */
     private McpServer mcpServer;
 
+    private volatile HeadlessLifetime headlessLifetime;
+
     /** In-process bridge exposed to sibling OSGi bundles by string service name. */
     private ServiceRegistration<?> bridgeRegistration;
 
@@ -90,7 +92,7 @@ public class Activator extends AbstractUIPlugin
     public void start(BundleContext context) throws Exception
     {
         super.start(context);
-        NativeRenderModeProbe.captureStartupModes();
+        if (HostKind.current() == HostKind.WINDOWED) { NativeRenderModeProbe.captureStartupModes(); }
         plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
 
@@ -112,7 +114,7 @@ public class Activator extends AbstractUIPlugin
         {
             // The bridge is still published here: the headless test application has no EDT
             // services to wait for, and the bridge's own contract is what those tests exercise.
-            publishBridge(context);
+            if (HostKind.current() != HostKind.HEADLESS) { publishBridge(context); }
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
@@ -133,6 +135,18 @@ public class Activator extends AbstractUIPlugin
 
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
+
+    void startHeadlessCore(HeadlessLifetime lifetime)
+    {
+        headlessLifetime = lifetime;
+        mcpServer.registerTools();
+        services.init(getBundle().getBundleContext(), false);
+        publishBridge(getBundle().getBundleContext());
+        orchestrator.start(true);
+        new McpCoreStartup(System::getenv).start();
+    }
+
+    public HeadlessLifetime getHeadlessLifetime() { return headlessLifetime; }
 
     /**
      * Publishes the stable in-process bridge.
@@ -159,6 +173,7 @@ public class Activator extends AbstractUIPlugin
     public void stop(BundleContext context) throws Exception
     {
         com.ditrix.edt.mcp.server.transport.StdioPluginSupport.stop();
+        if (headlessLifetime != null) { headlessLifetime.close(); headlessLifetime = null; }
         if (bridgeRegistration != null)
         {
             bridgeRegistration.unregister();
@@ -723,6 +738,8 @@ public class Activator extends AbstractUIPlugin
     {
         // Check headless indicators without accessing Display.
         // (Display.getDefault() initializes GTK and fails in headless environments.)
+
+        if (HostKind.current() == HostKind.HEADLESS) { return true; }
 
         // 1) Eclipse test mode property
         String testSuite = System.getProperty("org.eclipse.ui.testsuite"); //$NON-NLS-1$

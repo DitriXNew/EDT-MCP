@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.HostKind;
+
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -110,6 +112,7 @@ public class GetServerStatusTool implements IMcpTool
                 JsonSchemaBuilder.object()
                     .booleanProperty("http", "Whether the HTTP listener is running", true)
                     .booleanProperty("ipc", "Whether the local IPC listener is running", true), false)
+            .stringProperty("hostKind", "EDT host kind: WINDOWED or HEADLESS")
             .stringProperty("protocolVersion", "MCP protocol version implemented by the server") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("pluginVersion", "Version of the EDT-MCP plugin") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("edtVersion", "Detected 1C:EDT version") //$NON-NLS-1$ //$NON-NLS-2$
@@ -149,6 +152,7 @@ public class GetServerStatusTool implements IMcpTool
             result.put(KEY_RUNNING, transports.running());
             result.put("transports", Map.of("http", http, "ipc", ipc));
 
+            result.put("hostKind", HostKind.current().name());
             result.put("protocolVersion", McpConstants.PROTOCOL_VERSION); //$NON-NLS-1$
             result.put("pluginVersion", McpConstants.PLUGIN_VERSION); //$NON-NLS-1$
             result.put("edtVersion", GetEdtVersionTool.getEdtVersion()); //$NON-NLS-1$

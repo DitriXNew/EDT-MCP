@@ -27,8 +27,12 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
     private final Path install;
     private final Path workspace;
     private final Path configuration;
+    private final boolean headless;
     public WindowsEdtStarter(Path install, Path workspace, Path configuration)
-    { this.install = install; this.workspace = workspace; this.configuration = configuration; }
+    { this(install, workspace, configuration, false); }
+
+    public WindowsEdtStarter(Path install, Path workspace, Path configuration, boolean headless)
+    { this.install = install; this.workspace = workspace; this.configuration = configuration; this.headless = headless; }
 
     public static void checkRuntime(Path install) throws IOException
     {
@@ -58,24 +62,37 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
     @Override public StartupCoordinator.Started start() throws Exception
     {
         checkRuntime(install);
-        List<String> command = new ArrayList<>(List.of(install.resolve("1cedt.exe").toString(),
+        return createDetached(command(), install, headless);
+    }
+
+    public List<String> command()
+    {
+        List<String> command = new ArrayList<>(List.of(install.resolve(headless ? "1cedtc.exe" : "1cedt.exe").toString(),
             "--launcher.ini", install.resolve("1cedt.ini").toString(), "--launcher.suppressErrors", "-nosplash",
-            "-vm", Path.of(System.getProperty("java.home"), "bin", "javaw.exe").toString(),
+            "-vm", Path.of(System.getProperty("java.home"), "bin", headless ? "java.exe" : "javaw.exe").toString(),
             "-install", install.toString(), "-data", workspace.toString()));
         if (configuration != null) { command.addAll(List.of("-configuration", configuration.toString())); }
+        if (headless) { command.addAll(List.of("-application", "com.ditrix.edt.mcp.server.stdioHost")); }
         // Explicit launch-only override. Never changes the user's HTTP auto-start preference.
         command.addAll(List.of("--launcher.appendVmargs", "-vmargs", "-Dedt.mcp.stdioOnly=true"));
-        return createDetached(command, install);
+        return List.copyOf(command);
     }
+
+    @Override public String notReadyMessage()
+    { return headless ? "Headless EDT is running but IPC is not ready. Ask the user to inspect the EDT workspace log."
+        : StartupCoordinator.Starter.super.notReadyMessage(); }
 
     @Override public boolean supportsStartup() { return System.getProperty("os.name").startsWith("Windows"); }
 
     public static StartupCoordinator.Started createDetached(List<String> command, Path workingDirectory) throws Exception
+    { return createDetached(command, workingDirectory, false); }
+
+    private static StartupCoordinator.Started createDetached(List<String> command, Path workingDirectory, boolean headless) throws Exception
     {
         if (!System.getProperty("os.name").startsWith("Windows")) { throw new IOException(StartupCoordinator.OPEN_WORKSPACE); }
         String commandLine = command.stream().map(WindowsEdtStarter::quote).collect(java.util.stream.Collectors.joining(" "));
         String script = "$ErrorActionPreference='Stop';$s=([wmiclass]'Win32_ProcessStartup').CreateInstance();"
-            + "$s.ShowWindow=1;$s.CreateFlags=16777216;$r=([wmiclass]'Win32_Process').Create("
+            + "$s.ShowWindow=" + (headless ? "0" : "1") + ";$s.CreateFlags=16777216;$r=([wmiclass]'Win32_Process').Create("
             + literal(commandLine) + "," + literal(workingDirectory.toString()) + ",$s);"
             + "if($r.ReturnValue -ne 0){throw ('WMI Create failed: '+$r.ReturnValue)};[Console]::Out.Write($r.ProcessId)";
         Path powershell = Path.of(System.getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -83,7 +100,8 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
             "-WindowStyle", "Hidden", "-EncodedCommand", Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE)))
             .redirectErrorStream(true).start();
         if (!provider.waitFor(15, TimeUnit.SECONDS))
-        { provider.destroyForcibly(); throw new IOException("WMI launch timed out; inspect the EDT window before retrying"); }
+        { provider.destroyForcibly(); throw new IOException(headless ? "WMI launch timed out; inspect the EDT workspace log before retrying"
+                : "WMI launch timed out; inspect the EDT window before retrying"); }
         String result = new String(provider.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
         if (provider.exitValue() != 0)
         {

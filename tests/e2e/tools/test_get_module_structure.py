@@ -176,3 +176,10 @@ def test_object_names_in_another_case_resolve_the_real_ast():
         assert_contains(result.text, "### Methods", "the real module's methods table must be returned")
         assert_contains(result.text, method, "the real module's method must be in the AST report")
     assert_no_diff("case-insensitive structure lookup must leave the fixture unchanged")
+
+
+@e2e_test(tool="get_module_structure", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_get_module_structure
+    contract_get_module_structure(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

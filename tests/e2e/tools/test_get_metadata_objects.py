@@ -265,3 +265,10 @@ def test_subsystem_type_name_lists_fixture_root():
     assert_not_contains(r.text, "CommonModule",
                         "Subsystem filter must not leak objects of other types")
     assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_get_metadata_objects
+    contract_get_metadata_objects(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")
