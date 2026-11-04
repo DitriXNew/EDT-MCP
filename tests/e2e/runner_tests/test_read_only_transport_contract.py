@@ -19,6 +19,7 @@ def fresh_harness():
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
     harness._OUTPUT_SCHEMAS = {tool: None for tool, _ in READS}  # Advertised without schemas.
+    harness._OUTPUT_SCHEMAS["sort_metadata"] = None
     harness._BASELINE_INVENTORY = []
     harness.wait_for_project_ready = mock.Mock(return_value=True)
     harness.all_fixtures_status = mock.Mock(return_value="")
@@ -27,6 +28,42 @@ def fresh_harness():
 
 
 class ReadOnlyTransportContractTest(unittest.TestCase):
+    def test_metadata_state_branches_on_notice_presence_and_rejects_malformed_blocks(self):
+        harness = fresh_harness()
+        snapshot = {"success": True, "mode": "list", "collections": [
+            {"fqn": "Configuration.catalogs", "order": ["Zulu", "Alpha"]}]}
+        with mock.patch.object(harness, "_post", return_value={"result": {"structuredContent": snapshot}}):
+            state = harness.metadata_collection_state(harness.PROJECT, "Configuration.Catalogs")
+            self.assertEqual(["Zulu", "Alpha"], state["order"])
+            self.assertNotIn("autosort", state)
+            snapshot["collections"][0]["autosort"] = {"active": True}
+            with self.assertRaises(harness.E2EAssertion):
+                harness.metadata_collection_state(harness.PROJECT, "Configuration.Catalogs")
+        self.assert_read_left_no_mutation(harness)
+
+    def test_metadata_order_listing_preserves_order_and_is_read_only_on_transport_loss(self):
+        harness = fresh_harness()
+        snapshot = {"success": True, "mode": "list", "collections": [
+            {"fqn": "Configuration.catalogs", "order": ["Zulu", "Alpha"]}]}
+        with mock.patch.object(harness, "_post", return_value={"result": {"structuredContent": snapshot}}) as post:
+            self.assertEqual(["Zulu", "Alpha"], harness.metadata_collection_order(
+                harness.PROJECT, "Configuration.Catalogs"))
+        self.assertEqual("list", post.call_args.args[1]["arguments"]["mode"])
+        self.assert_read_left_no_mutation(harness)
+        with mock.patch.object(harness, "_post", side_effect=ConnectionResetError("read interrupted")), \
+                mock.patch.object(harness, "freeze_fixtures") as freeze:
+            with self.assertRaises(ConnectionResetError):
+                harness.metadata_collection_order(harness.PROJECT, "Configuration.Catalogs")
+        freeze.assert_not_called()
+        self.assert_read_left_no_mutation(harness)
+
+    def test_sort_modes_only_exempt_explicit_list_from_mutation_tracking(self):
+        harness = fresh_harness()
+        self.assertTrue(harness._is_read_only_model_action("sort_metadata", {"mode": "list"}))
+        for args in ({}, {"mode": "alphabetical"}, {"mode": "move"}, {"mode": "explicit"},
+                     {"mode": "LIST"}, {"action": "list"}):
+            self.assertFalse(harness._is_read_only_model_action("sort_metadata", args))
+
     def assert_read_left_no_mutation(self, harness):
         self.assertFalse(harness.calls_aborted())
         self.assertFalse(harness.fixtures_frozen())

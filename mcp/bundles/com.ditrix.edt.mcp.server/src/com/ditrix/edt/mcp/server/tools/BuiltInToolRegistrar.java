@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
+import com.ditrix.edt.mcp.server.tools.impl.SortMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugPauseTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
@@ -255,6 +256,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new RenameMetadataObjectTool());
         catalogue.add(new DeleteMetadataTool());
         catalogue.add(new CreateMetadataTool());
+        catalogue.add(new SortMetadataTool());
         catalogue.add(new ModifyMetadataTool());
         catalogue.add(new AdoptMetadataObjectTool());
         catalogue.add(new CloneMetadataObjectTool());

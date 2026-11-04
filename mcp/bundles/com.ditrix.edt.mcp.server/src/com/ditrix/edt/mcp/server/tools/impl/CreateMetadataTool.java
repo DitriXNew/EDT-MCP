@@ -59,6 +59,9 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataOrdering;
+import com.ditrix.edt.mcp.server.utils.MetadataAutoSort;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
@@ -191,7 +194,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Add a new metadata object or member to a configuration. Parameters and examples: " //$NON-NLS-1$
+        return "Add a new metadata object or member to a configuration. Autosort places governed objects; ask the user about manual order. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
@@ -208,6 +211,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'Subsystem.<Parent>.Subsystem.<Child>', repeatable to any depth - the parent " //$NON-NLS-1$
                 + "chain must already exist. The trailing Name is the new node's " //$NON-NLS-1$
                 + "programmatic Name; type / kind tokens may be English or Russian.", true) //$NON-NLS-1$
+            .integerProperty("insertPosition", "Optional 1-based position in the destination metadata collection. "
+                + "1 is first; omit to append. Refuses values outside 1..size+1 before creation. "
+                + "Not applicable to form/XDTO content, predefined data or standalone external roots.")
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
@@ -352,6 +358,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_CALL_TYPE,
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
                 + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
+            .objectProperty("autosort", MetadataAutoSort.OUTPUT_DESCRIPTION)
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION))
             .build();
@@ -373,6 +380,65 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
+        String result = executeCreate(params);
+        if (ToolResult.isErrorPayload(result))
+        {
+            return result;
+        }
+        try
+        {
+            JsonObject body = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+            String fqn = resultString(body, "fqn");
+            MetadataAutoSort.Notice notice = fqn == null ? null
+                : createdAutosortNotice(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), fqn);
+            return notice == null ? result : notice.annotate(result);
+        }
+        catch (Exception e)
+        {
+            return ToolResult.errorAfterMutation("Metadata was created, but its autosort policy could not be reported: "
+                + unwrapCauseMessage(e) + ". Inspect the collection with sort_metadata mode=list before retrying.").toJson();
+        }
+    }
+
+    protected MetadataAutoSort.Notice createdAutosortNotice(String projectName, String fqn)
+    {
+        if (!MetadataAutoSort.isInstalled())
+        {
+            return null;
+        }
+        ProjectContext ctx = resolveProjectAndScope(projectName, fqn);
+        if (ctx.hasError())
+        {
+            throw new IllegalStateException(ctx.error);
+        }
+        if (ctx.scope.isExternalObjects())
+        {
+            return null;
+        }
+        BmModelResolver.Resolution bm = BmModelResolver.resolve(ctx.project);
+        if (!bm.isAvailable())
+        {
+            throw new IllegalStateException(bm.actionableError(NAME, "Read the created object before retrying."));
+        }
+        MetadataAutoSort.Settings autosort = MetadataAutoSort.forProject(ctx.project);
+        return BmTransactions.read(bm.getModel(), "CreatedMetadataAutosort", (tx, pm) ->
+            creationNotice(tx.toTransactionObject(ctx.config), fqn, autosort));
+    }
+
+    static MetadataAutoSort.Notice creationNotice(Configuration config, String fqn, MetadataAutoSort.Settings autosort)
+    {
+        if (MetadataNodeResolver.resolveAddress(MetadataScope.ofConfiguration(config), fqn, false) == null)
+        {
+            return null;
+        }
+        var destination = MetadataOrdering.destination(config, fqn);
+        EReference ref = destination.collections().get(0);
+        return autosort.forCollection(ref).notice(
+            MetadataOrdering.collectionAddress(destination.owner(), ref), MetadataAutoSort.CREATED);
+    }
+
+    protected String executeCreate(Map<String, String> params)
+    {
         String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
         if (err != null)
         {
@@ -384,6 +450,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
         String callType = JsonUtils.extractStringArgument(params, KEY_CALL_TYPE);
+        String positionText = JsonUtils.extractStringArgument(params, "insertPosition");
+        Integer insertPosition = JsonUtils.parseIntegralInt(positionText);
+        if (params.containsKey("insertPosition") && insertPosition == null)
+        {
+            return ToolResult.error("Invalid insertPosition '" + positionText
+                + "'; choose a whole 1-based integer or omit insertPosition to append.").toJson();
+        }
 
         // Normalize 'ё'->'е' at the PARSE step, BEFORE identifier validation, so a Name carrying the
         // letter 'ё' (which the 1C standard mdo-ru-name-unallowed-letter rejects) is stored compliant.
@@ -402,6 +475,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("generateContent=true and formType require an owned form FQN "
                 + "('Type.Object.Form.FormName'); '" + fqn
                 + "' is not one. Omit these options or create an owned form.").toJson();
+        }
+        if (insertPosition != null)
+        {
+            String positionError = validateInsertBeforeWrite(projectName, normFqn, insertPosition);
+            if (positionError != null)
+            {
+                return positionError;
+            }
         }
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         // callType is meaningful ONLY for a form event handler FQN; reject it loudly elsewhere rather
@@ -448,6 +529,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // Parse the supported properties (synonym/comment); reject anything else early. The synonym /
         // comment values are 'ё'->'е' normalized through the same report as the Name.
         Props props = new Props();
+        props.insertPosition = insertPosition;
         String propErr = parseProperties(properties, props, normReport);
         if (propErr != null)
         {
@@ -1083,6 +1165,47 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return result.put(McpKeys.MESSAGE, "Created " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)).toJson(); //$NON-NLS-1$
     }
 
+    private String validateInsertBeforeWrite(String projectName, String fqn, int position)
+    {
+        ProjectContext ctx = resolveProjectAndScope(projectName, fqn);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+        BmModelResolver.Resolution bm = BmModelResolver.resolve(ctx.project);
+        if (!bm.isAvailable())
+        {
+            return ToolResult.error(bm.actionableError(NAME, "Nothing was changed.")).toJson();
+        }
+        try
+        {
+            MetadataAutoSort.Settings autosort = MetadataAutoSort.forProject(ctx.project);
+            BmTransactions.read(bm.getModel(), "ValidateMetadataInsertPosition", (tx, pm) -> {
+                validateInsertDestination(tx.toTransactionObject(ctx.config), fqn, position, autosort);
+                return null;
+            });
+            return null;
+        }
+        catch (Exception e)
+        {
+            String refusal = MetadataAutoSort.refusalJson(e);
+            if (refusal != null)
+            {
+                return refusal;
+            }
+            return ToolResult.error("Cannot use insertPosition for '" + fqn + "': "
+                + unwrapCauseMessage(e) + " Omit insertPosition for external content or fix the metadata collection/index.").toJson();
+        }
+    }
+
+    static void validateInsertDestination(Configuration config, String fqn, int position, MetadataAutoSort.Settings autosort)
+    {
+        MetadataOrdering.Level destination = MetadataOrdering.destination(config, fqn);
+        EReference ref = destination.collections().get(0);
+        MetadataOrdering.validateInsertPosition(position, MetadataOrdering.members(destination.owner(), ref).size());
+        autosort.forCollection(ref).requireManualOrder(MetadataOrdering.collectionAddress(destination.owner(), ref));
+    }
+
     // ---- top-level creation (mirrors the former create_metadata_object) -------------------------
 
     /**
@@ -1190,6 +1313,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
                 }
+                EReference destination = (EReference)cfg.eClass().getEStructuralFeature(configFeatureName);
+                MetadataOrdering.validateInsertPosition(req.props.insertPosition,
+                    MetadataOrdering.members(cfg, destination).size());
                 MdObject newObject = newTopObject(factory, eClass, v8Project, name, typeProvider);
                 if (newObject == null)
                 {
@@ -1202,6 +1328,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 req.typeSpecific.applyTo(newObject);
                 tx.attachTopObject((IBmObject)newObject, req.normFqn);
                 addToCollection(cfg, configFeatureName, newObject);
+                MetadataOrdering.positionCreated(cfg, destination, newObject, req.props.insertPosition);
                 // A CommonForm is a BasicForm: without its content Form (the file Form.form) the
                 // form is a descriptor only - the content object is never a BM top object, so every
                 // later member create fails with "bmGetFqn may be called on attached BM objects
@@ -1427,6 +1554,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("Parent subsystem not found in transaction"); //$NON-NLS-1$
                 }
                 Subsystem owner = (Subsystem)txParent;
+                MetadataOrdering.validateInsertPosition(props.insertPosition, owner.getSubsystems().size());
                 String ownerFqn = ((IBmObject)owner).bmGetFqn();
                 Object created = newTopObject(factory, eClass, v8Project, name,
                     typeProviderFor(eClass, version));
@@ -1444,6 +1572,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 // pair), and EDT serializes BOTH - the parent lists the child by name, the child
                 // names its parent by FQN - so setting only one leaves a half-linked pair on disk.
                 owner.getSubsystems().add(newObject);
+                if (props.insertPosition != null)
+                {
+                    owner.getSubsystems().move(props.insertPosition - 1, newObject);
+                }
                 newObject.setParentSubsystem(owner);
                 factory.fillDefaultReferences(newObject);
                 parentFqnHolder[0] = ownerFqn;
@@ -1718,6 +1850,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     throw new IllegalStateException("Member already exists: " + target.childName); //$NON-NLS-1$
                 }
                 String ownerFqn = ((IBmObject)owner).bmGetFqn();
+                MetadataOrdering.validateInsertPosition(props.insertPosition,
+                    MetadataOrdering.members(owner, target.feature).size());
                 MdObject child = newTopObject(bm.factory, target.elementType, bm.v8Project,
                     target.childName, typeProviderFor(target.elementType, bm.version));
                 if (child == null)
@@ -1728,6 +1862,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 applyScalarProps(child, props, synonymLanguage);
                 String attached = ReferencedTopObjects.attachFqn(ownerFqn, child.eClass(), target.childName);
                 ReferencedTopObjects.attachAndLink(tx, owner, target.feature, child, attached, bm.factory);
+                MetadataOrdering.positionCreated(owner, target.feature, child, props.insertPosition);
                 childFqn[0] = attached;
                 parentFqn[0] = ownerFqn;
                 return null;
@@ -1783,10 +1918,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject owner = resolveMemberOwnerInTx(tx, topBmId, parts, feature, name);
+                MetadataOrdering.validateInsertPosition(props.insertPosition,
+                    MetadataOrdering.members(owner, (EReference)feature).size());
                 MemberChildSpec spec =
                     new MemberChildSpec(factory, elementType, owner, version, name, props,
                         synonymLanguage, feature);
                 MdObject child = createMemberChild(spec);
+                MetadataOrdering.positionCreated(owner, (EReference)feature, child, props.insertPosition);
                 fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(owner);
                 if ("ExternalDataSource".equals(parts[0])) //$NON-NLS-1$
                 {
@@ -2654,6 +2792,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return propErr;
         }
+        int positionValue = JsonUtils.extractIntArgument(params, "insertPosition", 0);
+        Integer insertPosition = params.containsKey("insertPosition") ? positionValue : null;
         boolean setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
         boolean generateContent = JsonUtils.extractBooleanArgument(params, KEY_GENERATE_CONTENT, false);
         // The bound object fields to seed: null = omitted (-> the kind defaults, resolved downstream
@@ -2738,13 +2878,19 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 FormType formType = FormGenerationSupport.resolveType(requestedFormType, ownerEnglishType);
                 FormGenerationSupport.validate((MdObject)txOwner, ownerEnglishType, formType,
                     fGenerateContent, fSetAsDefault, fObjectFields);
-                return FormElementWriter.createForm(tx, (MdObject)txOwner, formName, synonymLanguage,
+                EReference destination = (EReference)txOwner.eClass().getEStructuralFeature("forms");
+                MetadataOrdering.validateInsertPosition(insertPosition,
+                    MetadataOrdering.members(txOwner, destination).size());
+                String contentFqn = FormElementWriter.createForm(tx, (MdObject)txOwner, formName, synonymLanguage,
                     synonym, comment, fSetAsDefault, svc.mdFactory, svc.formFactory, svc.fqnGenerator,
                     svc.version, russianAutoNames, fGenerateContent && formType == FormType.OBJECT,
                     ownerEnglishType, fObjectFields, formType,
                     fGenerateContent && formType != FormType.OBJECT
                         ? (formOwner, mdForm) -> FormGenerationSupport.generate(formOwner, mdForm, formType,
                             svc.v8Project, ctx.scope.resolveLanguageCode(null)) : null);
+                MetadataOrdering.positionCreated(txOwner, destination,
+                    (MdObject)FormElementWriter.findOwnedForm((MdObject)txOwner, formName), insertPosition);
+                return contentFqn;
             });
         }
         catch (Exception e)
@@ -3399,6 +3545,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         String language;
         String comment;
         TemplateType templateType;
+        Integer insertPosition;
     }
 
     /**

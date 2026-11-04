@@ -128,6 +128,8 @@ public final class InputSchemaCompactor
         Map<String, Set<String>> keep = new HashMap<>();
         // XOR input modes and the method's conditional scope must survive schema compaction.
         keep.put("validate_query", asSet("queryText", "method"));
+        // Level address shape and conditional mode semantics cannot be expressed by these scalar schemas.
+        keep.put("sort_metadata", asSet("fqn", "mode", "recursive", "items", "direction", "positions"));
         // The only statement anywhere that a 'task' marker means TODO/FIXME/XXX/HACK.
         // priority sub-filters the TASK family only - a bookmark has no priority, and the
         // combination is rejected. The enum lists high|normal|low with nothing saying that.
@@ -326,7 +328,8 @@ public final class InputSchemaCompactor
         // rejected, and returnValuesReuse='DuringRequest' is illegal for some kinds - both
         // combinations the compacted enums advertise as valid. Cross-field constraints are
         // the one thing a flat schema cannot state at all.
-        keep.put("create_metadata", asSet("normalizeYo", "commonModuleKind", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // insertPosition carries its 1-based convention, bounds refusal and external-content scope.
+        keep.put("create_metadata", asSet("insertPosition", "normalizeYo", "commonModuleKind", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "serverCall", "privileged", "returnValuesReuse")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         keep.put("modify_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the

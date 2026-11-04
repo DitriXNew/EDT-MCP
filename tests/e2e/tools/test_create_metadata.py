@@ -56,6 +56,10 @@ from harness import (
     poll_disk_contains,
     poll_disk_contains_all,
     read_disk,
+    metadata_collection_order,
+    metadata_collection_state,
+    assert_autosort_notice,
+    autosort_descending,
     restore_extension_fixture,
     split_markdown_row,
     tree_snapshot,
@@ -70,6 +74,79 @@ from harness import (
 
 # The fixture form the kind-resolution probes write to (issue #343).
 _KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_insert_position_indexes_configuration_and_member_mdo_order():
+    config_path = "src/Configuration/Configuration.mdo"
+    baseline = ET.fromstring(read_disk(config_path))
+    original = [(node.text or "").rsplit(".", 1)[-1] for node in baseline if _xml_local(node.tag) == "catalogs"]
+    owner = "Catalog.E861Indexed"
+    state = metadata_collection_state(PROJECT, "Configuration.Catalogs")
+    if "autosort" in state:
+        before = tree_snapshot()
+        refused = call("create_metadata", {"projectName": PROJECT, "fqn": owner, "insertPosition": 1})
+        error = assert_error(refused)
+        assert_autosort_notice(refused.structured, "Configuration.catalogs")
+        assert_error_quality(error, names=["Configuration.catalogs", "Autosort"], suggests=["ask the user", "Auto sort"])
+        assert_tree_unchanged(before, "autosort must refuse the index before creation")
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": owner})
+        assert_ok(created, "default insertion with autosort")
+        assert "alphabetical position" in assert_autosort_notice(created.structured, "Configuration.catalogs")["effect"]
+        expected = sorted(original + ["E861Indexed"], key=str.casefold, reverse=autosort_descending(state))
+    else:
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": owner, "insertPosition": 1})
+        assert_ok(created, "insert new catalog first")
+        assert "autosort" not in created.structured, created.structured
+        expected = ["E861Indexed"] + original
+    poll_disk_contains_all(config_path, [], check=lambda xml: [
+        (n.text or "").rsplit(".", 1)[-1] for n in ET.fromstring(xml)
+        if _xml_local(n.tag) == "catalogs"] == expected, ctx="configuration order agrees with insertion policy")
+    assert metadata_collection_order(PROJECT, "Configuration.Catalogs") == expected
+
+    child, collection, folder = "Attribute", "attributes", "Catalogs"
+    if "autosort" in metadata_collection_state(PROJECT, owner + ".Attributes"):
+        before = tree_snapshot()
+        refused = call("create_metadata", {"projectName": PROJECT,
+                        "fqn": owner + ".Attribute.Refused861", "insertPosition": 1})
+        error = assert_error(refused)
+        assert_autosort_notice(refused.structured, "Catalog.E861Indexed.attributes")
+        assert_error_quality(error, names=["attributes", "Autosort"], suggests=["ask the user", "Auto sort"])
+        assert_tree_unchanged(before, "governed member index must not create an attribute")
+        owner, child, collection, folder = "Enum.E861Indexed", "EnumValue", "enumValues", "Enums"
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed ungoverned insertion collection")
+    owner_path = "src/%s/E861Indexed/E861Indexed.mdo" % folder
+    for name, position, order in [("Zulu", None, ["Zulu"]), ("Alpha", 1, ["Alpha", "Zulu"]),
+                                  ("Middle", 2, ["Alpha", "Middle", "Zulu"]),
+                                  ("Third", 3, ["Alpha", "Middle", "Third", "Zulu"]),
+                                  ("Last", 5, ["Alpha", "Middle", "Third", "Zulu", "Last"]),
+                                  ("Append", None, ["Alpha", "Middle", "Third", "Zulu", "Last", "Append"])]:
+        args = {"projectName": PROJECT, "fqn": owner + "." + child + "." + name}
+        if position is not None:
+            args["insertPosition"] = position
+        assert_ok(call("create_metadata", args), "insert/append attribute")
+        poll_disk_contains_all(owner_path, [], check=lambda xml: [
+            _direct_child_text(node, "name") for node in ET.fromstring(xml)
+            if _xml_local(node.tag) == collection] == order, ctx="attribute insertion order %r" % order)
+        details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner], "full": True})
+        assert_ok(details, "read back member insertion order")
+        actual = []
+        for line in details.text.splitlines():
+            if line.strip().startswith("|"):
+                cells = split_markdown_row(line)
+                if cells and cells[0].strip() in order:
+                    actual.append(cells[0].strip())
+        assert actual == order, (order, details.text)
+    before = tree_snapshot()
+    for position in (0, -1, 8, 1.5):
+        result = call("create_metadata", {"projectName": PROJECT, "fqn": owner + "." + child + ".Rejected861",
+                                          "insertPosition": position})
+        error = assert_error(result, "invalid insertion position")
+        assert_error_quality(error, names=["insertPosition", str(position)], suggests=["omit", "choose", "1-based"])
+        if isinstance(position, int):
+            assert "insertPosition %d is outside 1..7" % position in error, error
+            assert "'%d.0'" % position not in error, error
+        assert_tree_unchanged(before, "invalid index must not create an object or change order")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

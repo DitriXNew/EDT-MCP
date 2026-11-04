@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**105 tools.**
+**106 tools.**
 
 ## Core
 
@@ -33,6 +33,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`business_process_route_map`](business_process_route_map.md) | Read, replace or remove a BusinessProcess route map. Call action='get' before replacing; replace discards all existing items, preserving point identity only… |
 | [`clone_metadata_object`](clone_metadata_object.md) | Clone one metadata object with EDT's native paste semantics. Call once without confirm to preview, then repeat the same newName and transfer selection with c… |
 | [`create_launch_config`](create_launch_config.md) | Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config'). |
+| [`sort_metadata`](sort_metadata.md) | Reorder metadata by Name, explicit order or one sibling move. |
 | [`create_metadata`](create_metadata.md) | Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata'). |
 | [`dcs`](dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first;… |
 | [`delete_launch_config`](delete_launch_config.md) | Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Paramete… |

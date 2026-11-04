@@ -26,6 +26,8 @@ Read arguments via `JsonUtils.extractStringArgument/extractIntArgument/extractBo
 
 **Every parameter read in `execute()` must be declared in `getInputSchema()`** (otherwise it is invisible to schema-driven clients) and vice versa.
 
+Use `JsonUtils.parseIntegralInt` for exact integer validation and render whole transport numbers without `.0`; index errors name the destination collection's valid range.
+
 ## Error contract
 
 - Errors only via `ToolResult.error(...)` (machine-readable: success=false + message/code). Never return a bare `"Error: …"` / `"Project not found"` string, never let an exception escape the tool.
@@ -37,6 +39,7 @@ Read arguments via `JsonUtils.extractStringArgument/extractIntArgument/extractBo
 
 - Similar tools use the same format (don't make one JSON and another markdown without a reason). The plugin default is markdown (see `IMcpTool.ResponseType`).
 - JSON fields use one style (don't mix camelCase/snake_case in similar responses).
+- Ordering responses report observed model order and moves, not the planned permutation; check optional autosort policy before manual-order writes. Governed responses share `autosort:{plugin,governs,setting,order,effect,userAction}` plus the same plain message; omit the block when inactive. `setting` is a human scope; `userAction` asks the user through verified EDT UI labels and forbids agent preference changes.
 - not-found — one semantics: an empty list for "list", an error for "get a specific one". Don't mix null/empty/error.
 - Canonicalize create/modify/delete FQN echoes, preview/batch rows, follow-up hints and write-guard refusals with `MetadataTypeUtils.toCanonicalEnglishFqn`: English structural tokens, unchanged programmatic Names. Delete scope hashes use the canonical address as well as the removal scope.
 - Base success claims on observed effects: XML export requires a new or proven rewritten `Configuration.xml` (newer mtime or changed size/digest). Export submission is not completion; `dcs` requires an observed shared export drain. An error after a committed write carries `mutationCommitted`; recover/read back before retrying.
@@ -58,7 +61,7 @@ Action/confirmation/status results with none of these return MARKDOWN. `write_mo
 
 Tool families that stay JSON, and why:
 
-- metadata-writes (`create_metadata`, `modify_metadata`, `delete_metadata`) → addressed by **FQN** *(a)*;
+- metadata-writes (`create_metadata`, `sort_metadata`, `modify_metadata`, `delete_metadata`) → addressed by **FQN** *(a)*;
 - debug / profiling tools → launch / application / breakpoint **IDs** + live session state *(a)*;
 - `validate_query` → error **line/col** *(b)*;
 - `list_configurations` → config **identities** *(a)*;

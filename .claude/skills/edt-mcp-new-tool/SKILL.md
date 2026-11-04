@@ -36,7 +36,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 6. **Unit test — MANDATORY** (`mcp/tests/.../tools/impl/XxxToolTest.java`). `BuiltInToolTestCoverageTest` fails the build if a registered tool has no `XxxToolTest`. Contract (no live runtime): NAME, `getResponseType()`, description contains `get_tool_guide('<name>')`, schema contains every parameter, the required array is correct (and excludes optional ones), output-schema keys. Deeper behaviour is e2e.
 
-7. **e2e test — MANDATORY** (`tests/e2e/tools/test_<tool>.py`). The e2e coverage ratchet fails if a tool in `tools/list` has none. Read `edt-mcp-e2e-testing`. happy + negative + error-quality; anti-cheat ("would the test fail if the tool were broken?"). A mutating tool: prefer non-mutating cases headless (the harness resets only the BASE fixture per-test, not the extension) + validate the mutating happy path LIVE; for a write-metadata tool that runs headless, check both the model read-back AND the on-disk structure (`poll_diff_contains`).
+7. **e2e test — MANDATORY** (`tests/e2e/tools/test_<tool>.py`). The e2e coverage ratchet fails if a tool in `tools/list` has none. Read `edt-mcp-e2e-testing`. happy + negative + error-quality; anti-cheat ("would the test fail if the tool were broken?"). Writers belong in `MODEL_MUTATION_TOOLS` in `tests/e2e/harness.py`; register any read-only mode exemption in `_is_read_only_model_action`. Exercise real mutations, assert disk structure before model read-back, and restore extension fixtures with the shared helper in `finally`. `WriteScopeInventoryTest`, `ToolsetsTest` and `ToolGroupTest` must pass.
 
 8. **Golden** — a new tool changes `tools/list`; regenerate and commit: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, then `git add tests/e2e/tools_list.golden.json`.
 
@@ -45,7 +45,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 10. **Full contour** (don't say "done" without it): `bash source/compile.sh` (compile + unit tests + every ratchet) → adversarial **Opus review** → redeploy to the dev EDT copy (`edt-redeploy.ps1`; the signal is the log line `MCP server UP on 8765`) → **live validation** against `:8765` → commit. A freshly deployed tool is NOT in this session's MCP deferred list — to check it live, call it through the e2e harness client (`python` → `harness.initialize(); harness.call("<name>", {...})`) or `Invoke-RestMethod`, not the tool's MCP wrapper. See `edt-mcp-build-test` and the dev-loop memory.
 
 ## Gotchas
-- **`((IBmObject)x).bmGetFqn()` is valid ONLY on a TOP object** — for export use `bmGetTopObject().bmGetFqn()`; for a member echo canonicalize its addressed FQN instead of calling `bmGetFqn()` on the member.
+- **`((IBmObject)x).bmGetFqn()` is valid ONLY on a TOP object** — for export use `bmGetTopObject().bmGetFqn()`; for a member echo canonicalize its addressed FQN instead of calling `bmGetFqn()` on the member. Collection echoes use `MetadataOrdering.collectionAddress`; a collection FQN is not a file-owner FQN.
 - Model writes happen on the UI thread (the write base does this; a bare `IMcpTool` must wrap in `Display.syncExec` itself).
 - `forceExportToDisk` wants the TOP FQN; a member change exports the parent top + (for a new top) the `Configuration` FQN.
 - Escape Cyrillic with `\uXXXX` in regexes only. Keep real 1C/BSL/type/name data as Cyrillic in other strings and comments; surface prose is English only.
