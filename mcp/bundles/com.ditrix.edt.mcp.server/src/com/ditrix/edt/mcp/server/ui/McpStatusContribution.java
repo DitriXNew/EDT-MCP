@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.ui;
 import java.io.IOException;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.events.SelectionAdapter;
@@ -35,6 +36,7 @@ import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
+import com.ditrix.edt.mcp.server.transport.TransportStatus;
 
 /**
  * Status bar contribution showing MCP server status.
@@ -556,7 +558,8 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         McpServer server = Activator.getDefault() != null ?
             Activator.getDefault().getMcpServer() : null;
 
-        boolean running = server != null && server.isRunning();
+        TransportStatus transports = TransportStatus.read();
+        boolean running = transports.running();
         long requestCount = server != null ? server.getRequestCount() : 0;
         int port = server != null ? server.getPort() : 0;
         String currentTool = server != null ? server.getCurrentToolName() : null;
@@ -570,7 +573,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         updateStatusLabel(isExecuting, currentTool);
         updateCounterLabel(isExecuting, executionSeconds, requestCount);
 
-        String tooltip = buildTooltip(isExecuting, running, currentTool, port, requestCount);
+        String tooltip = buildTooltip(isExecuting, transports, currentTool, port, requestCount);
         applyTooltip(tooltip);
 
         // One canvas: repaint it instead of re-laying out labels.
@@ -690,26 +693,15 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
      * Builds the status tooltip text for the current server state, appending an
      * update notification when one is available. Pure: builds and returns text only.
      */
-    private String buildTooltip(boolean isExecuting, boolean running, String currentTool,
+    private String buildTooltip(boolean isExecuting, TransportStatus transports, String currentTool,
         int port, long requestCount)
     {
-        String tooltip;
-        if (isExecuting)
-        {
-            tooltip = "MCP Server: Executing " + currentTool +
-                "\nPort: " + port + "\nRequests: " + requestCount +
-                "\nVersion: " + McpConstants.PLUGIN_VERSION + "\nAuthor: " + McpConstants.AUTHOR;
-        }
-        else if (running)
-        {
-            tooltip = "MCP Server: Running on port " + port + "\nRequests: " + requestCount +
-                "\nVersion: " + McpConstants.PLUGIN_VERSION + "\nAuthor: " + McpConstants.AUTHOR +
-                "\nClick for options";
-        }
-        else
-        {
-            tooltip = "MCP Server: Stopped\nClick to start";
-        }
+        String transportText = (transports.http()
+            ? NLS.bind(Messages.McpStatus_HttpRunning, port) : Messages.McpStatus_HttpStopped)
+            + "\n" + (transports.ipc() ? Messages.McpStatus_StdioReady : Messages.McpStatus_StdioUnavailable); //$NON-NLS-1$
+        String title = isExecuting ? NLS.bind(Messages.McpStatus_Executing, currentTool) : Messages.McpStatus_Title;
+        String tooltip = NLS.bind(Messages.McpStatus_Tooltip,
+            new Object[] {title, transportText, requestCount, McpConstants.PLUGIN_VERSION, McpConstants.AUTHOR});
 
         // Append update notification to tooltip if available
         if (UpdateChecker.getInstance().isUpdateAvailable())

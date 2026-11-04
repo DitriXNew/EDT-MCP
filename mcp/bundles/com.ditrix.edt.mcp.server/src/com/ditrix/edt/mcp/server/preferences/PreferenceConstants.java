@@ -21,6 +21,7 @@ public final class PreferenceConstants
     public static final String PREF_PORT = "mcpServerPort"; //$NON-NLS-1$
     
     /** Auto-start on EDT startup */
+    public static final String PREF_HTTP_ENABLED = "mcpServerHttpEnabled"; //$NON-NLS-1$
     public static final String PREF_AUTO_START = "mcpServerAutoStart"; //$NON-NLS-1$
     
     /** Path to check descriptions folder */
@@ -45,6 +46,7 @@ public final class PreferenceConstants
     public static final int DEFAULT_PORT = 8765;
     
     /** Default auto-start */
+    public static final boolean DEFAULT_HTTP_ENABLED = true;
     public static final boolean DEFAULT_AUTO_START = false;
     
     /** Default checks folder (empty - the descriptions shipped in the plugin are used) */
