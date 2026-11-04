@@ -35,11 +35,64 @@ from harness import (
     assert_error_quality,
     assert_no_diff,
     e2e_test,
+    requires_live_infobase,
     PROJECT,
 )
 
 # Config name unlikely to collide with existing configs in the workspace.
 _CONFIG_NAME = "e2e_CreateLaunchConfigTest_ThinClient"
+
+
+def _check_created_testing_settings(mode, port, expected_port):
+    requires_live_infobase("saves a throwaway testing launch configuration")
+    name = "e2e_create_testing_settings"
+    params = {"projectName": PROJECT, "name": name}
+    if mode is not None:
+        params["automatedTestingMode"] = mode
+    if port is not None:
+        params["automatedTestingPort"] = port
+    created = call("create_launch_config", params)
+    assert_ok(created, "create testing configuration")
+    try:
+        sc = created.structured
+        assert isinstance(sc, dict), sc
+        if mode is None:
+            assert "automatedTestingMode" not in sc, sc
+        else:
+            assert sc.get("automatedTestingMode") == mode, sc
+        if expected_port is None:
+            assert "automatedTestingPort" not in sc, sc
+        else:
+            assert sc.get("automatedTestingPort") == expected_port, sc
+        listed = call("list_configurations", {"projectName": PROJECT, "type": "client"})
+        assert_ok(listed, "read back saved testing configuration")
+        matches = [c for c in listed.structured["configurations"] if c.get("name") == name]
+        assert len(matches) == 1 and matches[0].get("applicationId") == sc.get("applicationId"), matches
+        assert_no_diff("creating launch settings must not change project sources")
+    finally:
+        if not calls_aborted():
+            deleted = call("delete_launch_config", {"name": name, "confirm": True})
+            assert_ok(deleted, "remove throwaway testing configuration")
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_created_testclient_reports_explicit_port():
+    _check_created_testing_settings("TESTCLIENT", 1550, 1550)
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_created_testclient_reports_default_port():
+    _check_created_testing_settings("TESTCLIENT", None, 1538)
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_created_testmanager_omits_port():
+    _check_created_testing_settings("TESTMANAGER", None, None)
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_created_without_testing_omits_both_settings():
+    _check_created_testing_settings(None, None, None)
 
 
 def _ensure_config_absent():

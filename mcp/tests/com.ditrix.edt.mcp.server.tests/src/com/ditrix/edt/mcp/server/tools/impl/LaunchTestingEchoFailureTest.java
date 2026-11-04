@@ -57,10 +57,31 @@ public class LaunchTestingEchoFailureTest
         assertSuccessfulEcho(result.toJson());
     }
 
+    @Test
+    public void testUnreadableModeDoesNotAdvertiseRequestAsConfiguration() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_MODE, ""))
+            .thenThrow(new CoreException(new Status(IStatus.ERROR, "testing", "Unreadable testing mode")));
+        LaunchOverrides request = LaunchOverrides.of("RunTests", null, null, "TESTCLIENT", 1540);
+        Method echo = LaunchTool.class.getDeclaredMethod("echoOverrides", ToolResult.class,
+            LaunchOverrides.class, LaunchOverrides.Prepared.class, ILaunchConfiguration.class);
+        echo.setAccessible(true);
+        ToolResult result = (ToolResult)echo.invoke(null, ToolResult.success().put("status", "launching"),
+            request, request.prepare(), config);
+        JsonObject json = JsonParser.parseString(result.toJson()).getAsJsonObject();
+        assertTrue(json.toString(), json.get("success").getAsBoolean());
+        assertEquals("RunTests", json.get("startupOption").getAsString());
+        assertFalse(json.has("automatedTestingMode"));
+        assertFalse(json.has("automatedTestingPort"));
+    }
+
     private static ILaunchConfiguration unreadablePortConfiguration() throws Exception
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
         when(config.getName()).thenReturn("Testing client");
+        when(config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_MODE, ""))
+            .thenReturn("TESTCLIENT");
         when(config.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538))
             .thenThrow(new CoreException(new Status(IStatus.ERROR, "testing",
                 "Stored testing port has the wrong attribute type")));
@@ -75,7 +96,7 @@ public class LaunchTestingEchoFailureTest
         assertEquals("debug", json.get("mode").getAsString());
         assertEquals("TESTCLIENT", json.get("automatedTestingMode").getAsString());
         assertEquals("RunTests", json.get("startupOption").getAsString());
-        assertFalse("An unreadable port must not be advertised as a known endpoint",
+        assertFalse("An unreadable port must not be advertised as a known setting",
             json.has("automatedTestingPort"));
         assertFalse(json.has("error"));
     }

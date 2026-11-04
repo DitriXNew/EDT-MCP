@@ -26,6 +26,9 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
@@ -47,6 +50,7 @@ public class CreateLaunchConfigTestingOutputTest
 {
     private final List<Runnable> restores = new ArrayList<>();
     private ILaunchConfigurationWorkingCopy copy;
+    private ILaunchConfiguration saved;
 
     @Before
     public void setUp() throws Exception
@@ -78,7 +82,8 @@ public class CreateLaunchConfigTestingOutputTest
         when(manager.getLaunchConfigurations(type)).thenReturn(new ILaunchConfiguration[0]);
         copy = mock(ILaunchConfigurationWorkingCopy.class);
         when(type.newInstance(null, "Testing client")).thenReturn(copy);
-        ILaunchConfiguration saved = mock(ILaunchConfiguration.class);
+        saved = mock(ILaunchConfiguration.class);
+        when(saved.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538)).thenReturn(1538);
         when(saved.getName()).thenReturn("Testing client");
         when(copy.doSave()).thenReturn(saved);
         DebugPlugin debugPlugin = mock(DebugPlugin.class);
@@ -117,6 +122,7 @@ public class CreateLaunchConfigTestingOutputTest
     @Test
     public void testCreatedClientEchoesNormalizedModeAndExplicitPort() throws Exception
     {
+        when(saved.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538)).thenReturn(1540);
         JsonObject result = create("testclient", "1540");
         assertEquals("TESTCLIENT", result.get("automatedTestingMode").getAsString());
         assertEquals(1540, result.get("automatedTestingPort").getAsInt());
@@ -125,11 +131,46 @@ public class CreateLaunchConfigTestingOutputTest
     }
 
     @Test
-    public void testCreatedClientWithoutPortEchoesModeOnly() throws Exception
+    public void testCreatedClientWithoutPortReportsDefault() throws Exception
     {
         JsonObject result = create("TESTCLIENT", null);
         assertEquals("TESTCLIENT", result.get("automatedTestingMode").getAsString());
-        assertFalse("Only an explicit port is persisted and echoed", result.has("automatedTestingPort"));
+        assertTrue(result.toString(), result.has("automatedTestingPort"));
+        assertEquals(1538, result.get("automatedTestingPort").getAsInt());
+    }
+
+    @Test
+    public void testCreatedClientReportsSavedPort() throws Exception
+    {
+        when(saved.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538)).thenReturn(1550);
+        JsonObject result = create("TESTCLIENT", null);
+        assertTrue(result.toString(), result.has("automatedTestingPort"));
+        assertEquals(1550, result.get("automatedTestingPort").getAsInt());
+    }
+
+    @Test
+    public void testSavedPortIsAuthoritativeAfterExplicitRequest() throws Exception
+    {
+        when(saved.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538)).thenReturn(1550);
+        JsonObject result = create("TESTCLIENT", "1540");
+        assertEquals(1550, result.get("automatedTestingPort").getAsInt());
+    }
+
+    @Test
+    public void testSavedConfigurationSurvivesUnreadablePort() throws Exception
+    {
+        when(saved.getAttribute(LaunchConfigUtils.ATTR_AUTOMATED_TESTING_PORT_NUMBER, 1538))
+            .thenThrow(new CoreException(new Status(IStatus.ERROR, "testing", "Unreadable testing port")));
+        JsonObject result = create("TESTCLIENT", null);
+        assertFalse(result.has("automatedTestingPort"));
+    }
+
+    @Test
+    public void testCreatedWithoutModeOmitsBothFields() throws Exception
+    {
+        JsonObject result = create(null, null);
+        assertFalse(result.has("automatedTestingMode"));
+        assertFalse(result.has("automatedTestingPort"));
     }
 
     @Test
@@ -143,7 +184,11 @@ public class CreateLaunchConfigTestingOutputTest
     private JsonObject create(String mode, String port) throws Exception
     {
         Map<String, String> params = new HashMap<>(Map.of("projectName", "TestingProject",
-            "applicationId", "TestingApplication", "name", "Testing client", "automatedTestingMode", mode));
+            "applicationId", "TestingApplication", "name", "Testing client"));
+        if (mode != null)
+        {
+            params.put("automatedTestingMode", mode);
+        }
         if (port != null)
         {
             params.put("automatedTestingPort", port);
@@ -153,7 +198,10 @@ public class CreateLaunchConfigTestingOutputTest
         assertEquals("created", result.get("action").getAsString());
         assertEquals("Testing client", result.get("name").getAsString());
         verify(copy).doSave();
-        assertTrue("The created configuration must confirm its persisted testing mode", result.has("automatedTestingMode"));
+        if (mode != null)
+        {
+            assertTrue("The created configuration must confirm its persisted testing mode", result.has("automatedTestingMode"));
+        }
         return result;
     }
 
