@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server;
 
 
+import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.ui.IStartup;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
@@ -33,11 +34,8 @@ public class McpServerStartup implements IStartup
     {
         new McpCoreStartup(this::getEnvironmentVariable).start();
 
-        // Auto-start when the preference is set OR the env override forces it.
-        boolean autoStart = "true".equalsIgnoreCase(getEnvironmentVariable(ENV_AUTO_START)) //$NON-NLS-1$
-            || Activator.getDefault().getPreferenceStore().getBoolean(PreferenceConstants.PREF_AUTO_START);
-
-        if (shouldStartHttp(autoStart))
+        if (shouldStartHttp(Activator.getDefault().getPreferenceStore(), getEnvironmentVariable(ENV_AUTO_START),
+            Boolean.getBoolean("edt.mcp.stdioOnly"))) //$NON-NLS-1$
         {
             int port = resolvePort();
 
@@ -56,8 +54,13 @@ public class McpServerStartup implements IStartup
         UpdateChecker.getInstance().scheduleCheck();
     }
 
-    static boolean shouldStartHttp(boolean autoStart)
-    { return autoStart && !Boolean.getBoolean("edt.mcp.stdioOnly"); }
+    /** The CI override wins over saved preferences; stdio launches still suppress auto-start. */
+    static boolean shouldStartHttp(IPreferenceStore store, String environmentOverride, boolean stdioOnly)
+    {
+        return !stdioOnly && ("true".equalsIgnoreCase(environmentOverride) //$NON-NLS-1$
+            || (store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED)
+                && store.getBoolean(PreferenceConstants.PREF_AUTO_START)));
+    }
 
     /** Reads launch overrides; package visibility allows startup tests without changing process env. */
     String getEnvironmentVariable(String name)

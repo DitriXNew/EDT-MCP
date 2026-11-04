@@ -135,21 +135,22 @@ If a screenshot is blank or gray, check the EDT log for `AccessDeniedException` 
 
 ### Configuration
 
-Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
+Go to **Window → Preferences → MCP Server**. The settings page has General, Tools, History and Privacy tabs:
 
 > [!NOTE]
 > **Display language.** The settings page and the tag dialogs are bilingual (Russian / English) and follow the Eclipse/EDT display language — the same `-nl` launch argument (or OS locale) that localizes the rest of EDT. Launch EDT with `-nl ru` for Russian or `-nl en` for English; any other locale falls back to English. The MCP tool surface itself (tool names, descriptions and errors) stays English regardless, as it is the AI wire contract.
 
 #### General Tab
 
-- **Server Port**: HTTP port (default: 8765)
+- **Enable MCP over HTTP**: On by default. The **MCP over HTTP** group contains the port (default: 8765), auto-start, remote access, auth token, HTTP status, Start/Stop/Restart, endpoint and **Copy URL**. Clearing the checkbox hides these controls; Apply stops HTTP. Enabling it and applying starts HTTP only when auto-start is selected; otherwise use Start. No EDT restart is needed. IPC remains independent.
 - **Check descriptions folder**: Optional override for the check descriptions that ship with the plugin. Leave it empty to use the bundled ones; point it at a folder to replace or translate individual checks (a file found there wins, per check)
-- **Auto-start**: Start server on EDT launch
-- **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
+- **Auto-start** (HTTP group): Start HTTP on EDT launch when HTTP is enabled. `EDT_MCP_AUTO_START=true` overrides both saved switches for CI; a launch with `-Dedt.mcp.stdioOnly=true` still suppresses HTTP auto-start without changing preferences.
+- **Plain text mode (Cursor compatibility)**: Applies to every transport and stays visible when HTTP is off. Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
 - **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
-- **Server control**: Start, stop, and restart the MCP server directly from preferences. The endpoint line shows the real URL for the port the server is actually serving, with **Copy URL** and **Copy config (type/url)** buttons — the latter puts a ready `mcpServers` JSON entry on the clipboard for agents that are configured only by editing a file. That entry is the `type`/`url` form (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the different shapes shown in their sections below. If an auth token is saved, the entry carries it as an `Authorization` header (it would get a 401 otherwise), so treat the copied text as a secret
+- **Connection configuration**: One button outside the HTTP group reads **Copy HTTP config** or **Copy stdio .mcp.json**. It switches immediately with the checkbox: HTTP off selects stdio; a stdio-only launch also selects stdio while HTTP is stopped; otherwise it selects HTTP. The HTTP entry uses the running port (or the pending port when stopped) and the saved auth token, never an unsaved token. It uses the `mcpServers` + `type`/`url` shape (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the shapes below. A saved token is included as an `Authorization` header, so treat the copied text as a secret.
+- **Transport status**: An always-visible **stdio: ready/unavailable** line reports the local IPC listener, matching `get_server_status.transports.ipc`. HTTP status stays inside its group. A stdio-only launch shows a note there while HTTP is stopped. The status-bar indicator is green when either listener is serving, and its tooltip reports both transports. Restore Defaults re-enables and reveals HTTP without saving until Apply.
 
 #### Tools Tab
 
@@ -325,7 +326,7 @@ enable/disable tools persistently).
 
 ### stdio
 
-In EDT, open **Window > Preferences > MCP Server > General** and click **Copy stdio .mcp.json**. Merge the ready entry into your client's configuration. The bootstrap ships inside the plugin, uses explicit installation/workspace paths and EDT's Java, and connects locally without a TCP port.
+In EDT, open **Window > Preferences > MCP Server > General** and clear **Enable MCP over HTTP** to select **Copy stdio .mcp.json**, then click it. Apply if you also want to stop HTTP; copying alone does not save the checkbox. A stdio-only launch with HTTP stopped already selects this button. Merge the ready entry into your client's configuration. The bootstrap ships inside the plugin, uses explicit installation/workspace paths and EDT's Java, and connects locally without a TCP port.
 
 On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves that windowed EDT running. Add the explicit `-headless` argument to request an optional host without a window on the next cold start. Its catalog excludes mandatory UI tools, and it saves and exits after 30 idle minutes by default. Existing hosts are shared regardless of client mode. Linux supports attachment to a running host. Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 

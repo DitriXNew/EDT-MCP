@@ -48,8 +48,11 @@ Use `mode="run"` for the same regular launch as EDT's green Run button. Omit `mo
 Set `automatedTestingMode="TESTCLIENT"` to start a runtime client with the platform's
 `/TESTCLIENT` option. `automatedTestingPort=1540` selects its `-TPort` connection port
 (integer 1..65535). If omitted, the working copy inherits the saved port; when no port
-is saved, EDT uses **1538**. The response echoes the normalized mode and effective port;
-if the saved port attribute cannot be read, the launch still succeeds and the port is absent.
+is saved, EDT uses **1538**. The response reports the effective mode and TESTCLIENT port
+from the dispatched configuration, including stored settings when no override is passed.
+These are launch settings; they do not confirm that a testing socket is listening or ready.
+Unreadable settings are omitted without failing an already-dispatched launch. With no
+stored or requested testing mode, both fields are absent; TESTMANAGER has no port field.
 Mode values are accepted case-insensitively and stored as `TESTCLIENT` / `TESTMANAGER`.
 
 `automatedTestingMode="TESTMANAGER"` starts the platform's test-manager mode. It takes

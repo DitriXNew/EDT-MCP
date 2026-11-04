@@ -75,14 +75,11 @@ public class McpCoreStartupTest
     }
 
     @Test public void stdioOnlyOverridesPreferenceAndEnvironmentHttpAutostart() {
-        String previous = System.getProperty("edt.mcp.stdioOnly");
-        try {
-            System.setProperty("edt.mcp.stdioOnly", "true");
-            assertFalse(McpServerStartup.shouldStartHttp(true)); assertFalse(McpServerStartup.shouldStartHttp(false));
-            System.clearProperty("edt.mcp.stdioOnly");
-            assertTrue(McpServerStartup.shouldStartHttp(true)); assertFalse(McpServerStartup.shouldStartHttp(false));
-        }
-        finally { if (previous == null) { System.clearProperty("edt.mcp.stdioOnly"); } else { System.setProperty("edt.mcp.stdioOnly", previous); } }
+        org.eclipse.jface.preference.IPreferenceStore store = org.mockito.Mockito.mock(org.eclipse.jface.preference.IPreferenceStore.class);
+        org.mockito.Mockito.when(store.getBoolean(com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_HTTP_ENABLED)).thenReturn(true);
+        org.mockito.Mockito.when(store.getBoolean(com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_AUTO_START)).thenReturn(true);
+        assertFalse(McpServerStartup.shouldStartHttp(store, "true", true));
+        assertTrue(McpServerStartup.shouldStartHttp(store, null, false));
     }
 
     @Test public void platformFailureLogsTheOriginalStackWithoutWorkbench() throws Exception {

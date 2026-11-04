@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.transport.StdioPluginSupport;
+import com.ditrix.edt.mcp.server.transport.TransportStatus;
 import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
@@ -144,10 +145,11 @@ public class GetServerStatusTool implements IMcpTool
 
             // Port: read from the live server when available; null-safe for headless.
             McpServer server = httpServer.get();
-            boolean http = server != null && server.isRunning();
-            boolean ipc = ipcRunning.getAsBoolean();
+            TransportStatus transports = TransportStatus.read(server, ipcRunning);
+            boolean http = transports.http();
+            boolean ipc = transports.ipc();
             result.put("port", server == null ? PreferenceConstants.DEFAULT_PORT : server.getPort()); //$NON-NLS-1$
-            result.put(KEY_RUNNING, http || ipc);
+            result.put(KEY_RUNNING, transports.running());
             result.put("transports", Map.of("http", http, "ipc", ipc));
 
             result.put("hostKind", HostKind.current().name());

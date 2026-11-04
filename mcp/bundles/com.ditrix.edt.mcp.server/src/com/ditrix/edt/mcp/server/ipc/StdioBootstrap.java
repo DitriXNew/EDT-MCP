@@ -13,6 +13,8 @@ import java.net.UnixDomainSocketAddress;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
@@ -47,7 +49,8 @@ public final class StdioBootstrap implements AutoCloseable
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private volatile JsonFrames.Socket connection;
     private volatile String status = "EDT is connecting. Retry the same call in about 2 seconds. No tool ran.";
-    private CompletableFuture<Void> preparation;
+    private volatile String launchFailure;
+    private CompletableFuture<String> preparation;
     private JsonObject initialize;
     private boolean initialized;
     private volatile boolean closed;
@@ -70,9 +73,20 @@ public final class StdioBootstrap implements AutoCloseable
     {
         try
         {
-            Path install = explicitPath(args, "-install").toRealPath();
+            Path install = explicitPath(args, "-install");
+            String installFix = "Set -install to the EDT installation directory in .mcp.json.";
+            try { install = install.toRealPath(); }
+            catch (NoSuchFileException e)
+            { throw new IOException(withAdvice("-install path does not exist: " + install, installFix), e); }
+            catch (IOException e)
+            { throw new IOException(withAdvice("Cannot access -install path " + install + ": " + e.getMessage(),
+                "Check read access to -install and set it to the EDT installation directory in .mcp.json."), e); }
+            if (!Files.isDirectory(install))
+            { throw new IOException(withAdvice("-install is not a directory: " + install, installFix)); }
             Path workspace = explicitPath(args, "-data");
-            WindowsEdtStarter.checkRuntime(install);
+            try { WindowsEdtStarter.checkRuntime(install); }
+            catch (WindowsEdtStarter.InstallationException e)
+            { throw new IOException(withAdvice("Cannot use -install " + install + ": " + e.getMessage(), installFix), e); }
             Path configuration = optionalPath(args, "-configuration");
             JsonObject catalog;
             try (var resource = StdioBootstrap.class.getResourceAsStream("/bootstrap-catalog.json"))
@@ -80,6 +94,8 @@ public final class StdioBootstrap implements AutoCloseable
                 if (resource == null) { throw new IOException("The plugin's generated bootstrap catalog is missing"); }
                 catalog = JsonParser.parseString(new String(resource.readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
             }
+            catch (IOException | RuntimeException e)
+            { throw new IOException(withAdvice("Cannot load the bootstrap catalog: " + e.getMessage(), "Reinstall the EDT MCP plugin."), e); }
             RegistryProvider registries = () -> {
                 Files.createDirectories(workspace);
                 return new EndpointRegistry(EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("ipc")), workspace);
@@ -89,10 +105,19 @@ public final class StdioBootstrap implements AutoCloseable
             {
                 var input = new BufferedInputStream(System.in);
                 String frame;
-                while ((frame = JsonFrames.read(input)) != null) { bootstrap.accept(frame); }
+                try { while ((frame = JsonFrames.read(input)) != null) { bootstrap.accept(frame); } }
+                catch (IOException e)
+                { throw new IOException(withAdvice("MCP stdio transport failed: " + e.getMessage(),
+                    "Check the client's stdio connection and newline-delimited UTF-8 JSON-RPC frames."), e); }
             }
         }
         catch (Exception e) { System.err.println("EDT MCP bootstrap: " + e.getMessage()); System.exit(1); }
+    }
+
+    private static String withAdvice(String message, String advice)
+    {
+        String text = message.stripTrailing();
+        return text + (text.endsWith(".") || text.endsWith("!") || text.endsWith("?") ? " " : ". ") + advice;
     }
 
     public static Path explicitPath(String[] args, String option) throws IOException
@@ -108,9 +133,15 @@ public final class StdioBootstrap implements AutoCloseable
         {
             if (args[i].equals(option))
             {
-                if (i + 1 == args.length) { throw new IOException("Missing " + option + " value"); }
-                Path path = Path.of(args[i + 1]);
-                if (!path.isAbsolute()) { throw new IOException(option + " must be an absolute path"); }
+                if (i + 1 == args.length) { throw new IOException("Missing " + option + " value; set an absolute directory path in .mcp.json."); }
+                Path path;
+                try { path = Path.of(args[i + 1]); }
+                catch (InvalidPathException e)
+                { throw new IOException(withAdvice("Invalid " + option + " path: " + args[i + 1],
+                    "Set a valid absolute directory path in .mcp.json."), e); }
+                if (!path.isAbsolute())
+                { throw new IOException(withAdvice(option + " must be an absolute path: " + path,
+                    "Set an absolute directory path in .mcp.json.")); }
                 return path;
             }
         }
@@ -183,13 +214,18 @@ public final class StdioBootstrap implements AutoCloseable
         for (var tool : catalog.getAsJsonObject("tools").getAsJsonArray("tools"))
         { known |= tool.getAsJsonObject().get("name").getAsString().equals(name); }
         if (!known) { send(error(id, -32601, "Unknown tool; use tools/list")); return; }
-        try { prepareConnection().get(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS); }
+        String refusal = status;
+        try { refusal = prepareConnection().get(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS); }
         catch (java.util.concurrent.TimeoutException e) { /* No invocation is retained by preparation. */ }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         catch (java.util.concurrent.ExecutionException e) { /* Preparation sets the actionable refusal. */ }
         current = connection;
         if (current != null) { forward(request, id, current); }
-        else { send(toolError(id, status)); }
+        else
+        {
+            String failure = launchFailure;
+            send(toolError(id, failure != null ? failure : refusal));
+        }
     }
 
     private void forward(JsonObject request, JsonElement id, JsonFrames.Socket current) throws IOException
@@ -206,12 +242,12 @@ public final class StdioBootstrap implements AutoCloseable
         catch (IOException e) { disconnected(current); }
     }
 
-    private synchronized CompletableFuture<Void> prepareConnection()
+    private synchronized CompletableFuture<String> prepareConnection()
     {
         if (attaching.compareAndSet(false, true))
         {
             preparation = new CompletableFuture<>();
-            CompletableFuture<Void> ready = preparation;
+            CompletableFuture<String> ready = preparation;
             worker.execute(() -> attachOrStart(ready));
         }
         return preparation;
@@ -232,19 +268,23 @@ public final class StdioBootstrap implements AutoCloseable
     private static boolean isString(JsonElement value)
     { return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString(); }
 
-    private void attachOrStart(CompletableFuture<Void> prepared)
+    private void attachOrStart(CompletableFuture<String> prepared)
     {
+        AtomicBoolean launching = new AtomicBoolean();
         try
         {
             var registry = registries.open();
             var endpoint = registry.read();
             if (endpoint == null || !EndpointRegistry.live(endpoint))
             {
+                if (launchFailure != null) { status = launchFailure; return; }
                 if (!starter.supportsStartup())
                 { status = StartupCoordinator.OPEN_WORKSPACE; return; }
-                status = StartupCoordinator.STARTING;
-                prepared.complete(null);
-                status = new StartupCoordinator(registry, starter).ensureStarted();
+                status = new StartupCoordinator(registry, starter).ensureStarted(() -> {
+                    launching.set(true);
+                    status = StartupCoordinator.STARTING;
+                    prepared.complete(status);
+                });
                 return;
             }
             if (!EndpointRegistry.workspaceKey(Path.of(endpoint.workspace())).equals(EndpointRegistry.workspaceKey(registry.workspace())))
@@ -267,6 +307,7 @@ public final class StdioBootstrap implements AutoCloseable
                 ready.set(true);
                 if (closed) { socket.close(); return; }
                 connection = socket;
+                launchFailure = null;
                 Thread receiver = new Thread(() -> receive(socket), "edt-mcp-replies");
                 receiver.setDaemon(true); receiver.start();
                 send("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}");
@@ -274,9 +315,13 @@ public final class StdioBootstrap implements AutoCloseable
             catch (Exception e) { socket.close(); throw e; }
         }
         catch (Exception e)
-        { status = "EDT connection/start failed: " + e.getMessage() + (headless ? ". Ask the user to inspect the EDT workspace log, then retry the same call. No tool ran."
-            : ". Ask the user to check the EDT window, then retry the same call. No tool ran."); }
-        finally { prepared.complete(null); attaching.set(false); }
+        {
+            status = withAdvice("EDT connection/start failed: " + e.getMessage(), headless
+                ? "Ask the user to inspect the EDT workspace log, then retry the same call. No tool ran."
+                : "Ask the user to check the EDT window, then retry the same call. No tool ran.");
+            if (launching.get()) { launchFailure = status; }
+        }
+        finally { prepared.complete(status); attaching.set(false); }
     }
 
     private void connect(JsonFrames.Socket socket, EndpointRegistry.Endpoint endpoint) throws IOException
