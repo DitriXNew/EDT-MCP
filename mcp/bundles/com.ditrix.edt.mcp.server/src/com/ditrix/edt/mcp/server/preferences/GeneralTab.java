@@ -77,6 +77,8 @@ public class GeneralTab
     private Button startButton;
     private Button stopButton;
     private Button restartButton;
+    // A saved enable is still pending until a listener actually runs.
+    private boolean httpEnablePending;
 
     /** Track created images for disposal */
     private final List<org.eclipse.swt.graphics.Image> managedImages = new ArrayList<>();
@@ -752,16 +754,21 @@ public class GeneralTab
     public void performOk()
     {
         boolean wasEnabled = store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED);
+        if (!wasEnabled && httpEnabledCheck.getSelection() && autoStartCheck.getSelection())
+        {
+            httpEnablePending = true;
+        }
         savePreferences();
         McpServer server = Activator.getDefault().getMcpServer();
         if (!httpEnabledCheck.getSelection())
         {
+            httpEnablePending = false;
             if (server != null && server.isRunning())
             {
                 stopServer();
             }
         }
-        else if (!wasEnabled && autoStartCheck.getSelection() && server != null && !server.isRunning())
+        else if (httpEnablePending && autoStartCheck.getSelection() && server != null && !server.isRunning())
         {
             startServer();
         }
@@ -907,6 +914,7 @@ public class GeneralTab
         Shell shell = composite.getShell();
         if (server != null && server.isRunning())
         {
+            httpEnablePending = false;
             statusLabel.setText(NLS.bind(Messages.GeneralTab_RunningOnPort, server.getPort()));
             statusLabel.setForeground(shell.getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
         }
@@ -960,9 +968,14 @@ public class GeneralTab
         {
             return;
         }
-        server.stop();
-        updateStatusLabel();
-        updateButtons();
+        try
+        {
+            server.stop();
+        }
+        finally
+        {
+            refreshServerState();
+        }
     }
 
     private void restartServer()

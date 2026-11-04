@@ -10,8 +10,11 @@ import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.*;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.jface.preference.PreferenceStore;
 import org.eclipse.swt.SWT;
@@ -38,6 +41,7 @@ public class GeneralTabTest
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     private PreferenceStore store;
     private McpServer server;
+    private final AtomicBoolean running = new AtomicBoolean();
     private Field plugin;
     private Object previousPlugin;
     private Display display;
@@ -57,6 +61,13 @@ public class GeneralTabTest
         System.clearProperty("edt.mcp.stdioOnly");
         store = new PreferenceStore();
         server = mock(McpServer.class);
+        when(server.isRunning()).thenAnswer(call -> running.get());
+        doAnswer(call -> {
+            running.set(true);
+            when(server.getPort()).thenReturn(call.getArgument(0));
+            return null;
+        }).when(server).start(anyInt());
+        doAnswer(call -> { running.set(false); return null; }).when(server).stop();
         Activator activator = mock(Activator.class);
         when(activator.getPreferenceStore()).thenReturn(store);
         when(activator.getMcpServer()).thenReturn(server);
@@ -125,12 +136,11 @@ public class GeneralTabTest
     @Test
     public void applyingOffStopsHttpAndApplyingOnStartsOnlyWithAutoStart() throws Exception
     {
-        when(server.isRunning()).thenReturn(true);
+        running.set(true);
         selectHttp(false);
         tab.performOk();
         verify(server).stop();
         assertFalse(store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED));
-        when(server.isRunning()).thenReturn(false);
         selectHttp(true);
         tab.performOk();
         verify(server, never()).start(anyInt());
@@ -142,6 +152,131 @@ public class GeneralTabTest
         verify(server).start(PreferenceConstants.DEFAULT_PORT);
         tab.performOk();
         verify(server, times(1)).start(anyInt());
+    }
+
+    @Test
+    public void failedEnableThenCorrectedApplyRetriesAndSuccessfulStartClearsPending() throws Exception
+    {
+        prepareEnable();
+        failStarts(1);
+        try (ErrorDialogs dialogs = new ErrorDialogs())
+        {
+            applyPage();
+            assertFalse(running.get());
+            assertTrue(store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED));
+            assertEquals(1, dialogs.count);
+            assertStopped();
+
+            field("portSpinner", Spinner.class).setSelection(9922);
+            applyPage();
+            assertTrue(running.get());
+            verify(server).start(9922);
+            assertEquals(1, dialogs.count);
+            assertTrue(field("statusLabel", Label.class).getText().contains("9922"));
+
+            click("stopButton");
+            applyPage();
+            assertStopped();
+            verify(server, times(2)).start(anyInt());
+        }
+    }
+
+    @Test
+    public void eachFailedOkAttemptShowsExactlyOneDialogAndOkRetries() throws Exception
+    {
+        prepareEnable();
+        failStarts(2);
+        try (ErrorDialogs dialogs = new ErrorDialogs())
+        {
+            tab.performOk();
+            assertEquals(1, dialogs.count);
+            tab.performOk();
+            assertEquals(2, dialogs.count);
+            tab.performOk();
+            assertTrue(running.get());
+            assertEquals(2, dialogs.count);
+            verify(server, times(3)).start(anyInt());
+        }
+    }
+
+    @Test
+    public void deliberateStopWithoutEnableTransitionStaysStoppedOnApplyAndOk() throws Exception
+    {
+        field("autoStartCheck", Button.class).setSelection(true);
+        running.set(true);
+        tab.refreshServerState();
+        click("stopButton");
+        applyPage();
+        tab.performOk();
+        verify(server).stop();
+        verify(server, never()).start(anyInt());
+        assertStopped();
+    }
+
+    @Test
+    public void disablingCancelsFailedEnableRetry() throws Exception
+    {
+        prepareEnable();
+        failStarts(1);
+        try (ErrorDialogs dialogs = new ErrorDialogs())
+        {
+            tab.performOk();
+            selectHttp(false);
+            applyPage();
+            selectHttp(true);
+            field("autoStartCheck", Button.class).setSelection(false);
+            applyPage();
+            field("autoStartCheck", Button.class).setSelection(true);
+            applyPage();
+            assertStopped();
+            verify(server, times(1)).start(anyInt());
+            assertEquals(1, dialogs.count);
+        }
+    }
+
+    @Test
+    public void applyOffStopsListenerAndRepaints() throws Exception
+    {
+        running.set(true);
+        tab.refreshServerState();
+        selectHttp(false);
+        applyPage();
+        verify(server).stop();
+        assertFalse(store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED));
+        assertStopped();
+    }
+
+    @Test
+    public void stopFailureAfterListenerStopsStillRepaintsStoppedState() throws Exception
+    {
+        running.set(true);
+        tab.refreshServerState();
+        doAnswer(call -> {
+            running.set(false);
+            throw new IllegalStateException("executor cleanup failed");
+        }).when(server).stop();
+        selectHttp(false);
+        assertThrows(IllegalStateException.class, () -> applyPage());
+        assertStopped();
+    }
+
+    @Test
+    public void stopFailureWithListenerStillRunningShowsRunningAndNextApplyRetries() throws Exception
+    {
+        running.set(true);
+        tab.refreshServerState();
+        doThrow(new IllegalStateException("stop failed")).doAnswer(call -> {
+            running.set(false);
+            return null;
+        }).when(server).stop();
+        selectHttp(false);
+        assertThrows(IllegalStateException.class, () -> applyPage());
+        assertTrue(field("stopButton", Button.class).getEnabled());
+        assertFalse(field("startButton", Button.class).getEnabled());
+        assertNotEquals(Messages.GeneralTab_Stopped, field("statusLabel", Label.class).getText());
+        applyPage();
+        verify(server, times(2)).stop();
+        assertStopped();
     }
 
     @Test
@@ -196,6 +331,85 @@ public class GeneralTabTest
             assertEquals(Messages.GeneralTab_StdioUnavailable, field("stdioStatusLabel", Label.class).getText());
         }
         finally { listenerField.set(null, previous); }
+    }
+
+    private void prepareEnable() throws Exception
+    {
+        selectHttp(false);
+        tab.performOk();
+        selectHttp(true);
+        field("autoStartCheck", Button.class).setSelection(true);
+    }
+
+    private void failStarts(int failures) throws Exception
+    {
+        AtomicInteger attempts = new AtomicInteger();
+        doAnswer(call -> {
+            if (attempts.incrementAndGet() <= failures) { throw new IOException("Port occupied"); }
+            running.set(true);
+            when(server.getPort()).thenReturn(call.getArgument(0));
+            return null;
+        }).when(server).start(anyInt());
+    }
+
+    private void click(String name) throws Exception
+    {
+        field(name, Button.class).notifyListeners(SWT.Selection, new Event());
+    }
+
+    private void assertStopped() throws Exception
+    {
+        assertFalse(running.get());
+        assertEquals(Messages.GeneralTab_Stopped, field("statusLabel", Label.class).getText());
+        assertTrue(field("startButton", Button.class).getEnabled());
+        assertFalse(field("stopButton", Button.class).getEnabled());
+        assertFalse(field("restartButton", Button.class).getEnabled());
+    }
+
+    /** Use the real page's inherited Apply -> performOk route with the real General tab. */
+    private void applyPage() throws Exception
+    {
+        McpServerPreferencePage page = new McpServerPreferencePage();
+        Object[][] tabs = {{"generalTab", tab}, {"toolsTab", mock(ToolsTab.class)},
+            {"historyTab", mock(HistoryTab.class)}, {"privacyTab", mock(PrivacyTab.class)}};
+        for (Object[] entry : tabs)
+        {
+            Field field = McpServerPreferencePage.class.getDeclaredField((String)entry[0]);
+            field.setAccessible(true);
+            field.set(page, entry[1]);
+        }
+        Method apply = org.eclipse.jface.preference.PreferencePage.class.getDeclaredMethod("performApply");
+        apply.setAccessible(true);
+        try { apply.invoke(page); }
+        catch (java.lang.reflect.InvocationTargetException failure)
+        {
+            throw (Exception)failure.getCause();
+        }
+    }
+
+    /** Count and dismiss real modal error dialogs, including an unexpected duplicate. */
+    private final class ErrorDialogs implements AutoCloseable, Runnable
+    {
+        private int count;
+
+        private ErrorDialogs() { display.timerExec(10, this); }
+
+        @Override
+        public void run()
+        {
+            for (Shell dialog : display.getShells())
+            {
+                if (dialog != shell && Messages.GeneralTab_StartFailedTitle.equals(dialog.getText()))
+                {
+                    count++;
+                    dialog.close();
+                }
+            }
+            display.timerExec(10, this);
+        }
+
+        @Override
+        public void close() { display.timerExec(-1, this); }
     }
 
     private void selectHttp(boolean enabled) throws Exception
