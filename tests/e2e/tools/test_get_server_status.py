@@ -65,6 +65,9 @@ def test_returns_live_server_snapshot_and_does_not_mutate():
             "get_server_status must return a JSON object in structuredContent; got: %r"
             % (s,))
 
+    if s.get("hostKind") != "WINDOWED":
+        raise AssertionError("Windowed HTTP e2e must report hostKind=WINDOWED")
+
     transports = s.get("transports")
     if not isinstance(transports, dict) or transports.get("http") is not True:
         raise AssertionError("HTTP e2e requires an active HTTP transport")

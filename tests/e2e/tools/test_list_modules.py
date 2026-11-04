@@ -152,3 +152,10 @@ def test_unknown_metadatatype_errors_with_supported_list():
     assert_error_quality(e, names=[bad], suggests=["commonModules"],
                          ctx="unknown metadataType")
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+@e2e_test(tool="list_modules", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_list_modules
+    contract_list_modules(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

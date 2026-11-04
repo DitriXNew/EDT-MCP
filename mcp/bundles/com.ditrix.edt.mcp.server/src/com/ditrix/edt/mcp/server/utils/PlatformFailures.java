@@ -382,6 +382,12 @@ public final class PlatformFailures
         return carriedMessage != null && filter.test(carriedMessage) ? carriedMessage : null;
     }
 
+    /** Returns whether the entire text is one Java object identity. */
+    public static boolean isObjectIdentity(String text)
+    {
+        return text != null && OBJECT_IDENTITY.matcher(text).matches();
+    }
+
     /**
      * The message with every embedded Java object identity reduced to the SIMPLE type name:
      * "Failed to persist reference value com...impl.RoleDescriptionImpl@3f2a1b" comes back as

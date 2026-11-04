@@ -1230,4 +1230,35 @@ public class GetMetadataDetailsToolTest
         assertFalse(row, row.contains("Catalog.Goods.Attribute.A" //$NON-NLS-1$
             + com.ditrix.edt.mcp.server.utils.FieldListSupport.MAX_LISTED + ","));
     }
+    @Test public void headlessReadUsesBmAndBilingualNamesWithoutWorkbench() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            for (String type : new String[] { "CommonModule", "ОбщийМодуль" })
+            {
+                for (String name : new String[] { "EnglishName", "Код" })
+                {
+                    String result = fixture.call(new GetMetadataDetailsTool(), Map.of("objectFqns", "[\"" + type + "." + name + "\"]"));
+                    assertTrue(result, result.contains("## CommonModule: " + name));
+                    assertTrue(result, result.contains("Translated " + name));
+                    assertEquals(result, fixture.callWindowed(new GetMetadataDetailsTool(),
+                        Map.of("objectFqns", "[\"" + type + "." + name + "\"]")));
+                }
+            }
+            String refused = fixture.call(new GetMetadataDetailsTool(), Map.of("objectFqns", "[\"CommonModule.Translated Код\"]"));
+            assertTrue(refused, refused.contains("| CommonModule.Translated Код | ERROR | Object not found"));
+            assertTrue(fixture.reads >= 10);
+        }
+    }
+    @Test public void headlessReadKeepsTheCapturedModelAcrossTheRequest() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            var manager = com.ditrix.edt.mcp.server.Activator.getDefault().getBmModelManager();
+            org.mockito.Mockito.when(manager.getModel(fixture.project())).thenReturn(fixture.model, null);
+            String result = fixture.call(new GetMetadataDetailsTool(), Map.of("objectFqns", "[\"CommonModule.Код\"]"));
+            assertTrue(result, result.contains("## CommonModule: Код"));
+            org.mockito.Mockito.verify(manager, org.mockito.Mockito.times(1)).getModel(fixture.project());
+        }
+    }
 }

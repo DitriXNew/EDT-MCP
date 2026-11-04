@@ -9,9 +9,33 @@ package com.ditrix.edt.mcp.server.tools.symbol;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.jface.text.ITextHover;
+import org.eclipse.jface.text.ITextHoverExtension2;
+import org.eclipse.jface.text.Region;
+import org.eclipse.jface.text.Position;
+import org.eclipse.jface.text.contentassist.ICompletionProposal;
+import org.eclipse.jface.text.source.Annotation;
+import org.eclipse.jface.text.source.ISourceViewer;
+import org.eclipse.xtext.ui.editor.hover.AnnotationWithQuickFixesHover.AnnotationInfo;
+import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 
 import org.junit.Test;
+import org.osgi.framework.FrameworkUtil;
 
 import com._1c.g5.v8.dt.bsl.model.BslFactory;
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
@@ -44,6 +68,334 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 public class SymbolInfoServiceTest
 {
     private final SymbolInfoService service = new SymbolInfoService();
+
+    private static final String OBJECT_REFERENCE =
+        "com._1c.g5.v8.dt.bsl.ui.hover.BslAnnotationWithQuickFixesHover$BslAnnotationInfo@13b1c2f5";
+    private static final String SSH_DESCRIPTION =
+        "Connect(Repository): Clones ssh://git@db/repo into the workspace.";
+
+    public interface HoverViewer extends ISourceViewer
+    {
+        ITextHover getTextHover(int offset, int stateMask);
+    }
+
+    public interface RichHover extends ITextHover, ITextHoverExtension2
+    {
+    }
+
+    public static class HtmlHover
+    {
+        private final String html;
+
+        public HtmlHover()
+        {
+            this(OBJECT_REFERENCE);
+        }
+
+        public HtmlHover(String html)
+        {
+            this.html = html;
+        }
+
+        public String getHtml()
+        {
+            return html;
+        }
+    }
+
+    public static class InputHover
+    {
+        public Object getInputElement()
+        {
+            return OBJECT_REFERENCE;
+        }
+    }
+
+    public static class ReferenceHover
+    {
+        @Override
+        public String toString()
+        {
+            return OBJECT_REFERENCE;
+        }
+    }
+
+    public static class BrokenHtmlHover
+    {
+        public String getHtml()
+        {
+            throw new IllegalStateException("Changed hover API");
+        }
+    }
+
+    public static class BrokenHtmlWithInput extends BrokenHtmlHover
+    {
+        public Object getInputElement()
+        {
+            return "Recovered input text";
+        }
+    }
+
+    public static class BrokenInputWithText
+    {
+        public Object getInputElement()
+        {
+            throw new IllegalStateException("Changed input API");
+        }
+
+        @Override
+        public String toString()
+        {
+            return "Useful object description";
+        }
+    }
+
+    public static class BrokenGettersHover extends BrokenHtmlHover
+    {
+        public Object getInputElement()
+        {
+            throw new IllegalStateException("Changed input API");
+        }
+
+        @Override
+        public String toString()
+        {
+            return OBJECT_REFERENCE;
+        }
+    }
+
+    public static class BrokenAnnotationInfo extends AnnotationInfo
+    {
+        public final Object annotation = "Changed annotation API";
+
+        public BrokenAnnotationInfo()
+        {
+            super(null, new Position(8, 6), null, new ICompletionProposal[0]);
+        }
+    }
+
+    private String hover(Object richInfo, String basicInfo, IXtextDocument document) throws Exception
+    {
+        HoverViewer viewer = mock(HoverViewer.class);
+        RichHover hover = mock(RichHover.class);
+        Region region = new Region(8, 6);
+        when(viewer.getTextHover(8, 0)).thenReturn(hover);
+        when(viewer.getDocument()).thenReturn(document);
+        when(hover.getHoverRegion(viewer, 8)).thenReturn(region);
+        when(hover.getHoverInfo2(viewer, region)).thenReturn(richInfo);
+        when(hover.getHoverInfo(viewer, region)).thenReturn(basicInfo);
+        java.lang.reflect.Method method =
+            SymbolInfoService.class.getDeclaredMethod("tryGetHoverInfo", ISourceViewer.class, int.class);
+        method.setAccessible(true);
+        return (String) method.invoke(service, viewer, 8);
+    }
+
+    private String hoverWithWarnings(Object richInfo, String basicInfo, String... causes) throws Exception
+    {
+        List<IStatus> recorded = new ArrayList<>();
+        ILog log = Platform.getLog(FrameworkUtil.getBundle(SymbolInfoService.class));
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        log.addLogListener(listener);
+        try
+        {
+            String result = hover(richInfo, basicInfo, null);
+            assertEquals("one warning per failing getter", causes.length, recorded.size());
+            for (int i = 0; i < causes.length; i++)
+            {
+                assertEquals(IStatus.WARNING, recorded.get(i).getSeverity());
+                assertTrue(recorded.get(i).getMessage(), recorded.get(i).getMessage().contains(causes[i]));
+            }
+            return result;
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void testSshDescriptionSurvivesRawAndBasicHover() throws Exception
+    {
+        assertEquals(SSH_DESCRIPTION, hover(SSH_DESCRIPTION, null, null));
+        assertEquals(SSH_DESCRIPTION, hover(null, SSH_DESCRIPTION, null));
+    }
+
+    @Test
+    public void testSshDescriptionSurvivesHtmlHover() throws Exception
+    {
+        assertEquals(SSH_DESCRIPTION, hover(new HtmlHover("<p>" + SSH_DESCRIPTION + "</p>"), null, null));
+    }
+
+    @Test
+    public void testSshDescriptionSurvivesAnnotationMessage() throws Exception
+    {
+        AnnotationInfo info = new AnnotationInfo(new Annotation("check", false, SSH_DESCRIPTION),
+            new Position(8, 6), null, new ICompletionProposal[0]);
+        assertEquals("### Annotation\n\n" + SSH_DESCRIPTION, hover(info, null, null));
+    }
+
+    @Test
+    public void testHtmlWrappedIdentityIsDroppedAfterConversion() throws Exception
+    {
+        assertNull(hover(new HtmlHover("<p>" + OBJECT_REFERENCE + "</p>"), null, null));
+        assertNull(hover(null, "<p>" + OBJECT_REFERENCE + "</p>", null));
+    }
+
+    @Test
+    public void testPaddedAndEscapedBareIdentitiesAreDropped()
+    {
+        assertNull(SymbolInfoService.meaningfulOrNull(" \t" + OBJECT_REFERENCE + "\r\n"));
+        assertNull(SymbolInfoService.meaningfulOrNull(" \t" + OBJECT_REFERENCE.replace("_", "\\_") + "\r\n"));
+    }
+
+    @Test
+    public void testFailingHtmlGetterStillUsesInputElement() throws Exception
+    {
+        assertEquals("Recovered input text",
+            hoverWithWarnings(new BrokenHtmlWithInput(), null, "Changed hover API"));
+    }
+
+    @Test
+    public void testFailingInputGetterStillUsesToString() throws Exception
+    {
+        assertEquals("Useful object description",
+            hoverWithWarnings(new BrokenInputWithText(), null, "Changed input API"));
+    }
+
+    @Test
+    public void testFailingGettersStillAllowBasicHover() throws Exception
+    {
+        assertEquals("Basic hover text", hoverWithWarnings(new BrokenGettersHover(), "Basic hover text",
+            "Changed hover API", "Changed input API"));
+    }
+
+    @Test
+    public void testAnnotationHoverReturnsMessageAndSymbol() throws Exception
+    {
+        AnnotationInfo info = new AnnotationInfo(new Annotation("check", false, "Missing function description"),
+            new Position(8, 6), null, new ICompletionProposal[0]) {};
+        IXtextDocument document = mock(IXtextDocument.class);
+        when(document.readOnly(any())).thenReturn("Function Маркер() Export");
+        String result = hover(info, OBJECT_REFERENCE, document);
+        assertTrue(result, result.contains("Missing function description"));
+        assertTrue(result, result.contains("Function Маркер() Export"));
+        assertTrue(result, result.contains("Annotation"));
+        assertFalse(result, result.contains("AnnotationInfo@"));
+    }
+
+    @Test
+    public void testAnnotationMessageSurvivesWithoutSymbol() throws Exception
+    {
+        AnnotationInfo info = new AnnotationInfo(new Annotation("check", false, "Missing function description"),
+            new Position(8, 6), null, new ICompletionProposal[0]);
+        String result = hover(info, null, null);
+        assertNotNull("annotation message survives without a symbol", result);
+        assertTrue(result, result.contains("Missing function description"));
+    }
+
+    @Test
+    public void testAnnotationMessageIsPlainText() throws Exception
+    {
+        String message = "Describe <Parameter> & return value";
+        AnnotationInfo info = new AnnotationInfo(new Annotation("check", false, message),
+            new Position(8, 6), null, new ICompletionProposal[0]);
+        String result = hover(info, null, null);
+        assertNotNull("annotation messages are plain text", result);
+        assertTrue(result, result.contains(message));
+    }
+
+    @Test
+    public void testStringHoverReferenceIsDropped() throws Exception
+    {
+        assertNull(hover(OBJECT_REFERENCE, null, null));
+    }
+
+    @Test
+    public void testHtmlHoverReferenceIsDropped() throws Exception
+    {
+        assertNull(hover(new HtmlHover(), null, null));
+    }
+
+    @Test
+    public void testBasicHoverReferenceIsDropped() throws Exception
+    {
+        assertNull(hover(null, OBJECT_REFERENCE, null));
+    }
+
+    @Test
+    public void testEscapedHoverReferenceIsDropped() throws Exception
+    {
+        assertNull(hover(OBJECT_REFERENCE.replace("_", "\\_"), null, null));
+        assertNull(hover(null, OBJECT_REFERENCE.replace("_", "\\_"), null));
+    }
+
+    @Test
+    public void testEncodedHtmlReferenceIsDroppedAfterMarkdown() throws Exception
+    {
+        assertNull(hover("<p>" + OBJECT_REFERENCE.replace("@", "&#64;") + "</p>", null, null));
+    }
+
+    @Test
+    public void testInputAndToStringReferenceAreDropped() throws Exception
+    {
+        assertNull(hover(new InputHover(), null, null));
+        assertNull(hover(new ReferenceHover(), null, null));
+    }
+
+    @Test
+    public void testBrokenReflectionDoesNotReturnObjectDescription() throws Exception
+    {
+        List<IStatus> recorded = new ArrayList<>();
+        ILog log = Platform.getLog(FrameworkUtil.getBundle(SymbolInfoService.class));
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        log.addLogListener(listener);
+        try
+        {
+            assertNull(hover(new BrokenHtmlHover(), null, null));
+            assertEquals("one diagnostic for a failed reflective getter", 1, recorded.size());
+            assertEquals(IStatus.WARNING, recorded.get(0).getSeverity());
+            assertTrue(recorded.get(0).getMessage().contains("Changed hover API"));
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void testAnnotationReflectionFailureLogsOnceAndStillResolvesSymbol() throws Exception
+    {
+        List<IStatus> recorded = new ArrayList<>();
+        ILog log = Platform.getLog(FrameworkUtil.getBundle(SymbolInfoService.class));
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        IXtextDocument document = mock(IXtextDocument.class);
+        when(document.readOnly(any())).thenReturn("Function Маркер() Export");
+        log.addLogListener(listener);
+        try
+        {
+            String result = hover(new BrokenAnnotationInfo(), OBJECT_REFERENCE, document);
+            assertTrue(result, result.contains("Function Маркер() Export"));
+            assertTrue(result, result.contains("Annotation"));
+            assertFalse(result, result.contains("BslAnnotationInfo"));
+            assertEquals("one diagnostic for a changed annotation API", 1, recorded.size());
+            assertEquals(IStatus.WARNING, recorded.get(0).getSeverity());
+            assertTrue(recorded.get(0).getMessage().contains("annotation field"));
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void testPlainHoverUnchanged() throws Exception
+    {
+        IXtextDocument document = mock(IXtextDocument.class);
+        assertEquals("**Function** Compute()", hover("<b>Function</b> Compute()", null, document));
+        assertEquals("**Function** Compute()", hover(null, "<b>Function</b> Compute()", document));
+        assertEquals("Contact john@face.book", hover("Contact john@face.book", null, document));
+        verify(document, never()).readOnly(any());
+    }
 
     // ==================== meaningfulOrNull — the pure string guard ====================
 

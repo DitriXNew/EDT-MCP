@@ -27,6 +27,7 @@ public final class StartupCoordinator
     {
         Started start() throws Exception;
         default boolean supportsStartup() { return true; }
+        default String notReadyMessage() { return "EDT is running but IPC is not ready. Ask the user to inspect the EDT window for a blocking dialog."; }
     }
     private final EndpointRegistry registry;
     private final Starter starter;
@@ -60,7 +61,7 @@ public final class StartupCoordinator
                     boolean live = claim != null && claim.process() != null
                         && EndpointRegistry.sameProcess(claim.process().pid(), claim.process().startTime());
                     if (recent && (claim.process() == null || live)) { return STARTING; }
-                    if (live) { return "EDT is running but IPC is not ready. Ask the user to inspect the EDT window for a blocking dialog."; }
+                    if (live) { return starter.notReadyMessage(); }
                 }
                 // A missing listener must never cause a second EDT against an already-open workspace.
                 var workspaceLock = registry.workspace().resolve(".metadata/.lock");

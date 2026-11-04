@@ -204,3 +204,10 @@ def test_russian_object_name_resolves_in_upper_and_lower_case():
         assert_contains(result.text, "Функция Маркер() Экспорт", "the real Russian module must be read")
         assert_contains(result.text, "Возврат 1;", "the real method body must be read")
     assert_no_diff("case-insensitive Russian reads must leave the fixture unchanged")
+
+
+@e2e_test(tool="read_module_source", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_read_module_source
+    contract_read_module_source(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

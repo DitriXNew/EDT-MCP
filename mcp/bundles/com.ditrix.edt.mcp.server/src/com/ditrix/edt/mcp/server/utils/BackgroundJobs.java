@@ -731,6 +731,7 @@ public final class BackgroundJobs implements AutoCloseable
         JobRecord record = new JobRecord(UUID.randomUUID().toString(), owningTool,
             initialProgress, cancellation);
 
+        com.ditrix.edt.mcp.server.HeadlessLifetime.Lease lease;
         synchronized (jobsLock)
         {
             ensureOpen();
@@ -749,6 +750,9 @@ public final class BackgroundJobs implements AutoCloseable
                 throw new RejectedExecutionException("Background job registry is full with " //$NON-NLS-1$
                     + maxStoredJobs + " running jobs"); //$NON-NLS-1$
             }
+            var lifetime = Activator.getDefault() == null ? null : Activator.getDefault().getHeadlessLifetime();
+            lease = lifetime == null ? null : lifetime.tool();
+            if (lifetime != null && lease == null) { throw new RejectedExecutionException("Headless EDT is shutting down"); }
             jobs.put(record.id, record);
             inFlight.incrementAndGet();
         }
@@ -757,7 +761,10 @@ public final class BackgroundJobs implements AutoCloseable
         // callable when it unwinds, or the cancelling side when the callable will never run.
         // Neither alone is enough - a callable that ignores interruption keeps its thread long
         // after cancellation, and a task cancelled in the queue never reaches its callable.
-        record.onSlotRelease(inFlight::decrementAndGet);
+        record.onSlotRelease(() -> {
+            inFlight.decrementAndGet();
+            if (lease != null) { lease.close(); }
+        });
 
         FutureTask<Void> task = new FutureTask<>(() -> {
             if (record.beginWork())

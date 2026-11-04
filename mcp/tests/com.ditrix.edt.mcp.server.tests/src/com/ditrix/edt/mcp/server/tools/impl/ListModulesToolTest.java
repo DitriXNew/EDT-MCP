@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -184,5 +185,25 @@ public class ListModulesToolTest
         // rather than throwing, well before any PlatformUI call.
         String result = new ListModulesTool().execute(null);
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
+    }
+    @Test public void headlessReadUsesBmForFilteredMetadataAndCoreFilesForAll() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            for (String name : new String[] { "EnglishName", "Код" })
+            {
+                String result = fixture.call(new ListModulesTool(), Map.of("metadataType", "commonModules", "objectName", name));
+                assertTrue(result, result.contains("CommonModules/" + name + "/Module.bsl"));
+                assertTrue(result, result.contains("| CommonModule | " + name + " |"));
+                assertEquals(result, fixture.callWindowed(new ListModulesTool(),
+                    Map.of("metadataType", "commonModules", "objectName", name)));
+            }
+            int reads = fixture.reads;
+            String all = fixture.call(new ListModulesTool(), Map.of());
+            assertTrue(all, all.contains("CommonModules/Код/Module.bsl"));
+            assertEquals("Filesystem mode needs no BM task", reads, fixture.reads);
+            String refused = fixture.call(new ListModulesTool(), Map.of("metadataType", "commonModules", "objectName", "Translated Код"));
+            assertFalse(refused, refused.contains("CommonModules/Код/Module.bsl"));
+        }
     }
 }

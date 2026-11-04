@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
+   <extension point="org.eclipse.core.runtime.applications" id="stdioHost">
+      <application visible="false" cardinality="singleton-global" thread="main">
+         <run class="com.ditrix.edt.mcp.server.StdioHostApplication"/>
+      </application>
+   </extension>
    <!-- Preferences page -->
    <extension point="org.eclipse.ui.preferencePages">
       <page

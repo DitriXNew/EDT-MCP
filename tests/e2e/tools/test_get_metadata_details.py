@@ -896,3 +896,10 @@ def test_missing_nested_subsystem_chain_is_an_errors_row_not_its_parent():
         assert_not_contains(r.text, "**Origin:**",
                             "the existing parent must not be rendered for " + bad)
     assert_no_diff("a lookup miss must not change the project")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_windowed_formatter_contract():
+    from read_host_contracts import contract_get_metadata_details
+    contract_get_metadata_details(call, "WINDOWED")
+    assert_no_diff("pinned formatter reads must not change fixture files")

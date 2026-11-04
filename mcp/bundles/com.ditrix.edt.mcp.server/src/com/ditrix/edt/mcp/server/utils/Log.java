@@ -122,6 +122,12 @@ public final class Log
         log(IStatus.WARNING, message, null);
     }
 
+    public static void warning(String message, Throwable error)
+    {
+        log(IStatus.WARNING, message, error);
+    }
+
+
     /**
      * Logs an error with an optional exception.
      *

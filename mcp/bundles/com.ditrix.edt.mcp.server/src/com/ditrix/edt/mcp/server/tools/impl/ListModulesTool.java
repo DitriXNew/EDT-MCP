@@ -17,8 +17,6 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.Path;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.BusinessProcess;
@@ -47,6 +45,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
@@ -142,8 +141,7 @@ public class ListModulesTool implements IMcpTool
         final String filter = nameFilter;
         final int maxResults = limit;
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result = listModulesInternal(projectName, mdType, objName, filter, maxResults);
@@ -179,7 +177,16 @@ public class ListModulesTool implements IMcpTool
             return formatOutput(projectName, modules, limit, metadataType);
         }
 
-        // For specific type filters, use EDT API
+        return ReadToolExecution.read(project, NAME,
+            () -> listMetadataModules(ctx, projectName, metadataType, objectName, nameFilter, limit));
+    }
+
+    private String listMetadataModules(ProjectContext ctx, String projectName, String metadataType,
+        String objectName, String nameFilter, int limit)
+    {
+        IProject project = ctx.project();
+        List<ModuleInfo> modules = new ArrayList<>();
+        String type = metadataType.toLowerCase();
         ProjectContext.ConfigurationResult resolved = ctx.resolveConfiguration();
         if (!resolved.ok())
         {

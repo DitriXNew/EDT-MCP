@@ -7,6 +7,7 @@ from pathlib import Path
 
 import harness as H
 from stdio_client import StdioClient, discover
+from read_host_contracts import run_contracts
 
 
 def checked(client, name, arguments, identity):
@@ -45,6 +46,7 @@ def main():
         assert "notifications/tools/list_changed" in first.notifications, "No live catalog notification"
         modules = checked(first, "list_modules", {"projectName": H.PROJECT, "metadataType": "commonModules", "nameFilter": "Вычисление"}, "cyrillic")
         assert "Вычисление" in (modules.text + str(modules.structured)), "Fixture Cyrillic module was corrupted or missing"
+        run_contracts(lambda name, arguments: checked(first, name, arguments, "formatter"), "WINDOWED")
         with ThreadPoolExecutor(max_workers=2) as executor:
             a = executor.submit(checked, first, "get_server_status", {}, "overlap-Ё")
             b = executor.submit(checked, second, "get_server_status", {}, "overlap-Ё")
