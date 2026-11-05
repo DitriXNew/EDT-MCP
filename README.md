@@ -152,11 +152,13 @@ Go to **Window → Preferences → MCP Server**. The settings page has General, 
 - **Connection configuration**: One button outside the HTTP group reads **Copy HTTP config** or **Copy stdio .mcp.json**. It switches immediately with the checkbox: HTTP off selects stdio; a stdio-only launch also selects stdio while HTTP is stopped; otherwise it selects HTTP. The HTTP entry uses the running port (or the pending port when stopped) and the saved auth token, never an unsaved token. It uses the `mcpServers` + `type`/`url` shape (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the shapes below. A saved token is included as an `Authorization` header, so treat the copied text as a secret.
 - **Transport status**: An always-visible **stdio: ready/unavailable** line reports the local IPC listener, matching `get_server_status.transports.ipc`. HTTP status stays inside its group. A stdio-only launch shows a note there while HTTP is stopped. The status-bar indicator is green when either listener is serving, and its tooltip reports both transports. Restore Defaults re-enables and reveals HTTP without saving until Apply.
 
+![MCP Server General tab](img/Settings.png)
+
 #### Tools Tab
 
 Manage which tools are available to AI assistants. Tools are organized into groups that can be enabled or disabled together. See [Tool Management](#tool-management) for details.
 
-![MCP Server Settings](img/Settings.png)
+![MCP Server Tools tab](img/SettingsTools.png)
 
 ## Status Bar Controls
 
