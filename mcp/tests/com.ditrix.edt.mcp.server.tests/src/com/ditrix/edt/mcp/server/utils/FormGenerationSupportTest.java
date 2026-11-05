@@ -246,7 +246,7 @@ public class FormGenerationSupportTest
                 }
                 catch (FormValidationException e)
                 {
-                    assertSame(cause, cause instanceof Error ? e.getCause().getCause() : e.getCause());
+                    assertSame(cause, e.getCause());
                     assertTrue(e.json(), e.json().contains("\"success\":false"));
                     assertTrue(e.json(), e.json().contains("LIST"));
                     assertTrue(e.json(), e.json().contains("generateContent=false"));
@@ -257,6 +257,35 @@ public class FormGenerationSupportTest
                 assertEquals(null, descriptor.getForm());
                 org.mockito.Mockito.verifyZeroInteractions(generator);
             }
+        }
+    }
+
+    @Test
+    public void fatalFieldGenerationErrorPropagatesWithoutGeneratingOrWritingContent()
+    {
+        for (LegacyFields fields : new LegacyFields[] {new LegacyFields(), new CompatibilityFields()})
+        {
+            OutOfMemoryError failure = new OutOfMemoryError("fatal field generation failure");
+            fields.failure = failure;
+            InformationRegister owner = MdClassFactory.eINSTANCE.createInformationRegister();
+            BasicForm descriptor = MdClassFactory.eINSTANCE.createInformationRegisterForm();
+            IV8Project project = mock(IV8Project.class);
+            when(project.getVersion()).thenReturn(Version.V8_3_27);
+            IFormGenerator generator = mock(IFormGenerator.class);
+            try
+            {
+                FormGenerationSupport.generate(owner, descriptor, FormType.LIST, project, "en", generator, fields);
+                fail("Expected the fatal field generation error");
+            }
+            catch (OutOfMemoryError expected)
+            {
+                assertSame(failure, expected);
+            }
+            assertEquals(1, fields.calls);
+            assertTrue(owner.getForms().isEmpty());
+            assertEquals(null, owner.getDefaultListForm());
+            assertEquals(null, descriptor.getForm());
+            org.mockito.Mockito.verifyZeroInteractions(generator);
         }
     }
 

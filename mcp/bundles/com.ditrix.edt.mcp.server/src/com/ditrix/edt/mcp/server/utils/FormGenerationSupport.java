@@ -152,7 +152,7 @@ public final class FormGenerationSupport
                     project.getScriptVariant(), version);
             }
         }
-        catch (Exception e)
+        catch (Exception | LinkageError e) // NOSONAR preserve the actionable field-generation refusal on incompatible EDT APIs
         {
             Activator.logError("EDT field generation failed for formType " + type, e);
             FormValidationException failure = invalid("EDT field generation failed for formType " + type

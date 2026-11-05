@@ -107,6 +107,34 @@ public class DesignerExtensionBackendTest
         verifyZeroInteractions(reference);
     }
 
+    @Test public void reflectiveSetterErrorPropagatesUnchangedAndNeverFallsBack() throws Exception
+    {
+        for (Error setterError : new Error[] {new NoSuchMethodError("setter dependency"),
+            new OutOfMemoryError("fatal setter failure")})
+        {
+            CurrentArguments arguments = new CurrentArguments()
+            {
+                @Override public void setAdditionalInfobaseParameters(String parameters)
+                {
+                    super.setAdditionalInfobaseParameters(parameters);
+                    throw setterError;
+                }
+            };
+            InfobaseReference reference = mock(InfobaseReference.class);
+            try
+            {
+                DesignerExtensionBackend.applyAdditionalInfobaseParameters(arguments, reference, "/Z tenant");
+                fail("Expected the setter error");
+            }
+            catch (Error expected)
+            {
+                assertSame(setterError, expected);
+            }
+            assertEquals(1, arguments.calls);
+            verifyZeroInteractions(reference);
+        }
+    }
+
     public static class LegacyArguments
     {
     }

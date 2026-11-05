@@ -28,9 +28,10 @@ public class ReflectionUtilsTest
     }
 
     @Test
-    public void invocationPreservesCheckedExceptionsAndLinkageErrors() throws Exception
+    public void invocationPreservesCheckedExceptionsAndErrors() throws Exception
     {
-        for (Throwable cause : new Throwable[] {new Exception("platform failure"), new NoSuchMethodError("linkage")})
+        for (Throwable cause : new Throwable[] {new Exception("platform failure"), new NoSuchMethodError("linkage"),
+            new OutOfMemoryError("fatal VM failure")})
         {
             PublicApi target = new PublicApi()
             {
@@ -48,9 +49,9 @@ public class ReflectionUtilsTest
                 ReflectionUtils.invoke(PublicApi.class.getMethod("value", String.class), target, "unused");
                 fail("Expected the platform failure");
             }
-            catch (Exception e)
+            catch (Exception | Error e)
             {
-                assertSame(cause, cause instanceof Exception ? e : e.getCause());
+                assertSame(cause, e);
             }
         }
     }

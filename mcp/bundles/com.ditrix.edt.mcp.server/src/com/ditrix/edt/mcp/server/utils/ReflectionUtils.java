@@ -44,6 +44,10 @@ public final class ReflectionUtils
             {
                 throw cause;
             }
+            if (e.getCause() instanceof Error cause)
+            {
+                throw cause;
+            }
             throw new IllegalStateException("EDT API invocation failed: " + method.getName(), e.getCause());
         }
     }
