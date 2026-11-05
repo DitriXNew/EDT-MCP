@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Compiles the bundle against the OLDEST supported EDT, to prove one artifact still loads there.
+# Compiles the bundle against an older EDT, to find calls to APIs that release does not have.
+# Optional: compatibility with earlier EDT versions is not guaranteed and this is no release gate.
 #
 # Why this exists: the build compiles against the newest EDT target platform, while the bundle
 # ships Bundle-RequiredExecutionEnvironment JavaSE-17 and lower-bound package imports that a newer
@@ -10,7 +11,7 @@
 # check that settles it is to compile the same sources against the older platform - which is what
 # this script does, using a local EDT installation as the target platform.
 #
-# It is a LOCAL gate, not a CI job: 1C publishes only the current service release of each EDT
+# It is a LOCAL check, not a CI job: 1C publishes only the current service release of each EDT
 # major under https://edt.1c.ru/downloads/releases/ruby/<major>/, so an older platform is
 # reproducible from an installation on disk, not from a URL.
 #
@@ -25,9 +26,6 @@
 #             osgi.ee 25, so resolving at 17 fails with "Missing requirement ... osgi.ee ...
 #             version=25" - a convincing failure that says nothing about our linkage. And it
 #             ships swt.svg, so there is nothing to drop.
-# 2026.2.0 matters even though it is not the oldest: 1C deletes the previous service release
-# from its channel, so once CI is re-pinned forward this script is the only thing that can still
-# prove the single artifact loads there.
 #
 # The working tree is restored on every exit path; the script fails loudly if it cannot restore.
 
@@ -96,7 +94,7 @@ else
 fi
 cat > "$TARGET" <<XML
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<?pde version="3.8"?><target name="Oldest supported EDT (local probe)" sequenceNumber="1">
+<?pde version="3.8"?><target name="Older EDT (local probe)" sequenceNumber="1">
 <locations>
 <location path="$PLUGINS" type="Directory"/>
 </locations>

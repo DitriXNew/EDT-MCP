@@ -38,18 +38,17 @@ One real bug was found and fixed during the first run: `ping` returned
 ## CI
 `.github/workflows/conformance.yml` runs this on **stock GitHub-hosted runners**
 (`ubuntu-latest`) — no docker image, no self-hosted runner. A `build` job builds
-the plugin once; a `conformance` job then runs against **EDT 2026.1** (currently
-build 2026.1.2), and the [`setup-edt`](../../.github/actions/setup-edt/action.yml)
+the plugin once; a `conformance` job then runs against the latest **EDT 2026.2**
+(currently 2026.2.2), and the [`setup-edt`](../../.github/actions/setup-edt/action.yml)
 composite action materializes Eclipse + 1C:EDT of that version (from the public p2
 via `p2 director`) + the built plugin and boots EDT headless under Xvfb, so the
 conformance client can hit the local `:8765`. Protocol-only conformance needs no
 EDT project and no 1C platform license, so it runs unattended in the cloud.
 
-The plugin is compiled against the 2026.1 target — the OLDEST supported EDT — so one
-artifact resolves on 2026.1 and 2026.2 alike, and this gate runs it on the NEWEST
-(2026.2: Eclipse 4.38 / Java 25). The gate stays parameterized by EDT version (a thin
-`conformance-2026.2.yml` caller) so a future matrix is a one-line add; EDT version ⇄
-Eclipse base ⇄ JDK is one tuple, so a caller pinning an older EDT passes its own trio.
+All CI runs on the latest EDT (2026.2: Eclipse 4.38 / Java 25); compatibility with
+earlier versions is not guaranteed. The gate stays parameterized by EDT version (a thin
+`conformance-2026.2.yml` caller), so the next EDT is a one-line change; EDT version ⇄
+Eclipse base ⇄ JDK is one tuple.
 
 The headless-EDT boot is new — the first real CI run validates it end-to-end (the
 job uploads the EDT log as an artifact for diagnosis). Until it's confirmed green,

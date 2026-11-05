@@ -15,10 +15,9 @@ name: MCP Conformance (reusable)
 # platform license needed.
 #
 # Note: the plugin is COMPILED against the 2026.2 target platform (mcp/targets) but to
-# release 17 with BREE JavaSE-17, so one artifact resolves on 2026.1 and 2026.2 alike. This
-# gate runs it on 2026.2; the older EDT is the one covered by the bytecode level rather than
-# by a job here. EDT version ⇄ Eclipse base ⇄ JDK is one tuple: 2026.2 is
-# Eclipse 4.38 on Java 25, so a caller pinning an older EDT must pass its own trio.
+# release 17 with BREE JavaSE-17. All CI runs on the latest EDT; earlier versions are not
+# guaranteed. EDT version ⇄ Eclipse base ⇄ JDK is one tuple: 2026.2 is Eclipse 4.38 on
+# Java 25.
 
 on:
   workflow_call:
