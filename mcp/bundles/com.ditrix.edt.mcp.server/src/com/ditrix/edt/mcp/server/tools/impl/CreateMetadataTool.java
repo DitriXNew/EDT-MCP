@@ -561,12 +561,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
-        if (ctx.hasError())
+        ProjectContext lookup = resolveProjectAndScope(projectName, normFqn);
+        if (lookup.hasError())
         {
-            return ctx.error;
+            return lookup.error;
         }
-        return prepareWrite(ctx.project, () -> {
+        return prepareWrite(lookup.project, () -> {
+            ProjectContext ctx = HostKind.current() == HostKind.HEADLESS
+                ? resolveProjectAndScope(projectName, normFqn) : lookup;
+            if (ctx.hasError()) return () -> ctx.error;
             IProject project = ctx.project;
             Configuration config = ctx.config;
 
@@ -591,7 +594,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             EClass externalRoot = externalRootEClass(ctx.scope.isExternalObjects(), normFqn);
             if (externalRoot != null)
             {
-                return () -> createExternalRoot(ctx, projectName, normFqn, externalRoot, props, expectedNotExists,
+                return createExternalRoot(ctx, projectName, normFqn, externalRoot, props, expectedNotExists,
                     normReport);
             }
 
@@ -654,10 +657,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // duplicate was rejected above), so its synonym map starts empty and the only locale it can
             // carry is the one being written - no model read needed. Issue #298.
             List<String> localesMissing = synonymLanguage == null ? null
-                : readPreparation(ctx.project, () -> ctx.scope.localesMissing(Collections.singletonList(synonymLanguage)));
+                : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
             // Writing into a language the configuration itself does not use is legal but worth a
             // question: it may be a single-language build, or a language not supported yet.
-            boolean localeUnused = readPreparation(ctx.project, () -> ctx.scope.isDeclaredButUnused(synonymLanguage));
+            boolean localeUnused = ctx.scope.isDeclaredButUnused(synonymLanguage);
 
             if (isReferencedTopTarget(target))
             {
@@ -874,7 +877,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
             }
             MetadataNodeResolver.MetadataNode pkgNode =
-                readPreparation(ctx.project, () -> MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node);
+                MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
             if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
                 || !(pkgNode.object instanceof IBmObject))
             {
@@ -893,7 +896,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return () -> ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
             }
 
-            final long pkgBmId = readPreparation(ctx.project, () -> ((IBmObject)pkgNode.object).bmGetId());
+            final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
             final String[] contentFqnHolder = { null };
             final boolean headless = HostKind.current() == HostKind.HEADLESS;
             final String packageName = headless ? ((XDTOPackage)pkgNode.object).getName() : null;
@@ -1124,7 +1127,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // Owner resolution uses the yo-fallback (create_metadata itself normalizes 'yo'->'ye' in Names
             // by default), and force-export targets the RESOLVED owner's canonical FQN.
             MetadataNodeResolver.ResolvedNode ownerResolved =
-                readPreparation(project, () -> MetadataNodeResolver.resolveExistingWithYoFallback(config, ref.ownerFqn()));
+                MetadataNodeResolver.resolveExistingWithYoFallback(config, ref.ownerFqn());
             if (ownerResolved.node == null)
             {
                 return () -> ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1146,15 +1149,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // resolution context (Configuration + platform Version) PredefinedWriter itself cannot reach:
             // it is built via MetadataTypeBuilder, the SAME platform machinery an attribute's type uses.
             // (extDimensionTypes[].characteristicType is NOT a consumer - the writer resolves it by
-            // navigating the live model, not against config.) Stash the SAME context resolveBmContext
-            // already resolved for the rest of this create path on props for PredefinedWriter#create to
-            // use. Harmless to set unconditionally (PredefinedWriter reads it only when a property that
-            // needs it was supplied).
-            props.config = config;
+            // navigating the live model, not against config.) Keep only the scalar context here;
+            // the write re-fetches its Configuration before PredefinedWriter#create uses it.
             props.version = bm.version;
             props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
 
-            final long ownerBmId = readPreparation(project, () -> ((IBmObject)owner).bmGetId());
+            final long ownerBmId = ((IBmObject)owner).bmGetId();
             final String createItemName = itemName;
             final String[] createdKindHolder = new String[1];
             // The force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
@@ -1173,6 +1173,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                             throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                         }
                         canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
+                        props.config = HostKind.current() == HostKind.HEADLESS
+                            ? (Configuration)tx.getTopObjectByFqn("Configuration") : config; //$NON-NLS-1$
                         PredefinedWriter.WriteResult result =
                             PredefinedWriter.create(txOwner, createItemName, props, expectedNotExists);
                         if (result.isError())
@@ -1307,8 +1309,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return () -> ToolResult.error("Configuration is not a BM object").toJson(); //$NON-NLS-1$
         }
-        final long configBmId = readPreparation(req.project, () -> ((IBmObject)req.config).bmGetId());
-        final String configFqn = readPreparation(req.project, () -> ((IBmObject)req.config).bmGetFqn());
+        final long configBmId = ((IBmObject)req.config).bmGetId();
+        final String configFqn = ((IBmObject)req.config).bmGetFqn();
         final String name = req.target.childName;
         final String configFeatureName = req.target.configFeatureName;
         final IModelObjectFactory factory = bm.factory;
@@ -1537,7 +1539,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         int parentDepth = req.chain.length - 1;
-        Subsystem parent = readPreparation(req.project, () -> SubsystemUtils.resolveByPath(req.config, req.chain, parentDepth));
+        Subsystem parent = SubsystemUtils.resolveByPath(req.config, req.chain, parentDepth);
         if (parent == null)
         {
             String parentFqn = SubsystemUtils.chainFqn(req.chain, parentDepth);
@@ -1547,7 +1549,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "subsystem tree." + MetadataNodeResolver.yoNotFoundHint(parentFqn)).toJson(); //$NON-NLS-1$
         }
         String requestedFqn = SubsystemUtils.chainFqn(req.chain, req.chain.length);
-        if (readPreparation(req.project, () -> SubsystemUtils.resolveByPath(req.config, req.chain, req.chain.length)) != null)
+        if (SubsystemUtils.resolveByPath(req.config, req.chain, req.chain.length) != null)
         {
             return () -> duplicateError(requestedFqn, req.expectedNotExists);
         }
@@ -1555,8 +1557,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         try
         {
-            synonymLanguage = readPreparation(req.project, () -> MetadataLanguageUtils.resolveSynonymLanguage(req.config, req.props.synonym,
-                req.props.language, "the synonym")); //$NON-NLS-1$
+            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(req.config, req.props.synonym,
+                req.props.language, "the synonym"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
         {
@@ -1573,7 +1575,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return () -> ToolResult.error("Parent subsystem is not a BM object").toJson(); //$NON-NLS-1$
         }
 
-        final long parentBmId = readPreparation(req.project, () -> ((IBmObject)parent).bmGetId());
+        final long parentBmId = ((IBmObject)parent).bmGetId();
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
         final IV8Project v8Project = bm.v8Project;
@@ -1698,82 +1700,89 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * @param eClass the root EClass the FQN's type token names
      * @return the create-result JSON (success or a ready-to-return error)
      */
-    private String createExternalRoot(ProjectContext ctx, String projectName, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    private java.util.function.Supplier<String> createExternalRoot(ProjectContext ctx, String projectName, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         EClass eClass, Props props, boolean expectedNotExists, MdNameNormalizer.Report normReport)
     {
         final String name = normFqn.substring(normFqn.indexOf('.') + 1);
         if (!isValidIdentifier(name))
         {
-            return invalidNameError(name);
+            return () -> invalidNameError(name);
         }
-        String clash = readPreparation(ctx.project, () -> externalRootNameClash(ctx.scope.allExternalObjects(), eClass, name, normFqn,
-            projectName, expectedNotExists));
+        String clash = externalRootNameClash(ctx.scope.allExternalObjects(), eClass, name, normFqn,
+            projectName, expectedNotExists);
         if (clash != null)
         {
-            return clash;
+            return () -> clash;
         }
 
         final String synonymLanguage;
         try
         {
-            synonymLanguage = readPreparation(ctx.project, () -> ctx.scope.resolveSynonymLanguage(props.synonym, props.language,
-                "the synonym")); //$NON-NLS-1$
+            synonymLanguage = ctx.scope.resolveSynonymLanguage(props.synonym, props.language,
+                "the synonym"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
         {
-            return ToolResult.error(e.getMessage()).toJson();
+            return () -> ToolResult.error(e.getMessage()).toJson();
         }
 
         BmContext bm = resolveBmContext(ctx.project, projectName);
         if (bm.hasError())
         {
-            return bm.error;
+            return () -> bm.error;
         }
         final IModelObjectFactory factory = bm.factory;
         final IV8Project v8Project = bm.v8Project;
         final String rootFqn = eClass.getName() + "." + name; //$NON-NLS-1$
-        try
-        {
-            BmTransactions.<Void>write(bm.bmModel, "CreateExternalObjectRoot", (tx, pm) -> //$NON-NLS-1$
+        List<String> preparedMissing = HostKind.current() == HostKind.HEADLESS && synonymLanguage != null
+            ? ctx.scope.localesMissing(Collections.singletonList(synonymLanguage)) : null;
+        boolean preparedUnused = HostKind.current() == HostKind.HEADLESS && ctx.scope.isDeclaredButUnused(synonymLanguage);
+        return () -> {
+            try
             {
-                // Re-checked under the write lock: the project's root registry above may lag a commit
-                // (EDT 2026.1 updates it asynchronously), and the attach only rejects the exact FQN.
-                String taken = takenRootFqn(tx, name);
-                if (taken != null)
+                BmTransactions.<Void>write(bm.bmModel, "CreateExternalObjectRoot", (tx, pm) -> //$NON-NLS-1$
                 {
-                    throw new RootNameTakenException(taken);
-                }
-                MdObject root = ExternalObjectRoots.newRoot(factory, eClass, name, v8Project);
-                if (root == null)
-                {
-                    throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
-                        + "' object"); //$NON-NLS-1$
-                }
-                applyScalarProps(root, props, synonymLanguage);
-                tx.attachTopObject((IBmObject)root, rootFqn);
-                factory.fillDefaultReferences(root);
-                return null;
-            });
-        }
-        catch (Exception e)
-        {
-            for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause())
-            {
-                if (t instanceof RootNameTakenException)
-                {
-                    return rootClashError(((RootNameTakenException)t).takenFqn, eClass, normFqn,
-                        projectName, expectedNotExists);
-                }
+                    // Re-checked under the write lock: the project's root registry above may lag a commit
+                    // (EDT 2026.1 updates it asynchronously), and the attach only rejects the exact FQN.
+                    String taken = takenRootFqn(tx, name);
+                    if (taken != null)
+                    {
+                        throw new RootNameTakenException(taken);
+                    }
+                    MdObject root = ExternalObjectRoots.newRoot(factory, eClass, name, v8Project);
+                    if (root == null)
+                    {
+                        throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
+                            + "' object"); //$NON-NLS-1$
+                    }
+                    applyScalarProps(root, props, synonymLanguage);
+                    tx.attachTopObject((IBmObject)root, rootFqn);
+                    factory.fillDefaultReferences(root);
+                    return null;
+                });
             }
-            Activator.logError("Error creating external object root", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
-        }
+            catch (Exception e)
+            {
+                for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause())
+                {
+                    if (t instanceof RootNameTakenException)
+                    {
+                        return rootClashError(((RootNameTakenException)t).takenFqn, eClass, normFqn,
+                            projectName, expectedNotExists);
+                    }
+                }
+                Activator.logError("Error creating external object root", e); //$NON-NLS-1$
+                return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+            }
 
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, Collections.singletonList(rootFqn));
-        List<String> localesMissing = synonymLanguage == null ? null
-            : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
-        return success(new SuccessInfo(rootFqn, eClass, name, persisted, props, synonymLanguage,
-            localesMissing, ctx.scope.isDeclaredButUnused(synonymLanguage), null, normReport));
+            boolean persisted = BmTransactions.forceExportToDisk(ctx.project, Collections.singletonList(rootFqn));
+            List<String> localesMissing = synonymLanguage == null ? null
+                : HostKind.current() == HostKind.HEADLESS ? preparedMissing
+                    : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
+            return success(new SuccessInfo(rootFqn, eClass, name, persisted, props, synonymLanguage,
+                localesMissing, HostKind.current() == HostKind.HEADLESS ? preparedUnused
+                    : ctx.scope.isDeclaredButUnused(synonymLanguage), null, normReport));
+        };
     }
 
     /**
@@ -1881,7 +1890,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return () -> bm.error;
         }
-        final long ownerBmId = readPreparation(project, () -> ((IBmObject)target.owner).bmGetId());
+        final long ownerBmId = ((IBmObject)target.owner).bmGetId();
         final String[] childFqn = { null };
         final String[] parentFqn = { null };
         return () -> {
@@ -1950,7 +1959,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return () -> bm.error;
         }
 
-        final long topBmId = readPreparation(project, () -> ((IBmObject)target.topObject).bmGetId());
+        final long topBmId = ((IBmObject)target.topObject).bmGetId();
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
@@ -2202,7 +2211,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String titleText = fmProps.titleVal;
         // The designer's auto-children (extended tooltip / context menu) get script-variant
         // localized name suffixes, like FormObjectDefaultNameProvider.
-        final boolean russianAutoNames = readPreparation(project, () -> scope.scriptVariant() == ScriptVariant.RUSSIAN);
+        final boolean russianAutoNames = readPreparation(project, () -> preparationScope(ctx).scriptVariant() == ScriptVariant.RUSSIAN);
         final String[] createdKind = new String[1];
 
         // Resolved BEFORE the write (it needs only the configuration) so the success payload can
@@ -2210,7 +2219,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String titleLanguage;
         try
         {
-            titleLanguage = readPreparation(project, () -> scope.resolveSynonymLanguage(fmProps.titleVal,
+            titleLanguage = readPreparation(project, () -> preparationScope(ctx).resolveSynonymLanguage(fmProps.titleVal,
                 fmProps.titleLang, "the title")); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
@@ -2223,7 +2232,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // A configuration that declares NO language at all still gets its generated title - under
         // the script-variant locale, exactly as before this change. Losing the title outright would
         // be a regression, and a language-less configuration offers nothing better to key it by.
-        String resolvedTitleLanguage = readPreparation(project, () -> scope.defaultLanguageCode());
+        String resolvedTitleLanguage = readPreparation(project, () -> preparationScope(ctx).defaultLanguageCode());
         if (resolvedTitleLanguage == null)
         {
             resolvedTitleLanguage = russianAutoNames ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -2233,19 +2242,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean persisted;
         // The form as the model resolved it: its names, not the caller's spelling, locate its module.
         final MdObject editedForm;
+        final FormElementWriter.FormEditContext editedFormContext;
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
                 ref.formPath, "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
                     + "get_metadata_objects and get_metadata_details." //$NON-NLS-1$
-                    + readPreparation(project, () -> scope.addressingHint(ref.formPath)));
+                    + readPreparation(project, () -> preparationScope(ctx).addressingHint(ref.formPath)));
             editedForm = fctx.mdForm;
+            editedFormContext = fctx;
 
             // A Table auto-generates one column per tabular-section attribute; the column names come
             // from the metadata owner (the form model alone cannot enumerate them), resolved here.
             final List<String> tableColumns = fKind == FormElementWriter.Kind.TABLE
-                ? resolveTabularSectionColumns(scope, ref.formPath, bind) : null;
+                ? readPreparation(project, () -> resolveTabularSectionColumns(preparationScope(ctx), ref.formPath, bind)) : null;
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormMember", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -2283,8 +2294,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // The element is NEW, so its title map carries exactly the locale just written; the rest
             // of the declared locales are what the caller still owes a translation for (#298).
             formResult.put(KEY_LANGUAGE, writtenTitleLanguage).put(KEY_LOCALES_MISSING,
-                readPreparation(project, () -> scope.localesMissing(Collections.singletonList(writtenTitleLanguage))));
-            if (readPreparation(project, () -> scope.isDeclaredButUnused(writtenTitleLanguage)))
+                readPreparation(project, () -> preparationScope(ctx).localesMissing(Collections.singletonList(writtenTitleLanguage))));
+            if (readPreparation(project, () -> preparationScope(ctx).isDeclaredButUnused(writtenTitleLanguage)))
             {
                 formResult.put(KEY_LOCALE_UNUSED, true);
             }
@@ -2293,7 +2304,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // A created COMMAND has no action yet: the message says so and quotes the address that binds
         // it, after a look into the form module for a method of the command's name (issue #628).
         return formResult.put(McpKeys.MESSAGE,
-            readPreparation(project, () -> formMemberSuccessMessage(project, fKind, normFqn, ref, editedForm))).toJson();
+            HostKind.current() == HostKind.HEADLESS
+                ? editedFormContext.read(form -> formMemberSuccessMessage(project, fKind, normFqn, ref, form))
+                : formMemberSuccessMessage(project, fKind, normFqn, ref, editedForm)).toJson();
     }
 
     /**
@@ -3162,7 +3175,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot resolve the platform version needed to validate the form " //$NON-NLS-1$
                 + "event.").toJson(); //$NON-NLS-1$
         }
-        final String langCode = readPreparation(ctx.project, () -> ctx.scope.defaultLanguageCode());
+        final String langCode = readPreparation(ctx.project, () -> preparationScope(ctx).defaultLanguageCode());
 
         final String eventName = ref.name;
         final String[] createdKind = new String[1];

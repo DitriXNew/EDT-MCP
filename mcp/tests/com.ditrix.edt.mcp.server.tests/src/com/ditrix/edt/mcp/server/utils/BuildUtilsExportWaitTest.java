@@ -32,6 +32,31 @@ import org.junit.Test;
  */
 public class BuildUtilsExportWaitTest
 {
+    @Test
+    public void diskExportMustIncludeTheNativeEmptyDirectoryCleanup() throws Exception
+    {
+        var directory = java.nio.file.Files.createTempDirectory("metadata-delete-");
+        try
+        {
+            var manager = org.mockito.Mockito.mock(com._1c.g5.v8.derived.IDerivedDataManager.class, call -> {
+                    if (!call.getMethod().getName().equals("waitComputation"))
+                        return org.mockito.Mockito.RETURNS_DEFAULTS.answer(call);
+                    var segments = new java.util.ArrayList<String>();
+                    for (Object argument : call.getArguments())
+                    {
+                        if (argument instanceof String text) segments.add(text);
+                        else if (argument instanceof String[] texts) segments.addAll(java.util.Arrays.asList(texts));
+                    }
+                    if (segments.contains("EXP_CL")) java.nio.file.Files.delete(directory);
+                    return true;
+                });
+            assertTrue(BuildUtils.waitExportComputations(manager, DEADLINE_MS));
+            assertTrue("A successful export drain must include EXP_CL, which removes deleted objects' directories",
+                java.nio.file.Files.notExists(directory));
+        }
+        finally { java.nio.file.Files.deleteIfExists(directory); }
+    }
+
     private static final String PROJECT = "TestConfiguration"; //$NON-NLS-1$
     private static final String OTHER = "OtherProject"; //$NON-NLS-1$
     private static final long DEADLINE_MS = 60_000L;

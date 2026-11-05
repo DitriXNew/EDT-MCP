@@ -50,6 +50,25 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return ReadToolExecution.readOnHost(project, "Prepare metadata write", work);
     }
 
+    /** Resolve a fresh root inside the caller's preparation read; retain the windowed context. */
+    protected static MetadataScope preparationScope(ProjectContext context)
+    {
+        return HostKind.current() == HostKind.HEADLESS
+            ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(context.project.getName()).resolveMetadataRootInTransaction().scope()
+            : context.scope;
+    }
+
+    protected static MetadataScope transactionScope(ProjectContext context,
+        com._1c.g5.v8.bm.core.IBmTransaction transaction)
+    {
+        if (HostKind.current() != HostKind.HEADLESS) return context.scope;
+        Configuration config = context.scope.isExternalObjects()
+            ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(context.project.getName())
+                .resolveMetadataRootInTransaction().configuration()
+            : (Configuration)transaction.getTopObjectByFqn("Configuration");
+        return MetadataScope.of(context.project, config);
+    }
+
     /** Finish preparation in a read before invoking the ID-based write continuation. */
     protected static String prepareWrite(IProject project,
         java.util.function.Supplier<java.util.function.Supplier<String>> preparation)
@@ -723,7 +742,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             return ctx;
         }
-        String hint = readPreparation(ctx.project, () -> ctx.scope.addressingHint(fqn));
+        String hint = readPreparation(ctx.project, () -> preparationScope(ctx).addressingHint(fqn));
         if (!hint.isEmpty())
         {
             ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
@@ -758,7 +777,9 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     final String vendorSupportRefusal(MetadataScope scope, String fqn)
     {
         String refusal = ReadToolExecution.readOnHost(scope.project(), getName() + ": support preflight",
-            () -> VendorSupportGuard.refusalForFqn(scope,
+            () -> VendorSupportGuard.refusalForFqn(HostKind.current() == HostKind.HEADLESS && scope.project() != null
+                ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(scope.project().getName())
+                    .resolveMetadataRootInTransaction().scope() : scope,
                 MetadataTypeUtils.toCanonicalEnglishFqn(fqn), writeIntent()));
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }

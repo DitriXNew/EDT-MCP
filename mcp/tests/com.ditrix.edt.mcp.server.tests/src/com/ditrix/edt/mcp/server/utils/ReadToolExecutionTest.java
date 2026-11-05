@@ -9,6 +9,36 @@ import com.ditrix.edt.mcp.server.HostKind;
 
 public class ReadToolExecutionTest
 {
+    @Test public void aHeadlessReadCannotReturnALiveBmObject() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            var live = org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmObject.class);
+            org.mockito.Mockito.when(live.bmIsTransient()).thenReturn(false);
+            var failure = assertThrows(AssertionError.class, () ->
+                ReadToolExecution.readOnHost(fixture.project(), "bad preparation", () -> live));
+            assertTrue(failure.getMessage(), failure.getMessage().contains("live IBmObject"));
+        }
+    }
+
+    @Test public void readValueGuardChecksRecordsAndContainersAndAllowsDetachedCopies()
+    {
+        record Value(Object nested) { }
+        var live = org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmObject.class);
+        org.mockito.Mockito.when(live.bmIsTransient()).thenReturn(false);
+        assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertNoLiveBmValue(
+            new Value(java.util.Map.of("objects", java.util.List.of(live)))));
+        ReadBoundaryAssertions.assertNoLiveBmValue(new Value(java.util.List.of("name", 17L)));
+        ReadBoundaryAssertions.assertNoLiveBmValue(
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog());
+        var description = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
+        var type = org.mockito.Mockito.mock(com._1c.g5.v8.dt.mcore.Type.class,
+            org.mockito.Mockito.withSettings().extraInterfaces(com._1c.g5.v8.bm.core.IBmObject.class,
+                org.eclipse.emf.ecore.InternalEObject.class));
+        description.getTypes().add(type);
+        assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertNoLiveBmValue(description));
+    }
+
     @Test public void transitiveHierarchyKeepsOneWorkbenchDisplayForRootAndChunks() throws Exception
     {
         String saved = System.getProperty("eclipse.application");

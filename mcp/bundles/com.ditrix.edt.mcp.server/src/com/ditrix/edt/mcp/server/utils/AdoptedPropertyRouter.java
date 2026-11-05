@@ -397,7 +397,13 @@ public final class AdoptedPropertyRouter
             for (Map.Entry<EStructuralFeature, BaseRead> planned : bases.entrySet())
             {
                 EStructuralFeature feature = planned.getKey();
-                BaseRead now = env.readBase(request.project, request.target, feature);
+                BaseRead now = env == PLATFORM && com.ditrix.edt.mcp.server.HostKind.current()
+                    == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                    ? ReadToolExecution.readOnHost(request.project, "Recheck adopted property base", () -> {
+                        var current = ProjectContext.of(request.project.getName()).resolveMetadataRootInTransaction();
+                        MdObject target = MetadataNodeResolver.resolveAddress(current.scope(), request.fqn, true);
+                        return env.readBase(request.project, target, feature);
+                    }) : env.readBase(request.project, request.target, feature);
                 String text = baseChanged(planned.getValue(), now, feature.getName(), request.fqn, base);
                 if (text != null)
                 {
@@ -515,7 +521,10 @@ public final class AdoptedPropertyRouter
                     request.project, request.version, env)).toJson(), decisions, notes);
             }
         }
-        return new Routing(null, decisions, notes, request, env, bases);
+        Request recheck = env == PLATFORM && com.ditrix.edt.mcp.server.HostKind.current()
+            == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? new Request(null, request.fqn, request.project, null, null, request.version, List.of()) : request;
+        return new Routing(null, decisions, notes, recheck, env, bases);
     }
 
     /**
@@ -1058,8 +1067,9 @@ public final class AdoptedPropertyRouter
             this.fqn = fqn;
             this.feature = feature;
             this.baseNames = Collections.unmodifiableSet(new LinkedHashSet<>(baseNames));
-            this.additions = Collections.unmodifiableList(new ArrayList<>(additions));
-            this.request = request;
+            this.additions = Collections.unmodifiableList(additions.stream().map(AdoptedPropertyRouter::typeSnapshot).toList());
+            this.request = com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? MetadataTypeBuilder.snapshotTypeDescription(request) : request;
             this.requestedBase = Collections.unmodifiableList(new ArrayList<>(requestedBase));
             this.requestedKept = Collections.unmodifiableList(new ArrayList<>(requestedKept));
             this.predictedAdded = Collections.unmodifiableList(new ArrayList<>(predictedAdded));
@@ -1110,8 +1120,10 @@ public final class AdoptedPropertyRouter
             this.fqn = fqn;
             this.feature = feature;
             this.baseNames = Collections.unmodifiableList(new ArrayList<>(baseNames));
-            this.built = Collections.unmodifiableMap(new LinkedHashMap<>(built));
-            this.additions = Collections.unmodifiableList(new ArrayList<>(additions));
+            Map<String, TypeItem> snapshots = new LinkedHashMap<>();
+            built.forEach((name, item) -> snapshots.put(name, typeSnapshot(item)));
+            this.built = Collections.unmodifiableMap(snapshots);
+            this.additions = Collections.unmodifiableList(additions.stream().map(AdoptedPropertyRouter::typeSnapshot).toList());
             this.additionNames = Collections.unmodifiableList(new ArrayList<>(additionNames));
             this.access = access;
             this.readNames = Collections.unmodifiableSet(new LinkedHashSet<>(readNames));
@@ -1151,7 +1163,24 @@ public final class AdoptedPropertyRouter
      * @throws IllegalStateException when the object has no type extension any more, its type extension is
      *             not the one the routing judged, or it holds a type whose name cannot be read (rolls back)
      */
+    private static TypeItem typeSnapshot(TypeItem item)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? MetadataTypeBuilder.snapshotTypeReference(item) : item;
+    }
+
+    private static TypeItem currentType(TypeItem item, com._1c.g5.v8.bm.core.IBmTransaction tx)
+    {
+        return tx != null && com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? MetadataTypeBuilder.typeInTransaction(item, tx) : item;
+    }
+
     public static void applyTypeExtension(EObject target, TypePlan plan)
+    {
+        applyTypeExtension(target, plan, null);
+    }
+
+    public static void applyTypeExtension(EObject target, TypePlan plan, com._1c.g5.v8.bm.core.IBmTransaction tx)
     {
         ObjectExtension extension = target instanceof MdObject ? ((MdObject)target).getExtension() : null;
         EStructuralFeature typeExtensionFeature = extension instanceof DefinedTypeExtension
@@ -1165,7 +1194,8 @@ public final class AdoptedPropertyRouter
         {
             throw Refusals.state(changedRefusal("type", plan.fqn, "its type extension")); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        Composition composition = composeTypeExtension(current, plan.baseNames, plan.additions, plan.request);
+        List<TypeItem> additions = plan.additions.stream().map(item -> currentType(item, tx)).toList();
+        Composition composition = composeTypeExtension(current, plan.baseNames, additions, plan.request);
         if (composition.changed)
         {
             String unreadable = unreadableTypeRefusal(current, plan.fqn, null);
@@ -1203,6 +1233,11 @@ public final class AdoptedPropertyRouter
      */
     public static void applySource(EObject target, SourcePlan plan)
     {
+        applySource(target, plan, null);
+    }
+
+    public static void applySource(EObject target, SourcePlan plan, com._1c.g5.v8.bm.core.IBmTransaction tx)
+    {
         IMdAdoptedPropertyAccess access = plan.access;
         if (!(target instanceof MdObject) || !(((MdObject)target).getExtension() instanceof EventSubscriptionExtension))
         {
@@ -1218,8 +1253,11 @@ public final class AdoptedPropertyRouter
         {
             throw Refusals.state(changedRefusal("source", plan.fqn, "its source")); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        Map<String, TypeItem> built = new LinkedHashMap<>();
+        plan.built.forEach((name, item) -> built.put(name, currentType(item, tx)));
+        List<TypeItem> additions = plan.additions.stream().map(item -> currentType(item, tx)).toList();
         List<TypeItem> next = composeSource(current instanceof TypeDescription ? (TypeDescription)current : null,
-            plan.baseNames, plan.built, plan.additions, plan.fqn);
+            plan.baseNames, built, additions, plan.fqn);
         TypeDescription value = McoreFactory.eINSTANCE.createTypeDescription();
         value.getTypes().addAll(next);
         if (!plan.additions.isEmpty())

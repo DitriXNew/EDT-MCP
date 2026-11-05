@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -458,9 +459,13 @@ public class RenameMetadataObjectTool implements IMcpTool
                 AtomicBoolean queued = new AtomicBoolean();
                 WriteScope.runWithScope(scope, () -> queued.set(BmTransactions.forceExportToDisk(
                     ProjectContext.of(projectName).project(), "Configuration")));
-                return finishHeadlessRename(projectName, objectFqn, newName, resultRef.get(), queued.get(),
-                    queued.get() && WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS,
-                        WriteExportBarrier.PLATFORM).drained());
+                WriteExportBarrier.Outcome export = queued.get()
+                    ? WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS, WriteExportBarrier.PLATFORM)
+                    : new WriteExportBarrier.Outcome(false, null);
+                if (queued.get() && !export.drained())
+                    return WriteExportBarrier.notConfirmedAfterMutation(projectName, export.pendingProject() != null
+                        ? BuildUtils.DiskExportState.PENDING : BuildUtils.DiskExportState.UNOBSERVABLE);
+                return finishHeadlessRename(projectName, objectFqn, newName, resultRef.get(), queued.get(), export.drained());
             }
             return resultRef.get();
         };
@@ -483,6 +488,8 @@ public class RenameMetadataObjectTool implements IMcpTool
     static String finishHeadlessRename(String projectName, String oldFqn, String newName, String result,
         boolean queued, boolean drained)
     {
+        if (queued && !drained)
+            return WriteExportBarrier.notConfirmedAfterMutation(projectName, BuildUtils.DiskExportState.UNOBSERVABLE);
         String canonical = MetadataTypeUtils.toCanonicalEnglishFqn(oldFqn);
         String[] parts = canonical.split("\\.");
         boolean registered = queued && drained && (parts.length != 2

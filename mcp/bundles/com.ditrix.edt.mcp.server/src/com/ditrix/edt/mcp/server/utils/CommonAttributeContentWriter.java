@@ -146,6 +146,29 @@ public final class CommonAttributeContentWriter
     public static Result apply(IProject project, Configuration config, CommonAttribute commonAttribute,
         List<JsonObject> content)
     {
+        if (content == null || content.isEmpty()) return applyWithIds(project, 0, 0, content);
+        long[] ids = ReadToolExecution.readOnHost(project, "Read common attribute identity", () ->
+            new long[] {((IBmObject)config).bmGetId(), ((IBmObject)commonAttribute).bmGetId()});
+        return applyWithIds(project, ids[0], ids[1], content);
+    }
+
+    public static Result apply(IProject project, String fqn, List<JsonObject> content)
+    {
+        long[] ids = ReadToolExecution.readOnHost(project, "Resolve common attribute identity", () -> {
+            var root = ProjectContext.resolveMetadataRoot(project.getName());
+            if (!root.ok()) return null;
+            var node = MetadataNodeResolver.resolveExistingWithYoFallback(root.scope(), fqn).node;
+            return node != null && node.object instanceof CommonAttribute && node.object instanceof IBmObject bm
+                && root.configuration() instanceof IBmObject config
+                ? new long[] {config.bmGetId(), bm.bmGetId()} : null;
+        });
+        return ids == null ? Result.failed(ToolResult.error("Common attribute not found: " + fqn).toJson())
+            : applyWithIds(project, ids[0], ids[1], content);
+    }
+
+    private static Result applyWithIds(IProject project, long configBmId, long attributeBmId,
+        List<JsonObject> content)
+    {
         if (content == null || content.isEmpty())
         {
             return Result.failed(ToolResult.error("Nothing to apply: provide at least one 'content' " //$NON-NLS-1$
@@ -159,8 +182,6 @@ public final class CommonAttributeContentWriter
             return Result.failed(services.error);
         }
 
-        long configBmId = ReadToolExecution.readOnHost(project, "Read content owner identity", () -> ((IBmObject)config).bmGetId());
-        long attributeBmId = ReadToolExecution.readOnHost(project, "Read content owner identity", () -> ((IBmObject)commonAttribute).bmGetId());
         try
         {
             // Validate + resolve every entry in a read boundary so the target's LIVE

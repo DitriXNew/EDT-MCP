@@ -260,36 +260,64 @@ public final class DcsTargetResolver
             + "extInfo is DynamicListExtInfo."; //$NON-NLS-1$
     }
 
+    /** No live metadata object crosses from target navigation into the later content transaction. */
+    private record RootIdentity(long objectId, long ownerId, String ownerFqn, Failure failure)
+    {
+        static RootIdentity failed(Resolution resolution)
+        {
+            return new RootIdentity(0, 0, null, resolution.failure());
+        }
+    }
+
+    private static MetadataScope scopeInRead(ProjectContext.ConfigurationResult context)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? ProjectContext.of(context.project().getName()).resolveMetadataRootInTransaction().scope() : context.scope();
+    }
+
+    private static RootIdentity captureRoot(ProjectContext.ConfigurationResult context,
+        RootClassification classification, boolean report)
+    {
+        return ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> {
+            String fqn = classification.normalizedRoot;
+            String ownerType = DcsMainSchemaOwner.expectedType(fqn);
+            var node = MetadataNodeResolver.resolveExisting(scopeInRead(context), fqn);
+            if (node == null) return RootIdentity.failed(notFound(fqn, report
+                ? "Verify the " + ownerType + " programmatic Name with get_metadata_objects, then retry."
+                : "Verify the template programmatic Name and owner FQN with get_metadata_details, then retry."));
+            if (report ? !DcsMainSchemaOwner.supports(node.object) : !(node.object instanceof BasicTemplate))
+                return RootIdentity.failed(wrongType(fqn, node.object, report
+                    ? "Address an existing " + ownerType + ".<Name> root."
+                    : "Address a CommonTemplate or an object's Template member."));
+            if (!(node.object instanceof IBmObject object))
+                return RootIdentity.failed(bmObjectUnavailable(fqn, node.object));
+            IBmObject owner = topObject(object);
+            String ownerFqn = fqnOrNull(owner);
+            if (owner == null || ownerFqn == null) return RootIdentity.failed(exportOwnerUnavailable(fqn));
+            return new RootIdentity(object.bmGetId(), owner.bmGetId(), ownerFqn, null);
+        });
+    }
+
+    private static RootIdentity captureForm(ProjectContext.ConfigurationResult context, String fqn,
+        String formPath)
+    {
+        return ReadToolExecution.readOnHost(context.project(), "Resolve DCS form", () -> {
+            MdObject form = FormStructureReader.resolveMdForm(scopeInRead(context), formPath);
+            if (form == null) return RootIdentity.failed(notFound(fqn,
+                "Verify the form and attribute programmatic Names with get_metadata_details, then retry."));
+            if (!(form instanceof IBmObject object)) return RootIdentity.failed(bmObjectUnavailable(fqn, form));
+            return new RootIdentity(object.bmGetId(), 0, null, null);
+        });
+    }
+
     private static Resolution resolveReport(ProjectContext.ConfigurationResult context,
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
         String ownerType = DcsMainSchemaOwner.expectedType(classification.normalizedRoot);
-        MetadataNodeResolver.MetadataNode node =
-            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot));
-        if (node == null)
-        {
-            return notFound(classification.normalizedRoot,
-                "Verify the " + ownerType //$NON-NLS-1$
-                    + " programmatic Name with get_metadata_objects, then retry."); //$NON-NLS-1$
-        }
-        if (!DcsMainSchemaOwner.supports(node.object))
-        {
-            return wrongType(classification.normalizedRoot, node.object,
-                "Address an existing " + ownerType + ".<Name> root."); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (!(node.object instanceof IBmObject))
-        {
-            return bmObjectUnavailable(classification.normalizedRoot, node.object);
-        }
-
-        IBmObject reportBm = (IBmObject)node.object;
-        long reportBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
-            () -> reportBm.bmGetId());
-        String ownerFqn = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topFqn(reportBm));
-        if (ownerFqn == null)
-        {
-            return exportOwnerUnavailable(classification.normalizedRoot);
-        }
+        RootIdentity identity = captureRoot(context, classification, true);
+        if (identity.failure != null) return Resolution.failure(identity.failure);
+        long reportBmId = identity.objectId;
+        String ownerFqn = identity.ownerFqn;
         DcsInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveReportMainDcs", (tx, monitor) -> //$NON-NLS-1$
         {
@@ -322,32 +350,10 @@ public final class DcsTargetResolver
     private static Resolution resolveTemplate(ProjectContext.ConfigurationResult context,
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
-        MetadataNodeResolver.MetadataNode node =
-            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot));
-        if (node == null)
-        {
-            return notFound(classification.normalizedRoot,
-                "Verify the template programmatic Name and owner FQN with get_metadata_details, then retry."); //$NON-NLS-1$
-        }
-        if (!(node.object instanceof BasicTemplate))
-        {
-            return wrongType(classification.normalizedRoot, node.object,
-                "Address a CommonTemplate or an object's Template member."); //$NON-NLS-1$
-        }
-        if (!(node.object instanceof IBmObject))
-        {
-            return bmObjectUnavailable(classification.normalizedRoot, node.object);
-        }
-
-        IBmObject templateBm = (IBmObject)node.object;
-        long templateBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
-            () -> templateBm.bmGetId());
-        IBmObject owner = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topObject(templateBm));
-        String ownerFqn = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topFqn(templateBm));
-        if (owner == null || ownerFqn == null)
-        {
-            return exportOwnerUnavailable(classification.normalizedRoot);
-        }
+        RootIdentity identity = captureRoot(context, classification, false);
+        if (identity.failure != null) return Resolution.failure(identity.failure);
+        long templateBmId = identity.objectId;
+        String ownerFqn = identity.ownerFqn;
         DcsInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveTemplateDcs", (tx, monitor) -> //$NON-NLS-1$
         {
@@ -367,8 +373,7 @@ public final class DcsTargetResolver
         }
 
         EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
-        ids.put(BmRole.ROOT_OWNER, ReadToolExecution.readOnHost(context.project(), "Read DCS owner identity",
-            owner::bmGetId));
+        ids.put(BmRole.ROOT_OWNER, identity.ownerId);
         ids.put(BmRole.TEMPLATE, templateBmId);
         inspection.copyIdsTo(ids);
         return Resolution.success(new Target(address, classification.normalizedRoot,
@@ -384,21 +389,10 @@ public final class DcsTargetResolver
         // 'Type.Object.Form.Name' (or 'CommonForm.Name'), a shape the generic node resolver does not
         // walk, so using it here made every dynamic-list root report "not found" for a form that
         // modify_metadata could resolve perfectly well.
-        MdObject mdForm =
-            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> FormStructureReader.resolveMdForm(context.scope(), classification.formMemberRef.formPath));
-        if (mdForm == null)
-        {
-            return notFound(classification.normalizedRoot,
-                "Verify the form and attribute programmatic Names with get_metadata_details, then retry."); //$NON-NLS-1$
-        }
-        if (!(mdForm instanceof IBmObject))
-        {
-            return bmObjectUnavailable(classification.normalizedRoot, mdForm);
-        }
-
-        IBmObject mdFormBm = (IBmObject)mdForm;
-        long mdFormBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
-            () -> mdFormBm.bmGetId());
+        RootIdentity identity = captureForm(context, classification.normalizedRoot,
+            classification.formMemberRef.formPath);
+        if (identity.failure != null) return Resolution.failure(identity.failure);
+        long mdFormBmId = identity.objectId;
         DynamicListInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveDynamicListDcs", (tx, monitor) -> //$NON-NLS-1$
         {
@@ -472,20 +466,9 @@ public final class DcsTargetResolver
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
         String formPath = FormElementWriter.parseFormPath(classification.normalizedRoot);
-        MdObject mdForm = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> FormStructureReader.resolveMdForm(context.scope(), formPath));
-        if (mdForm == null)
-        {
-            return notFound(classification.normalizedRoot,
-                "Verify the form programmatic Name with get_metadata_details, then retry."); //$NON-NLS-1$
-        }
-        if (!(mdForm instanceof IBmObject))
-        {
-            return bmObjectUnavailable(classification.normalizedRoot, mdForm);
-        }
-
-        IBmObject mdFormBm = (IBmObject)mdForm;
-        long mdFormBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
-            () -> mdFormBm.bmGetId());
+        RootIdentity identity = captureForm(context, classification.normalizedRoot, formPath);
+        if (identity.failure != null) return Resolution.failure(identity.failure);
+        long mdFormBmId = identity.objectId;
         FormInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveFormConditionalAppearance", (tx, monitor) -> //$NON-NLS-1$
         {

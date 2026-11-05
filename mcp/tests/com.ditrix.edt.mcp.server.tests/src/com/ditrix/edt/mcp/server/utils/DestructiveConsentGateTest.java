@@ -41,6 +41,64 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.Outcome;
 public class DestructiveConsentGateTest
 {
     @Test
+    public void headlessAllowAuditsWithAndWithoutEnvironmentOverride()
+    {
+        var records = new java.util.ArrayList<org.eclipse.core.runtime.IStatus>();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().startsWith("Destructive-consent gate:")) records.add(status);
+        };
+        org.eclipse.core.runtime.Platform.addLogListener(listener);
+        try
+        {
+            for (boolean env : new boolean[] {false, true})
+            {
+                records.clear();
+                var preview = ConsentPreview.withUnloggableNames("Evaluate expression", "Runs BSL", 1,
+                    java.util.List.of("private-token"));
+                assertEquals(ConsentDecision.ALLOW, DestructiveConsentGate.getInstance().requireConsent(
+                    "evaluate_expression", preview, com.ditrix.edt.mcp.server.HostKind.HEADLESS, env));
+                assertEquals("Every headless allow must be audited", 1, records.size());
+                assertEquals(org.eclipse.core.runtime.IStatus.INFO, records.get(0).getSeverity());
+                String line = records.get(0).getMessage();
+                assertTrue(line, line.contains("headless"));
+                assertTrue(line, line.contains("'evaluate_expression'"));
+                assertTrue(line, line.endsWith("Evaluate expression: Runs BSL (1 item(s): content not logged, 13 chars)"));
+                assertFalse(line, line.contains("private-token"));
+            }
+        }
+        finally { org.eclipse.core.runtime.Platform.removeLogListener(listener); }
+    }
+
+    @Test
+    public void windowedAuditRemainsByteIdenticalAndUsesTheSameRedactedPreviewAsHeadless()
+    {
+        var records = new java.util.ArrayList<org.eclipse.core.runtime.IStatus>();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().startsWith("Destructive-consent gate:")) records.add(status);
+        };
+        org.eclipse.core.runtime.Platform.addLogListener(listener);
+        try
+        {
+            var preview = ConsentPreview.withUnloggableNames("Evaluate expression", "Runs BSL", 1,
+                java.util.List.of("private-token"));
+            var gate = DestructiveConsentGate.getInstance();
+            assertEquals(ConsentDecision.ALLOW, gate.requireConsent("evaluate_expression", preview,
+                com.ditrix.edt.mcp.server.HostKind.WINDOWED, true));
+            String expected = "Destructive-consent gate: EDT_MCP_DESTRUCTIVE_CONSENT=allow bypassed the prompt for 'evaluate_expression' — Evaluate expression: Runs BSL (1 item(s): content not logged, 13 chars)";
+            assertEquals(1, records.size());
+            assertEquals(expected, records.get(0).getMessage());
+            assertEquals(org.eclipse.core.runtime.IStatus.INFO, records.get(0).getSeverity());
+            assertEquals(ConsentDecision.ALLOW, gate.requireConsent("evaluate_expression", preview,
+                com.ditrix.edt.mcp.server.HostKind.HEADLESS, false));
+            assertEquals("Both hosts must use the audit writer", 2, records.size());
+            assertTrue(records.get(1).getMessage().endsWith(expected.substring(expected.indexOf(" bypassed"))));
+            assertEquals(records.get(0).getSeverity(), records.get(1).getSeverity());
+            assertFalse(records.toString().contains("private-token"));
+        }
+        finally { org.eclipse.core.runtime.Platform.removeLogListener(listener); }
+    }
+
+    @Test
     public void explicitHeadlessHostAlwaysAllowsEveryGatedTool()
     {
         String previous = System.getProperty("eclipse.application");

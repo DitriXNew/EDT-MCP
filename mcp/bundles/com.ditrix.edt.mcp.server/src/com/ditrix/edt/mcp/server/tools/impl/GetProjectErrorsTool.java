@@ -2074,13 +2074,12 @@ public class GetProjectErrorsTool implements IMcpTool
         FormElementWriter.FormEditContext ctx;
         try
         {
-            MdObject mdForm = FormStructureReader.resolveMdForm(metadataScope, ref.formPath);
-            if (mdForm == null)
+            ctx = FormElementWriter.resolveForEditOrNull(project, metadataScope, ref.formPath);
+            if (ctx == null)
             {
                 // The form itself is absent from this project's root: a decided "not here".
                 return Collections.emptyList();
             }
-            ctx = FormElementWriter.editContextFor(project, mdForm);
         }
         catch (Exception e)
         {

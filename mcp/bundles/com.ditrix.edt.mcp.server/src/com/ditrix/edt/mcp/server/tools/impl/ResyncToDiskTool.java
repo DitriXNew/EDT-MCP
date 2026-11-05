@@ -817,7 +817,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             result.warning = "Configuration is not a BM object; dangling-reference scan skipped."; //$NON-NLS-1$
             return result;
         }
-        final long configBmId = readPreparation(project, () -> ((IBmObject)config).bmGetId());
+        ConfigurationIdentity identity = readPreparation(project, () -> {
+            Configuration current = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(project.getName())
+                    .resolveMetadataRootInTransaction().configuration() : config;
+            return new ConfigurationIdentity(((IBmObject)current).bmGetId(),
+                com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                    ? ((IBmObject)current).bmGetFqn() : null);
+        });
+        final long configBmId = identity.id;
 
         // A configuration vendor support locks keeps its entries: scanned in a read, reported, never removed.
         if (remove && !configurationEditable(bmModel, configBmId))
@@ -860,7 +869,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             // the FQN cannot be named. Stated separately so a cleanup that could not name its file
             // is still a write in this project rather than the "queued nothing" reported above.
             WriteScope.recordWrite(project);
-            String configFqn = readPreparation(project, () -> ((IBmObject)config).bmGetFqn());
+            String configFqn = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? identity.fqn : ((IBmObject)config).bmGetFqn();
             if (configFqn != null && !configFqn.isEmpty())
             {
                 boolean reExported = BmTransactions.forceExportToDisk(project, configFqn);
@@ -875,6 +885,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     /** Whether EDT allows editing the configuration; a check that throws counts as "no" (fail closed). */
+    private record ConfigurationIdentity(long id, String fqn) { }
+
     private static boolean configurationEditable(IBmModel bmModel, long configBmId)
     {
         try

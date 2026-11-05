@@ -19,6 +19,74 @@ import org.junit.Test;
 public class DcsTargetResolverTest
 {
     @Test
+    public void targetIdentityAndOwnerMustBeCapturedInTheResolutionRead() throws Exception
+    {
+        for (String route : new String[] {"CommonTemplate", "Report", "CommonForm", "DynamicList"})
+        {
+            String kind = route.equals("DynamicList") ? "CommonForm" : route;
+            for (String name : new String[] {"Target", "Цель"})
+            {
+            try (var fixture = new HeadlessReadFixture())
+            {
+                com._1c.g5.v8.dt.metadata.mdclass.MdObject stored;
+                Class<? extends com._1c.g5.v8.dt.metadata.mdclass.MdObject> type;
+                if (kind.equals("CommonTemplate"))
+                {
+                    stored = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCommonTemplate();
+                    type = com._1c.g5.v8.dt.metadata.mdclass.CommonTemplate.class;
+                }
+                else if (kind.equals("Report"))
+                {
+                    stored = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createReport();
+                    type = com._1c.g5.v8.dt.metadata.mdclass.Report.class;
+                }
+                else
+                {
+                    stored = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCommonForm();
+                    type = com._1c.g5.v8.dt.metadata.mdclass.CommonForm.class;
+                }
+                stored.setName(name);
+                stored.getSynonym().put("en", "Caption");
+                int[] resolvedIn = {-1};
+                var object = org.mockito.Mockito.mock(type, org.mockito.Mockito.withSettings()
+                    .extraInterfaces(com._1c.g5.v8.bm.core.IBmObject.class, org.eclipse.emf.ecore.InternalEObject.class)
+                    .defaultAnswer(call -> {
+                        String method = call.getMethod().getName();
+                        if (method.equals("getName")) { resolvedIn[0] = fixture.reads; return name; }
+                        if (method.startsWith("bm"))
+                        {
+                            assertEquals("Live " + kind + " escaped the read that resolved it", resolvedIn[0], fixture.reads);
+                            assertTrue(fixture.depth > 0);
+                            if (method.equals("bmGetId")) return 17L;
+                            if (method.equals("bmIsTop")) return true;
+                            if (method.equals("bmGetFqn")) return kind + "." + name;
+                        }
+                        return call.getMethod().invoke(stored, call.getArguments());
+                    }));
+                if (kind.equals("CommonTemplate")) fixture.config.getCommonTemplates().add((com._1c.g5.v8.dt.metadata.mdclass.CommonTemplate)object);
+                else if (kind.equals("Report")) fixture.config.getReports().add((com._1c.g5.v8.dt.metadata.mdclass.Report)object);
+                else fixture.config.getCommonForms().add((com._1c.g5.v8.dt.metadata.mdclass.CommonForm)object);
+                var tx = org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmTransaction.class);
+                org.mockito.Mockito.when(tx.getObjectById(17L)).thenReturn((com._1c.g5.v8.bm.core.IBmObject)stored);
+                org.mockito.Mockito.when(fixture.model.executeAndRollback(org.mockito.ArgumentMatchers.any())).thenAnswer(call ->
+                    ((com._1c.g5.v8.bm.integration.IBmTask<?>)call.getArgument(0)).execute(tx, null));
+                var context = ProjectContext.resolveMetadataRoot(fixture.name());
+                String token = name.equals("Target") ? kind : kind.equals("CommonTemplate") ? "ОбщийМакет"
+                    : kind.equals("Report") ? "Отчет" : "ОбщаяФорма";
+                String fqn = token + "." + name + (route.equals("DynamicList") ? ".Attribute.List" : "");
+                var result = DcsTargetResolver.resolve(context, fixture.model, DcsAddress.parse(fqn).address());
+                org.junit.Assert.assertNotEquals(result.isSuccess() ? "resolved" : result.failure().message(),
+                    DcsTargetResolver.FailureCode.RESOLUTION_FAILED, result.isSuccess() ? null : result.failure().code());
+                org.mockito.Mockito.verify(tx).getObjectById(17L);
+                var bySynonym = DcsTargetResolver.resolve(context, fixture.model,
+                    DcsAddress.parse(kind + ".Caption").address());
+                org.junit.Assert.assertEquals(DcsTargetResolver.FailureCode.TARGET_NOT_FOUND, bySynonym.failure().code());
+            }
+            }
+        }
+    }
+
+    @Test
     public void testClassifiesReportMainDcs()
     {
         assertKind("Report.Sales", DcsTargetResolver.TargetKind.REPORT_MAIN_DCS); //$NON-NLS-1$

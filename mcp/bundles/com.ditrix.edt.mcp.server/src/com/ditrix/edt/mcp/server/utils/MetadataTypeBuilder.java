@@ -287,6 +287,53 @@ public final class MetadataTypeBuilder
         // utility class
     }
 
+    /** Detached authored type whose non-containment references retain only their BM URIs. */
+    public static TypeDescription snapshotTypeDescription(TypeDescription value)
+    {
+        if (value == null) return null;
+        TypeDescription copy = org.eclipse.emf.ecore.util.EcoreUtil.copy(value);
+        copy.getTypes().clear();
+        for (TypeItem item : value.getTypes()) copy.getTypes().add(snapshotTypeReference(item));
+        return copy;
+    }
+
+    /** Capture inside the producing read; a detached root alone does not detach its referenced Type. */
+    public static TypeItem snapshotTypeReference(TypeItem item)
+    {
+        if (!(item instanceof com._1c.g5.v8.bm.core.IBmObject bm) || bm.bmIsTransient()) return item;
+        var uri = bm.bmGetUri();
+        if (uri == null) throw Refusals.state("Cannot capture the metadata type identity. Re-read the object and retry.");
+        TypeItem proxy = (TypeItem)org.eclipse.emf.ecore.util.EcoreUtil.create(item.eClass());
+        ((org.eclipse.emf.ecore.InternalEObject)proxy).eSetProxyURI(uri);
+        return proxy;
+    }
+
+    /** Resolve a captured BM type identity in the transaction that will consume it. */
+    public static TypeItem typeInTransaction(TypeItem item, com._1c.g5.v8.bm.core.IBmTransaction tx)
+    {
+        if (item.eIsProxy())
+        {
+            var uri = ((org.eclipse.emf.ecore.InternalEObject)item).eProxyURI();
+            if (com._1c.g5.v8.bm.core.BmUriUtil.isBmUri(uri))
+            {
+                Object current = tx.getObjectByUri(uri);
+                if (!(current instanceof TypeItem))
+                    throw Refusals.state("The metadata type no longer exists. Re-read the object before retrying.");
+                return (TypeItem)current;
+            }
+        }
+        return item;
+    }
+
+    /** Keeps the detached qualifiers while resolving every captured type reference in the active write. */
+    public static TypeDescription typesInTransaction(TypeDescription value, com._1c.g5.v8.bm.core.IBmTransaction tx)
+    {
+        TypeDescription copy = org.eclipse.emf.ecore.util.EcoreUtil.copy(value);
+        copy.getTypes().clear();
+        for (TypeItem item : value.getTypes()) copy.getTypes().add(typeInTransaction(item, tx));
+        return copy;
+    }
+
     private static Result error(String message)
     {
         return new Result(null, message, false, null);

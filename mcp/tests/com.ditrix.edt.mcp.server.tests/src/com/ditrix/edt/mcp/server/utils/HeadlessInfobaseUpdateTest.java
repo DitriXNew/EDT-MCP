@@ -18,6 +18,26 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 public class HeadlessInfobaseUpdateTest
 {
+    @Test public void suspendedUpdateCanRunAfterTheAnswerAndMustNotAdviseRetry() throws Exception
+    {
+        var manager = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        var ran = new java.util.concurrent.CountDownLatch(1);
+        String result;
+        manager.suspend();
+        try
+        {
+            result = HeadlessInfobaseUpdate.runBounded(() -> { ran.countDown(); return "updated"; }, 5000);
+            assertEquals(1L, ran.getCount());
+        }
+        finally { manager.resume(); }
+        assertTrue("The retained job must actually execute after resume", ran.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+        assertEquals(result, "unknown", response.get("outcome").getAsString());
+        assertTrue(result, response.get("mutationOutcomeUnknown").getAsBoolean());
+        assertFalse(result, result.contains("retry"));
+        assertFalse(result, result.contains("No update ran"));
+    }
+
     @Test public void neverStartedUpdateHasNoUnknownMutationMarker()
     {
         for (boolean cancel : new boolean[] { false, true })

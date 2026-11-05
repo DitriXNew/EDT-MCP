@@ -66,12 +66,23 @@ public final class WriteExportBarrier
 
     public static String notConfirmed(String projectName)
     {
+        return notConfirmedResult(projectName).toJson();
+    }
+
+    public static String notConfirmedAfterMutation(String projectName, DiskExportState state)
+    {
+        return notConfirmedResult(projectName).put("mutationCommitted", true)
+            .put("exportState", state.name()).toJson();
+    }
+
+    private static ToolResult notConfirmedResult(String projectName)
+    {
         return ToolResult.error("The operation completed, but its export to disk was not confirmed "
             + "within a " + (DEADLINE_MS / 1000) + "s budget, so the files of project '"
             + projectName + "' may not be consistent on disk: an object's own .mdo can already be "
             + "written or deleted while Configuration.mdo still holds the old collection. Nothing was "
             + "rolled back. Do not commit the working tree in this state. Check the project with "
             + "list_projects, wait for it to report ready, then use resync_to_disk to write out what "
-            + "is still pending.").toJson();
+            + "is still pending.");
     }
 }

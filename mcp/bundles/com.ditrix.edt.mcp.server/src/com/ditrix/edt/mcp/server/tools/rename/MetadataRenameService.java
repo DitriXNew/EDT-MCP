@@ -278,33 +278,37 @@ public class MetadataRenameService
 
         // Find the object
         final String normalizedFqn = objectFqn;
-        MdObject targetObject = ReadToolExecution.readOnHost(project, "Resolve rename target",
-            () -> resolveObject(config, normalizedFqn));
-        if (targetObject == null)
-        {
-            return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
-                "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
-                "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
-                "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
-                "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
-                "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
-                "Table (an " + //$NON-NLS-1$
-                "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
-                "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
-                "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
-        }
+        return ReadToolExecution.readOnHost(project, "Prepare metadata rename", () -> {
+            Configuration currentConfig = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? Activator.getDefault().getConfigurationProvider().getConfiguration(project) : config;
+            MdObject targetObject = resolveObject(currentConfig, normalizedFqn);
+            if (targetObject == null)
+            {
+                return (java.util.function.Supplier<String>)() -> ToolResult.error("Object not found: " + normalizedFqn + ". " + //$NON-NLS-1$
+                    "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
+                    "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
+                    "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
+                    "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
+                    "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
+                    "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
+                    "Table (an " + //$NON-NLS-1$
+                    "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
+                    "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
+                    "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
+            }
 
-        // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
-        // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
-        // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
-        // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
-        // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
-        // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
+            // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
+            // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
+            // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
+            // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
+            // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
+            // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
 
-        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
-        return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,
-            disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
+            BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
+            return planMdClassRename(project, normalizedFqn, newName, targetObject, confirm,
+                disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
+        }).get();
     }
 
     /**
@@ -317,9 +321,19 @@ public class MetadataRenameService
         int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
         BmModelResolver.Resolution modelResolution)
     {
+        return ReadToolExecution.readOnHost(project, "Prepare metadata rename", () ->
+            planMdClassRename(project, objectFqn, newName, targetObject, confirm, disableRequest,
+                expectedHash, maxResults, progress, refactoringService, modelResolution)).get();
+    }
+
+    private java.util.function.Supplier<String> planMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
         if (!modelResolution.isAvailable())
         {
-            return ToolResult.error(modelResolution.actionableError(TOOL_NAME,
+            return () -> ToolResult.error(modelResolution.actionableError(TOOL_NAME,
                 "Nothing was renamed.")).toJson(); //$NON-NLS-1$
         }
 
@@ -327,38 +341,36 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         try
         {
-            refactorings = ReadToolExecution.readOnHost(project, "Prepare metadata rename",
-                () -> refactoringService.createMdObjectRenameRefactoring(targetObject, newName));
+            refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
         }
         catch (RuntimeException e)
         {
             Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
-            return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+            return () -> ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
                 + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
                 + "retry rename_metadata_object.").toJson(); //$NON-NLS-1$
         }
         if (refactorings == null || refactorings.isEmpty())
         {
-            return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
+            return () -> ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
         }
 
-        String lockedReferrers = ReadToolExecution.readOnHost(project, "Check rename referrers",
-            () -> supportLockRefusal(objectFqn, refactorings));
+        String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
         if (lockedReferrers != null)
         {
-            return ToolResult.error(lockedReferrers).toJson();
+            return () -> ToolResult.error(lockedReferrers).toJson();
         }
         if (!confirm)
         {
             // Preview mode - collect all items and problems
-            return ReadToolExecution.readOnHost(project, "Read rename preview",
-                () -> buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults));
+            String preview = buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
+            return () -> preview;
         }
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
+            return () -> performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "metadata object"); //$NON-NLS-1$
         }
     }
@@ -537,7 +549,10 @@ public class MetadataRenameService
     static String vendorSupportRefusal(MetadataScope scope, String objectFqn)
     {
         return ReadToolExecution.readOnHost(scope.project(), "Check rename support",
-            () -> VendorSupportGuard.refusalForFqn(scope, objectFqn, VendorSupportGuard.Intent.RENAME));
+            () -> VendorSupportGuard.refusalForFqn(com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS && scope.project() != null
+                ? ProjectContext.of(scope.project().getName()).resolveMetadataRootInTransaction().scope() : scope,
+                objectFqn, VendorSupportGuard.Intent.RENAME));
     }
 
     /**

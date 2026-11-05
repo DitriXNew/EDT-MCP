@@ -634,8 +634,8 @@ public class DcsTool implements IMcpTool
             DcsTargetResolver.Target target = resolution.target();
             DcsPresentationParser.LanguageContext languages =
                 ReadToolExecution.readOnHost(context.project(), "Read DCS languages", () ->
-                    new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
-                        effectiveLanguage, context.scope().defaultLanguageCode(),
+                    new DcsPresentationParser.LanguageContext(currentRoot(context).scope().declaredLanguageCodes(),
+                        effectiveLanguage, currentRoot(context).scope().defaultLanguageCode(),
                         language != null && !language.isEmpty()));
             IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
             IV8Project v8Project = v8ProjectManager == null
@@ -647,11 +647,12 @@ public class DcsTool implements IMcpTool
                     + target.normalizedRootFqn()
                     + "'. Wait for EDT to finish loading the project, then retry.").toJson(); //$NON-NLS-1$
             }
-            DcsWriter.TypeResolver typeResolver =
-                DcsWriter.typeResolver(context.configuration(), version);
-            StyleValueBuilder.NamedColorResolver namedColors =
-                StyleValueBuilder.forConfiguration(context.configuration(),
-                    AppearanceValueBuilder.colorCatalogue(version));
+            DcsWriter.TypeResolver typeResolver = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? null
+                    : DcsWriter.typeResolver(context.configuration(), version);
+            StyleValueBuilder.NamedColorResolver namedColors = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? null
+                    : StyleValueBuilder.forConfiguration(context.configuration(), AppearanceValueBuilder.colorCatalogue(version));
             if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
             {
                 if (body != null && body.has(FORMAT_XML))
@@ -815,7 +816,7 @@ public class DcsTool implements IMcpTool
                     DcsChartReferences.Census chartsBefore =
                         DcsChartReferences.census(content.schema(), address.rootFqn());
                     DcsWriterCatalogues catalogues = replaceCatalogues(target.kind(), services.version(),
-                        languages, null, namedColors);
+                        languages, null, colorsForTransaction(context, version, tx, namedColors));
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
@@ -828,7 +829,7 @@ public class DcsTool implements IMcpTool
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
                             ? DcsSettingsWriter.schemaMembers(body) : body;
                         settings = DcsSettingsWriter.planSchema(content.schema(), action, type,
-                            address, settingsBody, languages, services.version(), namedColors);
+                            address, settingsBody, languages, services.version(), colorsForTransaction(context, version, tx, namedColors));
                         if (!settings.isSuccess())
                         {
                             throw DcsWriteFailure.message(settings.error());
@@ -838,8 +839,8 @@ public class DcsTool implements IMcpTool
                     if (prepared != null)
                     {
                         DcsSchemaWriter.Result applied =
-                            DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver,
-                                services.version(), namedColors, catalogues);
+                            DcsSchemaWriter.apply(content.schema(), prepared.request(), typesForTransaction(context, version, tx, typeResolver),
+                                services.version(), colorsForTransaction(context, version, tx, namedColors), catalogues);
                         if (!applied.isSuccess())
                         {
                             throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
@@ -949,7 +950,7 @@ public class DcsTool implements IMcpTool
                 }
                 DynamicListExtInfo extInfo = dynamicListExtInfo(member);
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages, version, namedColors);
+                    type, address, body, typesForTransaction(context, version, tx, typeResolver), languages, version, colorsForTransaction(context, version, tx, namedColors));
                 if (!planned.isSuccess())
                 {
                     return dynamicPlanError(planned);
@@ -964,7 +965,7 @@ public class DcsTool implements IMcpTool
                 {
                     return ""; //$NON-NLS-1$
                 }
-                return ModifyMetadataTool.dynamicListRetypeVerdict(context.configuration(), version,
+                return ModifyMetadataTool.dynamicListRetypeVerdict(configurationInTransaction(context, tx), version,
                     formModel, member, planned.plan().mainTable());
             });
         if (verdict != null && !verdict.isEmpty())
@@ -1022,20 +1023,20 @@ public class DcsTool implements IMcpTool
                 {
                     String refusal = replaceRefusal(extInfo,
                         extInfo == null ? null : extInfo.getListSettings(), type, address,
-                        replaceCatalogues(target.kind(), version, languages, null, namedColors), body);
+                        replaceCatalogues(target.kind(), version, languages, null, colorsForTransaction(context, version, tx, namedColors)), body);
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
                     }
                 }
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages, version, namedColors);
+                    type, address, body, typesForTransaction(context, version, tx, typeResolver), languages, version, colorsForTransaction(context, version, tx, namedColors));
                 if (!planned.isSuccess())
                 {
                     throw new FormValidationException(dynamicPlanError(planned));
                 }
                 String mainTableError = FormElementWriter.mainTableResolutionError(
-                    context.configuration(), planned.plan().mainTable());
+                    configurationInTransaction(context, tx), planned.plan().mainTable());
                 if (mainTableError != null)
                 {
                     throw new FormValidationException(mainTableError);
@@ -1043,7 +1044,7 @@ public class DcsTool implements IMcpTool
                 if (extInfo == null && planned.plan().canConvertPlainAttribute())
                 {
                     String recheck = ModifyMetadataTool.dynamicListRetypeVerdict(
-                        context.configuration(), version, formModel, member,
+                        configurationInTransaction(context, tx), version, formModel, member,
                         planned.plan().mainTable());
                     if (recheck != null && !recheck.isEmpty())
                     {
@@ -1051,7 +1052,7 @@ public class DcsTool implements IMcpTool
                     }
                 }
                 DcsDynamicListWriter.CommitResult committed = planned.plan().commit(formModel,
-                    member, extInfo, tx, context.configuration(), version);
+                    member, extInfo, tx, configurationInTransaction(context, tx), version);
                 outcome.set(new DynamicWriteOutcome(committed.modelSnapshot(),
                     committed.settingsFqn(), committed.applied()));
             });
@@ -1136,7 +1137,7 @@ public class DcsTool implements IMcpTool
                 DcsRootReader.Result read = DcsRootReader.read(tx, target);
                 if (!read.isSuccess()) return ToolResult.error(read.error()).toJson();
                 DcsOptions.Result options = DcsOptions.render(target.normalizedRootFqn(),
-                    target.kind(), read.root(), address, type, context.scope().defaultLanguageCode(),
+                    target.kind(), read.root(), address, type, currentRoot(context).scope().defaultLanguageCode(),
                     version, limit, offset);
                 return options.isSuccess() ? options.markdown()
                     : ToolResult.error(options.error()).toJson();
@@ -1196,7 +1197,7 @@ public class DcsTool implements IMcpTool
                 {
                     String refusal = DcsMutationGuard.replaceError(
                         current, address, replaceCatalogues(target.kind(), version, languages, null,
-                            namedColors));
+                            colorsForTransaction(context, version, tx, namedColors)));
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -1205,7 +1206,7 @@ public class DcsTool implements IMcpTool
                 DcsSettingsWriter.SettingsResult planned =
                     DcsSettingsWriter.planFormConditionalAppearance(
                         current, action, type, address, body, languages,
-                        version, namedColors);
+                        version, colorsForTransaction(context, version, tx, namedColors));
                 if (!planned.isSuccess())
                 {
                     throw new FormValidationException(ToolResult.error(planned.error()).toJson());
@@ -1304,6 +1305,14 @@ public class DcsTool implements IMcpTool
     private static String localeUnusedNote(ProjectContext.ConfigurationResult context,
         DcsPresentationParser.LanguageContext languages)
     {
+        if (context == null || languages == null) return "";
+        return ReadToolExecution.readOnHost(context.project(), "Read written DCS locales",
+            () -> localeUnusedNoteInRead(context, languages));
+    }
+
+    private static String localeUnusedNoteInRead(ProjectContext.ConfigurationResult context,
+        DcsPresentationParser.LanguageContext languages)
+    {
         if (context == null || languages == null)
         {
             return ""; //$NON-NLS-1$
@@ -1311,7 +1320,7 @@ public class DcsTool implements IMcpTool
         List<String> unused = new ArrayList<>();
         for (String code : languages.usedCodes())
         {
-            if (MetadataLanguageUtils.isDeclaredButUnused(context.configuration(), code))
+            if (MetadataLanguageUtils.isDeclaredButUnused(currentRoot(context).configuration(), code))
             {
                 unused.add(code);
             }
@@ -1616,13 +1625,50 @@ public class DcsTool implements IMcpTool
             id = target.bmId(DcsTargetResolver.BmRole.ROOT_OWNER);
         }
         EObject owner = id == null ? null : tx.getObjectById(id.longValue());
-        return VendorSupportGuard.refusalFor(owner, context.scope(), target.normalizedRootFqn(),
+        return VendorSupportGuard.refusalFor(owner, com.ditrix.edt.mcp.server.HostKind.current()
+            == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? com.ditrix.edt.mcp.server.utils.MetadataScope.of(context.project(), configurationInTransaction(context, tx))
+                : context.scope(), target.normalizedRootFqn(),
             String.valueOf(address), "changed"); //$NON-NLS-1$
+    }
+
+    private static com._1c.g5.v8.dt.metadata.mdclass.Configuration configurationInTransaction(
+        ProjectContext.ConfigurationResult context, IBmTransaction tx)
+    {
+        if (com.ditrix.edt.mcp.server.HostKind.current() != com.ditrix.edt.mcp.server.HostKind.HEADLESS)
+        {
+            return context.configuration();
+        }
+        EObject root = tx.getTopObjectByFqn("Configuration");
+        return root instanceof com._1c.g5.v8.dt.metadata.mdclass.Configuration configuration
+            ? configuration : currentRoot(context).configuration();
+    }
+
+    private static DcsWriter.TypeResolver typesForTransaction(ProjectContext.ConfigurationResult context,
+        Version version, IBmTransaction tx, DcsWriter.TypeResolver windowed)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? DcsWriter.typeResolver(configurationInTransaction(context, tx), version) : windowed;
+    }
+
+    private static StyleValueBuilder.NamedColorResolver colorsForTransaction(ProjectContext.ConfigurationResult context,
+        Version version, IBmTransaction tx, StyleValueBuilder.NamedColorResolver windowed)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? StyleValueBuilder.forConfiguration(configurationInTransaction(context, tx),
+                AppearanceValueBuilder.colorCatalogue(version)) : windowed;
+    }
+
+    /** Used only inside a BM boundary; callbacks retain the project handle, not its earlier configuration. */
+    private static ProjectContext.ConfigurationResult currentRoot(ProjectContext.ConfigurationResult context)
+    {
+        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? ProjectContext.of(context.project().getName()).resolveMetadataRootInTransaction() : context;
     }
 
     private static String resolveLanguage(ProjectContext.ConfigurationResult context, String requested)
     {
-        List<String> declared = context.scope().declaredLanguageCodes();
+        List<String> declared = currentRoot(context).scope().declaredLanguageCodes();
         if (requested != null && !requested.isEmpty() && !declared.isEmpty())
         {
             for (String code : declared)
@@ -1636,6 +1682,6 @@ public class DcsTool implements IMcpTool
                 + String.join(", ", declared) //$NON-NLS-1$
                 + ". Pass one of those codes, or omit language to use the default."; //$NON-NLS-1$
         }
-        return context.scope().resolveLanguageCode(requested);
+        return currentRoot(context).scope().resolveLanguageCode(requested);
     }
 }

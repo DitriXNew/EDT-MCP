@@ -34,7 +34,8 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *
  * <p><b>Decision order</b> (each step reuses an existing plugin idiom):
  * <ol>
- *   <li>The explicit {@link HostKind#HEADLESS} host always allows, with or without the env override.</li>
+ *   <li>The explicit {@link HostKind#HEADLESS} host always allows, with or without the env override,
+ *       and logs the same redacted tool/preview audit at INFO, naming the headless host.</li>
  *   <li><b>env {@code EDT_MCP_DESTRUCTIVE_CONSENT}</b> ({@code allow}/{@code ask},
  *       case-insensitive, read like {@code Toolsets.ENV_PROGRESSIVE_DISCLOSURE}) —
  *       {@code allow} WINS and returns {@link ConsentDecision#ALLOW} without any UI.
@@ -273,14 +274,23 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      */
     public ConsentDecision requireConsent(String toolName, ConsentPreview preview)
     {
+        HostKind host = HostKind.current();
+        return requireConsent(toolName, preview, host, host != HostKind.HEADLESS && isEnvAllow());
+    }
+
+    ConsentDecision requireConsent(String toolName, ConsentPreview preview, HostKind host, boolean envAllow)
+    {
         // The explicit headless host has no interaction and always allows, regardless of consent settings.
-        if (HostKind.current() == HostKind.HEADLESS) { return ConsentDecision.ALLOW; }
+        if (host == HostKind.HEADLESS)
+        {
+            auditAllow(toolName, preview, "headless host"); //$NON-NLS-1$
+            return ConsentDecision.ALLOW;
+        }
 
         // Windowed consent keeps its existing env, shell, session and preference order.
-        if (isEnvAllow())
+        if (envAllow)
         {
-            Activator.logInfo("Destructive-consent gate: " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
-                + "=allow bypassed the prompt for '" + toolName + "' — " + describe(preview)); //$NON-NLS-1$ //$NON-NLS-2$
+            auditAllow(toolName, preview, ENV_DESTRUCTIVE_CONSENT + "=allow"); //$NON-NLS-1$
             return ConsentDecision.ALLOW;
         }
 
@@ -318,6 +328,12 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
         // Step 6 — prompt on a live UI session (the SWT seam).
         return promptForConsent(toolName, preview, display, shell);
+    }
+
+    private static void auditAllow(String toolName, ConsentPreview preview, String reason)
+    {
+        Activator.logInfo("Destructive-consent gate: " + reason //$NON-NLS-1$
+            + " bypassed the prompt for '" + toolName + "' — " + describe(preview)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

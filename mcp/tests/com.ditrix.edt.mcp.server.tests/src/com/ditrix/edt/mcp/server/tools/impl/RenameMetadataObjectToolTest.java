@@ -53,6 +53,19 @@ import com.ditrix.edt.mcp.server.tools.rename.RenameProgress;
  */
 public class RenameMetadataObjectToolTest
 {
+    @Test public void undrainedRenameReportsExportStateRatherThanStaleBytes()
+    {
+        for (String name : new String[] {"EnglishName", "Код"})
+        {
+            String result = RenameMetadataObjectTool.finishHeadlessRename("TestConfiguration",
+                "Catalog." + name, "Renamed", "renamed", true, false);
+            var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+            assertTrue(result, response.get("mutationCommitted").getAsBoolean());
+            assertTrue(result, response.get("error").getAsString().contains("export to disk was not confirmed"));
+            assertFalse(result, result.contains("does not confirm the registration change"));
+        }
+    }
+
     @Test public void drainedRenameMustObserveOldRegistrationGoneAndNewPresent() throws Exception
     {
         for (String name : new String[] { "EnglishName", "Код" })

@@ -48,7 +48,12 @@ public final class HeadlessReadFixture implements AutoCloseable
         });
         when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
             reads++; depth++;
-            try { return ((IBmTask<?>)inv.getArgument(0)).execute(null, null); }
+            try
+            {
+                Object result = ((IBmTask<?>)inv.getArgument(0)).execute(null, null);
+                ReadBoundaryAssertions.assertNoLiveBmValue(result);
+                return result;
+            }
             finally { depth--; }
         });
         plugin.set(null, activator);

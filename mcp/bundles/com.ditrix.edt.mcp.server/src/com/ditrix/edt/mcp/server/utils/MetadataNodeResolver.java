@@ -48,6 +48,34 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
  */
 public final class MetadataNodeResolver
 {
+    /** A lookup result that can be carried to a later transaction without retaining a live object. */
+    public record ObjectIdentity(long bmId, String fqn, String kind) { }
+
+    /** Detached Name/UUID/containment identity for APIs that compare an origin without reading its content. */
+    public static MdObject detachedIdentity(MdObject source)
+    {
+        MdObject copy = (MdObject)org.eclipse.emf.ecore.util.EcoreUtil.create(source.eClass());
+        copy.setName(source.getName());
+        copy.setUuid(source.getUuid());
+        if (source.eContainer() instanceof MdObject owner && !(owner instanceof Configuration)
+            && source.eContainingFeature() instanceof org.eclipse.emf.ecore.EReference feature && feature.isMany())
+        {
+            MdObject parent = detachedIdentity(owner);
+            @SuppressWarnings("unchecked")
+            java.util.List<Object> children = (java.util.List<Object>)parent.eGet(feature);
+            children.add(copy);
+        }
+        return copy;
+    }
+
+    /** Call inside a read; consumers must re-fetch the object by id in their own transaction. */
+    public static ObjectIdentity resolveIdentity(MetadataScope scope, String fqn)
+    {
+        MetadataNode node = resolveExistingWithYoFallback(scope, fqn).node;
+        if (node == null || !(node.object instanceof com._1c.g5.v8.bm.core.IBmObject object)) return null;
+        String canonical = resolvableAddressOf(node.object);
+        return new ObjectIdentity(object.bmGetId(), canonical, node.object.eClass().getName());
+    }
     /**
      * Bilingual child KIND token (lower-cased) &rarr; EMF containment feature name on the owner.
      * The feature name is the standard EMF accessor name (e.g. {@code getAttributes()} &rarr;

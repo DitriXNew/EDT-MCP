@@ -28,6 +28,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -251,7 +252,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // through the one dispatch the vendor-support guard judges an address with, together with
         // the address every result below names it by (for a subsystem, its chain as list_subsystems
         // prints it).
-        AdoptionSource source = readPreparation(ctx.project, () -> AdoptionSource.resolve(ctx.scope, normFqn));
+        AdoptionSource source = readPreparation(ctx.project, () -> AdoptionSource.resolve(preparationScope(ctx), normFqn));
         if (source == null)
         {
             return ToolResult.error(sourceNotFound(normFqn)).toJson();
@@ -303,7 +304,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 + "(the md.extension bundle may be inactive).").toJson(); //$NON-NLS-1$
         }
 
-        if (!readPreparation(ctx.project, () -> adopter.isAdoptable(source.object)))
+        if (!readPreparation(ctx.project, () -> adopter.isAdoptable(sourceInRead(ctx.project, source.fqn, source.object))))
         {
             return notAdoptableError(source);
         }
@@ -322,7 +323,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             return adoptForm(ctx, source, target, adopter, extensionModel, mapping);
         }
 
-        if (readAdoptionLookup(target, () -> adopter.isAdopted(source.object, target)))
+        if (readAdoptionLookup(target, () -> adopter.isAdopted(sourceInRead(target.getParentProject(), source.fqn, source.object), target)))
         {
             // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
             // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
@@ -330,7 +331,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             WriteScope.recordNothingQueued();
             // The existing copy's link was decided when it was adopted, under the flag and the version of that time.
             return alreadyAdoptedResult(source, extName,
-                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, target)));
+                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, source.fqn, target)));
         }
 
         // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
@@ -348,7 +349,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             WriteScope.recordNothingQueued();
             return alreadyAdoptedResult(source, extName,
-                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, target)));
+                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, source.fqn, target)));
         }
 
         AdoptionChanges changes = write.changes;
@@ -365,8 +366,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         IModelObjectAdopter adopter, IBmModel extensionModel, MappingEvidence mapping) throws Exception
     {
         String extName = target.getProject().getName();
-        boolean alreadyAdopted = readAdoptionLookup(target, () -> adopter.isAdopted(source.object, target));
-        EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, target) : null;
+        boolean alreadyAdopted = readAdoptionLookup(target, () -> adopter.isAdopted(sourceInRead(target.getParentProject(), source.fqn, source.object), target));
+        EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, source.fqn, target) : null;
         Long adoptedId = null;
         List<String> found = List.of();
         Set<String> unresolved = new LinkedHashSet<>();
@@ -422,10 +423,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 {
                     throw new IllegalStateException(baseModelError);
                 }
-                MetadataNodeResolver.MetadataNode node = BmTransactions.read(baseModel,
+                MdObject picture = BmTransactions.read(baseModel,
                     "adopt_metadata_object: resolve form picture", //$NON-NLS-1$
-                    (tx, monitor) -> MetadataNodeResolver.resolveExisting(ctx.scope, pictureFqn));
-                if (node == null)
+                    (tx, monitor) -> {
+                        var foundNode = MetadataNodeResolver.resolveExisting(preparationScope(ctx), pictureFqn);
+                        return foundNode == null ? null : HostKind.current() == HostKind.HEADLESS
+                            ? MetadataNodeResolver.detachedIdentity(foundNode.object) : foundNode.object;
+                    });
+                if (picture == null)
                 {
                     unresolved.add(pictureFqn);
                     refusal = "Form picture '" + pictureFqn //$NON-NLS-1$
@@ -433,7 +438,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                         + "list_common_pictures and modify_metadata, then retry. No objects were adopted."; //$NON-NLS-1$
                 }
                 else if (!BmTransactions.read(baseModel, "adopt_metadata_object: preflight picture", //$NON-NLS-1$
-                    (tx, monitor) -> adopter.isAdoptable(node.object)))
+                    (tx, monitor) -> adopter.isAdoptable(sourceInRead(ctx.project, pictureFqn, picture))))
                 {
                     // EDT's isAdopted requires an adoptable source.
                     unresolved.add(pictureFqn);
@@ -442,13 +447,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                         + "'. Choose an adoptable picture using list_common_pictures and update the form " //$NON-NLS-1$
                         + "with modify_metadata, then retry. No objects were adopted."; //$NON-NLS-1$
                 }
-                else if (extensionModel != null && isAdoptedInModel(extensionModel, adopter, node.object, target))
+                else if (extensionModel != null && isAdoptedInModel(extensionModel, adopter, picture, pictureFqn, target))
                 {
                     alreadyPresent.add(pictureFqn);
                 }
                 else
                 {
-                    missing.put(pictureFqn, node.object);
+                    missing.put(pictureFqn, picture);
                 }
             }
             catch (RuntimeException e)
@@ -533,7 +538,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     adoptedPictures.add(picture.getKey());
                 }
                 else if (picturePresent(extensionModel, picture.getKey())
-                    || isAdoptedInModel(extensionModel, adopter, picture.getValue(), target))
+                    || isAdoptedInModel(extensionModel, adopter, picture.getValue(), picture.getKey(), target))
                 {
                     alreadyPresent.add(picture.getKey());
                 }
@@ -544,7 +549,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
             if (adopted == null && adoptedId == null)
             {
-                adopted = adoptedCopy(adopter, source.object, target);
+                adopted = adoptedCopy(adopter, source.object, source.fqn, target);
             }
             if (!changed)
             {
@@ -589,10 +594,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             try
             {
-                formAdopted = isAdoptedInModel(model, adopter, source.object, target);
+                formAdopted = isAdoptedInModel(model, adopter, source.object, source.fqn, target);
                 if (formAdopted)
                 {
-                    dirty.addAll(dirtyCopyFqns(model, adoptedCopy(adopter, source.object, target)));
+                    dirty.addAll(dirtyCopyFqns(model, adoptedCopy(adopter, source.object, source.fqn, target)));
                 }
             }
             catch (RuntimeException e)
@@ -613,7 +618,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             }
             try
             {
-                if (isAdoptedInModel(model, adopter, picture.getValue(), target))
+                if (isAdoptedInModel(model, adopter, picture.getValue(), picture.getKey(), target))
                 {
                     adoptedPictures.add(picture.getKey());
                     dirty.add(picture.getKey());
@@ -652,11 +657,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     private static boolean isAdoptedInModel(IBmModel model, IModelObjectAdopter adopter, EObject source,
-        IExtensionProject target)
+        String sourceFqn, IExtensionProject target)
     {
         IProject base = HostKind.current() == HostKind.HEADLESS ? target.getParentProject() : null;
         return readPreparation(base, () -> BmTransactions.read(model,
-            "adopt_metadata_object: inspect adoption", (tx, monitor) -> adopter.isAdopted(source, target))); //$NON-NLS-1$
+            "adopt_metadata_object: inspect adoption", (tx, monitor) -> adopter.isAdopted(sourceInRead(target.getParentProject(), sourceFqn, source), target))); //$NON-NLS-1$
     }
 
     private static List<String> dirtyCopyFqns(IBmModel model, EObject copy)
@@ -1024,11 +1029,17 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
      * The copy of {@code source} already adopted into {@code target}, as EDT's adopter finds it (the lookup its
      * {@code isAdopted} answers with), or {@code null} when it names none or the lookup fails.
      */
-    private static EObject adoptedCopy(IModelObjectAdopter adopter, EObject source, IExtensionProject target)
+    private static EObject adoptedCopy(IModelObjectAdopter adopter, EObject source, String sourceFqn, IExtensionProject target)
     {
         try
         {
-            return readAdoptionLookup(target, () -> adopter.getAdopted(source, target));
+            return readAdoptionLookup(target, () -> {
+                EObject copy = adopter.getAdopted(sourceInRead(target.getParentProject(), sourceFqn, source), target);
+                if (copy == null || HostKind.current() != HostKind.HEADLESS) return copy;
+                EObject proxy = EcoreUtil.create(copy.eClass());
+                ((InternalEObject)proxy).eSetProxyURI(EcoreUtil.getURI(copy));
+                return proxy;
+            });
         }
         catch (RuntimeException e)
         {
@@ -1154,7 +1165,15 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     static EObject sourceForWrite(EObject original, MetadataScope scope, String fqn)
     {
         return HostKind.current() == HostKind.HEADLESS
-            ? MetadataNodeResolver.resolveAddress(scope, fqn, YO_FALLBACK) : original;
+            ? scope.project() == null ? MetadataNodeResolver.resolveAddress(scope, fqn, YO_FALLBACK)
+                : sourceInRead(scope.project(), fqn, original) : original;
+    }
+
+    private static EObject sourceInRead(IProject base, String fqn, EObject windowed)
+    {
+        if (HostKind.current() != HostKind.HEADLESS || base == null) return windowed;
+        var context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(base.getName()).resolveMetadataRootInTransaction();
+        return context.ok() ? MetadataNodeResolver.resolveAddress(context.scope(), fqn, YO_FALLBACK) : null;
     }
 
     static <T> T readAdoptionLookup(IExtensionProject target, java.util.function.Supplier<T> lookup)
@@ -1491,7 +1510,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 return null;
             }
             String chain = object instanceof Subsystem ? canonicalChain((Subsystem)object, normFqn) : null;
-            return new AdoptionSource(object, chain != null ? chain : normFqn);
+            return new AdoptionSource(HostKind.current() == HostKind.HEADLESS
+                ? MetadataNodeResolver.detachedIdentity(object) : object, chain != null ? chain : normFqn);
         }
 
         /**
