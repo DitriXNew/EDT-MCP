@@ -494,6 +494,20 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
     protected static final class TestTool extends AdoptMetadataObjectTool
     {
         protected final ProjectContext context;
+        private IExportEnvironment exports;
+
+        String awaitExports(String result, WriteScope writes,
+            java.util.function.BiFunction<String, Long, com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState> wait)
+        {
+            exports = wait::apply;
+            return awaitDiskExport(Map.of("projectName", "Base"), result, writes);
+        }
+
+        @Override
+        protected IExportEnvironment exportEnvironment()
+        {
+            return exports;
+        }
 
         TestTool(IProject project, Configuration config) throws Exception
         {

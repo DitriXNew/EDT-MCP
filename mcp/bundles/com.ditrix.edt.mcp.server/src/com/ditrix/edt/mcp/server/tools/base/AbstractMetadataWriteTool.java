@@ -352,20 +352,16 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     // observable from anywhere else.
     protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
     {
-        // Parsed once, and only a SUCCESS is parsed at all: an error is a well-formed JSON object
-        // too, and treating one as a write would make a rejected argument wait out the whole
-        // deadline and then be re-reported as a disk problem.
         JsonObject success = successObject(result);
-        if (success == null)
+        boolean committedError = success == null && ToolResult.isErrorPayload(result) && scope.hasRecordedWrite();
+        if (success == null && !committedError)
         {
-            // This is also the common return path for an exception caught by execute(). If the
-            // tool recorded a write before producing that ordinary error, derive the structural
-            // post-commit marker here instead of requiring every catch to remember a factory.
             return scope.markErrorAfterRecordedWrite(result);
         }
         WriteScope.Verdict verdict = scope.verdict(defaultProjectsToAwait(params));
         if (verdict.written().isEmpty() && verdict.cascaded().isEmpty())
         {
+            if (committedError) return scope.markErrorAfterRecordedWrite(result);
             // Nothing to WAIT for, but the post-wait step still runs: a tool may have work that
             // must not start until the barrier is behind it, and skipping it here would silently
             // drop that work for exactly the calls that queued nothing. Reported as established:
@@ -373,8 +369,27 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             return scope.markErrorAfterRecordedWrite(
                 publish(verdict, refreshAfterExportAwait(params, result, true, scope)));
         }
-        WriteExportBarrier.Outcome export = WriteExportBarrier.await(verdict, exportDeadlineMs(),
-            exportEnvironment()::waitForDiskExport);
+        WriteExportBarrier.Outcome export;
+        try
+        {
+            export = WriteExportBarrier.await(verdict, exportDeadlineMs(), exportEnvironment()::waitForDiskExport);
+        }
+        catch (RuntimeException e)
+        {
+            if (!committedError) throw e;
+            Activator.logWarning("Could not observe disk export after a failed metadata write: " + e); //$NON-NLS-1$
+            export = new WriteExportBarrier.Outcome(false, null);
+        }
+        if (committedError)
+        {
+            // Draining must preserve the original failure and never run success-only refresh work.
+            String marked = scope.markErrorAfterRecordedWrite(result);
+            if (export.drained()) return marked;
+            JsonObject error = JsonParser.parseString(marked).getAsJsonObject();
+            error.addProperty("exportState", (export.pendingProject() == null //$NON-NLS-1$
+                ? BuildUtils.DiskExportState.UNOBSERVABLE : BuildUtils.DiskExportState.PENDING).name());
+            return GsonProvider.toJson(error);
+        }
         if (export.pendingProject() != null)
         {
             return scope.markErrorAfterRecordedWrite(WriteExportBarrier.notConfirmed(export.pendingProject()));

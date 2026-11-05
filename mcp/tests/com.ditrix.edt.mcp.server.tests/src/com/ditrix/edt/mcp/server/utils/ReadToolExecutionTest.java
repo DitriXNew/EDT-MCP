@@ -9,6 +9,63 @@ import com.ditrix.edt.mcp.server.HostKind;
 
 public class ReadToolExecutionTest
 {
+    @Test public void failedMetadataWriteDrainsAfterHostDispatchAndWorkspaceRuleRelease() throws Exception
+    {
+        String saved = System.getProperty("eclipse.application");
+        try (var workbench = new ReadTestWorkbench())
+        {
+            boolean[] onSwt = {false};
+            org.mockito.Mockito.doAnswer(call -> {
+                onSwt[0] = true;
+                try { ((Runnable)call.getArgument(0)).run(); }
+                finally { onSwt[0] = false; }
+                return null;
+            }).when(workbench.display).syncExec(org.mockito.ArgumentMatchers.any());
+            for (String host : java.util.List.of(HostKind.APPLICATION_ID, "org.eclipse.ui.ide.workbench"))
+            {
+                System.setProperty("eclipse.application", host);
+                int[] waits = {0};
+                var workspace = org.eclipse.core.resources.ResourcesPlugin.getWorkspace();
+                var tool = new com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool()
+                {
+                    @Override public String getName() { return "test_failed_writer"; }
+                    @Override public String getDescription() { return "test"; }
+                    @Override public String getInputSchema() { return "{}"; }
+                    @Override protected String executeOnUiThread(java.util.Map<String, String> params) throws Exception
+                    {
+                        assertEquals(HostKind.current() == HostKind.WINDOWED, onSwt[0]);
+                        workspace.run(monitor -> {
+                            assertNotNull(org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
+                            com.ditrix.edt.mcp.server.tools.base.WriteScope.recordWrite("WriteTarget");
+                        }, workspace.getRoot(), org.eclipse.core.resources.IWorkspace.AVOID_UPDATE, null);
+                        return com.ditrix.edt.mcp.server.protocol.ToolResult.error("Later dependency failed").toJson();
+                    }
+                    @Override protected IExportEnvironment exportEnvironment()
+                    {
+                        return (project, budget) -> {
+                            assertFalse("The host dispatch must return before draining", onSwt[0]);
+                            assertNull(org.eclipse.swt.widgets.Display.getCurrent());
+                            assertNull(org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
+                            assertEquals("WriteTarget", project);
+                            waits[0]++;
+                            return BuildUtils.DiskExportState.DRAINED;
+                        };
+                    }
+                };
+                String answer = tool.execute(java.util.Map.of());
+                assertEquals(host + ": " + answer, 1, waits[0]);
+                assertEquals(com.google.gson.JsonParser.parseString(
+                    com.ditrix.edt.mcp.server.protocol.ToolResult.errorAfterMutation("Later dependency failed").toJson()),
+                    com.google.gson.JsonParser.parseString(answer));
+            }
+        }
+        finally
+        {
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
     @Test public void aHeadlessReadCannotReturnALiveBmObject() throws Exception
     {
         try (var fixture = new HeadlessReadFixture())

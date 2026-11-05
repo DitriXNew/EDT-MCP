@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -65,6 +66,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.ditrix.edt.mcp.server.utils.FormPictureDependencies;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -151,6 +154,50 @@ public class AdoptMetadataObjectPicturesRegressionTest extends AdoptMetadataObje
     public void testFailureRetainsCommittedPictureWhenNativeLookupIsStale() throws Exception
     {
         assertFailureRetainsCommittedPicture(false, true, false);
+    }
+
+    @Test
+    public void testCommittedPictureThenDependencyFailureDrainsBeforeReturning() throws Exception
+    {
+        assertFailureRetainsCommittedPicture(false, true, false);
+        assertTrue(scope.hasRecordedWrite());
+        assertEquals(List.of("CommonPicture.Logo", "Configuration"), scope.exportedTopObjects("tests"));
+        for (DiskExportState state : DiskExportState.values())
+        {
+            List<String> awaited = new ArrayList<>();
+            String answer = tool.awaitExports(rawResponse, scope, (project, budget) -> {
+                assertFalse("The workspace rule must be released before draining", workspaceRule);
+                assertFalse("The BM transaction must end before draining", writing);
+                assertNull(org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
+                assertNull("The export drain must run off SWT", org.eclipse.swt.widgets.Display.getCurrent());
+                assertTrue(budget > 59_000L && budget <= 60_000L);
+                awaited.add(project);
+                return state;
+            });
+            assertEquals(List.of("tests"), awaited);
+            JsonObject expected = JsonParser.parseString(ToolResult.markErrorAfterMutation(rawResponse))
+                .getAsJsonObject();
+            if (state != DiskExportState.DRAINED)
+            {
+                expected.addProperty("exportState", state.name());
+            }
+            assertEquals("The original adoption failure and all mutation evidence must survive", expected,
+                JsonParser.parseString(answer));
+        }
+    }
+
+    @Test
+    public void testAdoptionRefusalWithoutAWriteReturnsWithoutDraining() throws Exception
+    {
+        copies.put(mdForm, mdForm);
+        extensionReadRoot = mdForm;
+        form.getItems().add(field("Inherited", logo));
+        formExtensions = null;
+        assertRefusal(run(FORM_FQN), "export service", "clean_project");
+        assertFalse(scope.hasRecordedWrite());
+        assertEquals(rawResponse, tool.awaitExports(rawResponse, scope, (project, budget) -> {
+            throw new AssertionError("A refusal without a recorded write must never wait");
+        }));
     }
 
     @Test
