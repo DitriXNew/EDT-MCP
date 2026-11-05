@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import com.ditrix.edt.mcp.server.HostKind;
 
 import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
+import com.ditrix.edt.mcp.server.utils.WorkspaceModelWrite;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -1150,16 +1151,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         return message;
     }
 
-    private static AdoptionWrite adoptUnderWorkspaceRule(IWorkspace workspace, IBmModel model,
+    static AdoptionWrite adoptUnderWorkspaceRule(IWorkspace workspace, IBmModel model,
         IModelObjectAdopter adopter, EObject original, MetadataScope sourceScope, String sourceFqn,
         IExtensionProject target) throws CoreException
     {
-        AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
-        // Acquire EDT's workspace rule before its global-context BM write, for every invocation.
-        workspace.run(monitor -> outcome.set(adoptWithChanges(model, adopter,
-            () -> sourceForWrite(original, sourceScope, sourceFqn), target)),
-            workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
-        return outcome.get();
+        return WorkspaceModelWrite.run(workspace, model, NAME, () -> adoptWithChanges(model, adopter,
+            () -> sourceForWrite(original, sourceScope, sourceFqn), target));
     }
 
     static EObject sourceForWrite(EObject original, MetadataScope scope, String fqn)

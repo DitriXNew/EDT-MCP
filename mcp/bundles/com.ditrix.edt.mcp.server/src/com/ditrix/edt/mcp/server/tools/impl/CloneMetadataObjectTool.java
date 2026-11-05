@@ -18,8 +18,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -42,6 +40,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.WorkspaceModelWrite;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
@@ -255,8 +254,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
         try
         {
-            IWorkspace workspace = ctx.project.getWorkspace();
-            workspace.run(monitor -> result.set(BmTransactions.writeInGlobalContext(model, NAME, (tx, progress) -> {
+            result.set(WorkspaceModelWrite.run(ctx.project.getWorkspace(), model, NAME,
+                () -> BmTransactions.writeInGlobalContext(model, NAME, (tx, progress) -> {
                 Configuration config = (Configuration)tx.getTopObjectByFqn("Configuration");
                 MdObject source = MetadataClonePlan.source(config, fqn);
                 checkDestination(config, source, newName);
@@ -325,7 +324,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                     .put("warning", "Texts are preserved. Do not retry this non-idempotent operation after a "
                         + "timeout or partial error; inspect the returned FQN first. Predefined item ids follow "
                         + "EDT native paste semantics.").toJson();
-            })), workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+            })));
             WriteScope.recordWrite(ctx.project);
             if (!BmTransactions.forceExportToDisk(ctx.project, dirty.get()))
             {

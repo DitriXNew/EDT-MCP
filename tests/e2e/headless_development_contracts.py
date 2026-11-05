@@ -146,9 +146,14 @@ def run_adoption(invoke, project, extension):
     for name, token in (("HeadlessAdoption", "Catalog"), ("ЗаимствованиеБезОкна", "Справочник")):
         args = {"projectName": "TestConfiguration", "fqn": token + "." + name}
         _ok(invoke, "create_metadata", args)
-        _ok(invoke, "adopt_metadata_object", dict(args, extensionProjectName="TestConfiguration.tests"))
+        adopted = _ok(invoke, "adopt_metadata_object", dict(args, extensionProjectName="TestConfiguration.tests"))
+        assert adopted.structured["action"] == "adopted" and adopted.structured["objectBelonging"] == "ADOPTED"
         file = Path(extension) / "src/Catalogs" / name / (name + ".mdo")
         assert file.is_file() and _registered(extension, "Catalog." + name), "adoption must export object and extension root"
+        saved = file.read_bytes()
+        repeated = _ok(invoke, "adopt_metadata_object", dict(args, extensionProjectName="TestConfiguration.tests"))
+        assert repeated.structured["action"] == "alreadyAdopted" and repeated.structured["writtenProjects"] == []
+        assert file.read_bytes() == saved and _registered(extension, "Catalog." + name)
 
 
 def run_auxiliary_writes(invoke, project, workspace, temp_directory=None):

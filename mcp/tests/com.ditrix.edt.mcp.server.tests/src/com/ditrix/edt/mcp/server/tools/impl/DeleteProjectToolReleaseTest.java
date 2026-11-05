@@ -70,6 +70,8 @@ public class DeleteProjectToolReleaseTest
 
         @Override public boolean await(long timeoutMs)
         {
+            assertNull("Context release must be awaited outside workspace rules",
+                org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
             awaits++;
             timeout = timeoutMs;
             if (failure != null)
