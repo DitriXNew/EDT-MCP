@@ -6,11 +6,16 @@ description: >
   No docker image and no self-hosted runner — everything is installed on the
   runner via the Eclipse p2 director, the same public p2 the Tycho build uses.
 
-  Prereq: the caller must already have built the MCP plugin p2 repository
+  With install-only, installs just the Eclipse + EDT base and exports install-dir.
+  Otherwise, the caller must already have built the MCP plugin p2 repository
   (mvn ... in mcp/), i.e. `plugin-repo` exists. The action exports `edt_pid`
   (the EDT process id) so the caller can stop it in an `if: always()` step.
 
 inputs:
+  install-only:
+    description: "Install the Eclipse + EDT base only, without overlaying MCP or launching EDT"
+    required: false
+    default: "false"
   port:
     description: "MCP server port to wait for"
     required: false
@@ -67,6 +72,14 @@ inputs:
     description: "GraphicalScheme feature registering the route-map exporter and importer"
     required: false
     default: "com._1c.g5.v8.dt.bp.scheme.feature.feature.group"
+
+outputs:
+  install-dir:
+    description: "Installed Eclipse + EDT directory (install-only mode)"
+    value: ${{ steps.install.outputs.install-dir }}
+  base-cache-key:
+    description: "Cache identity of the pinned Eclipse + EDT base"
+    value: ${{ steps.edtcache.outputs.key }}
 
 runs:
   using: composite
@@ -198,7 +211,16 @@ runs:
         path: ${{ runner.temp }}/edt/eclipse
         key: ${{ steps.edtcache.outputs.key }}
 
+    - name: Export EDT installation directory
+      if: inputs.install-only == 'true'
+      id: install
+      shell: bash
+      run: |
+        test -d "$RUNNER_TEMP/edt/eclipse/plugins"
+        echo "install-dir=$RUNNER_TEMP/edt/eclipse" >> "$GITHUB_OUTPUT"
+
     - name: Overlay the freshly-built MCP plugin via p2 director (always)
+      if: inputs.install-only != 'true'
       shell: bash
       run: |
         set -uxo pipefail
@@ -234,6 +256,7 @@ runs:
         [ "$ok" = 1 ] || { echo "[setup-edt] ERROR: plugin overlay p2 director failed"; exit 1; }
 
     - name: Boot EDT headless (Xvfb) and wait for the MCP server
+      if: inputs.install-only != 'true'
       shell: bash
       env:
         MCP_PORT: ${{ inputs.port }}

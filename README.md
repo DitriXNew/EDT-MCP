@@ -36,7 +36,10 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 > 2026.1 is Eclipse 4.30 / Java 17, 2026.2 is Eclipse 4.38 / Java 25. Building it needs a
 > JDK 25 (Tycho 5 reads the platform's Java 25 class files); that is the JDK that *runs*
 > the build, not the level it emits. The e2e + protocol-conformance gates run it on
-> **2026.2**.
+> **2026.2**. The [oldest-platform CI gate](.github/workflows/oldest-platform.yml)
+> compiles against **2026.1** to check API linkage on every PR and master push, and
+> before publishing a release. **2026.2.0** linkage stays a local check because that
+> release is no longer served by the public channel.
 
 ## Features
 
@@ -1312,9 +1315,9 @@ bash source/compile.sh
 ### Notes
 
 - A full first build pulls the EDT 2026.2 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2025-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
-- `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed older EDT instead, which is what keeps the single-build claim honest: the manifest cannot express "references no API that only the newest release has", but a compile against the older one proves it. Run it when the target platform or a call into an EDT API changes. It needs a **local** EDT installation, because 1C publishes only the current service release of each major online and deletes the previous one. Two installations are worth keeping:
-  - **2026.1** — the oldest supported major: `bash source/verify-oldest-platform.sh <2026.1-install-dir>` (the defaults).
-  - **2026.2.0** — the previous service release of the current major: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.2 and the jars of 2026.2.0 and 2026.2.1 are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
+- `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed older EDT, which checks API linkage that the manifest cannot express. The checks are split between CI and a local installation:
+  - **2026.1** — the oldest supported major is checked by [Oldest platform (EDT 2026.1)](.github/workflows/oldest-platform.yml) on every PR and master push, and as a release prerequisite. CI installs the pinned build from `ruby/2026.1/` through `setup-edt` and runs `bash source/verify-oldest-platform.sh <install-dir>` with the defaults. Channel drift, inconsistent indexes or an unavailable channel fail the gate through the pin guard, even with a cached installation.
+  - **2026.2.0** — run locally when the target platform or a call into an EDT API changes: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). This release is no longer served by `ruby/2026.2/`, so a local installation is the remaining linkage check for it.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 

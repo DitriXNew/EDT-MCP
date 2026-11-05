@@ -29,6 +29,7 @@ bash source/compile.sh --skip-tests
 - **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
 - **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
 - When sharing a local Tycho cache, hold the shared build lock for the entire Maven process. With a warm cache, `mvn -o clean verify --batch-mode -T 1` is the offline equivalent; run the full suite without `-Dtest` before handoff. Discover toolchain/cache/lock paths locally.
+- API linkage against EDT 2026.1 is a separate CI gate in `oldest-platform.yml`, also required before release. It installs the pinned platform through `setup-edt` in install-only mode and runs `verify-oldest-platform.sh` with the defaults on JDK 25. For target-platform or platform-API changes, also run the local 2026.2.0 check: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg`. That release is no longer served by the public channel.
 
 ## Live redeploy (Tier 2 — the only proof of runtime behaviour)
 
