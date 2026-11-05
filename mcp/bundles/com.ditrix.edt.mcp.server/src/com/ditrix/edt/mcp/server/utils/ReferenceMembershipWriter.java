@@ -261,7 +261,8 @@ public final class ReferenceMembershipWriter
         List<PlannedEntry> plan = new ArrayList<>(); // NOSONAR plan is read inside the write lambda (capture)
         for (JsonObject entry : content)
         {
-            EntryPlan resolved = planEntry(config, entry, kind);
+            EntryPlan resolved = ReadToolExecution.readOnHost(project, "Plan reference membership",
+                () -> planEntry(config, entry, kind));
             if (resolved.error != null)
             {
                 return Result.failed(resolved.error);
@@ -276,7 +277,8 @@ public final class ReferenceMembershipWriter
                 + "(IBmModelManager). Ensure the EDT workbench is fully started, then retry.").toJson()); //$NON-NLS-1$
         }
 
-        long topBmId = ((IBmObject)top).bmGetId();
+        long topBmId = ReadToolExecution.readOnHost(project, "Read membership owner identity",
+            () -> ((IBmObject)top).bmGetId());
         try
         {
             return BmTransactions.write(model, "ModifyReferenceMembership", (tx, pm) -> //$NON-NLS-1$
@@ -306,7 +308,7 @@ public final class ReferenceMembershipWriter
         catch (RuntimeException e)
         {
             Activator.logError("Failed to modify " + kind.memberLabel + " list for " //$NON-NLS-1$ //$NON-NLS-2$
-                + top.getName(), e);
+                + ReadToolExecution.readOnHost(project, "Read membership owner name", top::getName), e);
             return Result.failed(ToolResult.error("Failed to modify the " + kind.memberLabel //$NON-NLS-1$
                 + " list: " + e.getMessage()).toJson()); //$NON-NLS-1$
         }

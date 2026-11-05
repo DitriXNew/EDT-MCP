@@ -19,7 +19,6 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.xtext.EcoreUtil2;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
@@ -95,7 +94,7 @@ public class QueryValidationService
     /** Dispatch precedes the BM read boundary; headless tests substitute only the display. */
     protected void dispatch(Runnable work)
     {
-        ReadToolExecution.dispatchOnDefaultDisplay(work);
+        ReadToolExecution.dispatchOnCurrentOrDefaultDisplay(work);
     }
 
     private static String validationScope(QlDcsResource resource, IV8Project v8Project)

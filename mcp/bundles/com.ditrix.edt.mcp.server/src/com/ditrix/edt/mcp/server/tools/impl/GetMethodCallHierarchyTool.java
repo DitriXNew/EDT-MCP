@@ -974,15 +974,16 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
             }
 
+            var readExecutor = transitiveExecutor(projectName);
             RootResolution root = new RootResolution();
-            ReadToolExecution.dispatchRead(projectName, NAME, () -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
+            readExecutor.accept(() -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
             if (root.error != null)
             {
                 return root.error;
             }
 
             TransitiveContext context =
-                new TransitiveContext(ctx.project(), projectName, root.resourceSet);
+                new TransitiveContext(ctx.project(), projectName, root.resourceSet, readExecutor);
             long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
             BooleanSupplier expired = () -> System.nanoTime() - deadline >= 0;
 
@@ -1059,12 +1060,20 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         ResourceSet resourceSet;
     }
 
+    private static java.util.function.Consumer<Runnable> transitiveExecutor(String projectName)
+    {
+        var display = ReadToolExecution.workbenchExecutor();
+        return work -> display.accept(() -> ReadToolExecution.readOnHost(projectName, NAME,
+            () -> { work.run(); return null; }));
+    }
+
     /** Everything a level expansion needs that does not change between levels. */
     private static final class TransitiveContext
     {
         final IProject project;
         final String projectName;
         final ResourceSet resourceSet;
+        final java.util.function.Consumer<Runnable> readExecutor;
 
         /**
          * Paths already counted in each diagnostic category. The walk re-reads and re-scans the
@@ -1080,11 +1089,13 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         /** Paths already counted as unverified; see {@link #unreadable}. */
         final Set<String> unverified = new HashSet<>();
 
-        TransitiveContext(IProject project, String projectName, ResourceSet resourceSet)
+        TransitiveContext(IProject project, String projectName, ResourceSet resourceSet,
+            java.util.function.Consumer<Runnable> readExecutor)
         {
             this.project = project;
             this.projectName = projectName;
             this.resourceSet = resourceSet;
+            this.readExecutor = readExecutor;
         }
     }
 
@@ -1215,7 +1226,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             List<IFile> chunk = candidates.subList(from, Math.min(from + UI_CHUNK_SIZE, candidates.size()));
             boolean[] chunkCut = { false };
-            ReadToolExecution.dispatchRead(ctx.projectName, NAME, () -> chunkCut[0] = matchChunk(ctx, chunk, byName, found, diag, expired));
+            ctx.readExecutor.accept(() -> chunkCut[0] = matchChunk(ctx, chunk, byName, found, diag, expired));
             if (chunkCut[0])
             {
                 cutShort = true;

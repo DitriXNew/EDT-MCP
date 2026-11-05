@@ -282,7 +282,7 @@ public final class RoleRightsWriter
                 + "generator). Ensure the EDT workbench is fully started, then retry.").toJson()); //$NON-NLS-1$
         }
 
-        long roleBmId = ((IBmObject)role).bmGetId();
+        long roleBmId = ReadToolExecution.readOnHost(project, "Read role identity", () -> ((IBmObject)role).bmGetId());
 
         Context ctx = new Context(project, config, holder.model, role, roleBmId, rightInfos, eventBroker,
             sorter);

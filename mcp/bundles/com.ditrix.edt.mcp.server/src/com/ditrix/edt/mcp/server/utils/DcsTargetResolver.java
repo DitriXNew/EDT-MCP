@@ -265,7 +265,7 @@ public final class DcsTargetResolver
     {
         String ownerType = DcsMainSchemaOwner.expectedType(classification.normalizedRoot);
         MetadataNodeResolver.MetadataNode node =
-            MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot);
+            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot));
         if (node == null)
         {
             return notFound(classification.normalizedRoot,
@@ -283,7 +283,9 @@ public final class DcsTargetResolver
         }
 
         IBmObject reportBm = (IBmObject)node.object;
-        String ownerFqn = topFqn(reportBm);
+        long reportBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
+            () -> reportBm.bmGetId());
+        String ownerFqn = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topFqn(reportBm));
         if (ownerFqn == null)
         {
             return exportOwnerUnavailable(classification.normalizedRoot);
@@ -291,7 +293,7 @@ public final class DcsTargetResolver
         DcsInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveReportMainDcs", (tx, monitor) -> //$NON-NLS-1$
         {
-            EObject txObject = tx.getObjectById(reportBm.bmGetId());
+            EObject txObject = tx.getObjectById(reportBmId);
             if (!DcsMainSchemaOwner.supports(txObject))
             {
                 return DcsInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
@@ -310,7 +312,7 @@ public final class DcsTargetResolver
         }
 
         EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
-        putId(ids, BmRole.ROOT_OWNER, reportBm);
+        ids.put(BmRole.ROOT_OWNER, reportBmId);
         inspection.copyIdsTo(ids);
         List<ExportTarget> exports = dcsExports(ownerFqn, inspection.contentFqn);
         return Resolution.success(new Target(address, classification.normalizedRoot,
@@ -321,7 +323,7 @@ public final class DcsTargetResolver
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
         MetadataNodeResolver.MetadataNode node =
-            MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot);
+            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot));
         if (node == null)
         {
             return notFound(classification.normalizedRoot,
@@ -338,8 +340,10 @@ public final class DcsTargetResolver
         }
 
         IBmObject templateBm = (IBmObject)node.object;
-        IBmObject owner = topObject(templateBm);
-        String ownerFqn = topFqn(templateBm);
+        long templateBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
+            () -> templateBm.bmGetId());
+        IBmObject owner = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topObject(templateBm));
+        String ownerFqn = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> topFqn(templateBm));
         if (owner == null || ownerFqn == null)
         {
             return exportOwnerUnavailable(classification.normalizedRoot);
@@ -347,7 +351,7 @@ public final class DcsTargetResolver
         DcsInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveTemplateDcs", (tx, monitor) -> //$NON-NLS-1$
         {
-            EObject txObject = tx.getObjectById(templateBm.bmGetId());
+            EObject txObject = tx.getObjectById(templateBmId);
             if (!(txObject instanceof BasicTemplate))
             {
                 return DcsInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
@@ -363,8 +367,9 @@ public final class DcsTargetResolver
         }
 
         EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
-        putId(ids, BmRole.ROOT_OWNER, owner);
-        putId(ids, BmRole.TEMPLATE, templateBm);
+        ids.put(BmRole.ROOT_OWNER, ReadToolExecution.readOnHost(context.project(), "Read DCS owner identity",
+            owner::bmGetId));
+        ids.put(BmRole.TEMPLATE, templateBmId);
         inspection.copyIdsTo(ids);
         return Resolution.success(new Target(address, classification.normalizedRoot,
             classification.kind, ids, dcsExports(ownerFqn, inspection.contentFqn), null));
@@ -380,7 +385,7 @@ public final class DcsTargetResolver
         // walk, so using it here made every dynamic-list root report "not found" for a form that
         // modify_metadata could resolve perfectly well.
         MdObject mdForm =
-            FormStructureReader.resolveMdForm(context.scope(), classification.formMemberRef.formPath);
+            ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> FormStructureReader.resolveMdForm(context.scope(), classification.formMemberRef.formPath));
         if (mdForm == null)
         {
             return notFound(classification.normalizedRoot,
@@ -392,10 +397,12 @@ public final class DcsTargetResolver
         }
 
         IBmObject mdFormBm = (IBmObject)mdForm;
+        long mdFormBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
+            () -> mdFormBm.bmGetId());
         DynamicListInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveDynamicListDcs", (tx, monitor) -> //$NON-NLS-1$
         {
-            EObject txMdForm = tx.getObjectById(mdFormBm.bmGetId());
+            EObject txMdForm = tx.getObjectById(mdFormBmId);
             if (txMdForm == null)
             {
                 return DynamicListInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
@@ -452,7 +459,7 @@ public final class DcsTargetResolver
         }
 
         EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
-        putId(ids, BmRole.MD_FORM, mdFormBm);
+        ids.put(BmRole.MD_FORM, mdFormBmId);
         inspection.copyIdsTo(ids);
         List<ExportTarget> exports = new ArrayList<>();
         exports.add(new ExportTarget(ExportRole.FORM_CONTENT, inspection.formContentFqn));
@@ -465,7 +472,7 @@ public final class DcsTargetResolver
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
         String formPath = FormElementWriter.parseFormPath(classification.normalizedRoot);
-        MdObject mdForm = FormStructureReader.resolveMdForm(context.scope(), formPath);
+        MdObject mdForm = ReadToolExecution.readOnHost(context.project(), "Resolve DCS target", () -> FormStructureReader.resolveMdForm(context.scope(), formPath));
         if (mdForm == null)
         {
             return notFound(classification.normalizedRoot,
@@ -477,10 +484,12 @@ public final class DcsTargetResolver
         }
 
         IBmObject mdFormBm = (IBmObject)mdForm;
+        long mdFormBmId = ReadToolExecution.readOnHost(context.project(), "Read DCS target identity",
+            () -> mdFormBm.bmGetId());
         FormInspection inspection = BmTransactions.executeAndRollback(bmModel,
             "ResolveFormConditionalAppearance", (tx, monitor) -> //$NON-NLS-1$
         {
-            EObject txMdForm = tx.getObjectById(mdFormBm.bmGetId());
+            EObject txMdForm = tx.getObjectById(mdFormBmId);
             EObject content = txMdForm == null ? null : FormElementWriter.getEditableForm(txMdForm);
             if (!(content instanceof Form))
             {
@@ -503,7 +512,7 @@ public final class DcsTargetResolver
         if (inspection.failure != null) return Resolution.failure(inspection.failure);
 
         EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
-        putId(ids, BmRole.MD_FORM, mdFormBm);
+        ids.put(BmRole.MD_FORM, mdFormBmId);
         List<ExportTarget> exports = Collections.singletonList(
             new ExportTarget(ExportRole.FORM_CONTENT, inspection.formContentFqn));
         return Resolution.success(new Target(address, classification.normalizedRoot,

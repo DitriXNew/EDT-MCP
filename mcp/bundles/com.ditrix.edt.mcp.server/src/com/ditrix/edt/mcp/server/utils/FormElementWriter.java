@@ -1216,7 +1216,8 @@ public final class FormElementWriter
     public static FormEditContext resolveForEdit(IProject project, MetadataScope scope,
         String formPath, String formNotFoundMessage)
     {
-        MdObject mdForm = FormStructureReader.resolveMdForm(scope, formPath);
+        MdObject mdForm = ReadToolExecution.readOnHost(project, "Resolve editable form",
+            () -> FormStructureReader.resolveMdForm(scope, formPath));
         if (mdForm == null)
         {
             throw new FormValidationException(ToolResult.error(formNotFoundMessage).toJson());
@@ -1256,7 +1257,7 @@ public final class FormElementWriter
             throw new FormValidationException(ToolResult.error("BM model not available for project: " //$NON-NLS-1$
                 + project.getName()).toJson());
         }
-        return new FormEditContext(project, bmModel, mdForm, ((IBmObject)mdForm).bmGetId(), formPath);
+        return new FormEditContext(project, bmModel, mdForm, ReadToolExecution.readOnHost(project, "Read form identity", () -> ((IBmObject)mdForm).bmGetId()), formPath);
     }
 
     /**

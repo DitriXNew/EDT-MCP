@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.HostKind;
+
+import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -81,6 +85,31 @@ import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
  */
 public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 {
+    @Override
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished, WriteScope scope)
+    {
+        if (HostKind.current() != HostKind.HEADLESS
+            || ToolResult.isErrorPayload(result)) return result;
+        var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+        String extension = resultString(response, KEY_EXTENSION_PROJECT);
+        for (String fqn : scope.exportedTopObjects(extension))
+        {
+            String[] parts = fqn.split("\\.");
+            if (parts.length != 2 || MetadataTypeUtils.getConfigReferenceName(parts[0]) == null) continue;
+            if (!drainEstablished || MetadataRegistration.verify(extension,
+                "src/Configuration/Configuration.mdo", "Configuration", fqn)
+                != MetadataRegistration.State.PRESENT)
+            {
+                return ToolResult.errorAfterMutation("Adoption changed extension '" + extension
+                    + "', but Configuration.mdo does not confirm registration of '" + fqn
+                    + "' on disk. Run resync_to_disk and inspect the extension before retrying or committing.")
+                    .put("fqn", fqn).put(KEY_EXTENSION_PROJECT, extension).toJson();
+            }
+        }
+        return result;
+    }
+
     public static final String NAME = "adopt_metadata_object"; //$NON-NLS-1$
 
     /** Output key: the extension project the object was adopted into. */
@@ -222,7 +251,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // through the one dispatch the vendor-support guard judges an address with, together with
         // the address every result below names it by (for a subsystem, its chain as list_subsystems
         // prints it).
-        AdoptionSource source = AdoptionSource.resolve(ctx.scope, normFqn);
+        AdoptionSource source = readPreparation(ctx.project, () -> AdoptionSource.resolve(ctx.scope, normFqn));
         if (source == null)
         {
             return ToolResult.error(sourceNotFound(normFqn)).toJson();
@@ -274,7 +303,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 + "(the md.extension bundle may be inactive).").toJson(); //$NON-NLS-1$
         }
 
-        if (!adopter.isAdoptable(source.object))
+        if (!readPreparation(ctx.project, () -> adopter.isAdoptable(source.object)))
         {
             return notAdoptableError(source);
         }
@@ -293,7 +322,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             return adoptForm(ctx, source, target, adopter, extensionModel, mapping);
         }
 
-        if (adopter.isAdopted(source.object, target))
+        if (readAdoptionLookup(target, () -> adopter.isAdopted(source.object, target)))
         {
             // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
             // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
@@ -313,7 +342,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 + "' before adoption. Wait for the project to finish loading and retry.").toJson(); //$NON-NLS-1$
         }
         AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
-            adopter, source.object, target);
+            adopter, source.object, ctx.scope, source.fqn, target);
         Long adoptedId = write.copyId;
         if (adoptedId == null)
         {
@@ -336,7 +365,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         IModelObjectAdopter adopter, IBmModel extensionModel, MappingEvidence mapping) throws Exception
     {
         String extName = target.getProject().getName();
-        boolean alreadyAdopted = adopter.isAdopted(source.object, target);
+        boolean alreadyAdopted = readAdoptionLookup(target, () -> adopter.isAdopted(source.object, target));
         EObject adopted = alreadyAdopted ? adoptedCopy(adopter, source.object, target) : null;
         Long adoptedId = null;
         List<String> found = List.of();
@@ -470,21 +499,22 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         try
         {
             // Commit each picture before the form's native copier resolves its dependencies.
-            List<EObject> sources = new ArrayList<>(missing.values());
+            List<String> sources = new ArrayList<>(missing.keySet());
             if (!alreadyAdopted)
             {
-                sources.add(source.object);
+                sources.add(source.fqn);
             }
-            for (EObject candidate : sources)
+            for (String candidate : sources)
             {
+                EObject original = candidate.equals(source.fqn) ? source.object : missing.get(candidate);
                 AdoptionWrite write = adoptUnderWorkspaceRule(ctx.project.getWorkspace(), extensionModel,
-                    adopter, candidate, target);
+                    adopter, original, ctx.scope, candidate, target);
                 if (write.copyId == null)
                 {
                     continue;
                 }
                 changed = true;
-                if (candidate == source.object)
+                if (candidate.equals(source.fqn))
                 {
                     adoptedId = write.copyId;
                 }
@@ -624,8 +654,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     private static boolean isAdoptedInModel(IBmModel model, IModelObjectAdopter adopter, EObject source,
         IExtensionProject target)
     {
-        return BmTransactions.read(model, "adopt_metadata_object: inspect adoption", //$NON-NLS-1$
-            (tx, monitor) -> adopter.isAdopted(source, target));
+        IProject base = HostKind.current() == HostKind.HEADLESS ? target.getParentProject() : null;
+        return readPreparation(base, () -> BmTransactions.read(model,
+            "adopt_metadata_object: inspect adoption", (tx, monitor) -> adopter.isAdopted(source, target))); //$NON-NLS-1$
     }
 
     private static List<String> dirtyCopyFqns(IBmModel model, EObject copy)
@@ -997,7 +1028,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     {
         try
         {
-            return adopter.getAdopted(source, target);
+            return readAdoptionLookup(target, () -> adopter.getAdopted(source, target));
         }
         catch (RuntimeException e)
         {
@@ -1109,23 +1140,45 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     private static AdoptionWrite adoptUnderWorkspaceRule(IWorkspace workspace, IBmModel model,
-        IModelObjectAdopter adopter, EObject source, IExtensionProject target) throws CoreException
+        IModelObjectAdopter adopter, EObject original, MetadataScope sourceScope, String sourceFqn,
+        IExtensionProject target) throws CoreException
     {
         AtomicReference<AdoptionWrite> outcome = new AtomicReference<>();
         // Acquire EDT's workspace rule before its global-context BM write, for every invocation.
-        workspace.run(monitor -> outcome.set(adoptWithChanges(model, adopter, source, target)),
+        workspace.run(monitor -> outcome.set(adoptWithChanges(model, adopter,
+            () -> sourceForWrite(original, sourceScope, sourceFqn), target)),
             workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
         return outcome.get();
+    }
+
+    static EObject sourceForWrite(EObject original, MetadataScope scope, String fqn)
+    {
+        return HostKind.current() == HostKind.HEADLESS
+            ? MetadataNodeResolver.resolveAddress(scope, fqn, YO_FALLBACK) : original;
+    }
+
+    static <T> T readAdoptionLookup(IExtensionProject target, java.util.function.Supplier<T> lookup)
+    {
+        IProject base = HostKind.current() == HostKind.HEADLESS ? target.getParentProject() : null;
+        return readPreparation(base, () -> readPreparation(target.getProject(), lookup));
     }
 
     /** Adopt in one global write and attribute only the objects attached by that task's commit event. */
     static AdoptionWrite adoptWithChanges(IBmModel model, IModelObjectAdopter adopter, EObject source,
         IExtensionProject target)
     {
+        return adoptWithChanges(model, adopter, () -> source, target);
+    }
+
+    private static AdoptionWrite adoptWithChanges(IBmModel model, IModelObjectAdopter adopter,
+        java.util.function.Supplier<EObject> sourceResolver, IExtensionProject target)
+    {
         AtomicReference<Set<Long>> associatedIds = new AtomicReference<>();
         List<String> requested = new ArrayList<>();
         Long adoptedId = BmTransactions.writeInGlobalContext(model, "adopt_metadata_object", (tx, monitor) -> { //$NON-NLS-1$
             requested.clear(); // A deadlock retry executes the task again.
+            EObject source = sourceResolver.get();
+            if (source == null) throw com.ditrix.edt.mcp.server.utils.Refusals.state("Adoption source disappeared. Re-read get_metadata_details and retry.");
             IBmModel adoptingModel = target.getAdapter(IBmModel.class);
             if (adoptingModel == null || adoptingModel.getEngine().getCurrentTransaction() != tx)
             {

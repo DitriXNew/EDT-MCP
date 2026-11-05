@@ -74,6 +74,7 @@ import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -623,7 +624,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
         // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
         // would miss the stored name — the resolver retries the normalized FQN.
-        ResolvedTarget resolvedTarget = resolveModifyTarget(ctx.scope, args.fqn, normFqn);
+        final String requestedFqn = normFqn;
+        ResolvedTarget resolvedTarget = readPreparation(ctx.project,
+            () -> resolveModifyTarget(ctx.scope, args.fqn, requestedFqn));
         if (resolvedTarget.error != null)
         {
             return resolvedTarget.error;
@@ -827,7 +830,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static MdObject resolveFormRootForDispatch(MetadataScope scope, String normFqn)
     {
         String formPath = FormElementWriter.parseFormPath(normFqn);
-        return formPath == null ? null : FormStructureReader.resolveMdForm(scope, formPath);
+        return formPath == null ? null : readPreparation(scope.project(),
+            () -> FormStructureReader.resolveMdForm(scope, formPath));
     }
 
     /**
@@ -938,13 +942,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         // Owner resolution uses the yo-fallback; force-export targets the RESOLVED owner's canonical FQN.
         MetadataNodeResolver.ResolvedNode ownerResolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn());
+            readPreparation(ctx.project, () -> MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn()));
         if (ownerResolved.node == null)
         {
             return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
                 + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())
-                + ctx.scope.addressingHint(ref.ownerFqn())).toJson();
+                + readPreparation(ctx.project, () -> ctx.scope.addressingHint(ref.ownerFqn()))).toJson();
         }
         MdObject owner = ownerResolved.node.object;
         if (!(owner instanceof IBmObject))
@@ -953,9 +957,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // The predefined items of an owner an extension adopted reach its .mdo only when the extension
         // marks them; otherwise EDT's .mdo writer drops the whole list (issues #709 / #710).
-        String droppedPredefined = AdoptedPropertyRouter.refusalIfDropped(owner,
+        String droppedPredefined = readPreparation(ctx.project, () -> AdoptedPropertyRouter.refusalIfDropped(owner,
             owner.eClass().getEStructuralFeature("predefined"), ref.ownerFqn(), ctx.project, //$NON-NLS-1$
-            resolvePlatformVersion(ctx));
+            resolvePlatformVersion(ctx)));
         if (droppedPredefined != null)
         {
             return droppedPredefined;
@@ -984,7 +988,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
 
-        final long ownerBmId = ((IBmObject)owner).bmGetId();
+        final long ownerBmId = readPreparation(ctx.project, () -> ((IBmObject)owner).bmGetId());
         final String itemName = ref.itemName;
         final String ownerFqn = ref.ownerFqn();
         // Force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
@@ -1093,7 +1097,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        Subsystem subsystem = SubsystemUtils.resolveByFqn(ctx.config, normFqn);
+        Subsystem subsystem = readPreparation(ctx.project, () -> SubsystemUtils.resolveByFqn(ctx.config, normFqn));
         if (subsystem == null)
         {
             return ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
@@ -1108,8 +1112,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
         // this refuses only a content state of None (issues #709 / #710).
-        String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
-            ctx.project, resolvePlatformVersion(ctx));
+        String dropped = readPreparation(ctx.project, () -> AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
+            ctx.project, resolvePlatformVersion(ctx)));
         if (dropped != null)
         {
             return dropped;
@@ -1226,7 +1230,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean contentPayload, boolean templatePayload, List<JsonObject> properties,
         Function<MetadataNodeResolver.MetadataNode, String> write)
     {
-        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(scope, fqn);
+        ConfigurationRoot.Resolution root = readPreparation(scope.project(), () -> ConfigurationRoot.resolve(scope, fqn));
         if (root == null)
         {
             return null;
@@ -1519,7 +1523,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties)
     {
         MetadataNodeResolver.MetadataNode pkgNode =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+            readPreparation(ctx.project, () -> MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node);
         if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
             || !(pkgNode.object instanceof IBmObject))
         {
@@ -1537,7 +1541,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(ERR_NO_BM_MODEL + ctx.project.getName()).toJson();
         }
 
-        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        final long pkgBmId = readPreparation(ctx.project, () -> ((IBmObject)pkgNode.object).bmGetId());
         final String[] contentFqnHolder = { null };
         XdtoWriter.Result result;
         try
@@ -1560,7 +1564,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
         // caller-typed ref.packageFqn may differ from the stored name, and force-export must
         // target the stored top object (never the caller-supplied spelling).
-        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        String pkgExportFqn = readPreparation(ctx.project, () -> "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName()); //$NON-NLS-1$
         exportFqns.add(pkgExportFqn);
         String contentFqn = contentFqnHolder[0];
         if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
@@ -1850,8 +1854,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         // The list of an object an extension adopted reaches its .mdo only when the extension marks it;
         // otherwise EDT's .mdo writer drops it (issues #709 / #710).
-        String dropped = AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), normFqn,
-            ctx.project, resolvePlatformVersion(ctx));
+        String dropped = readPreparation(ctx.project, () -> AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), normFqn,
+            ctx.project, resolvePlatformVersion(ctx)));
         if (dropped != null)
         {
             return dropped;
@@ -1953,24 +1957,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return mixError;
         }
 
-        String payloadError = TemplateContentSupport.payloadError(template, templateSpec, normFqn);
+        String payloadError = readPreparation(ctx.project, () -> TemplateContentSupport.payloadError(template, templateSpec, normFqn));
         if (payloadError != null)
         {
             return payloadError;
         }
-        if (template.getTemplateType() == TemplateType.TEXT_DOCUMENT)
+        if (readPreparation(ctx.project, () -> template.getTemplateType() == TemplateType.TEXT_DOCUMENT))
         {
             return modifyTextTemplateContent(ctx, normFqn, template, templateSpec);
         }
 
         // Spreadsheet payloads retain their existing type guard.
-        String nonSpreadsheetError = nonSpreadsheetTemplateError(template, normFqn);
+        String nonSpreadsheetError = readPreparation(ctx.project, () -> nonSpreadsheetTemplateError(template, normFqn));
         if (nonSpreadsheetError != null)
         {
             return nonSpreadsheetError;
         }
 
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, true);
+        TemplateWriteContext writeCtx = readPreparation(ctx.project, () -> resolveTemplateWriteContext(ctx, template, normFqn, true));
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2018,7 +2022,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
         JsonObject templateSpec)
     {
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, false);
+        TemplateWriteContext writeCtx = readPreparation(ctx.project, () -> resolveTemplateWriteContext(ctx, template, normFqn, false));
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2525,7 +2529,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // re-navigate to the leaf's owner BY NAME inside the tx - this is what lets a member of a
         // NESTED object (e.g. a tabular-section attribute) be modified, not just a direct member.
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        BmFetchPlan plan = resolveBmFetchPlan(ctx.scope, node, target, parts);
+        BmFetchPlan plan = readPreparation(ctx.project, () -> resolveBmFetchPlan(ctx.scope, node, target, parts));
         if (plan.error != null)
         {
             return plan.error;
@@ -2543,8 +2547,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // once so an unresolved 'type' reference can append the extension-adopt hint (issue #262).
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         List<PreparedChange> changes = new ArrayList<>();
-        String prepErr = validateAndPrepare(ctx.project, ctx.scope, config, version, target, properties, changes,
-            normReport, isExtensionProject);
+        String prepErr = readPreparation(ctx.project, () -> validateAndPrepare(ctx.project, ctx.scope, config, version, target, properties, changes,
+            normReport, isExtensionProject));
         if (prepErr != null)
         {
             return prepErr;
@@ -2552,8 +2556,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         // A change of an object an extension ADOPTED goes where EDT keeps it - its extension block - or
         // refuses the call, before the consent gate and the write (issues #709 / #710).
-        AdoptedPropertyRouter.Routing routing = routeAdopted(normFqn, ctx.project, ctx.scope, config, version,
-            target, changes, AdoptedPropertyRouter::route);
+        AdoptedPropertyRouter.Routing routing = readPreparation(ctx.project, () -> routeAdopted(normFqn, ctx.project, ctx.scope, config, version,
+            target, changes, AdoptedPropertyRouter::route));
         if (routing.isRefused())
         {
             return routing.refusal();
@@ -2617,13 +2621,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // DIFFERENT, unrelated package). A Configuration BM id, captured OUTSIDE the write tx and
         // re-fetched INSIDE it, mirrors CreateMetadataTool.createTopLevel's configBmId precedent.
         final long configBmId =
-            xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
+            readPreparation(ctx.project, () -> xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L);
         final String[] contentFqnHolder = { null };
         // Read OUTSIDE the write transaction (a plain configuration read, like the language
         // resolution the prepare step already did); only the per-object present locales are
         // collected inside. Issue #298.
-        final List<String> declaredCodes = ctx.scope.declaredOrOverride(
-            declaredCodesAfterBatch(config, target, properties));
+        final List<String> declaredCodes = readPreparation(ctx.project, () -> ctx.scope.declaredOrOverride(
+            declaredCodesAfterBatch(config, target, properties)));
+        final List<String> externalLocales = externalLocalesForWrite(ctx, declaredCodes);
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
@@ -2649,7 +2654,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     contentFqnHolder[0] = templates.retype((BasicTemplate)applyTo, requestedTemplateType, tx);
                 }
                 typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
-                localizedReport.collect(applyTo, changes, declaredCodes, config);
+                localizedReport.collectWithLocales(applyTo, changes, declaredCodes,
+                    localesInUseDuringWrite(ctx, tx, declaredCodes, externalLocales));
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
                     XDTOPackage changedPkg = (XDTOPackage)applyTo;
@@ -4019,13 +4025,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // so persisted is never a false true over an ancestor .mdo while the child's own file goes
         // unwritten (bmGetFqn() is legal only on a top object).
         IBmObject subsystemBm = (IBmObject)subsystem;
-        if (!subsystemBm.bmIsTop())
+        if (!readPreparation(ctx.project, () -> subsystemBm.bmIsTop()))
         {
             return ToolResult.error("Cannot resolve the on-disk file to export for subsystem '" //$NON-NLS-1$
                 + normFqn + "': it is not an independent top-level metadata object. A subsystem is always " //$NON-NLS-1$
                 + "its own object, so this should not happen; report it with the subsystem FQN.").toJson(); //$NON-NLS-1$
         }
-        String exportFqn = subsystemBm.bmGetFqn();
+        String exportFqn = readPreparation(ctx.project, () -> subsystemBm.bmGetFqn());
 
         ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
             subsystem, content, ReferenceMembershipWriter.Kind.SUBSYSTEM_CONTENT);
@@ -4390,7 +4396,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final List<String> applied = new ArrayList<>();
         // A form root's/member's title is localized too, so it gets the same report the mdclass path
         // gives (issue #298). The declared codes are read OUTSIDE the write transaction.
-        final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
+        final List<String> declaredCodes = readPreparation(ctx.project, ctx.scope::declaredLanguageCodes);
+        final List<String> externalLocales = externalLocalesForWrite(ctx, declaredCodes);
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         // Attributes this call took the main flag AWAY from - a change to a member the caller did
         // not address, so it is reported rather than left to be discovered.
@@ -4481,8 +4488,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 for (int i = 0; i < localizedChanges.size(); i++)
                 {
-                    localizedReport.collect(localizedHolders.get(i),
-                        List.of(localizedChanges.get(i)), declaredCodes, ctx.config);
+                    localizedReport.collectWithLocales(localizedHolders.get(i),
+                        List.of(localizedChanges.get(i)), declaredCodes,
+                        localesInUseDuringWrite(ctx, tx, declaredCodes, externalLocales));
                 }
             });
 
@@ -6037,7 +6045,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form item as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
-            final String mdFormName = fctx.mdForm.getName();
+            final String mdFormName = readPreparation(ctx.project, fctx.mdForm::getName);
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -8501,6 +8509,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    private static List<String> externalLocalesForWrite(ProjectContext ctx, List<String> declaredCodes)
+    {
+        return HostKind.current() == HostKind.HEADLESS && ctx.scope.isExternalObjects()
+            ? readPreparation(ctx.project, () -> MetadataLanguageUtils.localesInUse(ctx.config, declaredCodes)) : null;
+    }
+
+    private static List<String> localesInUseDuringWrite(ProjectContext ctx, IBmTransaction tx,
+        List<String> declaredCodes, List<String> externalLocales)
+    {
+        if (HostKind.current() != HostKind.HEADLESS)
+            return MetadataLanguageUtils.localesInUse(ctx.config, declaredCodes);
+        if (ctx.scope.isExternalObjects()) return externalLocales;
+        if (!(tx.getTopObjectByFqn("Configuration") instanceof Configuration config))
+            throw Refusals.state("Configuration disappeared. Re-read get_metadata_details and retry.");
+        return MetadataLanguageUtils.localesInUse(config, declaredCodes);
+    }
+
     /**
      * Collects what a modify wrote to LOCALIZED properties, so the result can tell the caller which
      * locale was actually used and which declared locales still owe a translation. Issue #298.
@@ -8607,6 +8632,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // The question is asked about declaredCodes - the AFTER-batch set this call reports on -
             // so a code this very batch declares is judged by the same rule as any other.
             List<String> inUse = MetadataLanguageUtils.localesInUse(config, declaredCodes);
+            collectWithLocales(target, changes, declaredCodes, inUse);
+        }
+
+        void collectWithLocales(EObject target, List<PreparedChange> changes, List<String> declaredCodes,
+            List<String> inUse)
+        {
             for (PreparedChange change : changes)
             {
                 if (!change.isLocalized())

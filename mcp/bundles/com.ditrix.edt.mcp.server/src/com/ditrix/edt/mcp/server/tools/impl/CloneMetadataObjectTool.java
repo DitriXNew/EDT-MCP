@@ -5,6 +5,8 @@
  */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
+
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -668,20 +670,11 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 resource.addProperty("verified", true);
                 resource.remove("modelHash");
             }
-            IFile configuration = project.getFile(resultString(response, "configurationFile"));
-            try (InputStream input = configuration.getContents(true))
+            if (MetadataRegistration.verify(project.getName(),
+                resultString(response, "configurationFile"), "Configuration", fqn)
+                != MetadataRegistration.State.PRESENT)
             {
-                org.w3c.dom.NodeList entries = SecureXml.documentBuilderFactory().newDocumentBuilder()
-                    .parse(input).getDocumentElement().getElementsByTagName(resultString(response, "collection"));
-                boolean registered = false;
-                for (int i = 0; i < entries.getLength(); i++)
-                {
-                    registered |= fqn.equals(entries.item(i).getTextContent().trim());
-                }
-                if (!registered)
-                {
-                    return partial(fqn, "Configuration.mdo does not register the clone");
-                }
+                return partial(fqn, "Configuration.mdo does not register the clone");
             }
             response.remove("cloneModelHash");
             response.remove("configurationFile");

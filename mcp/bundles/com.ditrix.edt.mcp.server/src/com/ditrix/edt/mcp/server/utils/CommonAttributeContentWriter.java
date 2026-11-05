@@ -163,8 +163,8 @@ public final class CommonAttributeContentWriter
             return Result.failed(services.error);
         }
 
-        long configBmId = ((IBmObject)config).bmGetId();
-        long attributeBmId = ((IBmObject)commonAttribute).bmGetId();
+        long configBmId = ReadToolExecution.readOnHost(project, "Read content owner identity", () -> ((IBmObject)config).bmGetId());
+        long attributeBmId = ReadToolExecution.readOnHost(project, "Read content owner identity", () -> ((IBmObject)commonAttribute).bmGetId());
         try
         {
             // Validate + resolve every entry in a read boundary so the target's LIVE

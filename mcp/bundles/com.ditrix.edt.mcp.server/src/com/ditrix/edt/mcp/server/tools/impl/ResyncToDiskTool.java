@@ -817,7 +817,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             result.warning = "Configuration is not a BM object; dangling-reference scan skipped."; //$NON-NLS-1$
             return result;
         }
-        final long configBmId = ((IBmObject)config).bmGetId();
+        final long configBmId = readPreparation(project, () -> ((IBmObject)config).bmGetId());
 
         // A configuration vendor support locks keeps its entries: scanned in a read, reported, never removed.
         if (remove && !configurationEditable(bmModel, configBmId))
@@ -860,7 +860,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             // the FQN cannot be named. Stated separately so a cleanup that could not name its file
             // is still a write in this project rather than the "queued nothing" reported above.
             WriteScope.recordWrite(project);
-            String configFqn = ((IBmObject)config).bmGetFqn();
+            String configFqn = readPreparation(project, () -> ((IBmObject)config).bmGetFqn());
             if (configFqn != null && !configFqn.isEmpty())
             {
                 boolean reExported = BmTransactions.forceExportToDisk(project, configFqn);

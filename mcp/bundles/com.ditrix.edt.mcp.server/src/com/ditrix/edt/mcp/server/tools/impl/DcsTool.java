@@ -16,7 +16,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.swt.widgets.Display;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -239,7 +238,8 @@ public class DcsTool implements IMcpTool
             return shapeError;
         }
         Integer limit = requestedLimit(format, hasLimit, rawLimit);
-        if (!ReadToolExecution.defaultDisplayAvailable())
+        var display = ReadToolExecution.defaultDisplayExecutor();
+        if (display == null)
         {
             return ToolResult.error("EDT workbench display is not available for dcs target '" + rawFqn
                 + "'. Open the project in EDT and retry action='" + action + "'.").toJson();
@@ -249,12 +249,12 @@ public class DcsTool implements IMcpTool
         Runnable handoff;
         if (ACTION_GET.equals(action))
         {
-            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> result.set(executeGet(projectName,
+            handoff = () -> display.accept(() -> result.set(executeGet(projectName,
                 parsed.address(), type, language, format, limit, offset)));
         }
         else if (ACTION_OPTIONS.equals(action))
         {
-            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> result.set(executeOptions(projectName,
+            handoff = () -> display.accept(() -> result.set(executeOptions(projectName,
                 parsed.address(), type, language, limit, offset)));
         }
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
@@ -264,7 +264,7 @@ public class DcsTool implements IMcpTool
                 : JsonParser.parseString(body).getAsJsonObject();
             WriteScope writeScope = new WriteScope();
             scope = writeScope;
-            handoff = () -> ReadToolExecution.dispatchOnDefaultDisplay(() -> WriteScope.runWithScope(writeScope,
+            handoff = () -> display.accept(() -> WriteScope.runWithScope(writeScope,
                 () -> result.set(executeWrite(projectName, parsed.address(), action, type,
                     parsedBody, expectedHash, language))));
         }
@@ -519,7 +519,7 @@ public class DcsTool implements IMcpTool
             {
                 return context.errorJson();
             }
-            String effectiveLanguage = resolveLanguage(context, language);
+            String effectiveLanguage = ReadToolExecution.readOnHost(context.project(), "Resolve DCS language", () -> resolveLanguage(context, language));
             if (effectiveLanguage != null && effectiveLanguage.startsWith("ERROR:")) //$NON-NLS-1$
             {
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
@@ -613,7 +613,7 @@ public class DcsTool implements IMcpTool
             {
                 return context.errorJson();
             }
-            String effectiveLanguage = resolveLanguage(context, language);
+            String effectiveLanguage = ReadToolExecution.readOnHost(context.project(), "Resolve DCS language", () -> resolveLanguage(context, language));
             if (effectiveLanguage != null && effectiveLanguage.startsWith("ERROR:")) //$NON-NLS-1$
             {
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
@@ -633,9 +633,10 @@ public class DcsTool implements IMcpTool
             }
             DcsTargetResolver.Target target = resolution.target();
             DcsPresentationParser.LanguageContext languages =
-                new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
-                    effectiveLanguage, context.scope().defaultLanguageCode(),
-                    language != null && !language.isEmpty());
+                ReadToolExecution.readOnHost(context.project(), "Read DCS languages", () ->
+                    new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
+                        effectiveLanguage, context.scope().defaultLanguageCode(),
+                        language != null && !language.isEmpty()));
             IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
             IV8Project v8Project = v8ProjectManager == null
                 ? null : v8ProjectManager.getProject(context.project());
@@ -1101,7 +1102,7 @@ public class DcsTool implements IMcpTool
         {
             ProjectContext.ConfigurationResult context = ProjectContext.resolveMetadataRoot(projectName);
             if (!context.ok()) return context.errorJson();
-            String effectiveLanguage = resolveLanguage(context, language);
+            String effectiveLanguage = ReadToolExecution.readOnHost(context.project(), "Resolve DCS language", () -> resolveLanguage(context, language));
             if (effectiveLanguage != null && effectiveLanguage.startsWith("ERROR:")) //$NON-NLS-1$
             {
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$

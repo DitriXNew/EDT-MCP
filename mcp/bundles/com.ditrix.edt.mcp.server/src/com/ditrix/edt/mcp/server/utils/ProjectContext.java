@@ -292,6 +292,12 @@ public final class ProjectContext
 
     private ConfigurationResult resolveRoot(boolean allowNoConfiguration)
     {
+        return ReadToolExecution.readOnHost(project, "Resolve metadata root",
+            () -> resolveRootInBoundary(allowNoConfiguration));
+    }
+
+    private ConfigurationResult resolveRootInBoundary(boolean allowNoConfiguration)
+    {
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {

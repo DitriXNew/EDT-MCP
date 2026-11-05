@@ -66,14 +66,22 @@ def run_metadata_writes(invoke, project, extension=None):
     project = Path(project)
     p = "TestConfiguration"
     src = project / "src"
+    language = _root(project).findtext("languages/languageCode")
+    assert language, "the disposable fixture must declare its synonym language code"
     autosort = {path: path.read_bytes() for path in (project / ".settings").glob("*autosort*")}
     for name, token in (("HeadlessCatalog", "Catalog"), ("КаталогБезОкна", "Справочник")):
         fqn = token + "." + name
         canonical = "Catalog." + name
         args = {"projectName": p, "fqn": fqn}
-        _ok(invoke, "create_metadata", args)
+        synonym = "Headless display " + name
+        created = _ok(invoke, "create_metadata", dict(args, properties=[
+            {"name": "synonym", "value": synonym, "language": language}]))
         file = src / "Catalogs" / name / (name + ".mdo")
         assert file.is_file() and _registered(project, canonical), "create must export object and root"
+        assert created.structured["synonym"] == synonym and created.structured["language"] == language
+        localized = {entry.findtext("key"): entry.findtext("value")
+                     for entry in ET.fromstring(file.read_bytes()).findall("synonym")}
+        assert localized[language] == synonym, "the language-code synonym must reach disk before another call"
         _ok(invoke, "modify_metadata", dict(args, properties=[{"name": "comment", "value": "Disk proof " + name}]))
         assert "Disk proof " + name in file.read_text(encoding="utf-8"), "modify must reach disk before another call"
         for child in ("Zulu", "Альфа", "Alpha"):

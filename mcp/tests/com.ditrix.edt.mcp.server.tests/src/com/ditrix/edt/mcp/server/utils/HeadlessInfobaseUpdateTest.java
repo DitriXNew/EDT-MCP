@@ -18,6 +18,48 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 public class HeadlessInfobaseUpdateTest
 {
+    @Test public void neverStartedUpdateHasNoUnknownMutationMarker()
+    {
+        for (boolean cancel : new boolean[] { false, true })
+        {
+            String result = HeadlessInfobaseUpdate.runBounded(() -> {
+                fail("Unscheduled update executed"); return "unexpected";
+            }, 30, job -> { job.schedule(60_000); if (cancel) job.cancel(); });
+            var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+            assertEquals(result, "notStarted", response.get("outcome").getAsString());
+            assertFalse(result, response.has("mutationOutcomeUnknown"));
+        }
+    }
+
+    @Test public void completedUpdateFailureCannotProveRollback()
+    {
+        String result = HeadlessInfobaseUpdate.runBounded(() -> {
+            throw new IllegalStateException("Failure after database work began");
+        }, 5000);
+        var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+        assertEquals("failed", response.get("outcome").getAsString());
+        assertTrue(result, response.has("mutationOutcomeUnknown"));
+        assertTrue(response.get("mutationOutcomeUnknown").getAsBoolean());
+        assertTrue(result, result.contains("Inspect the database"));
+    }
+
+    @Test public void completedUpdateReturnsItsActualAnswer()
+    {
+        assertEquals("completed", HeadlessInfobaseUpdate.runBounded(() -> "completed", 5000));
+    }
+
+    @Test public void completedStructuredRefusalsKeepTheirProducersMutationEvidence()
+    {
+        for (var result : new com.ditrix.edt.mcp.server.protocol.ToolResult[] {
+            com.ditrix.edt.mcp.server.protocol.ToolResult.error("No target selected"),
+            com.ditrix.edt.mcp.server.protocol.ToolResult.errorAfterMutation("Target changed"),
+            com.ditrix.edt.mcp.server.protocol.ToolResult.errorWithUnknownMutationOutcome("Native update failed") })
+        {
+            String answer = result.toJson();
+            assertEquals(answer, HeadlessInfobaseUpdate.runBounded(() -> answer, 5000));
+        }
+    }
+
     @Test public void blockedPlatformUpdateCannotHoldItsCallerForever() throws Exception
     {
         var release = new java.util.concurrent.CountDownLatch(1);
@@ -37,9 +79,40 @@ public class HeadlessInfobaseUpdateTest
             catch (java.util.concurrent.TimeoutException e) { throw new AssertionError("The update caller hung", e); }
             assertTrue(result, result.contains("Close active infobase sessions"));
             assertTrue(result, result.contains("unknown"));
+            assertTrue(result, com.google.gson.JsonParser.parseString(result).getAsJsonObject()
+                .has("mutationOutcomeUnknown"));
+            assertTrue(result, com.google.gson.JsonParser.parseString(result).getAsJsonObject()
+                .get("mutationOutcomeUnknown").getAsBoolean());
             assertFalse(result, result.contains("late update"));
         }
         finally { release.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test public void interruptedInFlightUpdateReportsUnknownMutation() throws Exception
+    {
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var result = new java.util.concurrent.atomic.AtomicReference<String>();
+        Thread caller = new Thread(() -> result.set(HeadlessInfobaseUpdate.runBounded(() -> {
+            started.countDown();
+            while (release.getCount() > 0)
+            {
+                try { release.await(); } catch (InterruptedException ignored) { }
+            }
+            return "late";
+        }, 30_000L)));
+        try
+        {
+            caller.start();
+            assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            caller.interrupt(); caller.join(5000);
+            assertFalse("Caller did not return", caller.isAlive());
+            assertTrue(result.get(), com.google.gson.JsonParser.parseString(result.get()).getAsJsonObject()
+                .has("mutationOutcomeUnknown"));
+            assertTrue(result.get(), com.google.gson.JsonParser.parseString(result.get()).getAsJsonObject()
+                .get("mutationOutcomeUnknown").getAsBoolean());
+        }
+        finally { release.countDown(); caller.interrupt(); caller.join(5000); }
     }
 
     @Test public void fullAndIncrementalUseCoreCallbacksWithoutAnActiveShell()

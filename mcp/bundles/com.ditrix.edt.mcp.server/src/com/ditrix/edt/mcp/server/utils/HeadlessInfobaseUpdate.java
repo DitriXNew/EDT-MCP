@@ -44,21 +44,28 @@ public final class HeadlessInfobaseUpdate
 
     static String runBounded(java.util.function.Supplier<String> work, long timeoutMs)
     {
+        return runBounded(work, timeoutMs, McpJobs::schedule);
+    }
+
+    static String runBounded(java.util.function.Supplier<String> work, long timeoutMs,
+        BoundedJob.IJobScheduler scheduler)
+    {
         var answer = new java.util.concurrent.atomic.AtomicReference<String>();
         var outcome = BoundedJob.run("Unattended database update", timeoutMs,
-            monitor -> answer.set(work.get()));
+            monitor -> answer.set(work.get()), null, scheduler);
         if (outcome.getOutcome() == BoundedJob.Outcome.COMPLETED && outcome.getFailure() == null)
             return answer.get();
         String detail = outcome.getFailure() == null ? outcome.getOutcome().name()
             : PlatformFailures.describe(outcome.getFailure());
-        if (outcome.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        if (outcome.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START
+            || outcome.getOutcome() == BoundedJob.Outcome.NOT_RUN)
             return com.ditrix.edt.mcp.server.protocol.ToolResult.error(
                 "The unattended database update did not start. No update ran; retry update_database.")
                 .put("outcome", "notStarted").toJson();
         if (outcome.getOutcome() == BoundedJob.Outcome.COMPLETED)
-            return com.ditrix.edt.mcp.server.protocol.ToolResult.error("Unattended database update failed: " + detail
+            return com.ditrix.edt.mcp.server.protocol.ToolResult.errorWithUnknownMutationOutcome("Unattended database update failed: " + detail
                 + ". Inspect the database before retrying update_database.").put("outcome", "failed").toJson();
-        return com.ditrix.edt.mcp.server.protocol.ToolResult.error("Unattended database update did not complete: "
+        return com.ditrix.edt.mcp.server.protocol.ToolResult.errorWithUnknownMutationOutcome("Unattended database update did not complete: "
             + detail + ". Close active infobase sessions and inspect the database before retrying. "
             + "The operation may still be running; do not assume rollback.")
             .put("outcome", "unknown").toJson();

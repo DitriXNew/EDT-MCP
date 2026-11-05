@@ -9,6 +9,179 @@ import com.ditrix.edt.mcp.server.HostKind;
 
 public class ReadToolExecutionTest
 {
+    @Test public void transitiveHierarchyKeepsOneWorkbenchDisplayForRootAndChunks() throws Exception
+    {
+        String saved = System.getProperty("eclipse.application");
+        try (var first = new ReadTestWorkbench())
+        {
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            var method = com.ditrix.edt.mcp.server.tools.impl.GetMethodCallHierarchyTool.class
+                .getDeclaredMethod("transitiveExecutor", String.class);
+            method.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var executor = (java.util.function.Consumer<Runnable>)method.invoke(null, "project");
+            try (var second = new ReadTestWorkbench())
+            {
+                int[] runs = {0};
+                executor.accept(() -> runs[0]++);
+                executor.accept(() -> runs[0]++);
+                assertEquals(2, runs[0]);
+                org.mockito.Mockito.verify(first.display, org.mockito.Mockito.times(2))
+                    .syncExec(org.mockito.ArgumentMatchers.any());
+                org.mockito.Mockito.verify(second.display, org.mockito.Mockito.never())
+                    .syncExec(org.mockito.ArgumentMatchers.any());
+            }
+        }
+        finally
+        {
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
+    @Test public void nestedPreparationBorrowsTheCapturedModelOnlyWhileItsReadIsActive() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            var manager = com.ditrix.edt.mcp.server.Activator.getDefault().getBmModelManager();
+            org.mockito.Mockito.when(manager.getModel(fixture.project())).thenReturn(fixture.model, null);
+            String result = ReadToolExecution.readOnHost(fixture.project(), "outer read", () ->
+                ReadToolExecution.readOnHost(fixture.project(), "nested preparation", () -> {
+                    assertEquals(1, fixture.depth);
+                    return fixture.config.getCommonModules().get(0).getName();
+                }));
+            assertEquals("EnglishName", result);
+            assertEquals(1, fixture.reads);
+            org.mockito.Mockito.verify(manager, org.mockito.Mockito.times(1)).getModel(fixture.project());
+            var refusal = assertThrows(IllegalStateException.class, () ->
+                ReadToolExecution.readOnHost(fixture.project(), "next request", () -> "must not run"));
+            assertTrue(refusal.getMessage(), refusal.getMessage().contains("BM model is unavailable"));
+            assertEquals(0, fixture.depth);
+            org.mockito.Mockito.verify(manager, org.mockito.Mockito.times(2)).getModel(fixture.project());
+        }
+    }
+
+    @Test public void failedPreparationReleasesItsCapturedModel() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            var manager = com.ditrix.edt.mcp.server.Activator.getDefault().getBmModelManager();
+            org.mockito.Mockito.when(manager.getModel(fixture.project())).thenReturn(fixture.model, null);
+            var failure = new IllegalArgumentException("failed preparation");
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () ->
+                ReadToolExecution.readOnHost(fixture.project(), "outer read", () ->
+                    ReadToolExecution.readOnHost(fixture.project(), "nested preparation", () -> { throw failure; }))));
+            assertEquals(0, fixture.depth);
+            assertThrows(IllegalStateException.class, () ->
+                ReadToolExecution.readOnHost(fixture.project(), "next request", () -> "must not run"));
+            org.mockito.Mockito.verify(manager, org.mockito.Mockito.times(2)).getModel(fixture.project());
+        }
+    }
+
+    @Test public void metadataWriterRetainsCapturedWorkbenchDisplay() throws Exception
+    {
+        String saved = System.getProperty("eclipse.application");
+        try (var first = new ReadTestWorkbench())
+        {
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            var executor = ReadToolExecution.workbenchExecutor();
+            try (var second = new ReadTestWorkbench())
+            {
+                int[] runs = {0};
+                executor.accept(() -> runs[0]++);
+                assertEquals(1, runs[0]);
+                org.mockito.Mockito.verify(first.display).syncExec(org.mockito.ArgumentMatchers.any());
+                org.mockito.Mockito.verify(second.display, org.mockito.Mockito.never())
+                    .syncExec(org.mockito.ArgumentMatchers.any());
+            }
+        }
+        finally
+        {
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
+    @Test public void configurationPropertiesRunsInlineOnDefaultDisplayThread() throws Exception
+    {
+        String saved = System.getProperty("eclipse.application");
+        var field = org.eclipse.swt.widgets.Display.class.getDeclaredField("Default"); field.setAccessible(true);
+        Object previous = field.get(null);
+        var display = org.mockito.Mockito.mock(org.eclipse.swt.widgets.Display.class);
+        org.mockito.Mockito.when(display.getThread()).thenReturn(Thread.currentThread());
+        try
+        {
+            field.set(null, display);
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            int[] runs = {0};
+            ReadToolExecution.dispatchOnDefaultDisplay(() -> runs[0]++);
+            assertEquals(1, runs[0]);
+            org.mockito.Mockito.verify(display, org.mockito.Mockito.never()).syncExec(org.mockito.ArgumentMatchers.any());
+        }
+        finally
+        {
+            field.set(null, previous);
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
+    @Test public void dcsKeepsTheDefaultDisplayCapturedAtAdmission() throws Exception
+    {
+        String saved = System.getProperty("eclipse.application");
+        var field = org.eclipse.swt.widgets.Display.class.getDeclaredField("Default"); field.setAccessible(true);
+        Object previous = field.get(null);
+        var first = org.mockito.Mockito.mock(org.eclipse.swt.widgets.Display.class);
+        var second = org.mockito.Mockito.mock(org.eclipse.swt.widgets.Display.class);
+        try
+        {
+            field.set(null, first);
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            var executor = ReadToolExecution.defaultDisplayExecutor();
+            field.set(null, second);
+            Runnable work = () -> { };
+            executor.accept(work);
+            org.mockito.Mockito.verify(first).syncExec(work);
+            org.mockito.Mockito.verify(second, org.mockito.Mockito.never()).syncExec(org.mockito.ArgumentMatchers.any());
+        }
+        finally
+        {
+            field.set(null, previous);
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
+    @Test public void currentDisplayQueryValidationDoesNotDispatchToDefault() throws Exception
+    {
+        var current = org.mockito.Mockito.mock(org.eclipse.swt.widgets.Display.class);
+        var other = org.mockito.Mockito.mock(org.eclipse.swt.widgets.Display.class);
+        Class<?> type = org.eclipse.swt.widgets.Display.class;
+        var displays = type.getDeclaredField("Displays"); displays.setAccessible(true);
+        var defaultDisplay = type.getDeclaredField("Default"); defaultDisplay.setAccessible(true);
+        var thread = type.getDeclaredField("thread"); thread.setAccessible(true);
+        Object previousDisplays = displays.get(null), previousDefault = defaultDisplay.get(null);
+        String application = System.getProperty("eclipse.application");
+        try
+        {
+            thread.set(current, Thread.currentThread());
+            displays.set(null, new org.eclipse.swt.widgets.Display[] { current });
+            defaultDisplay.set(null, other);
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            int[] runs = {0};
+            new QueryValidationService().dispatch(() -> runs[0]++);
+            assertEquals(1, runs[0]);
+            org.mockito.Mockito.verifyNoMoreInteractions(other);
+            org.mockito.Mockito.verifyNoMoreInteractions(current);
+        }
+        finally
+        {
+            displays.set(null, previousDisplays); defaultDisplay.set(null, previousDefault);
+            if (application == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", application);
+        }
+    }
+
     @Test public void headlessOptionalDispatchAndRenderingNeverCreateSwt() throws Exception
     {
         String previous = System.getProperty("eclipse.application");

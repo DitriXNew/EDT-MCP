@@ -12,6 +12,7 @@ final class ReadTestWorkbench implements AutoCloseable
 {
     private final Field instance;
     private final Object previous;
+    final Display display;
 
     ReadTestWorkbench() throws Exception
     {
@@ -21,7 +22,7 @@ final class ReadTestWorkbench implements AutoCloseable
         Class<?> unsafeType = Class.forName("sun.misc.Unsafe");
         Field field = unsafeType.getDeclaredField("theUnsafe"); field.setAccessible(true);
         Object holder = unsafeType.getMethod("allocateInstance", Class.class).invoke(field.get(null), type);
-        Display display = mock(Display.class);
+        display = mock(Display.class);
         Field displayField = type.getDeclaredField("display"); displayField.setAccessible(true);
         displayField.set(holder, display);
         doAnswer(call -> { ((Runnable)call.getArgument(0)).run(); return null; }).when(display).syncExec(any());

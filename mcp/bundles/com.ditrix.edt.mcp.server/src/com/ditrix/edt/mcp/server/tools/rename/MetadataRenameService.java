@@ -54,6 +54,7 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
@@ -276,7 +277,9 @@ public class MetadataRenameService
         }
 
         // Find the object
-        MdObject targetObject = resolveObject(config, objectFqn);
+        final String normalizedFqn = objectFqn;
+        MdObject targetObject = ReadToolExecution.readOnHost(project, "Resolve rename target",
+            () -> resolveObject(config, normalizedFqn));
         if (targetObject == null)
         {
             return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
@@ -324,7 +327,8 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         try
         {
-            refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+            refactorings = ReadToolExecution.readOnHost(project, "Prepare metadata rename",
+                () -> refactoringService.createMdObjectRenameRefactoring(targetObject, newName));
         }
         catch (RuntimeException e)
         {
@@ -339,7 +343,8 @@ public class MetadataRenameService
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
         }
 
-        String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
+        String lockedReferrers = ReadToolExecution.readOnHost(project, "Check rename referrers",
+            () -> supportLockRefusal(objectFqn, refactorings));
         if (lockedReferrers != null)
         {
             return ToolResult.error(lockedReferrers).toJson();
@@ -347,12 +352,13 @@ public class MetadataRenameService
         if (!confirm)
         {
             // Preview mode - collect all items and problems
-            return buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
+            return ReadToolExecution.readOnHost(project, "Read rename preview",
+                () -> buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults));
         }
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
+            return performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "metadata object"); //$NON-NLS-1$
         }
     }
@@ -490,7 +496,8 @@ public class MetadataRenameService
                 return ToolResult.error(target.error).toJson();
             }
             Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
-            String lockedReferrers = supportLockRefusal(normFqn, refactorings);
+            String lockedReferrers = ReadToolExecution.readOnHost(project, "Check form rename referrers",
+                () -> supportLockRefusal(normFqn, refactorings));
             if (lockedReferrers != null)
             {
                 return ToolResult.error(lockedReferrers).toJson();
@@ -500,7 +507,7 @@ public class MetadataRenameService
                 return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
                     Collections.emptyMap(), Collections.emptyList());
             }
-            return performRename(normFqn, newName, refactorings, disableRequest, expectedHash, progress,
+            return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "form element"); //$NON-NLS-1$
         }
         catch (Exception e)
@@ -529,7 +536,8 @@ public class MetadataRenameService
      */
     static String vendorSupportRefusal(MetadataScope scope, String objectFqn)
     {
-        return VendorSupportGuard.refusalForFqn(scope, objectFqn, VendorSupportGuard.Intent.RENAME);
+        return ReadToolExecution.readOnHost(scope.project(), "Check rename support",
+            () -> VendorSupportGuard.refusalForFqn(scope, objectFqn, VendorSupportGuard.Intent.RENAME));
     }
 
     /**
@@ -2646,12 +2654,14 @@ public class MetadataRenameService
 
 
 
-    private String performRename(String objectFqn, String newName,
+    private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
         RenameProgress progress, String subject)
     {
-        int textOccurrencesSkipped = applyTextOccurrencePolicy(refactorings);
-        String hashError = expectedHashError(refactorings, disableRequest, expectedHash);
+        int textOccurrencesSkipped = ReadToolExecution.readOnHost(project, "Prepare rename text policy",
+            () -> applyTextOccurrencePolicy(refactorings));
+        String hashError = ReadToolExecution.readOnHost(project, "Check rename preview hash",
+            () -> expectedHashError(refactorings, disableRequest, expectedHash));
         if (hashError != null)
         {
             return ToolResult.error(hashError).toJson();
@@ -2665,10 +2675,11 @@ public class MetadataRenameService
         // The subject is passed in rather than hardcoded: this path now also renames FORM elements,
         // and a prompt saying "metadata object" about a form field would misdescribe what is being
         // authorized (issue #381).
-        ConsentPreview preview = new ConsentPreview("Rename " + subject, //$NON-NLS-1$
+        ConsentPreview preview = ReadToolExecution.readOnHost(project, "Read rename consent preview",
+            () -> new ConsentPreview("Rename " + subject, //$NON-NLS-1$
             "This renames '" + objectFqn + "' to '" + newName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' and cascades the change across the references EDT resolves for it.", //$NON-NLS-1$
-            countRefactoringItems(refactorings), collectRefactoringTitles(refactorings));
+            countRefactoringItems(refactorings), collectRefactoringTitles(refactorings)));
         // The tool NAME literal is intentionally inlined here (matching the frozen value in
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
         // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
@@ -2699,7 +2710,9 @@ public class MetadataRenameService
         disableOutcome.textOccurrencesSkipped = textOccurrencesSkipped;
         if (!disableRequest.indices().isEmpty())
         {
-            applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome);
+            ReadToolExecution.readOnHost(project, "Select rename changes", () -> {
+                applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome); return null;
+            });
         }
 
         List<String> performed = new ArrayList<>();

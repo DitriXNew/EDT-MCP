@@ -24,6 +24,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -33,6 +34,7 @@ import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonArray;
@@ -40,23 +42,27 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/**
- * Base class for metadata write tools that mutate the EDT model
- * (create / add / delete) and therefore must run on the UI thread.
- * <p>
- * Centralizes the boilerplate shared by all such tools:
- * <ul>
- * <li>JSON response type;</li>
- * <li>marshalling the call onto the SWT UI thread via {@link Display#syncExec}
- * with unified error handling (logs and returns a {@link ToolResult} error);</li>
- * <li>resolving the {@link IProject} and its {@link Configuration};</li>
- * <li>unwrapping the underlying cause message thrown from a BM write task.</li>
- * </ul>
- * Subclasses implement {@link #executeOnUiThread(Map)}, which is already invoked
- * on the UI thread.
- */
+/** Shared host dispatch, project resolution and post-write export reporting. */
 public abstract class AbstractMetadataWriteTool implements IMcpTool
 {
+    protected static <T> T readPreparation(IProject project, java.util.function.Supplier<T> work)
+    {
+        return ReadToolExecution.readOnHost(project, "Prepare metadata write", work);
+    }
+
+    /** Finish preparation in a read before invoking the ID-based write continuation. */
+    protected static String prepareWrite(IProject project,
+        java.util.function.Supplier<java.util.function.Supplier<String>> preparation)
+    {
+        return readPreparation(project, preparation).get();
+    }
+
+    private static void logExecutionFailure(String context, Throwable failure)
+    {
+        if (HostKind.current() == HostKind.HEADLESS) Refusals.log(context, failure);
+        else Activator.logError(context, failure);
+    }
+
     /**
      * Whether this tool's result depends on VALIDATION having finished, not just on the model.
      * <p>
@@ -241,6 +247,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         WriteScope scope = new WriteScope();
+        var display = ReadToolExecution.workbenchExecutor();
         try
         {
             Runnable uiThreadWork = () -> WriteScope.runWithScope(scope, () -> {
@@ -253,7 +260,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 }
                 catch (Exception e)
                 {
-                    Activator.logError("Error in " + getName(), e); //$NON-NLS-1$
+                    logExecutionFailure("Error in " + getName(), e); //$NON-NLS-1$
                     resultRef.set(ToolResult.error(e.getMessage()).toJson());
                 }
             });
@@ -262,7 +269,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             if (boundMs > 0L)
             {
                 BoundedJob.Result bounded = BoundedJob.run(getName() + ": UI-thread work", boundMs, //$NON-NLS-1$
-                    monitor -> ReadToolExecution.dispatch(uiThreadWork));
+                    monitor -> display.accept(uiThreadWork));
                 if (bounded.getOutcome() != BoundedJob.Outcome.COMPLETED)
                 {
                     // The caller is bounded, not SWT. The UI runnable may still record a commit or
@@ -275,14 +282,14 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 }
                 if (bounded.getFailure() != null)
                 {
-                    Activator.logError("Error finishing " + getName(), bounded.getFailure()); //$NON-NLS-1$
+                    logExecutionFailure("Error finishing " + getName(), bounded.getFailure()); //$NON-NLS-1$
                     return scope.markErrorAfterRecordedWrite(
                         ToolResult.error(bounded.getFailure().getMessage()).toJson());
                 }
             }
             else
             {
-                ReadToolExecution.dispatch(uiThreadWork);
+                display.accept(uiThreadWork);
             }
 
             // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
@@ -295,7 +302,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // Covers failures in the UI hand-off itself and in every post-commit export/refresh
             // step. The scope, not this catch's position or wording, decides whether the mutation
             // marker belongs on the answer.
-            Activator.logError("Error finishing " + getName(), e); //$NON-NLS-1$
+            logExecutionFailure("Error finishing " + getName(), e); //$NON-NLS-1$
             return scope.markErrorAfterRecordedWrite(ToolResult.error(e.getMessage()).toJson());
         }
     }
@@ -345,7 +352,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // drop that work for exactly the calls that queued nothing. Reported as established:
             // this call put nothing in the queue, so there is nothing about it left unfinished.
             return scope.markErrorAfterRecordedWrite(
-                publish(verdict, refreshAfterExportAwait(params, result, true)));
+                publish(verdict, refreshAfterExportAwait(params, result, true, scope)));
         }
         WriteExportBarrier.Outcome export = WriteExportBarrier.await(verdict, exportDeadlineMs(),
             exportEnvironment()::waitForDiskExport);
@@ -355,7 +362,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         }
         boolean drainEstablished = export.drained();
         return scope.markErrorAfterRecordedWrite(attachWrittenObjectMarkers(params, verdict, scope,
-            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished))));
+            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished, scope))));
     }
 
     /** The FQN a metadata write addresses; decides whether {@code Configuration} is its target. */
@@ -520,6 +527,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return result;
     }
 
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished, WriteScope scope)
+    {
+        return refreshAfterExportAwait(params, result, drainEstablished);
+    }
+
     /**
      * Reads a string member of a result, for a subclass restating part of its own answer.
      *
@@ -618,9 +631,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Performs the tool logic. Always invoked on the SWT UI thread, so model
-     * mutations are safe here. Any thrown exception is logged and converted to a
-     * {@link ToolResult} error by {@link #execute(Map)}.
+     * Runs on SWT in windowed EDT and on the caller in headless EDT.
+     * Model reads and writes retain their own transaction boundaries.
      *
      * @param params the tool parameters
      * @return the JSON result string
@@ -711,7 +723,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             return ctx;
         }
-        String hint = ctx.scope.addressingHint(fqn);
+        String hint = readPreparation(ctx.project, () -> ctx.scope.addressingHint(fqn));
         if (!hint.isEmpty())
         {
             ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
@@ -745,8 +757,9 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      */
     final String vendorSupportRefusal(MetadataScope scope, String fqn)
     {
-        String refusal = VendorSupportGuard.refusalForFqn(scope,
-            MetadataTypeUtils.toCanonicalEnglishFqn(fqn), writeIntent());
+        String refusal = ReadToolExecution.readOnHost(scope.project(), getName() + ": support preflight",
+            () -> VendorSupportGuard.refusalForFqn(scope,
+                MetadataTypeUtils.toCanonicalEnglishFqn(fqn), writeIntent()));
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
@@ -768,6 +781,13 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
     /** The same write gate with an already-resolved project, for lifecycle snapshot tests. */
     ProjectContext resolveProjectRoot(String projectName, IProject project, boolean allowNoConfiguration)
+    {
+        return ReadToolExecution.readOnHost(project, getName() + ": resolve root",
+            () -> resolveProjectRootInBoundary(projectName, project, allowNoConfiguration));
+    }
+
+    private ProjectContext resolveProjectRootInBoundary(String projectName, IProject project,
+        boolean allowNoConfiguration)
     {
         ProjectContext ctx = new ProjectContext();
 

@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -456,13 +458,9 @@ public class RenameMetadataObjectTool implements IMcpTool
                 AtomicBoolean queued = new AtomicBoolean();
                 WriteScope.runWithScope(scope, () -> queued.set(BmTransactions.forceExportToDisk(
                     ProjectContext.of(projectName).project(), "Configuration")));
-                if (!queued.get() || !WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS,
-                    WriteExportBarrier.PLATFORM).drained())
-                {
-                    return ToolResult.error("Rename changed the model, but Configuration.mdo export was not confirmed. "
-                        + "Use resync_to_disk and inspect the files before retrying or committing.")
-                        .put("mutationCommitted", true).toJson();
-                }
+                return finishHeadlessRename(projectName, objectFqn, newName, resultRef.get(), queued.get(),
+                    queued.get() && WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS,
+                        WriteExportBarrier.PLATFORM).drained());
             }
             return resultRef.get();
         };
@@ -480,6 +478,23 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
         return runRenameBounded(objectFqn, newName, true, timeoutMs, action);
+    }
+
+    static String finishHeadlessRename(String projectName, String oldFqn, String newName, String result,
+        boolean queued, boolean drained)
+    {
+        String canonical = MetadataTypeUtils.toCanonicalEnglishFqn(oldFqn);
+        String[] parts = canonical.split("\\.");
+        boolean registered = queued && drained && (parts.length != 2
+            || MetadataRegistration.verifyRename(projectName, canonical,
+                parts[0] + "." + newName));
+        if (!queued || !drained || !registered)
+        {
+            return ToolResult.error("Rename changed the model, but Configuration.mdo does not confirm the registration change from " + oldFqn + " to " + newName + ". "
+                + "Use resync_to_disk and inspect the files before retrying or committing.")
+                .put("mutationCommitted", true).toJson();
+        }
+        return result;
     }
 
     /** Admission and attachment share a lock; terminal previews are retrieved only by jobId. */
