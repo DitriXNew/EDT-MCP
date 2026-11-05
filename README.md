@@ -30,13 +30,13 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 
 > [!IMPORTANT]
 > **EDT version compatibility:**
-> Supports 1C:EDT **2026.1 and 2026.2** (Ruby) from a single build. The plugin is
-> COMPILED against the 2026.2 target platform but **to Java 17** (`release 17` plus
-> `Bundle-RequiredExecutionEnvironment: JavaSE-17`), so one artifact resolves on both —
-> 2026.1 is Eclipse 4.30 / Java 17, 2026.2 is Eclipse 4.38 / Java 25. Building it needs a
-> JDK 25 (Tycho 5 reads the platform's Java 25 class files); that is the JDK that *runs*
-> the build, not the level it emits. The e2e + protocol-conformance gates run it on
-> **2026.2**.
+> Supports the latest 1C:EDT release, currently **2026.2.2** (Ruby); all CI runs on it.
+> **Compatibility with earlier EDT versions is not guaranteed:** the plugin may work
+> there, but nothing checks it and such a problem does not block a release.
+> The plugin is COMPILED against the 2026.2 target platform but **to Java 17**
+> (`release 17` plus `Bundle-RequiredExecutionEnvironment: JavaSE-17`). Building it needs
+> a JDK 25 (Tycho 5 reads the platform's Java 25 class files); that is the JDK that
+> *runs* the build, not the level it emits.
 
 ## Features
 
@@ -1312,9 +1312,7 @@ bash source/compile.sh
 ### Notes
 
 - A full first build pulls the EDT 2026.2 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2025-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
-- `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed older EDT instead, which is what keeps the single-build claim honest: the manifest cannot express "references no API that only the newest release has", but a compile against the older one proves it. Run it when the target platform or a call into an EDT API changes. It needs a **local** EDT installation, because 1C publishes only the current service release of each major online and deletes the previous one. Two installations are worth keeping:
-  - **2026.1** — the oldest supported major: `bash source/verify-oldest-platform.sh <2026.1-install-dir>` (the defaults).
-  - **2026.2.0** — the previous service release of the current major: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.2 and the jars of 2026.2.0 and 2026.2.1 are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
+- `bash source/verify-oldest-platform.sh <edt-install-dir>` is an optional local check, not a release requirement: it compiles the same sources against an installed older EDT and so finds calls to APIs that release does not have. It takes the defaults for 2026.1, and `--ee JavaSE-25 --keep-svg` for 2026.2.0.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 
@@ -1347,7 +1345,7 @@ Use it for substantial whole-task work — a feature, a non-trivial bug, or a ne
 
 ## Requirements
 
-- 1C:EDT 2026.1 or 2026.2 (Ruby)
+- 1C:EDT 2026.2.2 (Ruby); compatibility with earlier versions is not guaranteed
 - Java 17+ (EDT 2026.2 itself runs on Java 25 — it ships its own JRE)
 
 ## License
