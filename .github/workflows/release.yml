@@ -6,11 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  oldest-platform:
-    uses: ./.github/workflows/oldest-platform.yml
-
   release:
-    needs: oldest-platform
     runs-on: ubuntu-24.04
     permissions:
       contents: write

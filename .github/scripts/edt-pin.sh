@@ -32,8 +32,6 @@
 # Prints ONE line on stdout: the build qualifier to fold into the cache key. All human /
 # annotation output goes to stderr. Exit 1 on a confirmed drift, an inconsistent channel, or an
 # unknown channel.
-# Set EDT_PIN_REQUIRE_READABLE=1 to also fail when either channel index is unreadable,
-# so an install-only gate cannot silently reuse a cached base after the channel disappears.
 #
 # TO RE-PIN after 1C ships a new build: bump the qualifier in the PIN MAP below to the value
 # the failure message reports, then re-run — the base cache refreshes automatically. Re-pinning
@@ -55,7 +53,7 @@ fi
 # channel -> the com._1c.g5.v8.dt.core build qualifier the CI base is validated against.
 case "$CHANNEL" in
   2026.2) EDT_EXPECTED="28.0.0.v202610261959" ;; # 1C:EDT 2026.2.2 (rebuild of 2026-10-26) — Eclipse 4.38 / Java 25
-  2026.1) EDT_EXPECTED="27.0.2.v202609041212" ;; # 1C:EDT 2026.1.3 — Eclipse 4.30 / Java 17
+  2026.1) EDT_EXPECTED="27.0.2.v202607090722" ;; # 1C:EDT 2026.1.2 — Eclipse 4.30 / Java 17
   *)
     log "::error::edt-pin.sh: no pinned EDT build for channel '$CHANNEL'. Add it to the PIN MAP in .github/scripts/edt-pin.sh."
     exit 1
@@ -64,8 +62,8 @@ esac
 
 # ── DETECT what the channel currently serves ─────────────────────────────────────────
 # Both indexes are small (~300-430 KB). A transient network failure here must NOT become a new
-# CI flake for existing callers, so by default a fetch/parse failure WARNS and skips only the
-# comparison that needed it. EDT_PIN_REQUIRE_READABLE opts into failing instead.
+# CI flake, so on a fetch/parse failure we WARN and skip only the comparison that needed it —
+# never blocking the job on a flake.
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -101,10 +99,6 @@ fetch_index() {
 CONTENT_READ=0; ARTIFACTS_READ=0
 fetch_index content.xml units && CONTENT_READ=1
 fetch_index artifacts.xml artifacts && ARTIFACTS_READ=1
-if [ "${EDT_PIN_REQUIRE_READABLE:-0}" = 1 ] && { [ "$CONTENT_READ" != 1 ] || [ "$ARTIFACTS_READ" != 1 ]; }; then
-  log "::error::EDT $CHANNEL channel indexes could not be read from $EDT_P2 (content.xml.xz readable=$CONTENT_READ, artifacts.xml.xz readable=$ARTIFACTS_READ). The channel may be unavailable or no longer served; refusing to validate a cached installation."
-  exit 1
-fi
 [ "$CONTENT_READ" = 1 ] || log "::warning::edt-pin.sh: could not read ${EDT_P2}content.xml.xz (network flake?)."
 [ "$ARTIFACTS_READ" = 1 ] || log "::warning::edt-pin.sh: could not read ${EDT_P2}artifacts.xml.xz (network flake?); skipping the artifact-index check."
 

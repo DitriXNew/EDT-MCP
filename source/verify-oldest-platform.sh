@@ -10,9 +10,9 @@
 # check that settles it is to compile the same sources against the older platform - which is what
 # this script does, using a local EDT installation as the target platform.
 #
-# CI installs EDT 2026.1 from its public channel and runs this gate with the defaults.
-# The 2026.2.0 check stays local: that release is no longer served by its channel, so it
-# requires an installation on disk.
+# It is a LOCAL gate, not a CI job: 1C publishes only the current service release of each EDT
+# major under https://edt.1c.ru/downloads/releases/ruby/<major>/, so an older platform is
+# reproducible from an installation on disk, not from a URL.
 #
 # Usage:
 #   bash source/verify-oldest-platform.sh /path/to/1c-edt-<older>-x86_64 \

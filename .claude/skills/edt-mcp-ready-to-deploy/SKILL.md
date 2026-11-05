@@ -39,11 +39,11 @@ Run this when a piece of work is finished — it is the gate that proves the who
    - **Harness changes:** run `python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`; output-schema validator and call-path contracts live there.
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
-   - **Older-platform API linkage has two gates:**
-     - CI owns 2026.1: `oldest-platform.yml` installs the pinned channel through `setup-edt` and runs `verify-oldest-platform.sh` with the defaults (JavaSE-17, SVG dropped). It runs on PRs and master pushes and is a release prerequisite. Confirm that check is green.
-     - When the target platform or a call into an EDT/platform API changes, run locally on 2026.2.0: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` — without the flags it dies in platform resolution (`osgi.ee` 25 missing) before testing any API.
+   - **Touched the target platform, or a call into an EDT/platform API? Also compile against the older EDTs, once per installation — each with its own flags:**
+     - 2026.1: `bash source/verify-oldest-platform.sh <2026.1-install-dir>` (the defaults: JavaSE-17, SVG dropped);
+     - 2026.2.0: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` — without the flags it dies in platform resolution (`osgi.ee` 25 missing) before testing any API.
 
-     The build compiles against the NEWEST platform, and neither the BREE nor the lower-bound imports can express "no signature that only the newer release has" — that binds fine and fails at the call site with `NoSuchMethodError` on the older EDT. The script compiles against an installation and restores the working tree on every exit path. CI can install **2026.1** from its public channel; **2026.2.0** is no longer served, so its local check remains required for platform/API changes.
+     The build compiles against the NEWEST platform, and neither the BREE nor the lower-bound imports can express "no signature that only the newer release has" — that binds fine and fails at the call site with `NoSuchMethodError` on the older EDT. The script points the target platform at a local installation and compiles; it restores the working tree on every exit path. Run it against **2026.1** (the oldest supported major) and against **2026.2.0** (the previous service release of the current major). The second one is not optional cover: 1C deletes the previous service release from its channel, so CI builds only against what `ruby/2026.2/` serves today and a local install is the only remaining proof that the single artifact still loads on 2026.2.0.
 
 4. **README updated** — bump the tool count (both places), add/adjust the group table, the flat tool table, and the detailed section; parameters must match the schema.
 
@@ -66,7 +66,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 - [ ] No stray Cyrillic / English surface / lowerCamelCase / `ToolResult.error` / tx boundary
 - [ ] Unit `XxxToolTest` + e2e `test_<tool>.py` (+ bilingual case if resolution changed)
 - [ ] `compile.sh` BUILD SUCCESS (FULL suite, on top of current master) + ratchets green; `docs/validate_agent_skills.py` clean
-- [ ] Oldest-platform CI check green for 2026.1; local `verify-oldest-platform.sh` green for 2026.2.0 (`--ee JavaSE-25 --keep-svg`) if the target platform or a platform API call changed
+- [ ] `verify-oldest-platform.sh` green on BOTH local installs — 2026.1 (defaults) and 2026.2.0 (`--ee JavaSE-25 --keep-svg`) (only if the target platform or a platform API call changed)
 - [ ] README count + tables + detail updated
 - [ ] Redeployed live; deployed jar verified (anti-stale); projects `ready`
 - [ ] Golden regenerated + committed (if `tools/list` changed); `docs/tools/<tool>.md` regenerated for every tool whose description/schema/guide changed
