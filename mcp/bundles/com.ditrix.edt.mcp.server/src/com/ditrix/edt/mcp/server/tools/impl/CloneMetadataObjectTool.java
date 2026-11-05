@@ -287,7 +287,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 validateClone(source, clone, newName);
                 Set<String> exports = new LinkedHashSet<>(copier.attachedTopFqns());
                 exports.add(created);
-                exports.addAll(MetadataClonePlan.topFqns(MetadataClonePlan.graph(clone)));
+                exports.addAll(MetadataClonePlan.collectTopFqns(MetadataClonePlan.graph(clone)));
                 exports.addAll(MetadataClonePlan.transfer(config, source, clone, transfer, generator));
                 exports.add(((IBmObject)config).bmGetFqn());
                 dirty.set(new ArrayList<>(exports));

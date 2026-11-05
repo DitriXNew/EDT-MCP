@@ -7265,7 +7265,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         McoreValueListBuilder.Result built = McoreValueListBuilder.build(raw, scope);
         if (built.error != null)
         {
-            return McoreValueListPreparation.error(ToolResult.error("Invalid mcore Value list for " //$NON-NLS-1$
+            return McoreValueListPreparation.failed(ToolResult.error("Invalid mcore Value list for " //$NON-NLS-1$
                 + "property '" + propertyName + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return prepareResolvedMcoreValueList(built.items);
@@ -7397,7 +7397,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         PictureValueBuilder.Result built = PictureValueBuilder.build(raw, scope, version);
         if (built.error != null)
         {
-            return PicturePreparation.error(ToolResult.error(
+            return PicturePreparation.failed(ToolResult.error(
                 "Invalid picture for property '" + name + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return prepareResolvedPicture(built.picture);
@@ -7494,7 +7494,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String reason)
     {
         String value = raw == null || raw.isJsonNull() ? "null" : raw.toString(); //$NON-NLS-1$
-        return ContainedValuePreparation.error(ToolResult.error("Invalid QName value for property '" //$NON-NLS-1$
+        return ContainedValuePreparation.failed(ToolResult.error("Invalid QName value for property '" //$NON-NLS-1$
             + propertyName + "': " + value + "; " + reason + ". Use either " //$NON-NLS-1$ //$NON-NLS-2$
             + "{\"name\":\"string\",\"nsUri\":\"http://www.w3.org/2001/XMLSchema\"} or " //$NON-NLS-1$
             + "\"{http://www.w3.org/2001/XMLSchema}string\".").toJson()); //$NON-NLS-1$
@@ -7815,7 +7815,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return new PicturePreparation(null, Long.valueOf(commonPictureBmId), null);
         }
 
-        static PicturePreparation error(String error)
+        static PicturePreparation failed(String error)
         {
             return new PicturePreparation(null, null, error);
         }
@@ -7843,7 +7843,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return new ContainedValuePreparation(value, null);
         }
 
-        static ContainedValuePreparation error(String error)
+        static ContainedValuePreparation failed(String error)
         {
             return new ContainedValuePreparation(null, error);
         }
@@ -7892,7 +7892,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 java.util.Collections.unmodifiableList(new ArrayList<>(values)), null);
         }
 
-        static McoreValueListPreparation error(String error)
+        static McoreValueListPreparation failed(String error)
         {
             return new McoreValueListPreparation(null, error);
         }

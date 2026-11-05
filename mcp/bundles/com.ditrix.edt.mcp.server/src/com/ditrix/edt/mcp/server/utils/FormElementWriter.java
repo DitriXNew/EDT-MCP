@@ -649,9 +649,6 @@ public final class FormElementWriter
     private static final String RU_FIELDS = cp(0x043f, 0x043e, 0x043b, 0x044f); // polya
     private static final String RU_BUTTONS = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0438); // knopki
     private static final String RU_TABLES = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b); // tablicy
-    private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
-    private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
-    private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
     private static final String RU_COLUMN = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430); // kolonka
     private static final String RU_COLUMNS = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438); // kolonki
     // The Russian platform NAMES of the value types this writer classifies are not repeated here: the

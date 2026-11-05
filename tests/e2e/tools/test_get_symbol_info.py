@@ -431,7 +431,8 @@ def test_nonexistent_module_errors_and_names_path():
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
-@e2e_test(tool="get_symbol_info", kind="read")
+# The exact hover pin needs fresh EDT: earlier tests' clean_project can invalidate hover model owners.
+@e2e_test(tool="get_symbol_info", kind="read", first=True)
 def test_windowed_formatter_contract():
     from read_host_contracts import contract_get_symbol_info
     contract_get_symbol_info(call, "WINDOWED")

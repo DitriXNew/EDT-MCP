@@ -25,6 +25,17 @@ final class DcsParserConcurrencyTestSupport
 {
     private DcsParserConcurrencyTestSupport() { }
 
+    @SuppressWarnings("unchecked")
+    private static ThreadLocalScope<Object> activeParserScope() throws ReflectiveOperationException
+    {
+        var field = DcsSettingsWriter.class.getDeclaredField("PARSE_SCRATCH");
+        field.setAccessible(true);
+        ThreadLocal<Object> local = (ThreadLocal<Object>)field.get(null);
+        var constructor = Class.forName(DcsSettingsWriter.class.getName() + "$ParseScratch").getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return ThreadLocalScope.open(local, local.get() == null ? constructor.newInstance() : local.get());
+    }
+
     private static String primitiveStringError() throws ReflectiveOperationException
     {
         try
@@ -70,7 +81,8 @@ final class DcsParserConcurrencyTestSupport
         item.getValues().add(text);
         firstSettings.getOutputParameters().getItems().add(item);
         Runnable pauseWithParserError = () -> {
-            try
+            // Observe a live scope; a completed standalone parser must now release its scratch.
+            try (var scope = activeParserScope())
             {
                 var bad = DcsSettingsWriter.buildValue(JsonParser.parseString("{kind:'field',value:''}"), "first");
                 assertNotNull(bad.error);

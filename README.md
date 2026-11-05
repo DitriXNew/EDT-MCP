@@ -220,7 +220,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All **106 tools** are organized into 11 preference groups; **103 are enabled by default**.
+All **107 tools** are organized into 11 preference groups; **104 are enabled by default**.
 These preference groups control enablement; the 12 progressive-disclosure toolsets in the
 [tool index](#available-tools) control visibility and have separate membership.
 `git`, `ask_workmate`, and `get_form_screenshot` are **disabled by default**. Enable
@@ -233,7 +233,7 @@ progressive-disclosure visibility and does not enable disabled tools:
 | **Errors & Problems** | Error reporting, validation, check-settings profiles, and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers`, `apply_quick_fix`, `validate_xdto_package`, `project_checks` |
 | **Code Intelligence** | Content assist, documentation, metadata and common-picture browsing, and references | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references`, `list_common_pictures`, `export_common_picture`, `search_in_dcs` |
 | **Tags** | Metadata tag management | `get_tags`, `get_objects_by_tags` |
-| **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, background jobs, and Workmate | `get_applications`, `infobase_sessions`, `infobase_extensions`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `get_job_status`, `cancel_job`, `build_external_objects`, `set_infobase_credentials`, `export_configuration_to_file` |
+| **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, background jobs, and Workmate | `edt_dialog`, `get_applications`, `infobase_sessions`, `infobase_extensions`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `get_job_status`, `cancel_job`, `build_external_objects`, `set_infobase_credentials`, `export_configuration_to_file` |
 | **Debugging** | Breakpoints, stepping, variables, expression evaluation, and profiling | `set_breakpoint`, `set_error_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `debug_pause`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms (`get_form_screenshot` is disabled by default) | `open_editor`, `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query`, `validate_form_model` |
 | **Refactoring** | Metadata and DCS create, inspect, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `sort_metadata`, `modify_metadata`, `adopt_metadata_object`, `clone_metadata_object`, `dcs`, `business_process_route_map` |
@@ -330,9 +330,12 @@ In EDT, open **Window > Preferences > MCP Server > General** and clear **Enable 
 
 On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves that windowed EDT running. Add the explicit `-headless` argument to request an optional host without a window on the next cold start. Its catalog excludes mandatory UI tools, and it saves and exits after 30 idle minutes by default. Existing hosts are shared regardless of client mode. Linux supports attachment to a running host. Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 
-**What the headless host can do.** Everything except five tools that need a real window: `get_content_assist`, `open_editor`, `get_form_screenshot`, `get_form_layout_snapshot` and `get_template_screenshot`. BSL analysis, metadata and form writes, rename, delete and database update all run without a window. `get_symbol_info` returns the signature and parameters without the editor hover documentation.
+**What the headless host can do.** Everything except six tools that need a real window: `get_content_assist`, `open_editor`, `get_form_screenshot`, `get_form_layout_snapshot`, `get_template_screenshot` and `edt_dialog`. BSL analysis, metadata and form writes, rename, delete and database update all run without a window. `get_symbol_info` returns the signature and parameters without the editor hover documentation.
 
-**There is nothing to agree to on this host.** Per-tool disabling, read-only presets and the destructive-consent window do not apply, so adding `-headless` to a client configuration removes those restrictions for that agent. Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
+> [!WARNING]
+> **stdio with `-headless` allows everything, by design.** Choosing this mode is the decision to allow every operation. There is no interaction on this host, so there is nothing to agree to, and no setting or safeguard limits it: per-tool disabling, read-only presets and the destructive-consent window do not apply. Add `-headless` only for an agent you trust with the whole workspace.
+
+Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
 
 ### VS Code / GitHub Copilot
 
@@ -576,7 +579,7 @@ with `python docs/generate_tool_docs.py`.
 <!-- TOOLS-INDEX:START -->
 <!-- Membership/grouping generated by docs/generate_tool_docs.py; descriptions maintained here. -->
 
-**106 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
+**107 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
 
 ### Core
 
@@ -584,6 +587,7 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
+| [`edt_dialog`](docs/tools/edt_dialog.md) | List open EDT modal dialogs, then explicitly press an exact button on an answerable dialog. |
 | [`enable_toolset`](docs/tools/enable_toolset.md) | Reveal the required `toolsets` IDs, or hide them with `disable=true` (default false), for progressive disclosure. This never enables a tool disabled in preferences; the core toolset stays visible. |
 | [`get_edt_version`](docs/tools/get_edt_version.md) | Return the installed 1C:EDT version as plain text; takes no parameters. |
 | [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect `objectFqns` in a project; `full=false` gives compact details and `assignable=true` discovers writable properties and allowed values. Forms use canonical structure headings, roles support `roleObjectOffset`, and per-object failures appear in a dedicated `## Errors` table. |

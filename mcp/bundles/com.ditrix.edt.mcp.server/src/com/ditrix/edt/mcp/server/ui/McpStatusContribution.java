@@ -61,9 +61,6 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
     /** Maximum length for tool name display before truncation */
     private static final int TOOL_NAME_MAX_LENGTH = 25;
     
-    /** Size hint for the circle indicator image */
-    private static final int CIRCLE_SIZE_HINT = 14;
-    
     /** Update interval in milliseconds for status refresh and blinking effect */
     private static final int STATUS_UPDATE_INTERVAL_MS = 500;
     

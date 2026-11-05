@@ -858,6 +858,8 @@ def _confirmed(args):
 # the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
 # apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
+    # A conflict-dialog Import press can rewrite project sources through EDT.
+    "edt_dialog",
     "sort_metadata", "create_metadata", "modify_metadata", "write_module_source",
     "apply_quick_fix", "build_external_objects",
     # The preview never writes; a confirmed clone writes only after validation and the hash check.
@@ -891,6 +893,7 @@ NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
 
 # Action-based writers share one exemption table. All other actions stay conservative.
 READ_ONLY_MODEL_ACTIONS = {
+    "edt_dialog": frozenset({"list"}),
     "dcs": frozenset({"get", "options"}),
     "business_process_route_map": frozenset({"get"}),
 }
@@ -3608,8 +3611,11 @@ def wait_until_no_running_launch(config_name=None, timeout=60):
 REGISTRY = []
 
 
-def e2e_test(tool, kind="read", last=False):
+def e2e_test(tool, kind="read", last=False, first=False):
     """Register a test function. kind: 'read' | 'write' | 'action'.
+
+    first=True runs before ordinary tests within the selected shard. Use it only for a test
+    whose exact pin needs an EDT that no earlier test has changed.
 
     last=True defers the test to the END of the run. Use it only when the SUBJECT of the test
     is the run itself rather than one tool's behaviour - the EDT-log ratchet, which can only
@@ -3619,6 +3625,6 @@ def e2e_test(tool, kind="read", last=False):
     """
     def deco(fn):
         REGISTRY.append({"func": fn, "tool": tool, "kind": kind, "name": fn.__name__,
-                         "last": last})
+                         "last": last, "first": first})
         return fn
     return deco

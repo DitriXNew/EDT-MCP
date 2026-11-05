@@ -28,6 +28,8 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,6 +39,8 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
@@ -50,6 +54,7 @@ import org.junit.Test;
 import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StartOutcome;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparation;
@@ -500,7 +505,8 @@ public class LaunchToolTest
         assertEquals("Default true: silently apply the configuration->DB update before launching " //$NON-NLS-1$
             + "so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the " //$NON-NLS-1$
             + "dialog is auto-confirmed); false skips the update and the platform may then show " //$NON-NLS-1$
-            + "that modal. Ignored for Attach. A standalone-server configuration performs no " //$NON-NLS-1$
+            + "that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. " //$NON-NLS-1$
+            + "A standalone-server configuration performs no " //$NON-NLS-1$
             + "database update on this route even when omitted, and an explicit true is refused " //$NON-NLS-1$
             + "- run update_database separately.", description); //$NON-NLS-1$
         // Both halves must survive: the standalone carve-out, and the modal behaviour it
@@ -626,16 +632,58 @@ public class LaunchToolTest
             return mock(ILaunch.class);
         }).when(config).launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class));
 
-        IStatus status = LaunchTool.runLaunchJobBody(config, false,
-            ExternalInfobaseChangesPolicy.DEFAULT, monitor);
-
         String expected = "Launch of 'Cancelled launch' was abandoned by EDT " //$NON-NLS-1$
-            + "(the launch delegate cancelled it); no reason was logged. Check the EDT error log."; //$NON-NLS-1$
-        assertEquals(IStatus.ERROR, status.getSeverity());
+            + "(the launch delegate cancelled it); no reason was logged."; //$NON-NLS-1$
+        List<IStatus> logs = new ArrayList<>();
+        IStatus status = cancellationWithLogs(config, monitor, logs);
+        assertEquals("the Job result must not produce a second ERROR", IStatus.CANCEL, status.getSeverity());
         assertEquals(expected, status.getMessage());
+        assertEquals(1, logs.size());
+        assertEquals(IStatus.INFO, logs.get(0).getSeverity());
+        assertEquals("launch cancelled asynchronously: " + expected, logs.get(0).getMessage());
         assertTrue(AsyncLaunchOutcomes.recent().stream().anyMatch(outcome ->
             "Cancelled launch".equals(outcome.launchConfiguration()) //$NON-NLS-1$
                 && expected.equals(outcome.message())));
+    }
+
+    private static IStatus cancellationWithLogs(ILaunchConfiguration config, IProgressMonitor monitor,
+        List<IStatus> logs)
+    {
+        ILogListener listener = (status, plugin) -> {
+            if (Activator.PLUGIN_ID.equals(status.getPlugin())) { logs.add(status); }
+        };
+        Platform.addLogListener(listener);
+        try
+        {
+            return LaunchTool.runLaunchJobBody(config, false, ExternalInfobaseChangesPolicy.DEFAULT, monitor);
+        }
+        finally
+        {
+            Platform.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void testReasonedDelegateCancellationStaysError() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getName()).thenReturn("Reasoned cancellation");
+        doAnswer(invocation -> {
+            Platform.getLog(Platform.getBundle("com._1c.g5.v8.dt.debug.core")).log(new Status(
+                IStatus.ERROR, "com._1c.g5.v8.dt.debug.core", "update failed"));
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return mock(ILaunch.class);
+        }).when(config).launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class));
+        List<IStatus> logs = new ArrayList<>();
+        IStatus status = cancellationWithLogs(config, new NullProgressMonitor(), logs);
+        assertEquals(IStatus.ERROR, status.getSeverity());
+        assertTrue(status.getMessage(), status.getMessage().contains("EDT logged while it ran: update failed"));
+        assertEquals(1, logs.size());
+        assertEquals(IStatus.ERROR, logs.get(0).getSeverity());
+        assertEquals("launch failed asynchronously: " + status.getMessage(), logs.get(0).getMessage());
+        assertTrue(AsyncLaunchOutcomes.recent().stream().anyMatch(outcome ->
+            "Reasoned cancellation".equals(outcome.launchConfiguration())
+                && status.getMessage().equals(outcome.message())));
     }
 
     @Test

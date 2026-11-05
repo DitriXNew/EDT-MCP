@@ -19,11 +19,7 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IV8Project;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.AutoRegistrationChanges;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
@@ -158,7 +154,7 @@ public final class ExchangePlanContentWriter
             plan.add(resolved.entry);
         }
 
-        Services services = Services.resolve(project);
+        MetadataWriteServices services = MetadataWriteServices.resolve(project);
         if (services.error != null)
         {
             return Result.failed(services.error);
@@ -212,7 +208,7 @@ public final class ExchangePlanContentWriter
      * @return a three-slot delta {@code [added, updated, removed]}
      */
     private static int[] applyPlannedEntry(IBmTransaction tx, ExchangePlan inTx, PlannedEntry planned,
-        Services services)
+        MetadataWriteServices services)
     {
         MdObject mdObject = resolveObjectInTx(tx, planned.objectBmId);
         if (mdObject == null)
@@ -576,50 +572,6 @@ public final class ExchangePlanContentWriter
     }
 
     // ---- internals ----------------------------------------------------------------------------
-
-    /** Resolves the {@link IBmModel}, the MdPlugin {@link IModelObjectFactory} and the platform
-     * {@link Version} for a project, or carries a ready JSON error. */
-    private static final class Services
-    {
-        final IBmModel model;
-        final IModelObjectFactory factory;
-        final Version version;
-        final String error;
-
-        private Services(IBmModel model, IModelObjectFactory factory, Version version, String error)
-        {
-            this.model = model;
-            this.factory = factory;
-            this.version = version;
-            this.error = error;
-        }
-
-        static Services resolve(IProject project)
-        {
-            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-            IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-            if (bmModelManager == null || factory == null || v8ProjectManager == null)
-            {
-                return new Services(null, null, null, ToolResult.error("The metadata write services " //$NON-NLS-1$
-                    + "are not available (IBmModelManager / IModelObjectFactory / IV8ProjectManager). " //$NON-NLS-1$
-                    + "Ensure the EDT workbench is fully started, then retry.").toJson()); //$NON-NLS-1$
-            }
-            IV8Project v8Project = v8ProjectManager.getProject(project);
-            if (v8Project == null)
-            {
-                return new Services(null, null, null, ToolResult.error("No 1C project for: " //$NON-NLS-1$
-                    + project.getName()).toJson());
-            }
-            IBmModel model = bmModelManager.getModel(project);
-            if (model == null)
-            {
-                return new Services(null, null, null, ToolResult.error("BM model not available for " //$NON-NLS-1$
-                    + "project: " + project.getName()).toJson()); //$NON-NLS-1$
-            }
-            return new Services(model, factory, v8Project.getVersion(), null);
-        }
-    }
 
     /**
      * Carries a ready JSON error out of a deep apply step (resolution / transaction failure) so the

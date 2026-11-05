@@ -994,7 +994,7 @@ public final class MetadataPropertyIntrospector
         /** No value, and nothing went wrong: the property is genuinely empty. */
         static final Rendered ABSENT = new Rendered(null, null, false);
         /** Reading or rendering threw, so nothing is known about the value. */
-        static final Rendered FAILED = new Rendered(null, null, true);
+        static final Rendered READ_FAILED = new Rendered(null, null, true);
 
         final String text;
         /** The same value as an identity; see {@link PropertyInfo#valueIdentity}. */
@@ -1053,13 +1053,13 @@ public final class MetadataPropertyIntrospector
          *
          * @param text what a reader sees; {@code null} prints as an empty cell
          * @param identity what the value IS; a blank one cannot be told from an unset reference
-         * @return the rendering, or {@link #FAILED} when nothing at all identifies the value
+         * @return the rendering, or {@link #READ_FAILED} when nothing at all identifies the value
          */
         static Rendered present(String text, String identity)
         {
             // Not "absent": a value we cannot identify is a value we know nothing about, and the
             // empty identity an ABSENT would carry is exactly the one an unset reference carries.
-            return identity == null || identity.isEmpty() ? FAILED
+            return identity == null || identity.isEmpty() ? READ_FAILED
                 : new Rendered(text, identity, false);
         }
     }
@@ -1141,7 +1141,7 @@ public final class MetadataPropertyIntrospector
         }
         catch (Exception e)
         {
-            return Rendered.FAILED;
+            return Rendered.READ_FAILED;
         }
     }
 
@@ -1283,7 +1283,7 @@ public final class MetadataPropertyIntrospector
      * identity is built from the type even when there is no name to hang on it.</p>
      *
      * @param value the reference value, never {@code null}
-     * @return the rendering; {@link Rendered#FAILED} only for a value with neither a name nor an
+     * @return the rendering; {@link Rendered#READ_FAILED} only for a value with neither a name nor an
      *     EClass name, which no object of a generated EMF model is
      */
     private static Rendered referenceTarget(Object value)
@@ -1457,13 +1457,13 @@ public final class MetadataPropertyIntrospector
      * order-sensitive, because the order of the fields is part of the value.</p>
      *
      * @param value the feature value, expected to be an {@code EList}
-     * @return the rendering, or {@link Rendered#FAILED} for a list that could not be read
+     * @return the rendering, or {@link Rendered#READ_FAILED} for a list that could not be read
      */
     private static Rendered renderFieldList(Object value)
     {
         if (!(value instanceof EList<?>))
         {
-            return Rendered.FAILED;
+            return Rendered.READ_FAILED;
         }
         JsonArray rendered = new JsonArray();
         for (Object element : (EList<?>)value)
@@ -1471,7 +1471,7 @@ public final class MetadataPropertyIntrospector
             String address = FieldListSupport.addressOf(element);
             if (address == null)
             {
-                return Rendered.FAILED;
+                return Rendered.READ_FAILED;
             }
             rendered.add(address);
         }
@@ -1481,7 +1481,7 @@ public final class MetadataPropertyIntrospector
     /**
      * Renders a contained mcore Value list to the same JSON array of strings accepted on the wire.
      *
-     * <h2>Why every giving-up branch here answers {@link Rendered#FAILED} and not {@code null}</h2>
+     * <h2>Why every giving-up branch here answers {@link Rendered#READ_FAILED} and not {@code null}</h2>
      * {@link #renderCurrent} has already asked {@code eGet}, and a property nobody set answered
      * {@code null} THERE, before this method was called. An empty list answers {@code []}, which is
      * a text. So by the time any branch below gives up, there IS a value: a non-empty list this
@@ -1497,18 +1497,18 @@ public final class MetadataPropertyIntrospector
      * turns an absent value into an empty cell AND an empty {@code valueIdentity}, and two sides
      * whose entries both failed to resolve then carry the same empty identity - so
      * {@code ComparisonNodeRenderer.compare} finds one distinct value and reports SAME for two
-     * lists that may name entirely different packages. {@link Rendered#FAILED} is what makes that
+     * lists that may name entirely different packages. {@link Rendered#READ_FAILED} is what makes that
      * row {@code UNDETERMINED} instead: not a claim that the sides differ, just the refusal to
      * claim they agree on something neither side was read for.
      *
      * @param value the feature's value, never {@code null}
-     * @return the JSON array, or {@link Rendered#FAILED} for a list that could not be read
+     * @return the JSON array, or {@link Rendered#READ_FAILED} for a list that could not be read
      */
     private static Rendered renderMcoreValueList(Object value)
     {
         if (!(value instanceof EList<?>))
         {
-            return Rendered.FAILED;
+            return Rendered.READ_FAILED;
         }
         JsonArray rendered = new JsonArray();
         for (Object element : (EList<?>)value)
@@ -1522,7 +1522,7 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(referenceValue, valueFeature);
                 if (!(target instanceof XDTOPackage))
                 {
-                    return Rendered.FAILED;
+                    return Rendered.READ_FAILED;
                 }
                 EObject targetObject = (EObject)target;
                 EStructuralFeature nameFeature =
@@ -1530,7 +1530,7 @@ public final class MetadataPropertyIntrospector
                 Object name = nameFeature == null ? null : resolvingGet(targetObject, nameFeature);
                 if (name == null || name.toString().isEmpty())
                 {
-                    return Rendered.FAILED;
+                    return Rendered.READ_FAILED;
                 }
                 rendered.add(McoreValueListBuilder.XDTO_PREFIX + name);
             }
@@ -1543,13 +1543,13 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(stringValue, valueFeature);
                 if (namespace == null || namespace.toString().isEmpty())
                 {
-                    return Rendered.FAILED;
+                    return Rendered.READ_FAILED;
                 }
                 rendered.add(namespace.toString());
             }
             else
             {
-                return Rendered.FAILED;
+                return Rendered.READ_FAILED;
             }
         }
         return Rendered.array(rendered);

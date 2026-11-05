@@ -229,7 +229,7 @@ public final class MetadataClonePlan
         }
         Map<String, String> files = ownedFileHashes(graph, fs, rootFile);
         content.append(files).append('\n');
-        List<String> topFqns = topFqns(graph);
+        List<String> topFqns = collectTopFqns(graph);
         for (MdObject sibling : MetadataTypeUtils.getObjects(config, source.eClass().getName()))
         {
             content.append(sibling.getName()).append(':').append(sibling.getUuid()).append('\n');
@@ -498,7 +498,7 @@ public final class MetadataClonePlan
         }
     }
 
-    public static List<String> topFqns(Map<String, EObject> graph)
+    public static List<String> collectTopFqns(Map<String, EObject> graph)
     {
         Set<String> fqns = new LinkedHashSet<>();
         for (EObject object : graph.values())

@@ -8,8 +8,11 @@ package com.ditrix.edt.mcp.server.protocol;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
@@ -26,6 +29,21 @@ public final class JsonUtils
     private JsonUtils()
     {
         // Utility class
+    }
+
+    /** Returns the first unknown member, preserving input and accepted-member order in the error. */
+    public static String unknownMemberError(JsonObject object, String where, String... accepted)
+    {
+        Set<String> allowed = new LinkedHashSet<>(Arrays.asList(accepted));
+        for (String key : object.keySet())
+        {
+            if (!allowed.contains(key))
+            {
+                return "Unknown member '" + key + "' in " + where + ". Accepted members: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + String.join(", ", allowed) + ". Remove '" + key + "' or use one of them."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+        }
+        return null;
     }
 
     /** JSON key for the EDT version field. */
