@@ -337,8 +337,7 @@ public final class BuildUtils
                 monitor -> {
                     try
                     {
-                        drained[0] = ddManager.waitComputation(timeoutMs, true,
-                            EXPORT_OBJECTS_SEGMENT, EXPORT_BLOBS_SEGMENT);
+                        drained[0] = waitExportComputations(ddManager, timeoutMs);
                     }
                     finally
                     {
@@ -389,6 +388,16 @@ public final class BuildUtils
             return DiskExportState.UNOBSERVABLE;
         }
         return DiskExportState.PENDING;
+    }
+
+    static boolean waitExportComputations(IDerivedDataManager manager, long timeoutMs) throws InterruptedException
+    {
+        // Object/blob exporters enqueue EXP_CL to remove their deleted files' empty directories.
+        // Await it after its producers, within the same budget, before claiming disk completion.
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        if (!manager.waitComputation(timeoutMs, true, EXPORT_OBJECTS_SEGMENT, EXPORT_BLOBS_SEGMENT)) return false;
+        long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+        return remaining > 0 && manager.waitComputation(remaining, true, "EXP_CL"); //$NON-NLS-1$
     }
 
     /** How a bounded {@link #waitForObjectValidation} ended. */

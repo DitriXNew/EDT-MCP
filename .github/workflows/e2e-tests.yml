@@ -384,13 +384,8 @@ jobs:
           echo "edt_log=$LOG" >> "$GITHUB_ENV"
           export EDT_MCP_AUTO_START=true
           export EDT_MCP_PORT="$MCP_PORT"
-          # Destructive-consent gate bypass for automation: the e2e harness is HTTP-only and cannot set
-          # a server preference, so the bypass lives on the EDT PROCESS. Without it every gated e2e
-          # test (delete_metadata / rename_metadata_object / delete_project / delete_infobase /
-          # update_database / a type-change modify_metadata / a write-capable git / a dcs retype /
-          # evaluate_expression) would FAIL here: this EDT is headless, and a gate with no human to
-          # ask now refuses instead of allowing (issue #566) - this variable is what grants consent
-          # for an unattended run, and it must stay set.
+          # This WINDOWED workbench under Xvfb retains its explicit consent override for CI.
+          # The separate HostKind.HEADLESS acceptance below removes the variable.
           export EDT_MCP_DESTRUCTIVE_CONSENT=allow
           # Four fixture projects: one per EDT project KIND - the base configuration, the
           # extension, and the external-objects project (issue #309 - a project whose roots are
@@ -539,6 +534,18 @@ jobs:
         with:
           name: e2e-edt-log-${{ inputs.edt }}-${{ matrix.shard }}
           path: ${{ env.edt_log }}
+          if-no-files-found: ignore
+
+      - name: Upload stdio headless host logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-headless-log-${{ inputs.edt }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/stdio-headless/host.log
+            ${{ runner.temp }}/stdio-headless/workspace/.metadata/.log
+            ${{ runner.temp }}/stdio-headless/workspace/.metadata/.bak_*.log
+          include-hidden-files: true
           if-no-files-found: ignore
 
       - name: Stop EDT

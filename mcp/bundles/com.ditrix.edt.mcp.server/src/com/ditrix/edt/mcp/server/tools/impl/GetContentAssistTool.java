@@ -27,14 +27,15 @@ import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
-import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.ide.IDE;
 import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.ui.editor.XtextEditor;
 import org.eclipse.xtext.ui.editor.XtextSourceViewer;
 import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -287,8 +288,7 @@ public class GetContentAssistTool implements IMcpTool
         AtomicReference<String> resultRef = new AtomicReference<>();
 
         // Execute on UI thread
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result = executeOnUiThread(targetFile, request);

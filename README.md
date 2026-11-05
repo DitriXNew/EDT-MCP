@@ -152,11 +152,13 @@ Go to **Window → Preferences → MCP Server**. The settings page has General, 
 - **Connection configuration**: One button outside the HTTP group reads **Copy HTTP config** or **Copy stdio .mcp.json**. It switches immediately with the checkbox: HTTP off selects stdio; a stdio-only launch also selects stdio while HTTP is stopped; otherwise it selects HTTP. The HTTP entry uses the running port (or the pending port when stopped) and the saved auth token, never an unsaved token. It uses the `mcpServers` + `type`/`url` shape (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the shapes below. A saved token is included as an `Authorization` header, so treat the copied text as a secret.
 - **Transport status**: An always-visible **stdio: ready/unavailable** line reports the local IPC listener, matching `get_server_status.transports.ipc`. HTTP status stays inside its group. A stdio-only launch shows a note there while HTTP is stopped. The status-bar indicator is green when either listener is serving, and its tooltip reports both transports. Restore Defaults re-enables and reveals HTTP without saving until Apply.
 
+![MCP Server General tab](img/Settings.png)
+
 #### Tools Tab
 
 Manage which tools are available to AI assistants. Tools are organized into groups that can be enabled or disabled together. See [Tool Management](#tool-management) for details.
 
-![MCP Server Settings](img/Settings.png)
+![MCP Server Tools tab](img/SettingsTools.png)
 
 ## Status Bar Controls
 
@@ -330,6 +332,13 @@ In EDT, open **Window > Preferences > MCP Server > General** and clear **Enable 
 
 On Windows, the first tool call opens a normal EDT window if necessary; closing the client leaves that windowed EDT running. Add the explicit `-headless` argument to request an optional host without a window on the next cold start. Its catalog excludes mandatory UI tools, and it saves and exits after 30 idle minutes by default. Existing hosts are shared regardless of client mode. Linux supports attachment to a running host. Windows automatic startup needs WMI access, short UDS paths are required, and interrupted calls are never replayed. See [stdio setup and limits](docs/stdio.md). HTTP configuration below remains supported.
 
+**What the headless host can do.** Everything except six tools that need a real window: `get_content_assist`, `open_editor`, `get_form_screenshot`, `get_form_layout_snapshot`, `get_template_screenshot` and `edt_dialog`. BSL analysis, metadata and form writes, rename, delete and database update all run without a window. `get_symbol_info` returns the signature and parameters without the editor hover documentation.
+
+> [!WARNING]
+> **stdio with `-headless` allows everything, by design.** Choosing this mode is the decision to allow every operation. There is no interaction on this host, so there is nothing to agree to, and no setting or safeguard limits it: per-tool disabling, read-only presets and the destructive-consent window do not apply. Add `-headless` only for an agent you trust with the whole workspace.
+
+Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
+
 ### VS Code / GitHub Copilot
 
 Create `.vscode/mcp.json`:
@@ -417,139 +426,6 @@ Copy the bundled [stdio configuration](docs/stdio.md) into `claude_desktop_confi
 ```
 
 </details>
-
-## 1C:Workmate in-process bridge
-
-The MCP-to-Workmate conversation adapter supports 1C:Workmate (`com.e1c.edt.ai*`
-1.0.5 or 1.0.7) in the same EDT JVM. The two builds differ in the conversation
-API — 1.0.5 wraps the project in `ProjectId`, 1.0.7 takes the Eclipse `IProject`
-and adds a progress-listener argument — and the adapter picks the layout by
-probing the installed classes, so no version has to be configured. One behaviour
-follows from that difference: on 1.0.7 a conversation is bound to a project, so
-`projectName` is required there and omitting it is refused before the question is
-sent.
-
-- `ask_workmate` starts Workmate's full conversation/tool loop in a bounded
-  background job and returns a pollable `jobId`, so the MCP transport request
-  does not stay open for the full cloud round-trip. Poll that id with the shared
-  `get_job_status` tool; `cancel_job` first previews and only acts with
-  `confirm=true`, and it never claims that a request already handed to Workmate
-  was cancelled. The Workmate bundles remain
-  optional and are loaded only at runtime through OSGi/reflection; they are not
-  part of this project's target platform. **The tool ships disabled** — it sends
-  the question to an external cloud service and Workmate may change the
-  configuration with its own tools — so enable it under
-  *Preferences → EDT MCP Server → Tools* first.
-- The OSGi service `com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge` lets
-  Workmate/JShell list and call EDT-MCP tools without importing EDT-MCP packages.
-  `callTool` goes through the same dispatcher as MCP `tools/call` and returns its
-  JSON-RPC response.
-
-Two details decide whether this actually works, both measured against Workmate
-1.0.5:
-
-- **The skill.** `ConversationFacade` defaults to `raw`, under which the cloud
-  answers from the model alone — one assistant message, no tool call, no look at
-  the project. `ask_workmate` therefore sends `custom` (the skill Workmate's own
-  autopilot uses), which runs the full tool loop. Override with `skillName` only
-  if you know the name is accepted; the cloud refuses most others outright.
-- **The question carries the bridge.** Workmate's chat reads a project's
-  `.workmate` rules, but this Java path does not, so `ask_workmate` prefixes the
-  question with the bridge instructions and the list of tool NAMES (full
-  descriptions stay behind `get_tool_guide`, which it calls when it needs one).
-  Pass `shareMcpTools=false` to send the question verbatim instead.
-
-The same instance is published under the JDK types `BiFunction<String,String,String>`
-(`callTool`) and `Supplier<String>` (`listTools`), both carrying the service property
-`edt.mcp.bridge=v1`. Prefer that alias: it needs no reflection and no access to the
-bridge package, which matters for callers whose rules forbid unproven Java API - such
-as Workmate's JShell tool.
-
-```java
-// Take the context from an ALWAYS-ACTIVE bundle, not from EDT-MCP's own: this bundle
-// uses lazy activation, so `Platform.getBundle("com.ditrix.edt.mcp.server")
-// .getBundleContext()` can hand back null and the next line then fails with
-// "because ctx is null". OSGi services are global, so any live context finds this one.
-var bundleContext = org.osgi.framework.FrameworkUtil
-    .getBundle(org.eclipse.core.runtime.Platform.class).getBundleContext();
-var references = bundleContext.getServiceReferences(
-    java.util.function.BiFunction.class, "(edt.mcp.bridge=v1)");
-if (references.isEmpty()) {
-    throw new IllegalStateException("EDT-MCP bridge service is not registered");
-}
-var mcp = bundleContext.getService(references.iterator().next());
-System.out.println(mcp.apply("get_edt_version", "{}"));
-```
-
-A consumer that prefers the named contract can still resolve it by string name and
-invoke it reflectively:
-
-```java
-var serviceReference = bundleContext.getServiceReference(
-    "com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge");
-var bridgeService = bundleContext.getService(serviceReference);
-try {
-    var callTool = bridgeService.getClass().getMethod(
-        "callTool", String.class, String.class);
-    System.out.println((String) callTool.invoke(
-        bridgeService, "get_edt_version", "{}"));
-} finally {
-    bundleContext.ungetService(serviceReference);
-}
-```
-
-### Letting Workmate's chat use the bridge
-
-Workmate's agentic chat holds its `JShell` tool but **not** `JShellSession`, and
-`JShell` rejects every call whose `repl_session_id` it cannot resolve. The chat can
-therefore execute code but cannot obtain the one value executing code requires.
-
-EDT-MCP breaks that deadlock: shortly after startup it registers a JShell session
-under the constant id **`edt-mcp`** (retried in the background while Workmate comes
-up, and again if Workmate ever evicts it). Call `JShell` directly with that session
-id and the following manual id:
-
-```
-scope           = "eclipse"
-repl_session_id = "edt-mcp"
-manual_ids      = ["active_workbench"]
-request_description  = "Call EDT-MCP through its in-process bridge."
-response_description = "EDT-MCP tool response was printed."
-```
-
-This chat-to-bridge setup was verified on **Workmate 1.0.8**, EDT 2026.2.1 on
-Windows 11, as reported in [#787](https://github.com/DitriXNew/EDT-MCP/issues/787).
-`active_workbench` is also registered by `EclipsePlatformBindingProvider.getManualEntries()`
-and used in the `JShell` example in the inspected Workmate **1.0.5 and 1.0.7** sources.
-The old `jshell_edt_canonical_imports` id belongs to the EDT metadata manual catalogue
-in the inspected **1.0.5** build; it is absent from the inspected **1.0.7** builds
-and was rejected on **1.0.8** in #787. Use `active_workbench` for this Eclipse bridge
-setup across these versions.
-
-`manual_ids` is validated against the installed build's live scenario catalogue;
-an unknown or blank id is rejected **before any Java code executes**. For another
-build, use `JShellManual` when available to obtain an exact `manual_id` from its
-catalogue. If the chat cannot access it, report the installed Workmate version and
-the exact error instead of guessing an id. The session id remains `edt-mcp`.
-
-[`tests/TestConfiguration/.workmate/WORKMATE.md`](tests/TestConfiguration/.workmate/WORKMATE.md)
-is a working example of such a rules file; copy it into `<project>/.workmate/` to give
-the chat the same access in your own configuration, replacing `TestConfiguration`
-with your EDT project name (`list_projects` lists valid names). **Start a new chat**
-after changing the rules so Workmate loads them. If `JShell` reports `Session not
-found`, the startup registration has not completed; report that error and retry
-after EDT-MCP and Workmate have started.
-
-For a request such as "show the last three commits through EDT-MCP", first enable
-**`git`** in **Window → Preferences → MCP Server → Tools → Git**. Both `git` and
-`ask_workmate` ship **disabled by default**, and **`enable_toolset` does not enable
-them**. The bridge obeys the same tool settings as HTTP MCP: a response such as
-`Tool 'git' is disabled by the user` means the bridge reached the dispatcher;
-ask the user to enable the tool in the Tools tab before retrying.
-
-The chat cannot reach the HTTP endpoint at all — `java.net.URL`, `java.net.Socket`
-and `ProcessBuilder` are on Workmate's restricted-types list — so the in-process
-bridge is its only route.
 
 ## Multi-EDT Proxy
 
@@ -660,7 +536,7 @@ with `python docs/generate_tool_docs.py`.
 
 ### Testing
 
-> YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling.
+> YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling. Bridge setup: [docs/workmate-bridge.md](docs/workmate-bridge.md).
 
 | Tool | Description |
 |------|-------------|
@@ -1017,7 +893,7 @@ The MCP server is a **local developer tool** and is secured for that model:
 
 ### Destructive-operation consent
 
-Before a **destructive** operation, the server can ask **you** (the human at the EDT
+On a **windowed EDT host**, before a destructive operation the server can ask **you** (the human at the EDT
 workbench) to confirm — so the AI cannot silently delete data or terminate live sessions.
 The gated tools are `clone_metadata_object`, `delete_metadata`, `rename_metadata_object`, `delete_project`,
 `delete_infobase`, `update_database`, `infobase_sessions`, `evaluate_expression` (arbitrary BSL in the running 1C app —
@@ -1040,7 +916,7 @@ Configure it in **Window → Preferences → MCP Server**:
 - **Per-tool checkbox** (Tools tab) — active only at the *Ask, except allowed tools* level: tick a tool
   to let it run destructively without a prompt.
 
-**Automation / CI bypass.** Because the confirmation dialog would block a headless or automated run,
+**Windowed automation / CI bypass.** To allow unattended calls on a windowed EDT host,
 set the environment variable **`EDT_MCP_DESTRUCTIVE_CONSENT=allow`** on the EDT process before launch —
 it overrides the preference and lets every gated operation proceed without a dialog (the same knob the
 e2e suite uses). Every such allow is logged with the tool name and its preview, so an unattended run
@@ -1053,11 +929,11 @@ leave no commit or reflog behind, so that line is the only record of what they h
 dialog always sees the whole command, redacted or not. The dialog only ever appears on a live UI
 session at the *Ask* level.
 
-**A headless EDT REFUSES a gated operation** (it still never blocks): with no workbench window there is
-nobody to ask, and the gate's job is to stop a destructive write that no human agreed to — so consent
-for an unattended run has to come from the operator at launch, via the environment variable above. The
-error names it. Previously the absence of a display *granted* consent instead, which meant an agent
-could remove the gate simply by starting EDT headless.
+**The explicit headless host always allows destructive operations**, with or without
+`EDT_MCP_DESTRUCTIVE_CONSENT`. It also ignores per-tool disabling and read-only presets.
+Preview/confirm protocols and tool preconditions still apply; autosort remains the user's setting.
+The decision uses `HostKind`, not display availability: a headless client attached to windowed EDT
+keeps every windowed gate, and a windowed EDT without a live shell still refuses.
 
 **The prompt is time-bounded.** A confirmation dialog waits at most **120 seconds** for a human to
 answer (below common MCP client request budgets, so a caller gets an actionable error instead of its

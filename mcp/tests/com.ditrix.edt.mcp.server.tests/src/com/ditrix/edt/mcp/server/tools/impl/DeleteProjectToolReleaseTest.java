@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.util.ArrayList;
@@ -14,6 +15,11 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.resources.IWorkspaceRoot;
+import org.eclipse.core.runtime.ICoreRunnable;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool.IReleaseWait;
@@ -23,6 +29,36 @@ import com.google.gson.JsonParser;
 /** Pins the whole deletion sequence rather than only a formatted result. */
 public class DeleteProjectToolReleaseTest
 {
+    @Test
+    public void testDeletionBatchesNotificationsUnderTheWorkspaceRootRule() throws Exception
+    {
+        for (boolean deleteContent : new boolean[] {false, true})
+        {
+            IProject project = mock(IProject.class);
+            IWorkspace workspace = mock(IWorkspace.class);
+            IWorkspaceRoot root = mock(IWorkspaceRoot.class);
+            when(project.getWorkspace()).thenReturn(workspace);
+            when(workspace.getRoot()).thenReturn(root);
+            boolean[] inside = {false};
+            doAnswer(call -> {
+                inside[0] = true;
+                try { ((ICoreRunnable)call.getArgument(0)).run(new NullProgressMonitor()); }
+                finally { inside[0] = false; }
+                return null;
+            }).when(workspace).run(any(ICoreRunnable.class), same(root), eq(IWorkspace.AVOID_UPDATE),
+                any(IProgressMonitor.class));
+            doAnswer(call -> {
+                assertTrue("Deletion must exclude concurrent workspace changes and batch notifications", inside[0]);
+                return null;
+            }).when(project).delete(eq(deleteContent), eq(true), any(IProgressMonitor.class));
+            DeleteProjectTool.deleteProjectResources(project, deleteContent);
+            verify(project).delete(eq(deleteContent), eq(true), any(IProgressMonitor.class));
+            verify(workspace).run(any(ICoreRunnable.class), same(root), eq(IWorkspace.AVOID_UPDATE),
+                any(IProgressMonitor.class));
+            assertFalse(inside[0]);
+        }
+    }
+
     /** A recording fake keeps this package-private seam compatible with the OSGi test loader. */
     private static final class Wait implements IReleaseWait
     {
@@ -34,6 +70,8 @@ public class DeleteProjectToolReleaseTest
 
         @Override public boolean await(long timeoutMs)
         {
+            assertNull("Context release must be awaited outside workspace rules",
+                org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
             awaits++;
             timeout = timeoutMs;
             if (failure != null)

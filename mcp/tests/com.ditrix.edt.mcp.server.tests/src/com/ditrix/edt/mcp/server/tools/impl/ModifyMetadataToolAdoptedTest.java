@@ -274,7 +274,12 @@ public class ModifyMetadataToolAdoptedTest
             + System.getProperty("user.dir"), source); //$NON-NLS-1$
         String text = read(source);
 
-        String generic = code(methodBody(text, "private String applyGenericPropertyChanges(")); //$NON-NLS-1$
+        String entry = code(methodBody(text, "private String applyGenericPropertyChanges(")); //$NON-NLS-1$
+        assertTrue("the generic entry must run aggregate preparation: " + entry,
+            entry.contains("prepareWrite(ctx.project,"));
+        assertTrue("the generic entry must delegate to the checked preparation: " + entry,
+            entry.contains("prepareGenericPropertyChanges(current, projectName, normFqn,"));
+        String generic = code(methodBody(text, "private java.util.function.Supplier<String> prepareGenericPropertyChanges(")); //$NON-NLS-1$
         assertTrue("the generic path must ask consent and then read the base again (T1): " + generic, //$NON-NLS-1$
             generic.contains("consentThenBaseCheck(normFqn, changes, routing)")); //$NON-NLS-1$
         assertFalse("the generic path must not ask consent without reading the base again", //$NON-NLS-1$
@@ -282,7 +287,12 @@ public class ModifyMetadataToolAdoptedTest
         assertTrue("the generic write must check the prepared changes again in the transaction (T3): " //$NON-NLS-1$
             + generic, generic.contains("applyChanges(applyTo, changes, tx, normFqn)")); //$NON-NLS-1$
 
-        String predefined = code(methodBody(text, "private String dispatchPredefinedItemFqn(")); //$NON-NLS-1$
+        String predefinedEntry = code(methodBody(text, "private String dispatchPredefinedItemFqn(")); //$NON-NLS-1$
+        assertTrue("the predefined entry must run aggregate preparation: " + predefinedEntry,
+            predefinedEntry.contains("prepareWrite(ctx.project,"));
+        assertTrue("the predefined entry must delegate to the checked preparation: " + predefinedEntry,
+            predefinedEntry.contains("preparePredefinedModification(current, normFqn, ref, args)"));
+        String predefined = code(methodBody(text, "private java.util.function.Supplier<String> preparePredefinedModification(")); //$NON-NLS-1$
         assertTrue("the predefined write must check the owner's state again in the transaction (T3): " //$NON-NLS-1$
             + predefined, predefined.contains("modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn)")); //$NON-NLS-1$
         assertFalse("the predefined write must not call the writer past that check", //$NON-NLS-1$

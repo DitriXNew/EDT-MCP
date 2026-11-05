@@ -1706,16 +1706,17 @@ def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ig
     return False
 
 
-def wait_for_named_projects_ready(names, timeout=180, ctx=""):
+def wait_for_named_projects_ready(names, timeout=180, ctx="", *, invoke=None):
     """Poll list_projects(format=json) until every project in `names` reads 'ready'.
 
     Returns the last {name: state} map so the caller asserts on it (and on what else it holds).
     Unlike wait_for_project_ready this reads the JSON contract and requires every named project
     to exist and read 'ready', regardless of its EDT flag, nature, or open state.
+    An optional invoke uses the same readiness contract over a different transport.
     """
     deadline = time.time() + timeout
     while True:
-        listed = call("list_projects", {"format": "json"})
+        listed = (invoke or call)("list_projects", {"format": "json"})
         assert_ok(listed, "list_projects while waiting for %s" % (ctx or sorted(names)))
         states = {row["name"]: row["state"] for row in listed.structured["projects"]}
         if all(states.get(name) == "ready" for name in names) or time.time() > deadline:

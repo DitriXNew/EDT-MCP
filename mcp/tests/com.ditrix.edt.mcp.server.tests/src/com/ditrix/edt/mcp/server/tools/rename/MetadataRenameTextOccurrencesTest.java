@@ -284,8 +284,9 @@ public class MetadataRenameTextOccurrencesTest
     private static String performUntilHashGuard(MetadataRenameService service, List<IRefactoring> tree,
         String expectedHash) throws Exception
     {
-        return (String)method("performRename", String.class, String.class, Collection.class, DisableRequest.class,
-            String.class, RenameProgress.class, String.class).invoke(service, "CommonModule.Old", "New", tree,
+        return (String)method("performRename", org.eclipse.core.resources.IProject.class,
+            String.class, String.class, Collection.class, DisableRequest.class,
+            String.class, RenameProgress.class, String.class).invoke(service, null, "CommonModule.Old", "New", tree,
                 DisableRequest.parse("999"), expectedHash, new RenameProgress(), "metadata object");
     }
 

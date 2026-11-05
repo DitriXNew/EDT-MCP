@@ -15,11 +15,11 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -114,11 +114,10 @@ public class GetSubsystemContentTool implements IMcpTool
         final boolean recursiveMode = recursive;
         final String lang = language;
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                resultRef.set(getSubsystemContentInternal(projectName, fqn, recursiveMode, lang));
+                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> getSubsystemContentInternal(projectName, fqn, recursiveMode, lang)));
             }
             catch (Exception e)
             {

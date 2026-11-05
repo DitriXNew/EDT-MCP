@@ -39,10 +39,10 @@ public class HeadlessBootstrapTest extends StdioTestSupport
         JsonObject catalog = catalog();
         JsonArray tools = catalog.getAsJsonObject("tools").getAsJsonArray("tools");
         tools.get(0).getAsJsonObject().addProperty("name", "list_projects");
-        JsonObject windowed = tools.get(0).deepCopy().getAsJsonObject(); windowed.addProperty("name", "delete_project"); tools.add(windowed);
+        JsonObject windowed = tools.get(0).deepCopy().getAsJsonObject(); windowed.addProperty("name", "open_editor"); tools.add(windowed);
         JsonObject degraded = windowed.deepCopy(); degraded.addProperty("name", "git"); tools.add(degraded);
         JsonObject capabilities = new JsonObject();
-        capabilities.addProperty("list_projects", "HEADLESS"); capabilities.addProperty("delete_project", "WINDOWED_ONLY"); capabilities.addProperty("git", "HEADLESS_DEGRADED");
+        capabilities.addProperty("list_projects", "HEADLESS"); capabilities.addProperty("open_editor", "WINDOWED_ONLY"); capabilities.addProperty("git", "HEADLESS_DEGRADED");
         catalog.add("hostCapabilities", capabilities);
         for (boolean headless : new boolean[]{false, true}) {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -53,7 +53,7 @@ public class HeadlessBootstrapTest extends StdioTestSupport
                 var frames = new ByteArrayInputStream(output.toByteArray()); JsonFrames.read(frames);
                 var result = JsonParser.parseString(JsonFrames.read(frames)).getAsJsonObject().getAsJsonObject("result");
                 assertEquals(headless ? 2 : 3, result.getAsJsonArray("tools").size());
-                assertEquals(headless, !result.toString().contains("delete_project"));
+                assertEquals(headless, !result.toString().contains("open_editor"));
                 assertTrue(result.toString().contains("git")); assertFalse(result.has("hostCapabilities"));
                 assertNull(JsonFrames.read(frames));
             }
@@ -67,17 +67,17 @@ public class HeadlessBootstrapTest extends StdioTestSupport
             for (boolean hostHeadless : new boolean[]{false, true}) {
                 System.setProperty("eclipse.application", hostHeadless ? com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID : "org.eclipse.ui.ide.workbench");
                 registry.replaceAll(List.of(new com.ditrix.edt.mcp.server.tools.IMcpTool() {
-                    public String getName() { return "delete_project"; }
+                    public String getName() { return "open_editor"; }
                     public String getDescription() { return "Mixed-mode sentinel"; }
                     public String getInputSchema() { return "{\"type\":\"object\"}"; }
                     public String execute(java.util.Map<String, String> args) { return "windowed-sentinel"; }
                 }));
                 var endpoint = registry(); var catalog = catalog(); var output = new ByteArrayOutputStream();
-                catalog.getAsJsonObject("tools").getAsJsonArray("tools").get(0).getAsJsonObject().addProperty("name", "delete_project");
-                JsonObject caps = new JsonObject(); caps.addProperty("delete_project", "WINDOWED_ONLY"); catalog.add("hostCapabilities", caps);
+                catalog.getAsJsonObject("tools").getAsJsonArray("tools").get(0).getAsJsonObject().addProperty("name", "open_editor");
+                JsonObject caps = new JsonObject(); caps.addProperty("open_editor", "WINDOWED_ONLY"); catalog.add("hostCapabilities", caps);
                 try (var listener = new IpcListener(endpoint, "test");
                      var bootstrap = new StdioBootstrap(() -> endpoint, () -> { fail("Never start a second EDT"); return null; }, output, catalog, !hostHeadless)) {
-                    bootstrap.accept(init(1, false)); bootstrap.accept(initialized()); bootstrap.accept(call(2, "delete_project"));
+                    bootstrap.accept(init(1, false)); bootstrap.accept(initialized()); bootstrap.accept(call(2, "open_editor"));
                     awaitOutput(output, hostHeadless ? "Remove -headless" : "windowed-sentinel");
                     bootstrap.accept("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}");
                     awaitOutput(output, "\"id\":3");

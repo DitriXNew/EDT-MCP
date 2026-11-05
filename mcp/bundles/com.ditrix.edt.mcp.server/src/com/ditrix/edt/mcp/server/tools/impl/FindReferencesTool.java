@@ -11,8 +11,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -52,10 +52,8 @@ public class FindReferencesTool implements IMcpTool
 
     public FindReferencesTool()
     {
-        this(ProjectStateChecker::awaitSearchScopeReady, runnable -> {
-            Display display = PlatformUI.getWorkbench().getDisplay();
-            display.syncExec(runnable);
-        }, () -> Display.getCurrent() != null);
+        this(ProjectStateChecker::awaitSearchScopeReady, ReadToolExecution::dispatch,
+            () -> Display.getCurrent() != null);
     }
 
     FindReferencesTool(SearchScopeSettler searchScopeSettler, Consumer<Runnable> uiRunner,
@@ -166,7 +164,10 @@ public class FindReferencesTool implements IMcpTool
         uiRunner.accept(() -> {
             try
             {
-                String result = new MetadataReferenceService().findReferences(projectName, objectFqn, maxResults);
+                String result = com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                    ? ReadToolExecution.read(projectName, NAME,
+                        () -> new MetadataReferenceService().findReferences(projectName, objectFqn, maxResults))
+                    : new MetadataReferenceService().findReferences(projectName, objectFqn, maxResults);
                 resultRef.set(result);
             }
             catch (Exception e)

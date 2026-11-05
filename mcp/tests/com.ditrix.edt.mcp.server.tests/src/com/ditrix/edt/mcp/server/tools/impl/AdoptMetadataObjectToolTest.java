@@ -57,6 +57,69 @@ import java.util.Map;
 
 public class AdoptMetadataObjectToolTest
 {
+    @Test public void headlessAdoptionLookupReadsBothBaseAndExtension() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture();
+            var extension = com.ditrix.edt.mcp.server.utils.SearchFixtureProject.create())
+        {
+            var target = mock(com._1c.g5.v8.dt.core.platform.IExtensionProject.class);
+            when(target.getParentProject()).thenReturn(fixture.project());
+            when(target.getProject()).thenReturn(extension.project());
+            var model = mock(com._1c.g5.v8.bm.integration.IBmModel.class);
+            when(com.ditrix.edt.mcp.server.Activator.getDefault().getBmModelManager().getModel(extension.project()))
+                .thenReturn(model);
+            int[] extensionDepth = {0};
+            when(model.executeReadonlyTask(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
+                extensionDepth[0]++;
+                try { return ((com._1c.g5.v8.bm.integration.IBmTask<?>)call.getArgument(0)).execute(null, null); }
+                finally { extensionDepth[0]--; }
+            });
+            assertEquals("lookup", AdoptMetadataObjectTool.readAdoptionLookup(target, () -> {
+                assertTrue("Native lookup read the base outside its transaction", fixture.depth > 0);
+                assertEquals("Native lookup read the extension outside its transaction", 1, extensionDepth[0]);
+                return "lookup";
+            }));
+            assertEquals(0, fixture.depth);
+            assertEquals(0, extensionDepth[0]);
+        }
+    }
+
+    @Test public void windowedAdoptionRetainsTheOriginalNativeObject()
+    {
+        String saved = System.getProperty("eclipse.application");
+        try
+        {
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            var original = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+            var scope = com.ditrix.edt.mcp.server.utils.MetadataScope.ofConfiguration(
+                com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration());
+            assertSame(original, AdoptMetadataObjectTool.sourceForWrite(original, scope, "Catalog.Missing"));
+        }
+        finally
+        {
+            if (saved == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", saved);
+        }
+    }
+
+    @Test public void headlessAdoptionUsesTheFreshFqnTarget() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            var stale = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCommonModule();
+            var scope = com.ditrix.edt.mcp.server.utils.MetadataScope.ofConfiguration(fixture.config);
+            for (String name : new String[] { "EnglishName", "Код" })
+            {
+                com.ditrix.edt.mcp.server.utils.ReadToolExecution.readOnHost(fixture.project(), "Test adoption handoff", () -> {
+                    var expected = fixture.config.getCommonModules().stream()
+                        .filter(module -> name.equals(module.getName())).findFirst().orElseThrow();
+                    assertSame(expected, AdoptMetadataObjectTool.sourceForWrite(stale, scope, "CommonModule." + name));
+                    return null;
+                });
+            }
+        }
+    }
+
     @Test
     public void testNameConstant()
     {

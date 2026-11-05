@@ -482,7 +482,10 @@ public final class StandaloneServerStateRecovery
             // Before the pre-flight: a refused target must not have its server stopped or restarted.
             checkGuard(guard);
             ensureStartable(project, application, applicationId, manager);
-            return attemptUpdates(() -> manager.update(application, updateType, context, monitor), guard,
+            return attemptUpdates(() -> com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                    ? HeadlessInfobaseUpdate.update(application, updateType, context, monitor)
+                    : manager.update(application, updateType, context, monitor), guard,
                 refusal -> stopServerForRefusal(project, application, applicationId, manager, refusal),
                 applicationId);
         }

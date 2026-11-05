@@ -14,11 +14,11 @@ import java.util.regex.Matcher;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -111,11 +111,10 @@ public class ReadMethodSourceTool implements IMcpTool
         // Try EMF approach first (on UI thread)
         AtomicReference<String> resultRef = new AtomicReference<>();
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                String result = readMethodViaEmf(projectName, modulePath, methodName);
+                String result = ReadToolExecution.readOnHost(projectName, NAME, () -> readMethodViaEmf(projectName, modulePath, methodName));
                 resultRef.set(result);
             }
             catch (Exception e)

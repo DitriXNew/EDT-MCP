@@ -54,6 +54,7 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
@@ -276,32 +277,38 @@ public class MetadataRenameService
         }
 
         // Find the object
-        MdObject targetObject = resolveObject(config, objectFqn);
-        if (targetObject == null)
-        {
-            return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
-                "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
-                "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
-                "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
-                "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
-                "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
-                "Table (an " + //$NON-NLS-1$
-                "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
-                "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
-                "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
-        }
+        final String normalizedFqn = objectFqn;
+        return ReadToolExecution.readOnHost(project, "Prepare metadata rename", () -> {
+            Configuration currentConfig = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? Activator.getDefault().getConfigurationProvider().getConfiguration(project) : config;
+            MdObject targetObject = resolveObject(currentConfig, normalizedFqn);
+            if (targetObject == null)
+            {
+                return (java.util.function.Supplier<String>)() -> ToolResult.error("Object not found: " + normalizedFqn + ". " + //$NON-NLS-1$
+                    "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
+                    "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
+                    "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
+                    "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
+                    "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
+                    "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
+                    "Table (an " + //$NON-NLS-1$
+                    "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
+                    "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
+                    "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
+            }
 
-        // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
-        // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
-        // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
-        // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
-        // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
-        // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
+            // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
+            // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
+            // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
+            // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
+            // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
+            // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
 
-        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
-        return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,
-            disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
+            BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
+            return planMdClassRename(project, normalizedFqn, newName, targetObject, confirm,
+                disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
+        }).get();
     }
 
     /**
@@ -314,12 +321,31 @@ public class MetadataRenameService
         int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
         BmModelResolver.Resolution modelResolution)
     {
+        return ReadToolExecution.readOnHost(project, "Prepare metadata rename", () ->
+            planMdClassRename(project, objectFqn, newName, targetObject, confirm, disableRequest,
+                expectedHash, maxResults, progress, refactoringService, modelResolution)).get();
+    }
+
+    private java.util.function.Supplier<String> planMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
         if (!modelResolution.isAvailable())
         {
-            return ToolResult.error(modelResolution.actionableError(TOOL_NAME,
+            return () -> ToolResult.error(modelResolution.actionableError(TOOL_NAME,
                 "Nothing was renamed.")).toJson(); //$NON-NLS-1$
         }
 
+        return () -> createMdClassRename(project, objectFqn, newName, targetObject, confirm,
+            disableRequest, expectedHash, maxResults, progress, refactoringService);
+    }
+
+    private String createMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService)
+    {
+        // Native initialization builds the workspace, so it must run after the preparation read ends.
         // Create refactoring (returns collection because it may also rename in extension projects)
         Collection<IRefactoring> refactorings;
         try
@@ -336,25 +362,29 @@ public class MetadataRenameService
         }
         if (refactorings == null || refactorings.isEmpty())
         {
-            return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Failed to create rename refactoring for: " + objectFqn
+                + ". Nothing was renamed. Use get_metadata_details to verify the target, then retry.").toJson(); //$NON-NLS-1$
         }
 
-        String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
-        if (lockedReferrers != null)
-        {
-            return ToolResult.error(lockedReferrers).toJson();
-        }
-        if (!confirm)
-        {
-            // Preview mode - collect all items and problems
-            return buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
-        }
-        else
-        {
-            // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
-                "metadata object"); //$NON-NLS-1$
-        }
+        return ReadToolExecution.<java.util.function.Supplier<String>>readOnHost(project, "Prepare metadata rename changes", () -> {
+            String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
+            if (lockedReferrers != null)
+            {
+                return () -> ToolResult.error(lockedReferrers).toJson();
+            }
+            if (!confirm)
+            {
+                // Preview mode - collect all items and problems
+                String preview = buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
+                return () -> preview;
+            }
+            else
+            {
+                // Execute mode - perform the rename, applying any disabled indices
+                return () -> performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
+                    "metadata object"); //$NON-NLS-1$
+            }
+        }).get();
     }
 
     /**
@@ -456,51 +486,67 @@ public class MetadataRenameService
                     + "Button / Group / Decoration / Table / Column ('...Attribute.A.Column.Name' or " //$NON-NLS-1$
                     + "'...Attribute.A.Column.TabularSection.Name'))."); //$NON-NLS-1$
 
-            // Only the old name and the refactoring leave the read transaction - never the element.
-            FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
+            String[] oldName = new String[1];
+            NamedElement target = FormElementWriter.readEditableForm(fctx,
                 "Prepare form element rename", (formModel, tx) -> { //$NON-NLS-1$
                     EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                     if (member == null)
                     {
-                        return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
-                            formModel, ref, normFqn));
+                        String advice = FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn);
+                        throw new FormValidationException(ToolResult.error("Form element not found."
+                            + (advice == null || advice.isEmpty()
+                                ? " Use get_metadata_details to list the form's elements." : advice)).toJson());
                     }
                     String designerChild = designerChildRefusal(member, ref);
                     if (designerChild != null)
                     {
-                        return FormRenameTarget.refused(designerChild);
+                        throw new FormValidationException(ToolResult.error(designerChild).toJson());
                     }
                     if (!(member instanceof NamedElement))
                     {
-                        return FormRenameTarget.refused("Form element '" + ref.name //$NON-NLS-1$
-                            + "' cannot be renamed: its model type carries no renameable name."); //$NON-NLS-1$
+                        throw new FormValidationException(ToolResult.error("Form element '" + ref.name //$NON-NLS-1$
+                            + "' cannot be renamed: its model type carries no renameable name.").toJson()); //$NON-NLS-1$
                     }
                     String duplicate = duplicateNameRefusal(formModel, member, ref, newName);
                     if (duplicate != null)
                     {
-                        return FormRenameTarget.refused(duplicate);
+                        throw new FormValidationException(ToolResult.error(duplicate).toJson());
                     }
-                    return FormRenameTarget.of(((NamedElement)member).getName(),
-                        formRefactoringService.createFormRenameRefactoring((NamedElement)member,
-                            newName));
+                    oldName[0] = ((NamedElement)member).getName();
+                    return (NamedElement)member;
                 });
 
-            if (target.error != null)
+            // BM rebinds the element on access; native initialization must run outside the read.
+            IRefactoring refactoring;
+            try
             {
-                return ToolResult.error(target.error).toJson();
+                refactoring = formRefactoringService.createFormRenameRefactoring(target, newName);
             }
-            Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
-            String lockedReferrers = supportLockRefusal(normFqn, refactorings);
+            catch (RuntimeException failure)
+            {
+                Activator.logError("Could not prepare form rename for " + normFqn, failure); //$NON-NLS-1$
+                return ToolResult.error("Could not prepare rename of form element '" + normFqn //$NON-NLS-1$
+                    + "'. Nothing was renamed; no cascade started. Use get_metadata_details to verify " //$NON-NLS-1$
+                    + "the element, then retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+            }
+            if (refactoring == null)
+            {
+                return ToolResult.error("EDT created no rename refactoring for '" + normFqn
+                    + "'. Nothing was renamed. Use get_metadata_details to verify the element, then retry.").toJson();
+            }
+            Collection<IRefactoring> refactorings = Collections.singletonList(refactoring);
+            String lockedReferrers = ReadToolExecution.readOnHost(project, "Check form rename referrers",
+                () -> supportLockRefusal(normFqn, refactorings));
             if (lockedReferrers != null)
             {
                 return ToolResult.error(lockedReferrers).toJson();
             }
             if (!confirm)
             {
-                return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
+                return renderPreview(normFqn, newName, oldName[0], refactorings, maxResults,
                     Collections.emptyMap(), Collections.emptyList());
             }
-            return performRename(normFqn, newName, refactorings, disableRequest, expectedHash, progress,
+            return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "form element"); //$NON-NLS-1$
         }
         catch (Exception e)
@@ -529,7 +575,11 @@ public class MetadataRenameService
      */
     static String vendorSupportRefusal(MetadataScope scope, String objectFqn)
     {
-        return VendorSupportGuard.refusalForFqn(scope, objectFqn, VendorSupportGuard.Intent.RENAME);
+        return ReadToolExecution.readOnHost(scope.project(), "Check rename support",
+            () -> VendorSupportGuard.refusalForFqn(com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS && scope.project() != null
+                ? ProjectContext.of(scope.project().getName()).resolveMetadataRootInTransaction().scope() : scope,
+                objectFqn, VendorSupportGuard.Intent.RENAME));
     }
 
     /**
@@ -701,41 +751,6 @@ public class MetadataRenameService
         }
         return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
             + ". Pick a different name."; //$NON-NLS-1$
-    }
-
-    /** What survives the prepare read transaction: the old name plus EDT's refactoring, or an error. */
-    private static final class FormRenameTarget
-    {
-        private final String oldName;
-        private final IRefactoring refactoring;
-        private final String error;
-
-        private FormRenameTarget(String oldName, IRefactoring refactoring, String error)
-        {
-            this.oldName = oldName;
-            this.refactoring = refactoring;
-            this.error = error;
-        }
-
-        static FormRenameTarget of(String oldName, IRefactoring refactoring)
-        {
-            return refactoring == null
-                ? new FormRenameTarget(null, null, "EDT created no rename refactoring for this " //$NON-NLS-1$
-                    + "form element.") //$NON-NLS-1$
-                : new FormRenameTarget(oldName, refactoring, null);
-        }
-
-        static FormRenameTarget notFound(String advice)
-        {
-            return new FormRenameTarget(null, null, "Form element not found." //$NON-NLS-1$
-                + (advice == null || advice.isEmpty()
-                    ? " Use get_metadata_details to list the form's elements." : advice)); //$NON-NLS-1$
-        }
-
-        static FormRenameTarget refused(String error)
-        {
-            return new FormRenameTarget(null, null, error);
-        }
     }
 
     /**
@@ -2646,12 +2661,14 @@ public class MetadataRenameService
 
 
 
-    private String performRename(String objectFqn, String newName,
+    private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
         RenameProgress progress, String subject)
     {
-        int textOccurrencesSkipped = applyTextOccurrencePolicy(refactorings);
-        String hashError = expectedHashError(refactorings, disableRequest, expectedHash);
+        int textOccurrencesSkipped = ReadToolExecution.readOnHost(project, "Prepare rename text policy",
+            () -> applyTextOccurrencePolicy(refactorings));
+        String hashError = ReadToolExecution.readOnHost(project, "Check rename preview hash",
+            () -> expectedHashError(refactorings, disableRequest, expectedHash));
         if (hashError != null)
         {
             return ToolResult.error(hashError).toJson();
@@ -2665,10 +2682,11 @@ public class MetadataRenameService
         // The subject is passed in rather than hardcoded: this path now also renames FORM elements,
         // and a prompt saying "metadata object" about a form field would misdescribe what is being
         // authorized (issue #381).
-        ConsentPreview preview = new ConsentPreview("Rename " + subject, //$NON-NLS-1$
+        ConsentPreview preview = ReadToolExecution.readOnHost(project, "Read rename consent preview",
+            () -> new ConsentPreview("Rename " + subject, //$NON-NLS-1$
             "This renames '" + objectFqn + "' to '" + newName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' and cascades the change across the references EDT resolves for it.", //$NON-NLS-1$
-            countRefactoringItems(refactorings), collectRefactoringTitles(refactorings));
+            countRefactoringItems(refactorings), collectRefactoringTitles(refactorings)));
         // The tool NAME literal is intentionally inlined here (matching the frozen value in
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
         // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
@@ -2699,7 +2717,9 @@ public class MetadataRenameService
         disableOutcome.textOccurrencesSkipped = textOccurrencesSkipped;
         if (!disableRequest.indices().isEmpty())
         {
-            applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome);
+            ReadToolExecution.readOnHost(project, "Select rename changes", () -> {
+                applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome); return null;
+            });
         }
 
         List<String> performed = new ArrayList<>();

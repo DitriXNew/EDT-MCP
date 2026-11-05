@@ -5,6 +5,8 @@
  */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
+
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -16,8 +18,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.WorkspaceModelWrite;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
@@ -253,8 +254,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
         try
         {
-            IWorkspace workspace = ctx.project.getWorkspace();
-            workspace.run(monitor -> result.set(BmTransactions.writeInGlobalContext(model, NAME, (tx, progress) -> {
+            result.set(WorkspaceModelWrite.run(ctx.project.getWorkspace(), model, NAME,
+                () -> BmTransactions.writeInGlobalContext(model, NAME, (tx, progress) -> {
                 Configuration config = (Configuration)tx.getTopObjectByFqn("Configuration");
                 MdObject source = MetadataClonePlan.source(config, fqn);
                 checkDestination(config, source, newName);
@@ -323,7 +324,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                     .put("warning", "Texts are preserved. Do not retry this non-idempotent operation after a "
                         + "timeout or partial error; inspect the returned FQN first. Predefined item ids follow "
                         + "EDT native paste semantics.").toJson();
-            })), workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+            })));
             WriteScope.recordWrite(ctx.project);
             if (!BmTransactions.forceExportToDisk(ctx.project, dirty.get()))
             {
@@ -668,20 +669,11 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 resource.addProperty("verified", true);
                 resource.remove("modelHash");
             }
-            IFile configuration = project.getFile(resultString(response, "configurationFile"));
-            try (InputStream input = configuration.getContents(true))
+            if (MetadataRegistration.verify(project.getName(),
+                resultString(response, "configurationFile"), "Configuration", fqn)
+                != MetadataRegistration.State.PRESENT)
             {
-                org.w3c.dom.NodeList entries = SecureXml.documentBuilderFactory().newDocumentBuilder()
-                    .parse(input).getDocumentElement().getElementsByTagName(resultString(response, "collection"));
-                boolean registered = false;
-                for (int i = 0; i < entries.getLength(); i++)
-                {
-                    registered |= fqn.equals(entries.item(i).getTextContent().trim());
-                }
-                if (!registered)
-                {
-                    return partial(fqn, "Configuration.mdo does not register the clone");
-                }
+                return partial(fqn, "Configuration.mdo does not register the clone");
             }
             response.remove("cloneModelHash");
             response.remove("configurationFile");

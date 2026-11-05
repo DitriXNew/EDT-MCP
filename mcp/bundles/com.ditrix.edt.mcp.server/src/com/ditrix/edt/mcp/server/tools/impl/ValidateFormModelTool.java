@@ -11,7 +11,6 @@ import java.util.Map;
 
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -21,7 +20,6 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
-import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -120,20 +118,19 @@ public class ValidateFormModelTool implements IMcpTool
         // The address a caller writes is Type.Object.Form.Name; the resolver wants the .forms. shape,
         // and this is the one place that knows the difference.
         String formPath = FormElementWriter.parseFormPath(normFqn);
-        MdObject mdForm =
-            formPath == null ? null : FormStructureReader.resolveMdForm(resolved.scope(), formPath);
-        if (mdForm == null)
+        String notFound = "Form not found: '" + formFqn //$NON-NLS-1$
+            + "'. Address a form as 'Type.Object.Form.FormName' or 'CommonForm.Name'; " //$NON-NLS-1$
+            + "get_metadata_objects lists the forms an object owns."; //$NON-NLS-1$
+        if (formPath == null)
         {
-            return ToolResult.error("Form not found: '" + formFqn //$NON-NLS-1$
-                + "'. Address a form as 'Type.Object.Form.FormName' or 'CommonForm.Name'; " //$NON-NLS-1$
-                + "get_metadata_objects lists the forms an object owns.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(notFound).toJson();
         }
 
         try
         {
             final Version version = platformVersionOf(resolved);
             List<FormModelValidator.Finding> findings = FormElementWriter.readEditableForm(
-                FormElementWriter.editContextFor(resolved.project(), mdForm), "ValidateFormModel", //$NON-NLS-1$
+                FormElementWriter.resolveForEdit(resolved.project(), resolved.scope(), formPath, notFound), "ValidateFormModel", //$NON-NLS-1$
                 (formModel, tx) -> FormModelValidator.validate(formModel,
                     container -> FormElementWriter.availableEventNames(container, version)));
             return report(normFqn, findings);

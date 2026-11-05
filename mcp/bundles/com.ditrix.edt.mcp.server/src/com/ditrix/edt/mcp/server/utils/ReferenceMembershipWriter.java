@@ -250,9 +250,28 @@ public final class ReferenceMembershipWriter
     public static Result apply(IProject project, Configuration config, MdObject top, List<JsonObject> content,
         Kind kind)
     {
+        return prepare(project, config, top, content, kind).get();
+    }
+
+    public static Result apply(IProject project, String fqn, List<JsonObject> content, Kind kind)
+    {
+        return ReadToolExecution.readOnHost(project, "Prepare reference membership", () -> {
+            var root = ProjectContext.resolveMetadataRoot(project.getName());
+            if (!root.ok()) return (java.util.function.Supplier<Result>)() -> Result.failed(root.errorJson());
+            MdObject top = MetadataNodeResolver.resolveAddress(root.scope(), fqn,
+                true);
+            if (top == null) return (java.util.function.Supplier<Result>)() -> Result.failed(
+                ToolResult.error("Metadata object no longer exists: " + fqn).toJson());
+            return prepare(project, root.configuration(), top, content, kind);
+        }).get();
+    }
+
+    private static java.util.function.Supplier<Result> prepare(IProject project, Configuration config, MdObject top, List<JsonObject> content,
+        Kind kind)
+    {
         if (content == null || content.isEmpty())
         {
-            return Result.failed(ToolResult.error("Nothing to apply: provide at least one 'content' " //$NON-NLS-1$
+            return () -> Result.failed(ToolResult.error("Nothing to apply: provide at least one 'content' " //$NON-NLS-1$
                 + "entry, e.g. {\"metadata\":\"Catalog.Products\"} to add a " + kind.memberLabel //$NON-NLS-1$
                 + " or {\"op\":\"remove\",\"metadata\":\"Catalog.Products\"} to remove one.").toJson()); //$NON-NLS-1$
         }
@@ -264,7 +283,7 @@ public final class ReferenceMembershipWriter
             EntryPlan resolved = planEntry(config, entry, kind);
             if (resolved.error != null)
             {
-                return Result.failed(resolved.error);
+                return () -> Result.failed(resolved.error);
             }
             plan.add(resolved.entry);
         }
@@ -272,44 +291,47 @@ public final class ReferenceMembershipWriter
         IBmModel model = resolveModel(project);
         if (model == null)
         {
-            return Result.failed(ToolResult.error("The metadata write services are not available " //$NON-NLS-1$
+            return () -> Result.failed(ToolResult.error("The metadata write services are not available " //$NON-NLS-1$
                 + "(IBmModelManager). Ensure the EDT workbench is fully started, then retry.").toJson()); //$NON-NLS-1$
         }
 
         long topBmId = ((IBmObject)top).bmGetId();
-        try
-        {
-            return BmTransactions.write(model, "ModifyReferenceMembership", (tx, pm) -> //$NON-NLS-1$
+        String topName = top.getName();
+        return () -> {
+            try
             {
-                Object inTxTop = tx.getObjectById(topBmId);
-                if (!(inTxTop instanceof MdObject))
+                return BmTransactions.write(model, "ModifyReferenceMembership", (tx, pm) -> //$NON-NLS-1$
                 {
-                    throw new ContentWriteException(ToolResult.error("The metadata object could not " //$NON-NLS-1$
-                        + "be resolved inside the transaction.").toJson());
-                }
-                MdObject topInTx = (MdObject)inTxTop;
-                int added = 0;
-                int removed = 0;
-                for (PlannedEntry planned : plan)
-                {
-                    int[] delta = applyPlannedEntry(kind, tx, topInTx, planned);
-                    added += delta[0];
-                    removed += delta[1];
-                }
-                return Result.ok(added, removed);
-            });
-        }
-        catch (ContentWriteException e)
-        {
-            return Result.failed(e.getErrorJson());
-        }
-        catch (RuntimeException e)
-        {
-            Activator.logError("Failed to modify " + kind.memberLabel + " list for " //$NON-NLS-1$ //$NON-NLS-2$
-                + top.getName(), e);
-            return Result.failed(ToolResult.error("Failed to modify the " + kind.memberLabel //$NON-NLS-1$
-                + " list: " + e.getMessage()).toJson()); //$NON-NLS-1$
-        }
+                    Object inTxTop = tx.getObjectById(topBmId);
+                    if (!(inTxTop instanceof MdObject))
+                    {
+                        throw new ContentWriteException(ToolResult.error("The metadata object could not " //$NON-NLS-1$
+                            + "be resolved inside the transaction.").toJson());
+                    }
+                    MdObject topInTx = (MdObject)inTxTop;
+                    int added = 0;
+                    int removed = 0;
+                    for (PlannedEntry planned : plan)
+                    {
+                        int[] delta = applyPlannedEntry(kind, tx, topInTx, planned);
+                        added += delta[0];
+                        removed += delta[1];
+                    }
+                    return Result.ok(added, removed);
+                });
+            }
+            catch (ContentWriteException e)
+            {
+                return Result.failed(e.getErrorJson());
+            }
+            catch (RuntimeException e)
+            {
+                Activator.logError("Failed to modify " + kind.memberLabel + " list for " //$NON-NLS-1$ //$NON-NLS-2$
+                    + topName, e);
+                return Result.failed(ToolResult.error("Failed to modify the " + kind.memberLabel //$NON-NLS-1$
+                    + " list: " + e.getMessage()).toJson()); //$NON-NLS-1$
+            }
+        };
     }
 
     // ---- mutation (inside the write boundary) -------------------------------------------------

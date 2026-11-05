@@ -392,7 +392,7 @@ Configure a dynamic list and reproduce empty settings holders in the same call:
 {"projectName":"MyProject","fqn":"Catalog.Products.Form.ListForm.Attribute.List","action":"upsert","type":"dynamicList","body":{"queryText":"SELECT Ref, Description FROM Catalog.Products","customQuery":true,"dynamicDataRead":true,"autoSaveUserSettings":true,"fields":[{"dataPath":"Ref"},{"dataPath":"Description"}],"listSettings":{"selection":{"items":[],"viewMode":"Normal","userSettingID":"selection"},"filter":{"items":[],"viewMode":"Normal","userSettingID":"filter"},"order":{"items":[],"viewMode":"Normal","userSettingID":"order"},"conditionalAppearance":{"items":[],"viewMode":"Normal","userSettingID":"appearance"}}}}
 ```
 
-Converting a plain form attribute is destructive. The existing consent gate, dynamic-list
+Converting a plain form attribute is destructive. Windowed consent, dynamic-list
 type availability check, main-table resolution, and orphaned-column refusal all run before
 the conversion. Request conversion with `action='upsert'`; `update` requires ext-info that
 already exists and never converts a plain attribute. Query properties remain available through

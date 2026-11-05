@@ -2125,6 +2125,118 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void headlessRegistrationRetryMustDrainBeforeReadingBytes() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            for (var state : com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState.values())
+            {
+                for (boolean absentOnSecondRead : new boolean[] {false, true})
+                {
+                    int[] verifications = {0};
+                    DeleteMetadataTool tool = new DeleteMetadataTool((name, preview) ->
+                        DestructiveConsentGate.ConsentDecision.ALLOW, (name, timeout) -> null,
+                        (project, fqn) -> true, project -> Collections.emptyList(),
+                        (project, file, container, fqn) -> ++verifications[0] > 1 && absentOnSecondRead
+                            ? DeleteMetadataTool.RegistrationState.ABSENT : DeleteMetadataTool.RegistrationState.PRESENT)
+                    {
+                        @Override protected com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState
+                            waitForRegistrationRetry(IProject project) { return state; }
+                    };
+                    String raw = "{\"success\":true,\"action\":\"executed\",\"fqn\":\"Catalog.X\","
+                        + "\"registeringFile\":\"src/Configuration/Configuration.mdo\",\"registeringContainer\":\"Configuration\"}";
+                    JsonObject result = JsonParser.parseString(tool.refreshAfterExportAwait(
+                        Map.of("projectName", fixture.name()), raw, true)).getAsJsonObject();
+                    if (state != com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState.DRAINED)
+                    {
+                        assertFalse(state + ": " + result, result.get("success").getAsBoolean());
+                        assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+                        assertEquals("Bytes cannot be checked during a pending/unobservable export", 1, verifications[0]);
+                        assertTrue(result.toString(), result.get("error").getAsString().contains("export to disk was not confirmed"));
+                        assertEquals(state.name(), result.get("exportState").getAsString());
+                    }
+                    else
+                    {
+                        assertEquals(2, verifications[0]);
+                        assertEquals(result.toString(), absentOnSecondRead, result.get("success").getAsBoolean());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void headlessUnobservableInitialExportCannotInspectRegistrationBytes() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            int[] reads = {0};
+            var tool = new DeleteMetadataTool((name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW,
+                (name, timeout) -> null, (project, fqn) -> true, project -> Collections.emptyList(),
+                (project, file, container, fqn) -> { reads[0]++; return DeleteMetadataTool.RegistrationState.ABSENT; });
+            String raw = "{\"success\":true,\"action\":\"executed\",\"fqn\":\"Catalog.X\","
+                + "\"registeringFile\":\"src/Configuration/Configuration.mdo\",\"registeringContainer\":\"Configuration\"}";
+            JsonObject result = JsonParser.parseString(tool.refreshAfterExportAwait(
+                Map.of("projectName", fixture.name()), raw, false)).getAsJsonObject();
+            assertFalse(result.toString(), result.get("success").getAsBoolean());
+            assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+            assertEquals("Do not interpret bytes while export is unobservable", 0, reads[0]);
+        }
+    }
+
+    @Test
+    public void headlessDrainedDeleteMustObserveTheObjectsDirectoryGone() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            var tool = new DeleteMetadataTool((name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW,
+                (name, timeout) -> null, (project, fqn) -> true, project -> Collections.emptyList(),
+                (project, file, container, fqn) -> DeleteMetadataTool.RegistrationState.ABSENT);
+            for (String name : new String[] {"EnglishName", "Удаляемый"})
+            {
+                var directory = fixture.project().getLocation().toFile().toPath().resolve("src/Catalogs/" + name);
+                java.nio.file.Files.createDirectories(directory);
+                String raw = "{\"success\":true,\"action\":\"executed\",\"fqn\":\"Catalog." + name + "\","
+                    + "\"registeringFile\":\"src/Configuration/Configuration.mdo\",\"registeringContainer\":\"Configuration\"}";
+                var params = Map.of("projectName", fixture.name());
+                JsonObject result = JsonParser.parseString(tool.refreshAfterExportAwait(params, raw, true)).getAsJsonObject();
+                assertFalse(result.toString(), result.get("success").getAsBoolean());
+                assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+                assertTrue(result.toString(), result.get("error").getAsString().contains("directory"));
+                java.nio.file.Files.delete(directory);
+                JsonObject clean = JsonParser.parseString(tool.refreshAfterExportAwait(params, raw, true)).getAsJsonObject();
+                assertTrue(clean.toString(), clean.get("success").getAsBoolean());
+                assertFalse(clean.toString(), clean.has("registeringFile"));
+            }
+        }
+    }
+
+    @Test
+    public void testHeadlessOrdinaryDeleteCannotSucceedOverAStaleConfigurationFile()
+    {
+        String previous = System.getProperty("eclipse.application");
+        try
+        {
+            System.setProperty("eclipse.application", com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID);
+            GenericDeleteFixture fixture = genericDelete(new ExportOrderRecorder(),
+                DestructiveConsentGate.ConsentDecision.ALLOW, null,
+                (projectName, file, container, target) -> DeleteMetadataTool.RegistrationState.PRESENT);
+            String raw = fixture.run("Configuration", true, false);
+            JsonObject result = JsonParser.parseString(fixture.tool.refreshAfterExportAwait(
+                Map.of("projectName", "NoSuchHeadlessProject"), raw, true)).getAsJsonObject();
+            assertFalse(result.toString(), result.get("success").getAsBoolean());
+            assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+            assertEquals("src/Configuration/Configuration.mdo", result.get("registeringFile").getAsString());
+            assertTrue(result.get("error").getAsString().contains("resync_to_disk"));
+        }
+        finally
+        {
+            if (previous == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", previous);
+        }
+    }
+
+    @Test
     public void testConfigurationRegistrationCheckReadsTheRegistrationElementOnly() throws Exception
     {
         Element stale = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$

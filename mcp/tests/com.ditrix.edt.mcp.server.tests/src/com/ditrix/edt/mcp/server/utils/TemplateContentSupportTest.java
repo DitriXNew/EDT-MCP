@@ -769,15 +769,19 @@ public class TemplateContentSupportTest
             Field project = contextType.getField("project");
             project.setAccessible(true);
             project.set(context, services.project);
+            var prepare = ModifyMetadataTool.class.getDeclaredMethod("resolveTemplateWriteContext", contextType,
+                BasicTemplate.class, String.class, boolean.class);
+            prepare.setAccessible(true);
+            Object prepared = prepare.invoke(null, context, template, "CommonTemplate.Contract730", false);
             var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTextTemplateContent", contextType,
-                String.class, BasicTemplate.class, JsonObject.class);
+                String.class, prepared.getClass(), JsonObject.class);
             write.setAccessible(true);
             JsonObject spec = new JsonObject();
             spec.addProperty("mode", "replace");
             spec.addProperty("overwrite", true);
             spec.addProperty("text", text);
             JsonObject result = JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
-                "CommonTemplate.Contract730", template, spec)).getAsJsonObject();
+                "CommonTemplate.Contract730", prepared, spec)).getAsJsonObject();
             assertTrue(result.toString(), result.get("success").getAsBoolean());
             String returnedHash = result.getAsJsonObject("template").get("contentHash").getAsString();
             assertEquals(text, new String(file.bytes.get(), charset));

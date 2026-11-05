@@ -74,6 +74,7 @@ import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -584,7 +585,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String formRootPath = FormElementWriter.parseFormPath(normFqn);
         if (shouldDispatchFormRoot(formRootPath, null, args.properties))
         {
-            if (resolveFormRootForDispatch(ctx.scope, normFqn) == null)
+            boolean exists = HostKind.current() == HostKind.HEADLESS
+                ? readPreparation(ctx.project, () -> FormStructureReader.resolveMdForm(preparationScope(ctx),
+                    FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(args.fqn))) != null)
+                : resolveFormRootForDispatch(ctx.scope, normFqn) != null;
+            if (!exists)
             {
                 return formRootNotFoundError(formRootPath);
             }
@@ -623,7 +628,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
         // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
         // would miss the stored name — the resolver retries the normalized FQN.
-        ResolvedTarget resolvedTarget = resolveModifyTarget(ctx.scope, args.fqn, normFqn);
+        final String requestedFqn = normFqn;
+        if (HostKind.current() == HostKind.HEADLESS)
+            return prepareWrite(ctx.project, () -> planHeadlessMetadataDispatch(ctx, args, requestedFqn));
+        ResolvedTarget resolvedTarget = readPreparation(ctx.project,
+            () -> resolveModifyTarget(preparationScope(ctx), args.fqn, requestedFqn));
         if (resolvedTarget.error != null)
         {
             return resolvedTarget.error;
@@ -650,6 +659,61 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         // The remaining case: a generic 'properties' change applied through the BM write boundary.
         return applyGenericPropertyChanges(ctx, args.projectName, normFqn, resolvedTarget.node, target,
+            args.properties, args.normReport);
+    }
+
+    /** Select a continuation using the live target only while this single preparation read is active. */
+    private java.util.function.Supplier<String> planHeadlessMetadataDispatch(ProjectContext handle,
+        ModifyArgs args, String requestedFqn)
+    {
+        ProjectContext ctx = resolveProjectAndScope(args.projectName, requestedFqn);
+        if (ctx.hasError()) return () -> ctx.error;
+        ResolvedTarget resolved = resolveModifyTarget(ctx.scope, args.fqn, requestedFqn);
+        if (resolved.error != null) return () -> resolved.error;
+        String fqn = resolved.normFqn;
+        MdObject target = resolved.node.object;
+        String formPath = FormElementWriter.parseFormPath(fqn);
+        if (shouldDispatchFormRoot(formPath, target, args.properties))
+            return () -> dispatchFormRootFqn(handle, fqn, formPath, args, true);
+        if (args.hasTemplatePayload)
+        {
+            if (!(target instanceof BasicTemplate))
+            {
+                String refusal = dispatchTemplatePayload(ctx, fqn, target, args.properties,
+                    args.content, args.hasRolePayload, args.templateSpec);
+                return () -> refusal;
+            }
+            return () -> modifyTemplateContent(handle, fqn, null, args.properties,
+                args.content, args.hasRolePayload, args.templateSpec);
+        }
+        if (args.hasRolePayload)
+        {
+            if (!(target instanceof Role))
+            {
+                String refusal = dispatchRolePayload(ctx, fqn, target, args.properties,
+                    args.rolePayloadRights, args.rolePayloadTemplates, args.roleProperties, true);
+                return () -> refusal;
+            }
+            return () -> modifyRoleRights(handle, fqn, null, args.properties,
+                args.rolePayloadRights, args.rolePayloadTemplates, args.roleProperties);
+        }
+        if (args.hasContentPayload)
+        {
+            String dropped = AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), fqn,
+                ctx.project, resolvePlatformVersion(ctx));
+            if (dropped != null) return () -> dropped;
+            if (target instanceof CommonAttribute)
+                return () -> modifyCommonAttributeContent(handle, fqn, null, args.properties, args.content);
+            if (target instanceof ExchangePlan)
+                return () -> modifyExchangePlanContent(handle, fqn, null, args.properties, args.content);
+            if (target instanceof Catalog)
+                return () -> modifyCatalogOwners(handle, fqn, null, args.properties, args.content);
+            if (target instanceof Document)
+                return () -> modifyDocumentRegisterRecords(handle, fqn, null, args.properties, args.content);
+            String refusal = dispatchContentPayload(ctx, fqn, target, args.properties, args.content);
+            return () -> refusal;
+        }
+        return () -> applyGenericPropertyChanges(handle, args.projectName, fqn, null, null,
             args.properties, args.normReport);
     }
 
@@ -827,7 +891,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static MdObject resolveFormRootForDispatch(MetadataScope scope, String normFqn)
     {
         String formPath = FormElementWriter.parseFormPath(normFqn);
-        return formPath == null ? null : FormStructureReader.resolveMdForm(scope, formPath);
+        return formPath == null ? null : readPreparation(scope.project(),
+            () -> FormStructureReader.resolveMdForm(scope, formPath));
     }
 
     /**
@@ -898,13 +963,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String dispatchPredefinedItemFqn(ProjectContext ctx, String normFqn,
         PredefinedWriter.PredefinedRef ref, ModifyArgs args)
     {
+        return prepareWrite(ctx.project, () -> {
+            ProjectContext current = HostKind.current() == HostKind.HEADLESS
+                ? resolveProjectAndScope(args.projectName, normFqn) : ctx;
+            if (current.hasError()) return () -> current.error;
+            return preparePredefinedModification(current, normFqn, ref, args);
+        });
+    }
+
+    private java.util.function.Supplier<String> preparePredefinedModification(ProjectContext ctx, String normFqn,
+        PredefinedWriter.PredefinedRef ref, ModifyArgs args)
+    {
         if (args.hasTemplatePayload)
         {
-            return templateOnlyForTemplateFqnError(normFqn, "addresses a predefined item"); //$NON-NLS-1$
+            return () -> templateOnlyForTemplateFqnError(normFqn, "addresses a predefined item"); //$NON-NLS-1$
         }
         if (args.hasRolePayload || args.hasContentPayload)
         {
-            return ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
+            return () -> ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
                 + "a predefined item; '" + normFqn + "' addresses a predefined item. Use 'properties' " //$NON-NLS-1$ //$NON-NLS-2$
                 + "(description / code on every owner, isFolder on a Catalog / " //$NON-NLS-1$ //$NON-NLS-2$
                 + "ChartOfCharacteristicTypes, plus the owner-specific properties named in this " //$NON-NLS-1$
@@ -914,14 +990,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
         if (ownerTypeErr != null)
         {
-            return ToolResult.error(ownerTypeErr).toJson();
+            return () -> ToolResult.error(ownerTypeErr).toJson();
         }
 
         PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
         String propErr = PredefinedWriter.parseProperties(args.properties, true, props);
         if (propErr != null)
         {
-            return propErr;
+            return () -> propErr;
         }
 
         Configuration config = ctx.config;
@@ -931,9 +1007,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // (extDimensionTypes[].characteristicType is NOT a consumer - the writer resolves it by
         // navigating the live model, not against config.) Stash the SAME context the generic
         // attribute-type path (resolvePlatformVersion / ExtensionOriginUtils.isExtensionProject)
-        // resolves on props for PredefinedWriter#modify to use. Harmless to set unconditionally
-        // (PredefinedWriter reads it only when a property that needs it was supplied).
-        props.config = config;
+        // resolves on props for PredefinedWriter#modify to use. Configuration is fetched in the write;
+        // only the version and project-kind flag survive preparation as scalars.
         props.version = resolvePlatformVersion(ctx);
         props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         // Owner resolution uses the yo-fallback; force-export targets the RESOLVED owner's canonical FQN.
@@ -941,7 +1016,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn());
         if (ownerResolved.node == null)
         {
-            return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
+            return () -> ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
                 + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())
                 + ctx.scope.addressingHint(ref.ownerFqn())).toJson();
@@ -949,7 +1024,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdObject owner = ownerResolved.node.object;
         if (!(owner instanceof IBmObject))
         {
-            return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
+            return () -> ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
         }
         // The predefined items of an owner an extension adopted reach its .mdo only when the extension
         // marks them; otherwise EDT's .mdo writer drops the whole list (issues #709 / #710).
@@ -958,32 +1033,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             resolvePlatformVersion(ctx));
         if (droppedPredefined != null)
         {
-            return droppedPredefined;
+            return () -> droppedPredefined;
         }
 
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+            return () -> ToolResult.error(ERR_NO_BM_MANAGER).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(ctx.project);
         if (bmModel == null)
         {
-            return ToolResult.error(ERR_NO_BM_MODEL + args.projectName).toJson();
+            return () -> ToolResult.error(ERR_NO_BM_MODEL + args.projectName).toJson();
         }
 
         // Retyping a predefined item is as destructive as retyping an attribute (it can drop stored
         // values on the next database update), so it goes through the SAME consent gate the ordinary
         // valueType path uses - BEFORE the write transaction opens.
-        if (props.valueTypeSet)
-        {
-            String consentErr = consentForPredefinedRetype(normFqn);
-            if (consentErr != null)
-            {
-                return consentErr;
-            }
-        }
-
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
         final String ownerFqn = ref.ownerFqn();
@@ -992,88 +1058,101 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // still resolves would otherwise export a non-existent FQN and leave the change in memory.
         final String[] canonicalOwnerFqnHolder = new String[1];
 
-        try
-        {
-            BmTransactions.<Void>write(bmModel, "ModifyPredefinedItem", (tx, pm) -> //$NON-NLS-1$
+        return () -> {
+            if (props.valueTypeSet)
             {
-                EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
-                if (txOwner == null)
+                String consentErr = consentForPredefinedRetype(normFqn);
+                if (consentErr != null)
                 {
-                    throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+                    return consentErr;
                 }
-                canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
-                PredefinedWriter.WriteResult result = modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn);
-                if (result.isError())
-                {
-                    // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
-                    throw Refusals.state(result.error);
-                }
-                return null;
-            });
-        }
-        catch (Exception e)
-        {
-            Refusals.log("Error modifying predefined item", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
-        }
+            }
 
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, canonicalOwnerFqnHolder[0]);
-        List<String> applied = new ArrayList<>();
-        if (props.descriptionSet)
-        {
-            applied.add("description"); //$NON-NLS-1$
-        }
-        if (props.codeSet)
-        {
-            applied.add("code"); //$NON-NLS-1$
-        }
-        if (props.valueTypeSet)
-        {
-            applied.add("valueType"); //$NON-NLS-1$
-        }
-        if (props.isFolderSet)
-        {
-            applied.add("isFolder"); //$NON-NLS-1$
-        }
-        // ChartOfAccounts owner-specific properties (parsed + applied by PredefinedWriter.modify).
-        if (props.accountTypeSet)
-        {
-            applied.add("accountType"); //$NON-NLS-1$
-        }
-        if (props.offBalanceSet)
-        {
-            applied.add("offBalance"); //$NON-NLS-1$
-        }
-        if (props.orderSet)
-        {
-            applied.add("order"); //$NON-NLS-1$
-        }
-        if (props.accountingFlagsSet)
-        {
-            applied.add("accountingFlags"); //$NON-NLS-1$
-        }
-        if (props.extDimensionTypesSet)
-        {
-            applied.add("extDimensionTypes"); //$NON-NLS-1$
-        }
-        // ChartOfCalculationTypes owner-specific properties.
-        if (props.actionPeriodIsBaseSet)
-        {
-            applied.add("actionPeriodIsBase"); //$NON-NLS-1$
-        }
-        if (props.baseSet)
-        {
-            applied.add("base"); //$NON-NLS-1$
-        }
-        if (props.displacedSet)
-        {
-            applied.add("displaced"); //$NON-NLS-1$
-        }
-        if (props.leadingSet)
-        {
-            applied.add("leading"); //$NON-NLS-1$
-        }
-        return buildModifiedResult(normFqn, applied, persisted, args.normReport);
+            try
+            {
+                BmTransactions.<Void>write(bmModel, "ModifyPredefinedItem", (tx, pm) -> //$NON-NLS-1$
+                {
+                    EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
+                    if (txOwner == null)
+                    {
+                        throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+                    }
+                    canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
+                    props.config = HostKind.current() == HostKind.HEADLESS
+                        ? (Configuration)tx.getTopObjectByFqn("Configuration") : config; //$NON-NLS-1$
+                    PredefinedWriter.WriteResult result = modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn);
+                    if (result.isError())
+                    {
+                        // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
+                        throw Refusals.state(result.error);
+                    }
+                    return null;
+                });
+            }
+            catch (Exception e)
+            {
+                Refusals.log("Error modifying predefined item", e); //$NON-NLS-1$
+                return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+            }
+
+            boolean persisted = BmTransactions.forceExportToDisk(ctx.project, canonicalOwnerFqnHolder[0]);
+            List<String> applied = new ArrayList<>();
+            if (props.descriptionSet)
+            {
+                applied.add("description"); //$NON-NLS-1$
+            }
+            if (props.codeSet)
+            {
+                applied.add("code"); //$NON-NLS-1$
+            }
+            if (props.valueTypeSet)
+            {
+                applied.add("valueType"); //$NON-NLS-1$
+            }
+            if (props.isFolderSet)
+            {
+                applied.add("isFolder"); //$NON-NLS-1$
+            }
+            // ChartOfAccounts owner-specific properties (parsed + applied by PredefinedWriter.modify).
+            if (props.accountTypeSet)
+            {
+                applied.add("accountType"); //$NON-NLS-1$
+            }
+            if (props.offBalanceSet)
+            {
+                applied.add("offBalance"); //$NON-NLS-1$
+            }
+            if (props.orderSet)
+            {
+                applied.add("order"); //$NON-NLS-1$
+            }
+            if (props.accountingFlagsSet)
+            {
+                applied.add("accountingFlags"); //$NON-NLS-1$
+            }
+            if (props.extDimensionTypesSet)
+            {
+                applied.add("extDimensionTypes"); //$NON-NLS-1$
+            }
+            // ChartOfCalculationTypes owner-specific properties.
+            if (props.actionPeriodIsBaseSet)
+            {
+                applied.add("actionPeriodIsBase"); //$NON-NLS-1$
+            }
+            if (props.baseSet)
+            {
+                applied.add("base"); //$NON-NLS-1$
+            }
+            if (props.displacedSet)
+            {
+                applied.add("displaced"); //$NON-NLS-1$
+            }
+            if (props.leadingSet)
+            {
+                applied.add("leading"); //$NON-NLS-1$
+            }
+            return buildModifiedResult(normFqn, applied, persisted, args.normReport);
+        };
     }
 
     /**
@@ -1093,7 +1172,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        Subsystem subsystem = SubsystemUtils.resolveByFqn(ctx.config, normFqn);
+        if (HostKind.current() == HostKind.HEADLESS)
+        {
+            return prepareWrite(ctx.project, () -> {
+                ProjectContext current = resolveProjectAndScope(args.projectName, normFqn);
+                if (current.hasError()) return () -> current.error;
+                Subsystem subsystem = SubsystemUtils.resolveByFqn(current.config, normFqn);
+                if (subsystem == null) return () -> ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
+                if (args.hasTemplatePayload)
+                {
+                    String refusal = templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
+                    return () -> refusal;
+                }
+                String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
+                    current.project, resolvePlatformVersion(current));
+                if (dropped != null) return () -> dropped;
+                return prepareSubsystemContent(current, normFqn, subsystem, args.properties, args.content, args.hasRolePayload);
+            });
+        }
+        Subsystem subsystem = readPreparation(ctx.project, () -> SubsystemUtils.resolveByFqn(ctx.config, normFqn));
         if (subsystem == null)
         {
             return ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
@@ -1108,8 +1205,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
         // this refuses only a content state of None (issues #709 / #710).
-        String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
-            ctx.project, resolvePlatformVersion(ctx));
+        String dropped = readPreparation(ctx.project, () -> AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
+            ctx.project, resolvePlatformVersion(ctx)));
         if (dropped != null)
         {
             return dropped;
@@ -1199,11 +1296,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String dispatchConfigurationRoot(ProjectContext ctx, ModifyArgs args)
     {
+        if (HostKind.current() == HostKind.HEADLESS)
+        {
+            RootDispatch decision = readPreparation(ctx.project, () -> {
+                var root = ConfigurationRoot.resolve(preparationScope(ctx), args.fqn);
+                if (root == null) return new RootDispatch(false, null);
+                String refusal = configurationRootRefusal(root.error, args.hasRolePayload,
+                    args.hasContentPayload, args.hasTemplatePayload, args.properties);
+                return new RootDispatch(true, refusal == null ? null : ToolResult.error(refusal).toJson());
+            });
+            if (!decision.matches) return null;
+            if (decision.error != null) return decision.error;
+            return applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, null, null,
+                args.properties, args.normReport);
+        }
         return dispatchConfigurationRoot(ctx.scope, args.fqn, args.hasRolePayload, args.hasContentPayload,
             args.hasTemplatePayload, args.properties,
             root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root, root.object,
                 args.properties, args.normReport));
     }
+
+    private record RootDispatch(boolean matches, String error) { }
 
     /**
      * The root dispatch itself: resolves a root address, judges the call with
@@ -1226,7 +1339,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean contentPayload, boolean templatePayload, List<JsonObject> properties,
         Function<MetadataNodeResolver.MetadataNode, String> write)
     {
-        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(scope, fqn);
+        ConfigurationRoot.Resolution root = readPreparation(scope.project(), () -> ConfigurationRoot.resolve(scope, fqn));
         if (root == null)
         {
             return null;
@@ -1518,10 +1631,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String modifyXdtoMember(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
         List<JsonObject> properties)
     {
-        MetadataNodeResolver.MetadataNode pkgNode =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
-        if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
-            || !(pkgNode.object instanceof IBmObject))
+        MetadataNodeResolver.ObjectIdentity pkg = readPreparation(ctx.project,
+            () -> MetadataNodeResolver.resolveIdentity(preparationScope(ctx), ref.packageFqn));
+        if (pkg == null || !"XDTOPackage".equals(pkg.kind())) //$NON-NLS-1$
         {
             return ToolResult.error("XDTOPackage not found: " + ref.packageFqn + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -1537,7 +1649,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(ERR_NO_BM_MODEL + ctx.project.getName()).toJson();
         }
 
-        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        final long pkgBmId = pkg.bmId();
         final String[] contentFqnHolder = { null };
         XdtoWriter.Result result;
         try
@@ -1560,7 +1672,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
         // caller-typed ref.packageFqn may differ from the stored name, and force-export must
         // target the stored top object (never the caller-supplied spelling).
-        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        String pkgExportFqn = pkg.fqn();
         exportFqns.add(pkgExportFqn);
         String contentFqn = contentFqnHolder[0];
         if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
@@ -1850,8 +1962,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         // The list of an object an extension adopted reaches its .mdo only when the extension marks it;
         // otherwise EDT's .mdo writer drops it (issues #709 / #710).
-        String dropped = AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), normFqn,
-            ctx.project, resolvePlatformVersion(ctx));
+        String dropped = readPreparation(ctx.project, () -> {
+            MdObject current = HostKind.current() == HostKind.HEADLESS
+                ? MetadataNodeResolver.resolveAddress(preparationScope(ctx), normFqn, true) : target;
+            return AdoptedPropertyRouter.refusalIfDropped(current, membershipList(current), normFqn,
+                ctx.project, resolvePlatformVersion(ctx));
+        });
         if (dropped != null)
         {
             return dropped;
@@ -1953,28 +2069,32 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return mixError;
         }
 
-        String payloadError = TemplateContentSupport.payloadError(template, templateSpec, normFqn);
-        if (payloadError != null)
-        {
-            return payloadError;
-        }
-        if (template.getTemplateType() == TemplateType.TEXT_DOCUMENT)
-        {
-            return modifyTextTemplateContent(ctx, normFqn, template, templateSpec);
-        }
-
-        // Spreadsheet payloads retain their existing type guard.
-        String nonSpreadsheetError = nonSpreadsheetTemplateError(template, normFqn);
-        if (nonSpreadsheetError != null)
-        {
-            return nonSpreadsheetError;
-        }
-
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, true);
+        TemplateWriteContext writeCtx = readPreparation(ctx.project, () -> {
+            ProjectContext current = HostKind.current() == HostKind.HEADLESS
+                ? resolveProjectAndScope(ctx.project.getName(), normFqn) : ctx;
+            BasicTemplate currentTemplate = HostKind.current() == HostKind.HEADLESS
+                ? (BasicTemplate)MetadataNodeResolver.resolveAddress(current.scope, normFqn, true) : template;
+            String error = currentTemplate == null ? ToolResult.error("Template no longer exists: " + normFqn
+                + ". Re-read get_metadata_details before retrying.").toJson()
+                : TemplateContentSupport.payloadError(currentTemplate, templateSpec, normFqn);
+            boolean text = currentTemplate != null && currentTemplate.getTemplateType() == TemplateType.TEXT_DOCUMENT;
+            if (error == null && !text) error = nonSpreadsheetTemplateError(currentTemplate, normFqn);
+            if (error != null)
+            {
+                TemplateWriteContext refused = new TemplateWriteContext();
+                refused.error = error;
+                return refused;
+            }
+            TemplateWriteContext plan = resolveTemplateWriteContext(current, currentTemplate, normFqn, !text);
+            plan.text = text;
+            return plan;
+        });
         if (writeCtx.error != null)
         {
             return writeCtx.error;
         }
+
+        if (writeCtx.text) return modifyTextTemplateContent(ctx, normFqn, writeCtx, templateSpec);
 
         // Captured inside the write: the moxel content's OWN canonical FQN (a template's content IS a
         // distinct top BM object once attached - pre-existing on disk, or freshly attached below), so it is
@@ -2015,10 +2135,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Write the file-backed text in the same BM boundary used for spreadsheet content. */
-    private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
+    private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, TemplateWriteContext writeCtx,
         JsonObject templateSpec)
     {
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, false);
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2035,7 +2154,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + "' no longer exists; re-read get_metadata_details.").toJson());
                 }
                 BasicTemplate current = (BasicTemplate)object;
-                String locked = vendorSupportRefusal(current, ctx.scope, normFqn, normFqn, "changed"); //$NON-NLS-1$
+                String locked = vendorSupportRefusal(current, transactionScope(ctx, tx), normFqn, normFqn, "changed"); //$NON-NLS-1$
                 if (locked != null)
                 {
                     throw new TemplateWriteException(locked);
@@ -2043,7 +2162,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 EObject owner = current.eContainer();
                 if (owner instanceof MdObject && !(owner instanceof Configuration))
                 {
-                    locked = vendorSupportRefusal(owner, ctx.scope, writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
+                    locked = vendorSupportRefusal(owner, transactionScope(ctx, tx), writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
                     if (locked != null)
                     {
                         throw new TemplateWriteException(locked);
@@ -2116,6 +2235,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private static final class TemplateWriteContext
     {
+        boolean text;
         /** A ready {@link ToolResult#error} JSON when a service / export target is missing, else {@code null}. */
         String error;
         /** The template's stable BM id, re-fetched inside the write tx. */
@@ -2518,6 +2638,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node, MdObject target, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
+        return prepareWrite(ctx.project, () -> {
+            ProjectContext current = HostKind.current() == HostKind.HEADLESS
+                ? resolveProjectAndScope(projectName, normFqn) : ctx;
+            if (current.hasError()) return () -> current.error;
+            MetadataNodeResolver.MetadataNode currentNode = HostKind.current() == HostKind.HEADLESS
+                ? resolveGenericWriteNode(current.scope, normFqn) : node;
+            if (currentNode == null) return () -> ToolResult.error("Node no longer exists: " + normFqn).toJson();
+            return prepareGenericPropertyChanges(current, projectName, normFqn, currentNode,
+                currentNode.object, properties, normReport);
+        });
+    }
+
+    private static MetadataNodeResolver.MetadataNode resolveGenericWriteNode(MetadataScope scope, String fqn)
+    {
+        var root = ConfigurationRoot.resolve(scope, fqn);
+        return root == null ? MetadataNodeResolver.resolveExisting(scope, fqn) : root.node;
+    }
+
+    private java.util.function.Supplier<String> prepareGenericPropertyChanges(ProjectContext ctx, String projectName, String normFqn,
+        MetadataNodeResolver.MetadataNode node, MdObject target, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport)
+    {
         Configuration config = ctx.config;
 
         // Resolve the BM re-fetch strategy (mutation must re-fetch inside the write tx). Only TOP
@@ -2528,7 +2670,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         BmFetchPlan plan = resolveBmFetchPlan(ctx.scope, node, target, parts);
         if (plan.error != null)
         {
-            return plan.error;
+            return () -> plan.error;
         }
         final long topBmId = plan.topBmId;
         final EStructuralFeature memberFeature = plan.memberFeature;
@@ -2547,7 +2689,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             normReport, isExtensionProject);
         if (prepErr != null)
         {
-            return prepErr;
+            return () -> prepErr;
         }
 
         // A change of an object an extension ADOPTED goes where EDT keeps it - its extension block - or
@@ -2556,14 +2698,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             target, changes, AdoptedPropertyRouter::route);
         if (routing.isRefused())
         {
-            return routing.refusal();
+            return () -> routing.refusal();
         }
         if (changes.isEmpty() && !routing.notes().isEmpty())
         {
             // Every change of the call leaves the object as it is: nothing to write, nothing to export -
             // a finding, published as an empty writtenProjects (#408).
             WriteScope.recordNothingQueued();
-            return buildModifiedResult(normFqn, List.of(), false, normReport, List.of(), null,
+            return () -> buildModifiedResult(normFqn, List.of(), false, normReport, List.of(), null,
                 TypeChangeDefaults.Reset.NONE, routing.notes());
         }
 
@@ -2571,23 +2713,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // the already-prepared changes, so a benign edit never prompts. On REJECT the tool returns the
         // error and mutates nothing; the gate itself is a no-op headless / when env or preference allows.
         // Then the base value a routed write of an adopted object was planned from is read again (#709/#710).
-        String consentErr = consentThenBaseCheck(normFqn, changes, routing);
-        if (consentErr != null)
-        {
-            return consentErr;
-        }
-
         // The top object that owns the node's .mdo file.
         final String[] fileOwnerFqn = { null };
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
         {
-            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+            return () -> ToolResult.error(ERR_NO_BM_MANAGER).toJson();
         }
         IBmModel bmModel = bmModelManager.getModel(ctx.project);
         if (bmModel == null)
         {
-            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
+            return () -> ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
 
         final List<String> applied = appliedFeatureNames(changes);
@@ -2606,7 +2742,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Fail BEFORE mutating: without the generator we cannot keep the content .xdto
             // targetNamespace in sync, and committing only the .mdo would silently reintroduce the
             // namespace drift while reporting success. Nothing is written here.
-            return ToolResult.error("Cannot change the XDTO package namespace right now: the " //$NON-NLS-1$
+            return () -> ToolResult.error("Cannot change the XDTO package namespace right now: the " //$NON-NLS-1$
                 + "ITopObjectFqnGenerator service is unavailable, so the content resource (.xdto) " //$NON-NLS-1$
                 + "target namespace cannot be kept in sync. Retry once EDT has finished " //$NON-NLS-1$
                 + "initializing.").toJson(); //$NON-NLS-1$
@@ -2624,6 +2760,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // collected inside. Issue #298.
         final List<String> declaredCodes = ctx.scope.declaredOrOverride(
             declaredCodesAfterBatch(config, target, properties));
+        final List<String> externalLocales = externalLocalesForWrite(ctx, declaredCodes);
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
@@ -2631,108 +2768,117 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final TypeChangeDefaults.Reset[] typeReset = { TypeChangeDefaults.Reset.NONE };
         final TemplateType requestedTemplateType = requestedTemplateType(changes);
 
-        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(ctx.project))
-        {
-            BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
+        return () -> {
+            String consentErr = consentThenBaseCheck(normFqn, changes, routing);
+            if (consentErr != null)
             {
-                EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
-                fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(applyTo);
-                // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
-                // namespace change - null otherwise, so the cascade below never fires).
-                final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
-                    ? ((XDTOPackage)applyTo).getNamespace() : null;
-                localizedReport.rememberPreState(applyTo, changes);
-                if (applyTo instanceof BasicTemplate && requestedTemplateType != null)
-                {
-                    AdoptedPropertyRouter.requireStillWritten(applyTo,
-                        MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE, null, normFqn);
-                    contentFqnHolder[0] = templates.retype((BasicTemplate)applyTo, requestedTemplateType, tx);
-                }
-                typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
-                localizedReport.collect(applyTo, changes, declaredCodes, config);
-                if (fqnGenerator != null && applyTo instanceof XDTOPackage)
-                {
-                    XDTOPackage changedPkg = (XDTOPackage)applyTo;
-                    // Captured BEFORE resolvePackageContent: ensureNamespace re-syncs a STALE content
-                    // targetNamespace to the owner, and QNames still carrying that stale value must be
-                    // rewritten too (not only the old mdclass namespace).
-                    com._1c.g5.v8.dt.xdto.model.Package preContent = changedPkg.getPackage();
-                    String preContentNs = (preContent instanceof IBmObject
-                        && ((IBmObject)preContent).bmIsTop()) ? preContent.getNsUri() : null;
-                    XdtoWriter.ContentResolution resolved =
-                        XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
-                    if (resolved.error != null)
-                    {
-                        // Abort + roll back the whole modify rather than committing only the .mdo and
-                        // leaving the content .xdto target namespace stale (a silent partial success).
-                        // Mirrors modifyXdtoMemberInTx.
-                        throw new XdtoWriteException(resolved.error);
-                    }
-                    contentFqnHolder[0] = resolved.contentFqn;
+                return consentErr;
+            }
 
-                    String newNamespace = changedPkg.getNamespace();
-                    if (oldNamespace != null && !oldNamespace.equals(newNamespace))
+            try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(ctx.project))
+            {
+                BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
+                {
+                    EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                    fileOwnerFqn[0] = ReferencedTopObjects.fileOwnerFqn(applyTo);
+                    // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
+                    // namespace change - null otherwise, so the cascade below never fires).
+                    final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
+                        ? ((XDTOPackage)applyTo).getNamespace() : null;
+                    localizedReport.rememberPreState(applyTo, changes);
+                    if (applyTo instanceof BasicTemplate && requestedTemplateType != null)
                     {
-                        // The renamed package's OWN content can hold SAME-PACKAGE references (a property
-                        // typed at a sibling ObjectType carries a QName with the package's own nsUri) -
-                        // rewrite those too, or the package would dangle against ITSELF right after the
-                        // rename. Its content FQN is already force-exported via contentFqnHolder.
-                        XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
-                        if (preContentNs != null && !preContentNs.equals(oldNamespace)
-                            && !preContentNs.equals(newNamespace))
+                        AdoptedPropertyRouter.requireStillWritten(applyTo,
+                            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE, null, normFqn);
+                        contentFqnHolder[0] = templates.retype((BasicTemplate)applyTo, requestedTemplateType, tx);
+                    }
+                    typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
+                    localizedReport.collectWithLocales(applyTo, changes, declaredCodes,
+                        localesInUseDuringWrite(ctx, tx, declaredCodes, externalLocales));
+                    if (fqnGenerator != null && applyTo instanceof XDTOPackage)
+                    {
+                        XDTOPackage changedPkg = (XDTOPackage)applyTo;
+                        // Captured BEFORE resolvePackageContent: ensureNamespace re-syncs a STALE content
+                        // targetNamespace to the owner, and QNames still carrying that stale value must be
+                        // rewritten too (not only the old mdclass namespace).
+                        com._1c.g5.v8.dt.xdto.model.Package preContent = changedPkg.getPackage();
+                        String preContentNs = (preContent instanceof IBmObject
+                            && ((IBmObject)preContent).bmIsTop()) ? preContent.getNsUri() : null;
+                        XdtoWriter.ContentResolution resolved =
+                            XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
+                        if (resolved.error != null)
                         {
-                            // The content targetNamespace was stale before this edit: QNames written
-                            // under THAT value and naming THIS package's own local types would stay
-                            // dangling after the rename. Targeted rewrite only (a genuine reference
-                            // to a third package whose namespace equals the stale value is kept).
-                            XdtoWriter.rewriteStaleSelfReferences(resolved.content, preContentNs, newNamespace);
+                            // Abort + roll back the whole modify rather than committing only the .mdo and
+                            // leaving the content .xdto target namespace stale (a silent partial success).
+                            // Mirrors modifyXdtoMemberInTx.
+                            throw new XdtoWriteException(resolved.error);
                         }
-                        cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
-                            fqnGenerator, cascadedPackageNames, cascadedExportFqns);
+                        contentFqnHolder[0] = resolved.contentFqn;
+
+                        String newNamespace = changedPkg.getNamespace();
+                        if (oldNamespace != null && !oldNamespace.equals(newNamespace))
+                        {
+                            // The renamed package's OWN content can hold SAME-PACKAGE references (a property
+                            // typed at a sibling ObjectType carries a QName with the package's own nsUri) -
+                            // rewrite those too, or the package would dangle against ITSELF right after the
+                            // rename. Its content FQN is already force-exported via contentFqnHolder.
+                            XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+                            if (preContentNs != null && !preContentNs.equals(oldNamespace)
+                                && !preContentNs.equals(newNamespace))
+                            {
+                                // The content targetNamespace was stale before this edit: QNames written
+                                // under THAT value and naming THIS package's own local types would stay
+                                // dangling after the rename. Targeted rewrite only (a genuine reference
+                                // to a third package whose namespace equals the stale value is kept).
+                                XdtoWriter.rewriteStaleSelfReferences(resolved.content, preContentNs, newNamespace);
+                            }
+                            cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
+                                fqnGenerator, cascadedPackageNames, cascadedExportFqns);
+                        }
                     }
+                    return null;
+                });
+                templates.commit();
+            }
+            catch (Exception e)
+            {
+                String ready = XdtoWriteException.jsonOf(e);
+                if (ready != null)
+                {
+                    return ready;
                 }
-                return null;
-            });
-            templates.commit();
-        }
-        catch (Exception e)
-        {
-            String ready = XdtoWriteException.jsonOf(e);
-            if (ready != null)
-            {
-                return ready;
+                Refusals.log("Error modifying metadata", e); //$NON-NLS-1$
+                return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
             }
-            Refusals.log("Error modifying metadata", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
-        }
 
-        List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(fileOwnerFqn[0]);
-        String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(fileOwnerFqn[0]))
-        {
-            exportFqns.add(contentFqn);
-        }
-        for (String cascadedFqn : cascadedExportFqns)
-        {
-            if (!exportFqns.contains(cascadedFqn))
+            List<String> exportFqns = new ArrayList<>();
+            exportFqns.add(fileOwnerFqn[0]);
+            String contentFqn = contentFqnHolder[0];
+            if (contentFqn != null && !contentFqn.equals(fileOwnerFqn[0]))
             {
-                exportFqns.add(cascadedFqn);
+                exportFqns.add(contentFqn);
             }
-        }
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+            for (String cascadedFqn : cascadedExportFqns)
+            {
+                if (!exportFqns.contains(cascadedFqn))
+                {
+                    exportFqns.add(cascadedFqn);
+                }
+            }
+            boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        List<String> adoptedNotes = new ArrayList<>(routing.notes());
-        for (PreparedChange change : changes)
-        {
-            String note = change.routedNote();
-            if (note != null)
+            List<String> adoptedNotes = new ArrayList<>(routing.notes());
+            for (PreparedChange change : changes)
             {
-                adoptedNotes.add(note);
+                String note = change.routedNote();
+                if (note != null)
+                {
+                    adoptedNotes.add(note);
+                }
             }
-        }
-        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
-            localizedReport, typeReset[0], adoptedNotes);
+            return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+                localizedReport, typeReset[0], adoptedNotes);
+        };
     }
 
     /**
@@ -3405,7 +3551,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // refusal that pass can produce belongs above the gate, or a denial comes back
                 // instead of the actionable error (issue #295).
                 List<HolderChange> prepared = new ArrayList<>();
-                String refusal = formRetypeVerdict(ctx.scope, version, member, properties,
+                String refusal = formRetypeVerdict(transactionScope(ctx, tx), version, member, properties,
                     normReport, prepared);
                 if (refusal != null)
                 {
@@ -3730,7 +3876,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         RoleRightsWriter.Result result =
-            RoleRightsWriter.apply(ctx.project, ctx.config, role, rights, templates, roleProperties);
+            HostKind.current() == HostKind.HEADLESS
+                ? RoleRightsWriter.apply(ctx.project, normFqn, rights, templates, roleProperties)
+                : RoleRightsWriter.apply(ctx.project, ctx.config, role, rights, templates, roleProperties);
 
         // The rights matrix (the Rights.rights file) is a SEPARATE BM resource from Role.mdo: the
         // RoleDescription is its own top BM object (its impl extends com._1c.g5.v8.bm.core.BmObject)
@@ -3810,7 +3958,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         CommonAttributeContentWriter.Result result =
-            CommonAttributeContentWriter.apply(ctx.project, ctx.config, commonAttribute, content);
+            HostKind.current() == HostKind.HEADLESS
+                ? CommonAttributeContentWriter.apply(ctx.project, normFqn, content)
+                : CommonAttributeContentWriter.apply(ctx.project, ctx.config, commonAttribute, content);
         if (result.hasError())
         {
             return result.error;
@@ -3856,7 +4006,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         ExchangePlanContentWriter.Result result =
-            ExchangePlanContentWriter.apply(ctx.project, ctx.config, exchangePlan, content);
+            HostKind.current() == HostKind.HEADLESS
+                ? ExchangePlanContentWriter.apply(ctx.project, normFqn, content)
+                : ExchangePlanContentWriter.apply(ctx.project, ctx.config, exchangePlan, content);
         if (result.hasError())
         {
             return result.error;
@@ -3901,8 +4053,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
         }
 
-        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
-            catalog, content, ReferenceMembershipWriter.Kind.CATALOG_OWNERS);
+        ReferenceMembershipWriter.Result result = HostKind.current() == HostKind.HEADLESS
+            ? ReferenceMembershipWriter.apply(ctx.project, normFqn, content, ReferenceMembershipWriter.Kind.CATALOG_OWNERS)
+            : ReferenceMembershipWriter.apply(ctx.project, ctx.config, catalog, content, ReferenceMembershipWriter.Kind.CATALOG_OWNERS);
         if (result.hasError())
         {
             return result.error;
@@ -3936,8 +4089,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
         }
 
-        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
-            document, content, ReferenceMembershipWriter.Kind.DOCUMENT_REGISTER_RECORDS);
+        ReferenceMembershipWriter.Result result = HostKind.current() == HostKind.HEADLESS
+            ? ReferenceMembershipWriter.apply(ctx.project, normFqn, content, ReferenceMembershipWriter.Kind.DOCUMENT_REGISTER_RECORDS)
+            : ReferenceMembershipWriter.apply(ctx.project, ctx.config, document, content, ReferenceMembershipWriter.Kind.DOCUMENT_REGISTER_RECORDS);
         if (result.hasError())
         {
             return result.error;
@@ -3989,18 +4143,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String modifySubsystemContent(ProjectContext ctx, String normFqn, Subsystem subsystem,
         List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload)
     {
+        return prepareSubsystemContent(ctx, normFqn, subsystem, properties, content, hasRolePayload).get();
+    }
+
+    private java.util.function.Supplier<String> prepareSubsystemContent(ProjectContext ctx, String normFqn, Subsystem subsystem,
+        List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload)
+    {
+        String subsystemKind = subsystem.eClass().getName();
         // A Role payload on a Subsystem FQN is refused before anything is applied (a Subsystem is not a
         // Role), mirroring dispatchRolePayload: the sibling payload must never be silently dropped while
         // the content change reports success.
         if (hasRolePayload)
         {
-            return ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
-                + "Role FQN; '" + normFqn + MSG_IS_A + subsystem.eClass().getName() + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
+            return () -> ToolResult.error("'rights' / 'templates' / 'roleProperties' are only valid for a " //$NON-NLS-1$
+                + "Role FQN; '" + normFqn + MSG_IS_A + subsystemKind + ". Use " //$NON-NLS-1$ //$NON-NLS-2$
                 + "'content' to edit the subsystem's content objects, or address a Role.<Name>.").toJson(); //$NON-NLS-1$
         }
         if (!properties.isEmpty())
         {
-            return ToolResult.error("A subsystem content change ('content') cannot be combined with a " //$NON-NLS-1$
+            return () -> ToolResult.error("A subsystem content change ('content') cannot be combined with a " //$NON-NLS-1$
                 + "generic 'properties' change in one call. Set the subsystem's own properties " //$NON-NLS-1$
                 + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
         }
@@ -4021,24 +4182,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         IBmObject subsystemBm = (IBmObject)subsystem;
         if (!subsystemBm.bmIsTop())
         {
-            return ToolResult.error("Cannot resolve the on-disk file to export for subsystem '" //$NON-NLS-1$
+            return () -> ToolResult.error("Cannot resolve the on-disk file to export for subsystem '" //$NON-NLS-1$
                 + normFqn + "': it is not an independent top-level metadata object. A subsystem is always " //$NON-NLS-1$
                 + "its own object, so this should not happen; report it with the subsystem FQN.").toJson(); //$NON-NLS-1$
         }
         String exportFqn = subsystemBm.bmGetFqn();
 
-        ReferenceMembershipWriter.Result result = ReferenceMembershipWriter.apply(ctx.project, ctx.config,
-            subsystem, content, ReferenceMembershipWriter.Kind.SUBSYSTEM_CONTENT);
-        if (result.hasError())
-        {
-            return result.error;
-        }
+        return () -> {
+            ReferenceMembershipWriter.Result result = HostKind.current() == HostKind.HEADLESS
+                ? ReferenceMembershipWriter.apply(ctx.project, normFqn, content, ReferenceMembershipWriter.Kind.SUBSYSTEM_CONTENT)
+                : ReferenceMembershipWriter.apply(ctx.project, ctx.config, subsystem, content, ReferenceMembershipWriter.Kind.SUBSYSTEM_CONTENT);
+            if (result.hasError())
+            {
+                return result.error;
+            }
 
-        // The content list lives inside the Subsystem's own .mdo (a nested subsystem has its own .mdo),
-        // so exporting the resolved subsystem's canonical top-object FQN once drains the change to disk.
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqn);
+            // The content list lives inside the Subsystem's own .mdo (a nested subsystem has its own .mdo),
+            // so exporting the resolved subsystem's canonical top-object FQN once drains the change to disk.
+            boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqn);
 
-        return buildMembershipResult(normFqn, "subsystem", KEY_CONTENT, result, persisted); //$NON-NLS-1$
+            return buildMembershipResult(normFqn, "subsystem", KEY_CONTENT, result, persisted); //$NON-NLS-1$
+        };
     }
 
     /**
@@ -4390,7 +4554,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final List<String> applied = new ArrayList<>();
         // A form root's/member's title is localized too, so it gets the same report the mdclass path
         // gives (issue #298). The declared codes are read OUTSIDE the write transaction.
-        final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
+        final List<String> declaredCodes = readPreparation(ctx.project, () -> preparationScope(ctx).declaredLanguageCodes());
+        final List<String> externalLocales = externalLocalesForWrite(ctx, declaredCodes);
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         // Attributes this call took the main flag AWAY from - a change to a member the caller did
         // not address, so it is reported rather than left to be discovered.
@@ -4410,7 +4575,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 EObject target = targetResolver.resolve(formModel);
                 List<HolderChange> changes =
-                    prepareFormMemberChanges(ctx.scope, version, target, properties, normReport,
+                    prepareFormMemberChanges(transactionScope(ctx, tx), version, target, properties, normReport,
                         nonAssignableHint);
                 // (receiver, change) of every localized write, reported only AFTER the whole
                 // batch is applied: reading a map mid-batch would report a locale as missing that
@@ -4481,8 +4646,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 for (int i = 0; i < localizedChanges.size(); i++)
                 {
-                    localizedReport.collect(localizedHolders.get(i),
-                        List.of(localizedChanges.get(i)), declaredCodes, ctx.config);
+                    localizedReport.collectWithLocales(localizedHolders.get(i),
+                        List.of(localizedChanges.get(i)), declaredCodes,
+                        localesInUseDuringWrite(ctx, tx, declaredCodes, externalLocales));
                 }
             });
 
@@ -4672,7 +4838,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     throw new FormValidationException(orphanErr);
                 }
                 applied.addAll(FormElementWriter.configureDynamicListQuery(
-                    formModel, member, qt, cq, mt, ctx.config, version));
+                    formModel, member, qt, cq, mt, transactionScope(ctx, tx).configuration(), version));
             });
 
         ToolResult result = ToolResult.success()
@@ -5432,7 +5598,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
-            (formModel, tx) -> dynamicListRetypeVerdict(config, version, formModel,
+            (formModel, tx) -> dynamicListRetypeVerdict(HostKind.current() == HostKind.HEADLESS
+                ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(fctx.project.getName())
+                    .resolveMetadataRootInTransaction().configuration() : config, version, formModel,
                 FormElementWriter.resolveFormMember(formModel, ref), mainTable));
     }
 
@@ -6037,7 +6205,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form item as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
-            final String mdFormName = fctx.mdForm.getName();
+            final String mdFormName = HostKind.current() == HostKind.HEADLESS
+                ? fctx.read(MdObject::getName) : fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -7901,17 +8070,45 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final Boolean common;
         /** Role -&gt; value as resolved by the preparation, in request order. */
         final Map<Role, Boolean> roles;
+        final Map<Long, Boolean> roleIds;
+        final Map<Long, String> roleNames;
 
         AdjustableBooleanEdit(Boolean common, Map<Role, Boolean> roles)
         {
             this.common = common;
-            this.roles = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(roles));
+            if (HostKind.current() == HostKind.HEADLESS)
+            {
+                Map<Long, Boolean> ids = new LinkedHashMap<>();
+                Map<Long, String> names = new LinkedHashMap<>();
+                roles.forEach((role, value) -> {
+                    long id = ((IBmObject)role).bmGetId();
+                    ids.put(id, value);
+                    names.put(id, role.getName());
+                });
+                this.roles = Map.of();
+                this.roleIds = java.util.Collections.unmodifiableMap(ids);
+                this.roleNames = java.util.Collections.unmodifiableMap(names);
+            }
+            else
+            {
+                this.roles = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(roles));
+                this.roleIds = Map.of();
+                this.roleNames = Map.of();
+            }
         }
 
         /** The role edits with every role re-fetched in {@code tx} (as resolved when {@code tx} is null). */
         Map<Role, Boolean> rolesIn(IBmTransaction tx)
         {
             Map<Role, Boolean> result = new LinkedHashMap<>();
+            for (Map.Entry<Long, Boolean> entry : roleIds.entrySet())
+            {
+                if (tx == null) throw new IllegalStateException("Role flags require the active write transaction");
+                Object current = tx.getObjectById(entry.getKey());
+                if (!(current instanceof Role role))
+                    throw new IllegalStateException("Role." + roleNames.get(entry.getKey()) + " is no longer in the transaction");
+                result.put(role, entry.getValue());
+            }
             for (Map.Entry<Role, Boolean> e : roles.entrySet())
             {
                 Role role = e.getKey();
@@ -8051,6 +8248,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
          */
         static PreparedChange typeDescription(EStructuralFeature feature, Object typeDescription)
         {
+            if (HostKind.current() == HostKind.HEADLESS && typeDescription instanceof TypeDescription value)
+                typeDescription = MetadataTypeBuilder.snapshotTypeDescription(value);
             return new PreparedChange(feature, Kind.SCALAR, typeDescription, null, null, null, null, true);
         }
 
@@ -8257,14 +8456,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     // The extension block, never the native type: EDT's .mdo writer keeps an adopted
                     // defined type's type there (issue #709).
-                    AdoptedPropertyRouter.applyTypeExtension(target, (AdoptedPropertyRouter.TypePlan)scalarValue);
+                    AdoptedPropertyRouter.applyTypeExtension(target, (AdoptedPropertyRouter.TypePlan)scalarValue, tx);
                     return TypeChangeDefaults.Reset.NONE;
                 }
                 case EXTENDED_SOURCE:
                 {
                     // The base sources plus the additions, and the state Extended - or back to None
                     // (issue #710).
-                    AdoptedPropertyRouter.applySource(target, (AdoptedPropertyRouter.SourcePlan)scalarValue);
+                    AdoptedPropertyRouter.applySource(target, (AdoptedPropertyRouter.SourcePlan)scalarValue, tx);
                     return TypeChangeDefaults.Reset.NONE;
                 }
                 case LOCALIZED:
@@ -8375,7 +8574,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         throw new IllegalStateException("Cannot set '" + feature.getName() //$NON-NLS-1$
                             + "': its AdjustableBoolean type cannot be instantiated"); //$NON-NLS-1$
                     }
-                    if (edit != null && !edit.roles.isEmpty())
+                    if (edit != null && (!edit.roles.isEmpty() || !edit.roleIds.isEmpty()))
                     {
                         Object flag = target.eGet(feature);
                         if (!(flag instanceof AdjustableBoolean))
@@ -8417,7 +8616,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 default:
                     if (typeChange && scalarValue instanceof TypeDescription)
                     {
-                        return TypeChangeDefaults.setType(target, feature, (TypeDescription)scalarValue, tx);
+                        TypeDescription value = (TypeDescription)scalarValue;
+                        if (HostKind.current() == HostKind.HEADLESS)
+                            value = MetadataTypeBuilder.typesInTransaction(value, tx);
+                        return TypeChangeDefaults.setType(target, feature, value, tx);
                     }
                     target.eSet(feature, scalarValue);
                     return TypeChangeDefaults.Reset.NONE;
@@ -8499,6 +8701,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
+    }
+
+    private static List<String> externalLocalesForWrite(ProjectContext ctx, List<String> declaredCodes)
+    {
+        return HostKind.current() == HostKind.HEADLESS && ctx.scope.isExternalObjects()
+            ? readPreparation(ctx.project, () -> MetadataLanguageUtils.localesInUse(preparationScope(ctx).configuration(), declaredCodes)) : null;
+    }
+
+    private static List<String> localesInUseDuringWrite(ProjectContext ctx, IBmTransaction tx,
+        List<String> declaredCodes, List<String> externalLocales)
+    {
+        if (HostKind.current() != HostKind.HEADLESS)
+            return MetadataLanguageUtils.localesInUse(ctx.config, declaredCodes);
+        if (ctx.scope.isExternalObjects()) return externalLocales;
+        if (!(tx.getTopObjectByFqn("Configuration") instanceof Configuration config))
+            throw Refusals.state("Configuration disappeared. Re-read get_metadata_details and retry.");
+        return MetadataLanguageUtils.localesInUse(config, declaredCodes);
     }
 
     /**
@@ -8607,6 +8826,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // The question is asked about declaredCodes - the AFTER-batch set this call reports on -
             // so a code this very batch declares is judged by the same rule as any other.
             List<String> inUse = MetadataLanguageUtils.localesInUse(config, declaredCodes);
+            collectWithLocales(target, changes, declaredCodes, inUse);
+        }
+
+        void collectWithLocales(EObject target, List<PreparedChange> changes, List<String> declaredCodes,
+            List<String> inUse)
+        {
             for (PreparedChange change : changes)
             {
                 if (!change.isLocalized())

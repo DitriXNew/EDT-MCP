@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
 import com._1c.g5.v8.dt.bsl.model.Expression;
@@ -36,6 +35,7 @@ import com._1c.g5.v8.dt.bsl.model.SimpleStatement;
 import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com._1c.g5.v8.dt.bsl.model.StringLiteral;
 import com._1c.g5.v8.dt.bsl.model.util.BslUtil;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -196,11 +196,10 @@ public class GetOutgoingStructuresTool implements IMcpTool
         final String qualifierFilter = (qualifier != null && !qualifier.isEmpty()) ? qualifier : null;
 
         AtomicReference<String> resultRef = new AtomicReference<>();
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                resultRef.set(analyze(projectName, modulePath, methodFilter, qualifierFilter, maxResults));
+                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> analyze(projectName, modulePath, methodFilter, qualifierFilter, maxResults)));
             }
             catch (Exception e)
             {

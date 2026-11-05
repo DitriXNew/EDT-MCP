@@ -74,10 +74,10 @@ public final class BoundedJob
         /** The waiting thread was interrupted; the job was cancelled but may still be running. */
         INTERRUPTED,
         /**
-         * The job left the queue without ever entering the work — something else cancelled it
-         * before it started (or the job manager was suspended, in which case {@code join} returns
-         * at once). Distinguished from {@link #COMPLETED} because a job that never ran did NOT do
-         * the work, and reporting that as success is a false green; distinguished from
+         * The bounded wait ended without observing entry into the work. Something else may have
+         * cancelled it, but a suspended manager can still hold the queued job and run it after
+         * resume. This outcome alone proves neither cancellation nor that the work cannot run.
+         * Distinguished from {@link #COMPLETED} because success is not established; distinguished from
          * {@link #TIMED_OUT_BEFORE_START} because OUR deadline was not what stopped it, so
          * "retry with a larger timeout" would be the wrong advice.
          */
@@ -554,8 +554,8 @@ public final class BoundedJob
         long elapsedMs = System.currentTimeMillis() - startMs;
         if (!enteredWork.get())
         {
-            // The job left the queue without running (cancelled before it started). It did NOT do
-            // the work, so it must not be reported as a completed one.
+            // A cancellation or a suspended manager's early join return. The latter leaves the
+            // job queued, so callers need terminal completion evidence to claim it cannot run.
             return new Result(Outcome.NOT_RUN, elapsedMs, null);
         }
         if (failureHolder[0] instanceof Error)

@@ -1977,6 +1977,7 @@ public final class LaunchLifecycleUtils
         throws ApplicationException
     {
         ExecutionContext context = new ExecutionContext();
+        if (policy != null) { context.setProperty(HeadlessInfobaseUpdate.EXTERNAL_CHANGES, policy); }
         Shell shell = grabActiveShell();
         if (shell != null)
         {

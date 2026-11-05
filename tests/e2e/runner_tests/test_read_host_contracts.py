@@ -24,6 +24,8 @@ class ReadHostContractsTest(unittest.TestCase):
                         if case["tool"] == tool and case["arguments"] == arguments]
             self.assertEqual(1, len(matching))
             response = copy.deepcopy(matching[0]["response"])
+            if kind == "HEADLESS" and tool == "get_symbol_info":
+                response = next(case["response"] for case in json.loads(C.HEADLESS_BASELINE.read_text(encoding="utf-8"))["cases"].values() if case["arguments"] == arguments)
             text = response["text"]
             if kind == "HEADLESS" and tool == "read_module_source":
                 text = text.partition("\n## Extension interception\n")[0]
@@ -51,7 +53,7 @@ class ReadHostContractsTest(unittest.TestCase):
         self.assertEqual(23, C.run_contracts(self.invoke("WINDOWED"), "WINDOWED"))
 
     def test_headless_driver_checks_each_moved_tool_and_cyrillic_content(self):
-        self.assertEqual(17, C.run_contracts(self.invoke("HEADLESS"), "HEADLESS"))
+        self.assertEqual(23, C.run_contracts(self.invoke("HEADLESS"), "HEADLESS"))
         for tool in C.MOVED_TOOLS:
             requests = [case["arguments"] for case in C.baseline_cases().values() if case["tool"] == tool]
             self.assertIn("Вычисление", json.dumps(requests, ensure_ascii=False))

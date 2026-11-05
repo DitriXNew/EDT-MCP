@@ -290,7 +290,19 @@ public final class ProjectContext
         return resolveRoot(true);
     }
 
+    /** Re-fetch the root in the caller's active BM read/write transaction; starts no nested read. */
+    public ConfigurationResult resolveMetadataRootInTransaction()
+    {
+        return resolveRootInBoundary(true);
+    }
+
     private ConfigurationResult resolveRoot(boolean allowNoConfiguration)
+    {
+        return ReadToolExecution.readOnHost(project, "Resolve metadata root",
+            () -> resolveRootInBoundary(allowNoConfiguration));
+    }
+
+    private ConfigurationResult resolveRootInBoundary(boolean allowNoConfiguration)
     {
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)

@@ -11,6 +11,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -169,7 +171,15 @@ public class DeleteProjectTool implements IMcpTool
                         waiter.cleanup();
                     }
                 };
-            }, () -> project.delete(deleteContent, true, new NullProgressMonitor()));
+            }, () -> deleteProjectResources(project, deleteContent));
+    }
+
+    static void deleteProjectResources(IProject project, boolean deleteContent) throws Exception
+    {
+        IWorkspace workspace = project.getWorkspace();
+        // Deletion releases Eclipse's tree lock internally; exclude other writers and defer notifications.
+        ICoreRunnable deletion = monitor -> project.delete(deleteContent, true, monitor);
+        workspace.run(deletion, workspace.getRoot(), IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
     }
 
     /** The platform mutation and its pre-armed release wait, shared with headless tests. */

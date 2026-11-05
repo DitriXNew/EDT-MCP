@@ -1,0 +1,35 @@
+{
+  "platform": "EDT 2026.2.2+21",
+  "hostKind": "HEADLESS",
+  "reason": "EMF symbol summary replaces editor hover documentation without a workbench.",
+  "cases": {
+    "symbol-Calc": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\nline: 1\ncolumn: 2\n---\n| Property | Value |\n| --- | --- |\n| **Symbol** | `Add` |\n| **Kind** | Function |\n| **Signature** | `Function Add(A, B) Export` |\n| **Export** | Yes |\n| **Lines** | 1 - 3 |\n| **Parameters** | A, B |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "symbol-Вычисление": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\nline: 1\ncolumn: 2\n---\n| Property | Value |\n| --- | --- |\n| **Symbol** | `Маркер` |\n| **Kind** | Function |\n| **Signature** | `Function Маркер(-) Export` |\n| **Export** | Yes |\n| **Lines** | 1 - 3 |\n| **Parameters** | - |\n",
+        "structuredContent": null,
+        "isError": false
+      }
+    }
+  }
+}

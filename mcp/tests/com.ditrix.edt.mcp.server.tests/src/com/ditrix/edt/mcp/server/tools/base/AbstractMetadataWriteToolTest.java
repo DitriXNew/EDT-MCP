@@ -242,17 +242,75 @@ public class AbstractMetadataWriteToolTest
     }
 
     @Test
-    public void testAnErrorAfterARecordedWriteIsMarkedAndNeverWaitedOn()
+    public void testAnErrorAfterARecordedWriteIsDrainedWithoutReplacingItsEvidence()
     {
-        // An error is a well-formed JSON object too. Waiting on one would spend the whole deadline
-        // on a call that wrote nothing, and then re-report a rejected argument as a disk problem.
-        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
-        String result = ToolResult.error("Node not found: Catalog.Nope").toJson(); //$NON-NLS-1$
+        for (DiskExportState state : DiskExportState.values())
+        {
+            RecordingEnvironment environment = new RecordingEnvironment(state);
+            String result = ToolResult.errorAfterMutation("Later dependency failed") //$NON-NLS-1$
+                .put("fqn", "Catalog.Copy").put("persisted", false).toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            StubTool tool = new StubTool(environment);
+            JsonObject answer = JsonParser.parseString(
+                tool.awaitDiskExport(params(PROJECT), result, wroteIn(EXTENSION))).getAsJsonObject();
+            JsonObject expected = JsonParser.parseString(result).getAsJsonObject();
+            if (state != DiskExportState.DRAINED)
+            {
+                expected.addProperty("exportState", state.name()); //$NON-NLS-1$
+            }
+            assertEquals(expected, answer);
+            assertEquals(Collections.singletonList(EXTENSION), environment.asked);
+            assertTrue(environment.deadlineMs > 59_000L && environment.deadlineMs <= 60_000L);
+            assertNull("Errors must not run success-only post-export work", tool.sawDrainEstablished); //$NON-NLS-1$
+        }
+    }
 
-        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT));
-        assertTrue(answer.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
-        assertTrue(answer.contains("Node not found: Catalog.Nope")); //$NON-NLS-1$
-        assertEquals("an error result must not reach the export wait", 0, environment.calls); //$NON-NLS-1$
+    @Test
+    public void testAnErrorWithNoRecordedWriteNeverWaits()
+    {
+        WriteScope empty = new WriteScope();
+        empty.queuedNothing();
+        WriteScope cascade = new WriteScope();
+        cascade.cascadedInto(EXTENSION);
+        for (WriteScope scope : List.of(silent(), empty, cascade))
+        {
+            RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+            String result = ToolResult.error("Node not found: Catalog.Nope").toJson(); //$NON-NLS-1$
+            StubTool tool = new StubTool(environment);
+            assertSame(result, tool.awaitDiskExport(params(PROJECT), result, scope));
+            assertEquals(0, environment.calls);
+            assertNull(tool.sawDrainEstablished);
+        }
+    }
+
+    @Test
+    public void testARecordedCommitBeforeExportSubmissionDrainsTheDefaultProject()
+    {
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, WriteScope::recordMutationCommitted);
+        String result = ToolResult.error("Could not submit export").toJson(); //$NON-NLS-1$
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), result, scope);
+        assertEquals(ToolResult.markErrorAfterMutation(result), answer);
+        assertEquals(Collections.singletonList(PROJECT), environment.asked);
+    }
+
+    @Test
+    public void testAFailedExportObservationCannotReplaceACommittedError()
+    {
+        StubTool tool = new StubTool(null)
+        {
+            @Override
+            protected IExportEnvironment exportEnvironment()
+            {
+                return (project, timeout) -> { throw new IllegalStateException("Project closed"); }; //$NON-NLS-1$
+            }
+        };
+        String result = ToolResult.errorAfterMutation("Later dependency failed").toJson(); //$NON-NLS-1$
+        JsonObject expected = JsonParser.parseString(result).getAsJsonObject();
+        expected.addProperty("exportState", "UNOBSERVABLE"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(expected, JsonParser.parseString(
+            tool.awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT))));
+        assertNull(tool.sawDrainEstablished);
     }
 
     @Test

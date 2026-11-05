@@ -57,7 +57,7 @@ EDT owns graph validation, including Start/completion reachability and split/joi
 
 ## Consent, identity and recovery
 
-Replacing an absent or empty map needs no destructive consent. Replacing a non-empty map requires destructive consent. Removing an existing map uses the destructive-consent gate; an absent map is refused before consent. Denied consent writes nothing. If the document changes during consent, read it again and retry.
+The explicit headless host always allows; the following consent rules apply to windowed EDT. Replacing an absent or empty map needs no destructive consent. Replacing a non-empty map requires destructive consent. Removing an existing map uses the destructive-consent gate; an absent map is refused before consent. Denied consent writes nothing. If the document changes during consent, read it again and retry.
 
 Replace discards all old items. Same-named points keep their `pointUUID`, which is their identity for infobase tasks. Renaming a point through replacement creates a new identity. Print properties, grid settings and document background survive replacement. To revert, restore the exported route-map file from version control and refresh/clean the project. Removing and recreating the document creates fresh point identities.
 

@@ -1015,6 +1015,41 @@ def test_confirm_renames_a_form_attribute_and_the_form_on_disk_follows():
 
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_form_rename_immediately_after_module_write_updates_reference():
+    """The native refactoring must build the just-written module before collecting references."""
+    group = "RNImmediateGroup"
+    renamed = group + "Renamed"
+    _seed_form_group(group)
+    source = ("&НаКлиенте\nПроцедура ImmediateRenameProbe()\n\tЭлементы."
+              + group + ".Видимость = Ложь;\nКонецПроцедуры\n")
+    written = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": _FORM_MODULE_SRC_REL,
+        "mode": "replace", "overwrite": True, "source": source,
+    })
+    assert_ok(written, "write the reference immediately before rename")
+    result = rename_call({
+        "projectName": PROJECT, "objectFqn": _form_fqn("Group", group),
+        "newName": renamed, "confirm": True,
+    })
+    assert_ok(result, "rename immediately after the write, without a settle or preview")
+    assert_contains(result.text, "action: executed")
+    poll_disk_contains(_FORM, "<name>" + renamed + "</name>")
+    poll_disk_lacks(_FORM, "<name>" + group + "</name>")
+    poll_disk_contains("src/" + _FORM_MODULE_SRC_REL,
+                       "Элементы." + renamed + ".Видимость")
+    poll_disk_lacks("src/" + _FORM_MODULE_SRC_REL, "Элементы." + group + ".")
+    module = _form_module_source()
+    assert_contains(module, "Элементы." + renamed + ".Видимость")
+    assert_not_contains(module, "Элементы." + group + ".")
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"], "full": True,
+    })
+    assert_ok(details, "read back the renamed form element")
+    assert_contains(details.text, "Form Structure")
+    assert_contains(details.text, renamed)
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_a_form_group_and_the_module_reference_follows():
     """The CASCADE, measured rather than assumed: a form-module reference to the element
     must be rewritten by the rename.

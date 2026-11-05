@@ -53,6 +53,43 @@ import com.ditrix.edt.mcp.server.tools.rename.RenameProgress;
  */
 public class RenameMetadataObjectToolTest
 {
+    @Test public void undrainedRenameReportsExportStateRatherThanStaleBytes()
+    {
+        for (String name : new String[] {"EnglishName", "Код"})
+        {
+            String result = RenameMetadataObjectTool.finishHeadlessRename("TestConfiguration",
+                "Catalog." + name, "Renamed", "renamed", true, false);
+            var response = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+            assertTrue(result, response.get("mutationCommitted").getAsBoolean());
+            assertTrue(result, response.get("error").getAsString().contains("export to disk was not confirmed"));
+            assertFalse(result, result.contains("does not confirm the registration change"));
+        }
+    }
+
+    @Test public void drainedRenameMustObserveOldRegistrationGoneAndNewPresent() throws Exception
+    {
+        for (String name : new String[] { "EnglishName", "Код" })
+        {
+            try (var files = com.ditrix.edt.mcp.server.utils.SearchFixtureProject.create())
+            {
+                var file = files.file("src/Configuration/Configuration.mdo",
+                    "<mdclass:Configuration xmlns:mdclass='http://g5.1c.ru/v8/dt/metadata/mdclass'>"
+                        + "<catalogs>Catalog." + name + "</catalogs></mdclass:Configuration>");
+                String result = RenameMetadataObjectTool.finishHeadlessRename(files.name(), "Catalog." + name,
+                    name + "New", "success", true, true);
+                assertTrue(result, com.ditrix.edt.mcp.server.protocol.ToolResult.isErrorPayload(result));
+                var error = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+                assertTrue(error.get("mutationCommitted").getAsBoolean());
+                assertTrue(result, result.contains("resync_to_disk"));
+                java.nio.file.Files.writeString(file.getLocation().toFile().toPath(),
+                    "<mdclass:Configuration xmlns:mdclass='http://g5.1c.ru/v8/dt/metadata/mdclass'>"
+                        + "<catalogs>Catalog." + name + "New</catalogs></mdclass:Configuration>");
+                assertEquals("success", RenameMetadataObjectTool.finishHeadlessRename(files.name(),
+                    "Catalog." + name, name + "New", "success", true, true));
+            }
+        }
+    }
+
     @Test
     public void testName()
     {

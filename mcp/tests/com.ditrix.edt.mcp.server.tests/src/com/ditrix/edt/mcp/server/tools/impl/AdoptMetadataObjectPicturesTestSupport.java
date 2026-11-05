@@ -156,6 +156,9 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
         Activator activator = mock(Activator.class);
         when(activator.getV8ProjectManager()).thenReturn(projects);
         when(activator.getBmModelManager()).thenReturn(models);
+        var derived = mock(com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider.class);
+        when(activator.getDerivedDataManagerProvider()).thenReturn(derived);
+        when(derived.get(extensionModel)).thenReturn(mock(com._1c.g5.v8.derived.IDerivedDataManager.class));
         ITopObjectFqnGenerator generator = mock(ITopObjectFqnGenerator.class);
         when(activator.getTopObjectFqnGenerator()).thenReturn(generator);
         when(generator.generateExternalPropertyFqn(any(), eq(MdClassPackage.Literals.BASIC_FORM__FORM)))
@@ -491,6 +494,20 @@ public abstract class AdoptMetadataObjectPicturesTestSupport
     protected static final class TestTool extends AdoptMetadataObjectTool
     {
         protected final ProjectContext context;
+        private IExportEnvironment exports;
+
+        String awaitExports(String result, WriteScope writes,
+            java.util.function.BiFunction<String, Long, com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState> wait)
+        {
+            exports = wait::apply;
+            return awaitDiskExport(Map.of("projectName", "Base"), result, writes);
+        }
+
+        @Override
+        protected IExportEnvironment exportEnvironment()
+        {
+            return exports;
+        }
 
         TestTool(IProject project, Configuration config) throws Exception
         {

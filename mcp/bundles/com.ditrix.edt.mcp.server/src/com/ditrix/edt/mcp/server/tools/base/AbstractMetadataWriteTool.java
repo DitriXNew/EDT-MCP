@@ -19,11 +19,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -33,6 +34,7 @@ import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonArray;
@@ -40,23 +42,46 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/**
- * Base class for metadata write tools that mutate the EDT model
- * (create / add / delete) and therefore must run on the UI thread.
- * <p>
- * Centralizes the boilerplate shared by all such tools:
- * <ul>
- * <li>JSON response type;</li>
- * <li>marshalling the call onto the SWT UI thread via {@link Display#syncExec}
- * with unified error handling (logs and returns a {@link ToolResult} error);</li>
- * <li>resolving the {@link IProject} and its {@link Configuration};</li>
- * <li>unwrapping the underlying cause message thrown from a BM write task.</li>
- * </ul>
- * Subclasses implement {@link #executeOnUiThread(Map)}, which is already invoked
- * on the UI thread.
- */
+/** Shared host dispatch, project resolution and post-write export reporting. */
 public abstract class AbstractMetadataWriteTool implements IMcpTool
 {
+    protected static <T> T readPreparation(IProject project, java.util.function.Supplier<T> work)
+    {
+        return ReadToolExecution.readOnHost(project, "Prepare metadata write", work);
+    }
+
+    /** Resolve a fresh root inside the caller's preparation read; retain the windowed context. */
+    protected static MetadataScope preparationScope(ProjectContext context)
+    {
+        return HostKind.current() == HostKind.HEADLESS
+            ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(context.project.getName()).resolveMetadataRootInTransaction().scope()
+            : context.scope;
+    }
+
+    protected static MetadataScope transactionScope(ProjectContext context,
+        com._1c.g5.v8.bm.core.IBmTransaction transaction)
+    {
+        if (HostKind.current() != HostKind.HEADLESS) return context.scope;
+        Configuration config = context.scope.isExternalObjects()
+            ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(context.project.getName())
+                .resolveMetadataRootInTransaction().configuration()
+            : (Configuration)transaction.getTopObjectByFqn("Configuration");
+        return MetadataScope.of(context.project, config);
+    }
+
+    /** Finish preparation in a read before invoking the ID-based write continuation. */
+    protected static String prepareWrite(IProject project,
+        java.util.function.Supplier<java.util.function.Supplier<String>> preparation)
+    {
+        return readPreparation(project, preparation).get();
+    }
+
+    private static void logExecutionFailure(String context, Throwable failure)
+    {
+        if (HostKind.current() == HostKind.HEADLESS) Refusals.log(context, failure);
+        else Activator.logError(context, failure);
+    }
+
     /**
      * Whether this tool's result depends on VALIDATION having finished, not just on the model.
      * <p>
@@ -241,7 +266,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
         AtomicReference<String> resultRef = new AtomicReference<>();
         WriteScope scope = new WriteScope();
-        Display display = PlatformUI.getWorkbench().getDisplay();
+        var display = ReadToolExecution.workbenchExecutor();
         try
         {
             Runnable uiThreadWork = () -> WriteScope.runWithScope(scope, () -> {
@@ -254,7 +279,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 }
                 catch (Exception e)
                 {
-                    Activator.logError("Error in " + getName(), e); //$NON-NLS-1$
+                    logExecutionFailure("Error in " + getName(), e); //$NON-NLS-1$
                     resultRef.set(ToolResult.error(e.getMessage()).toJson());
                 }
             });
@@ -263,7 +288,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             if (boundMs > 0L)
             {
                 BoundedJob.Result bounded = BoundedJob.run(getName() + ": UI-thread work", boundMs, //$NON-NLS-1$
-                    monitor -> display.syncExec(uiThreadWork));
+                    monitor -> display.accept(uiThreadWork));
                 if (bounded.getOutcome() != BoundedJob.Outcome.COMPLETED)
                 {
                     // The caller is bounded, not SWT. The UI runnable may still record a commit or
@@ -276,14 +301,14 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 }
                 if (bounded.getFailure() != null)
                 {
-                    Activator.logError("Error finishing " + getName(), bounded.getFailure()); //$NON-NLS-1$
+                    logExecutionFailure("Error finishing " + getName(), bounded.getFailure()); //$NON-NLS-1$
                     return scope.markErrorAfterRecordedWrite(
                         ToolResult.error(bounded.getFailure().getMessage()).toJson());
                 }
             }
             else
             {
-                display.syncExec(uiThreadWork);
+                display.accept(uiThreadWork);
             }
 
             // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
@@ -296,7 +321,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // Covers failures in the UI hand-off itself and in every post-commit export/refresh
             // step. The scope, not this catch's position or wording, decides whether the mutation
             // marker belongs on the answer.
-            Activator.logError("Error finishing " + getName(), e); //$NON-NLS-1$
+            logExecutionFailure("Error finishing " + getName(), e); //$NON-NLS-1$
             return scope.markErrorAfterRecordedWrite(ToolResult.error(e.getMessage()).toJson());
         }
     }
@@ -327,36 +352,51 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     // observable from anywhere else.
     protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
     {
-        // Parsed once, and only a SUCCESS is parsed at all: an error is a well-formed JSON object
-        // too, and treating one as a write would make a rejected argument wait out the whole
-        // deadline and then be re-reported as a disk problem.
         JsonObject success = successObject(result);
-        if (success == null)
+        boolean committedError = success == null && ToolResult.isErrorPayload(result) && scope.hasRecordedWrite();
+        if (success == null && !committedError)
         {
-            // This is also the common return path for an exception caught by execute(). If the
-            // tool recorded a write before producing that ordinary error, derive the structural
-            // post-commit marker here instead of requiring every catch to remember a factory.
             return scope.markErrorAfterRecordedWrite(result);
         }
         WriteScope.Verdict verdict = scope.verdict(defaultProjectsToAwait(params));
         if (verdict.written().isEmpty() && verdict.cascaded().isEmpty())
         {
+            if (committedError) return scope.markErrorAfterRecordedWrite(result);
             // Nothing to WAIT for, but the post-wait step still runs: a tool may have work that
             // must not start until the barrier is behind it, and skipping it here would silently
             // drop that work for exactly the calls that queued nothing. Reported as established:
             // this call put nothing in the queue, so there is nothing about it left unfinished.
             return scope.markErrorAfterRecordedWrite(
-                publish(verdict, refreshAfterExportAwait(params, result, true)));
+                publish(verdict, refreshAfterExportAwait(params, result, true, scope)));
         }
-        WriteExportBarrier.Outcome export = WriteExportBarrier.await(verdict, exportDeadlineMs(),
-            exportEnvironment()::waitForDiskExport);
+        WriteExportBarrier.Outcome export;
+        try
+        {
+            export = WriteExportBarrier.await(verdict, exportDeadlineMs(), exportEnvironment()::waitForDiskExport);
+        }
+        catch (RuntimeException e)
+        {
+            if (!committedError) throw e;
+            Activator.logWarning("Could not observe disk export after a failed metadata write: " + e); //$NON-NLS-1$
+            export = new WriteExportBarrier.Outcome(false, null);
+        }
+        if (committedError)
+        {
+            // Draining must preserve the original failure and never run success-only refresh work.
+            String marked = scope.markErrorAfterRecordedWrite(result);
+            if (export.drained()) return marked;
+            JsonObject error = JsonParser.parseString(marked).getAsJsonObject();
+            error.addProperty("exportState", (export.pendingProject() == null //$NON-NLS-1$
+                ? BuildUtils.DiskExportState.UNOBSERVABLE : BuildUtils.DiskExportState.PENDING).name());
+            return GsonProvider.toJson(error);
+        }
         if (export.pendingProject() != null)
         {
             return scope.markErrorAfterRecordedWrite(WriteExportBarrier.notConfirmed(export.pendingProject()));
         }
         boolean drainEstablished = export.drained();
         return scope.markErrorAfterRecordedWrite(attachWrittenObjectMarkers(params, verdict, scope,
-            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished))));
+            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished, scope))));
     }
 
     /** The FQN a metadata write addresses; decides whether {@code Configuration} is its target. */
@@ -521,6 +561,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return result;
     }
 
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished, WriteScope scope)
+    {
+        return refreshAfterExportAwait(params, result, drainEstablished);
+    }
+
     /**
      * Reads a string member of a result, for a subclass restating part of its own answer.
      *
@@ -619,9 +665,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Performs the tool logic. Always invoked on the SWT UI thread, so model
-     * mutations are safe here. Any thrown exception is logged and converted to a
-     * {@link ToolResult} error by {@link #execute(Map)}.
+     * Runs on SWT in windowed EDT and on the caller in headless EDT.
+     * Model reads and writes retain their own transaction boundaries.
      *
      * @param params the tool parameters
      * @return the JSON result string
@@ -712,7 +757,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             return ctx;
         }
-        String hint = ctx.scope.addressingHint(fqn);
+        String hint = readPreparation(ctx.project, () -> preparationScope(ctx).addressingHint(fqn));
         if (!hint.isEmpty())
         {
             ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
@@ -746,8 +791,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      */
     final String vendorSupportRefusal(MetadataScope scope, String fqn)
     {
-        String refusal = VendorSupportGuard.refusalForFqn(scope,
-            MetadataTypeUtils.toCanonicalEnglishFqn(fqn), writeIntent());
+        String refusal = ReadToolExecution.readOnHost(scope.project(), getName() + ": support preflight",
+            () -> VendorSupportGuard.refusalForFqn(HostKind.current() == HostKind.HEADLESS && scope.project() != null
+                ? com.ditrix.edt.mcp.server.utils.ProjectContext.of(scope.project().getName())
+                    .resolveMetadataRootInTransaction().scope() : scope,
+                MetadataTypeUtils.toCanonicalEnglishFqn(fqn), writeIntent()));
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
@@ -769,6 +817,13 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
     /** The same write gate with an already-resolved project, for lifecycle snapshot tests. */
     ProjectContext resolveProjectRoot(String projectName, IProject project, boolean allowNoConfiguration)
+    {
+        return ReadToolExecution.readOnHost(project, getName() + ": resolve root",
+            () -> resolveProjectRootInBoundary(projectName, project, allowNoConfiguration));
+    }
+
+    private ProjectContext resolveProjectRootInBoundary(String projectName, IProject project,
+        boolean allowNoConfiguration)
     {
         ProjectContext ctx = new ProjectContext();
 

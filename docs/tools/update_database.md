@@ -94,7 +94,7 @@ Pass `terminateRunningClients=false` to keep the client running; then the old ma
 
 ## Database restructure (auto-confirmed)
 
-When the update changes the DB structure (new/changed objects), EDT pops a blocking **"Restructure data" / «Реорганизация информации»** confirmation dialog listing the structural changes. Because `confirm=true` has already approved this irreversible update, the tool **auto-presses that dialog's default "Accept" button** so the unattended call completes without a human click — otherwise the MCP call would hang on the modal. The EDT update API offers no per-call switch for this, so it is handled by intercepting the dialog only for the duration of this update; the auto-press is written to the EDT log. A structural restructure can include data-deleting changes (dropped attributes/objects) — that is part of applying the configuration you confirmed. Applies to both file infobases and standalone servers.
+On windowed EDT, a confirmed update auto-accepts the native **Restructure data** dialog for that operation. The explicit headless host uses core synchronization callbacks without opening dialogs: `confirm=true` accepts restructuring, and `externalInfobaseChanges` selects override/import/cancel. Unknown runtime questions fail with their condition and a recovery action. A file infobase with active sessions must return an error; close those sessions before retrying. The headless caller waits at most 120 seconds; a timeout reports an unknown outcome because the platform may still be running. Inspect the database before retrying. Structural changes can delete data.
 
 ## Examples
 

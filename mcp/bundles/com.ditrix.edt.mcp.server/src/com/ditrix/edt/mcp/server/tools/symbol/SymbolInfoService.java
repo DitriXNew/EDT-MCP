@@ -23,8 +23,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
-import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.ide.IDE;
 import org.eclipse.xtext.nodemodel.ICompositeNode;
 import org.eclipse.xtext.nodemodel.ILeafNode;
@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
@@ -126,8 +127,7 @@ public class SymbolInfoService
         AtomicReference<String> resultRef = new AtomicReference<>();
 
         // Execute on UI thread
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
                 String result = executeOnUiThread(targetFile, targetLine, targetColumn);
@@ -146,7 +146,8 @@ public class SymbolInfoService
         if (result == null || result.startsWith("Error: No active workbench") //$NON-NLS-1$
             || result.startsWith("Error: Could not open editor")) //$NON-NLS-1$
         {
-            String emfResult = meaningfulOrNull(getSymbolInfoViaEmf(project, filePath, line, column));
+            String emfResult = meaningfulOrNull(ReadToolExecution.read(project, "get_symbol_info",
+                () -> getSymbolInfoViaEmf(project, filePath, targetLine, targetColumn)));
             if (emfResult != null)
             {
                 result = emfResult;
@@ -183,6 +184,7 @@ public class SymbolInfoService
      */
     private String executeOnUiThread(IFile file, int line, int column) throws Exception // NOSONAR reflective per-kind dispatch; further decomposition deferred
     {
+        if (!PlatformUI.isWorkbenchRunning()) { return "Error: No active workbench window"; }
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)
         {

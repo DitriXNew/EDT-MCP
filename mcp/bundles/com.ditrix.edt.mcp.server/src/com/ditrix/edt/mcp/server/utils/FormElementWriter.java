@@ -1135,7 +1135,7 @@ public final class FormElementWriter
         /**
          * @param formModel the transaction-bound editable content form
          * @param tx the active BM read transaction
-         * @return the read result (must not leak transaction-bound EObjects)
+         * @return the read result; only native form rename carries its rebindable target outside BM
          */
         T run(EObject formModel, IBmTransaction tx);
     }
@@ -1152,8 +1152,8 @@ public final class FormElementWriter
     }
 
     /**
-     * A resolved form-edit context: the project, its BM model and the MD-form (pre-transaction
-     * snapshot - re-fetched by {@link #mdFormBmId} inside the transaction for any mutation).
+     * A resolved form-edit context: project/model services and the form's stable id. Headless
+     * reads and writes re-fetch the form; only windowed callers retain the original native form.
      */
     public static final class FormEditContext
     {
@@ -1161,7 +1161,7 @@ public final class FormElementWriter
         public final IProject project;
         /** The project's BM model. */
         public final IBmModel bmModel;
-        /** Pre-transaction snapshot of the MD-form (safe for reads like {@code getName()}). */
+        /** Original native form for the windowed path; headless callers carry only its id. */
         public final MdObject mdForm;
         /** The MD-form's bmId, used to re-fetch it inside the transaction. */
         final long mdFormBmId;
@@ -1173,9 +1173,20 @@ public final class FormElementWriter
         {
             this.project = project;
             this.bmModel = bmModel;
-            this.mdForm = mdForm;
+            this.mdForm = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? null : mdForm;
             this.mdFormBmId = mdFormBmId;
             this.formPath = formPath;
+        }
+
+        public <T> T read(java.util.function.Function<MdObject, T> work)
+        {
+            return BmTransactions.read(bmModel, "Read editable form identity", (tx, monitor) -> {
+                var current = tx.getObjectById(mdFormBmId);
+                if (!(current instanceof MdObject form))
+                    throw new FormValidationException(ToolResult.error("Form no longer exists; resolve it again.").toJson());
+                return work.apply(form);
+            });
         }
     }
 
@@ -1213,12 +1224,21 @@ public final class FormElementWriter
     public static FormEditContext resolveForEdit(IProject project, MetadataScope scope,
         String formPath, String formNotFoundMessage)
     {
-        MdObject mdForm = FormStructureReader.resolveMdForm(scope, formPath);
-        if (mdForm == null)
-        {
-            throw new FormValidationException(ToolResult.error(formNotFoundMessage).toJson());
-        }
-        return editContext(project, mdForm, formPath);
+        FormEditContext context = resolveForEditOrNull(project, scope, formPath);
+        if (context == null) throw new FormValidationException(ToolResult.error(formNotFoundMessage).toJson());
+        return context;
+    }
+
+    /** A missing form is distinct from unavailable services; captures its identity in the resolving read. */
+    public static FormEditContext resolveForEditOrNull(IProject project, MetadataScope scope, String formPath)
+    {
+        return ReadToolExecution.readOnHost(project, "Resolve editable form", () -> {
+            MetadataScope current = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? ProjectContext.of(project.getName()).resolveMetadataRoot().scope() : scope;
+            MdObject mdForm = FormStructureReader.resolveMdForm(current, formPath);
+            return mdForm == null ? null : editContext(project, mdForm, formPath);
+        });
     }
 
     /**

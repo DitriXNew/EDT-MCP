@@ -15,7 +15,6 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.Function;
 import com._1c.g5.v8.dt.bsl.model.Method;
@@ -24,6 +23,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -132,11 +132,10 @@ public class GoToDefinitionTool implements IMcpTool
         // Execute on UI thread (required for EDT API access)
         AtomicReference<String> resultRef = new AtomicReference<>();
 
-        Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        ReadToolExecution.dispatch(() -> {
             try
             {
-                String result = resolveDefinition(projectName, symbol, modulePath, includeSource);
+                String result = ReadToolExecution.readOnHost(projectName, NAME, () -> resolveDefinition(projectName, symbol, modulePath, includeSource));
                 resultRef.set(result);
             }
             catch (Exception e)

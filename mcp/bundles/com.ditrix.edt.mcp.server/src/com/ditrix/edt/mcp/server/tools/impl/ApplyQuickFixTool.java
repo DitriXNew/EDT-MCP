@@ -269,7 +269,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         MarkerMatch chosen = matches.get(chosenIdx);
 
-        String locked = vendorSupportRefusal(project, ctx.scope, chosen);
+        String locked = readPreparation(project, () -> vendorSupportRefusal(project, preparationScope(ctx), chosen));
         if (locked != null)
         {
             return locked;

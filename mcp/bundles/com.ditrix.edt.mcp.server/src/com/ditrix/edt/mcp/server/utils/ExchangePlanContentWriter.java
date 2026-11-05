@@ -134,9 +134,28 @@ public final class ExchangePlanContentWriter
     public static Result apply(IProject project, Configuration config, ExchangePlan exchangePlan,
         List<JsonObject> content)
     {
+        return prepare(project, config, exchangePlan, content).get();
+    }
+
+    public static Result apply(IProject project, String fqn, List<JsonObject> content)
+    {
+        return ReadToolExecution.readOnHost(project, "Prepare exchange plan content", () -> {
+            var root = ProjectContext.resolveMetadataRoot(project.getName());
+            if (!root.ok()) return (java.util.function.Supplier<Result>)() -> Result.failed(root.errorJson());
+            var node = MetadataNodeResolver.resolveExistingWithYoFallback(root.scope(), fqn).node;
+            if (node == null || !(node.object instanceof ExchangePlan plan))
+                return (java.util.function.Supplier<Result>)() -> Result.failed(
+                    ToolResult.error("Exchange plan not found: " + fqn).toJson());
+            return prepare(project, root.configuration(), plan, content);
+        }).get();
+    }
+
+    private static java.util.function.Supplier<Result> prepare(IProject project, Configuration config, ExchangePlan exchangePlan,
+        List<JsonObject> content)
+    {
         if (content == null || content.isEmpty())
         {
-            return Result.failed(ToolResult.error("Nothing to apply: provide at least one 'content' " //$NON-NLS-1$
+            return () -> Result.failed(ToolResult.error("Nothing to apply: provide at least one 'content' " //$NON-NLS-1$
                 + "entry, e.g. {\"metadata\":\"Catalog.Products\",\"autoRecord\":\"Allow\"} to add an " //$NON-NLS-1$
                 + "object or {\"op\":\"remove\",\"metadata\":\"Catalog.Products\"} to remove one.") //$NON-NLS-1$
                 .toJson());
@@ -149,7 +168,7 @@ public final class ExchangePlanContentWriter
             EntryPlan resolved = planEntry(config, entry);
             if (resolved.error != null)
             {
-                return Result.failed(resolved.error);
+                return () -> Result.failed(resolved.error);
             }
             plan.add(resolved.entry);
         }
@@ -157,44 +176,47 @@ public final class ExchangePlanContentWriter
         MetadataWriteServices services = MetadataWriteServices.resolve(project);
         if (services.error != null)
         {
-            return Result.failed(services.error);
+            return () -> Result.failed(services.error);
         }
 
         long exchangePlanBmId = ((IBmObject)exchangePlan).bmGetId();
-        try
-        {
-            return BmTransactions.write(services.model, "ModifyExchangePlanContent", (tx, pm) -> //$NON-NLS-1$
+        String planName = exchangePlan.getName();
+        return () -> {
+            try
             {
-                ExchangePlan inTx = (ExchangePlan)tx.getObjectById(exchangePlanBmId);
-                if (inTx == null)
+                return BmTransactions.write(services.model, "ModifyExchangePlanContent", (tx, pm) -> //$NON-NLS-1$
                 {
-                    throw new ContentWriteException(ToolResult.error("The exchange plan could not be " //$NON-NLS-1$
-                        + "resolved inside the transaction.").toJson());
-                }
-                int added = 0;
-                int updated = 0;
-                int removed = 0;
-                for (PlannedEntry planned : plan)
-                {
-                    int[] delta = applyPlannedEntry(tx, inTx, planned, services);
-                    added += delta[0];
-                    updated += delta[1];
-                    removed += delta[2];
-                }
-                return Result.ok(added, updated, removed);
-            });
-        }
-        catch (ContentWriteException e)
-        {
-            return Result.failed(e.getErrorJson());
-        }
-        catch (RuntimeException e)
-        {
-            Activator.logError("Failed to modify exchange plan content for " //$NON-NLS-1$
-                + exchangePlan.getName(), e);
-            return Result.failed(ToolResult.error("Failed to modify exchange plan content: " //$NON-NLS-1$
-                + e.getMessage()).toJson());
-        }
+                    ExchangePlan inTx = (ExchangePlan)tx.getObjectById(exchangePlanBmId);
+                    if (inTx == null)
+                    {
+                        throw new ContentWriteException(ToolResult.error("The exchange plan could not be " //$NON-NLS-1$
+                            + "resolved inside the transaction.").toJson());
+                    }
+                    int added = 0;
+                    int updated = 0;
+                    int removed = 0;
+                    for (PlannedEntry planned : plan)
+                    {
+                        int[] delta = applyPlannedEntry(tx, inTx, planned, services);
+                        added += delta[0];
+                        updated += delta[1];
+                        removed += delta[2];
+                    }
+                    return Result.ok(added, updated, removed);
+                });
+            }
+            catch (ContentWriteException e)
+            {
+                return Result.failed(e.getErrorJson());
+            }
+            catch (RuntimeException e)
+            {
+                Activator.logError("Failed to modify exchange plan content for " //$NON-NLS-1$
+                    + planName, e);
+                return Result.failed(ToolResult.error("Failed to modify exchange plan content: " //$NON-NLS-1$
+                    + e.getMessage()).toJson());
+            }
+        };
     }
 
     // ---- mutation (inside the write boundary) -------------------------------------------------

@@ -6,7 +6,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.swt.widgets.Display;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -91,14 +91,11 @@ public class GetTemplateScreenshotTool implements IMcpTool
             return ToolResult.error("templatePath is required").toJson(); //$NON-NLS-1$
         }
 
-        Display display = Display.getDefault();
-        if (display == null || display.isDisposed())
+        AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
+        if (!ReadToolExecution.dispatchRendering(() -> resultRef.set(TemplateScreenshotHelper.capture(projectName, templatePath))))
         {
             return ToolResult.error("Display is not available").toJson(); //$NON-NLS-1$
         }
-
-        AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
-        display.syncExec(() -> resultRef.set(TemplateScreenshotHelper.capture(projectName, templatePath)));
 
         CaptureResult result = resultRef.get();
         if (result == null)

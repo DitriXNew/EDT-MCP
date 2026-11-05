@@ -15,8 +15,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.PlatformUI;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
@@ -284,14 +282,8 @@ public class ReadModuleSourceTool implements IMcpTool
         });
         try
         {
-            Display display = PlatformUI.getWorkbench().getDisplay();
-            if (display.getThread() == Thread.currentThread())
+            if (!ReadToolExecution.dispatchAsync(task))
             {
-                task.run();
-            }
-            else
-            {
-                display.asyncExec(task);
                 String result = awaitComputedValue(ref, finished,
                     INTERCEPTION_FOOTER_TIMEOUT_SECONDS, TimeUnit.SECONDS, expired);
                 if (expired.get() || Thread.currentThread().isInterrupted())

@@ -7,6 +7,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -65,6 +66,93 @@ import com.google.gson.JsonParser;
 /** Model-measured additions, ordinary-adoption compatibility, and uncapped export/history scope. */
 public class AdoptMetadataObjectToolCascadeTest
 {
+    @Test
+    public void adoptionReleasesRootBeforeExporterCompletionOnBothHosts() throws Exception
+    {
+        String application = System.getProperty("eclipse.application");
+        Field plugin = Activator.class.getDeclaredField("plugin");
+        plugin.setAccessible(true);
+        Object previous = plugin.get(null);
+        try
+        {
+            for (String host : List.of(com.ditrix.edt.mcp.server.HostKind.APPLICATION_ID,
+                "org.eclipse.ui.ide.workbench"))
+            {
+                System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+                setUp();
+                System.setProperty("eclipse.application", host);
+                var workspace = org.eclipse.core.resources.ResourcesPlugin.getWorkspace();
+                var manager = mock(com._1c.g5.v8.derived.IDerivedDataManager.class);
+                var provider = mock(com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider.class);
+                Activator activator = mock(Activator.class);
+                when(activator.getDerivedDataManagerProvider()).thenReturn(provider);
+                when(provider.get(model)).thenReturn(manager);
+                plugin.set(null, activator);
+                var wrapping = new java.util.concurrent.atomic.AtomicReference<
+                    com._1c.g5.v8.derived.operations.WrappingOperation>();
+                when(manager.scheduleOperation(any(), any(), eq(true), any())).thenAnswer(call -> {
+                    wrapping.set(call.getArgument(0));
+                    return null;
+                });
+                var exported = new java.util.concurrent.CountDownLatch(1);
+                var notifications = new java.util.concurrent.atomic.AtomicBoolean();
+                var exporter = new org.eclipse.core.runtime.jobs.Job("Adoption regression exporter")
+                {
+                    @Override protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+                    {
+                        exported.countDown();
+                        return Status.OK_STATUS;
+                    }
+                };
+                exporter.setRule(workspace.getRoot());
+                beforeWrite = () -> assertTrue("The root rule must precede the BM transaction",
+                    org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule().contains(workspace.getRoot()));
+                var copy = top(MdObject.class, "ExchangePlan.Branches");
+                when(tx.getObjectById(42L)).thenReturn((IBmObject)copy);
+                afterWrite = () -> {
+                    exporter.schedule();
+                    var operation = wrapping.get();
+                    if (operation != null)
+                    {
+                        operation.setImplicitWaitingContext(List.of());
+                        operation.setAsyncEventScheduler(() -> {
+                            assertNull("Commit notifications must leave the root rule",
+                                org.eclipse.core.runtime.jobs.Job.getJobManager().currentRule());
+                            notifications.set(true);
+                        });
+                    }
+                    else
+                    {
+                        try
+                        {
+                            assertTrue("Global commit waited for an exporter blocked by its root rule",
+                                exported.await(500, java.util.concurrent.TimeUnit.MILLISECONDS));
+                        }
+                        catch (InterruptedException e) { throw new AssertionError(e); }
+                    }
+                };
+                try
+                {
+                    var result = AdoptMetadataObjectTool.adoptUnderWorkspaceRule(workspace, model, adopter,
+                        source.object, sourceScope, source.fqn, target);
+                    assertEquals(Long.valueOf(((IBmObject)copy).bmGetId()), result.copyId);
+                    assertTrue("Export must be able to acquire its rule after commit",
+                        exported.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                    assertTrue("Native commit notifications were lost", notifications.get());
+                    verify(manager, never()).implicitDerivedDataWait(any());
+                    verify(manager, never()).disableImplicitWaiting();
+                }
+                finally { exporter.join(); }
+            }
+        }
+        finally
+        {
+            plugin.set(null, previous);
+            if (application == null) System.clearProperty("eclipse.application");
+            else System.setProperty("eclipse.application", application);
+        }
+    }
+
     private final List<IBmObject> objects = new ArrayList<>();
     private final Map<IBmObject, String> names = new IdentityHashMap<>();
     private final List<IBmSyncEventListener> listeners = new ArrayList<>();
@@ -83,6 +171,7 @@ public class AdoptMetadataObjectToolCascadeTest
     private AdoptMetadataObjectTool.AdoptionSource source;
     private IModelObjectAdopter adopter;
     private IExtensionProject target;
+    private MetadataScope sourceScope;
 
     @Before
     public void setUp() throws Exception
@@ -157,7 +246,8 @@ public class AdoptMetadataObjectToolCascadeTest
         var plan = MdClassFactory.eINSTANCE.createExchangePlan();
         plan.setName("Branches");
         base.getExchangePlans().add(plan);
-        source = AdoptMetadataObjectTool.AdoptionSource.resolve(MetadataScope.ofConfiguration(base),
+        sourceScope = MetadataScope.ofConfiguration(base);
+        source = AdoptMetadataObjectTool.AdoptionSource.resolve(sourceScope,
             "ExchangePlan.Branches");
     }
 

@@ -21,6 +21,7 @@ repeatable and leaves no workspace residue. assert_no_diff guards the committed 
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 from harness import (
     call,
@@ -127,12 +128,18 @@ def test_export_import_roundtrip_then_delete_project():
             "no-confirm delete must be a preview"
         lp_after_prev = call("list_projects", {})
         assert_contains(lp_after_prev.text, NEW_PROJECT, "a preview must not delete the project")
+        paths = call("list_projects", {"format": "json"})
+        assert_ok(paths, "resolve the imported project's disk location")
+        project_path = Path(next(row["path"] for row in paths.structured["projects"]
+                                 if row["name"] == NEW_PROJECT))
+        assert project_path.is_dir(), "the imported project must exist on disk before deletion"
 
         dele = call("delete_project",
                     {"projectName": NEW_PROJECT, "deleteContent": True, "confirm": True})
         assert_ok(dele, "delete the imported project (confirm)")
         assert dele.structured and dele.structured.get("action") == "deleted", \
             "confirm delete must report action='deleted'"
+        assert not project_path.exists(), "confirmed deletion must remove the project directory before another call"
 
         # 5) Verify it is gone.
         wait_for_project_ready()

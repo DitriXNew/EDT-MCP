@@ -341,9 +341,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         IPreferenceStore store = getStore();
         if (store == null)
         {
-            // FAIL CLOSED: with no preference store (a headless registry, a plugin not started yet)
-            // an empty set would advertise and allow EVERY tool, including the ones that ship
-            // disabled - the powerful raw git tool among them. Fall back to the shipped defaults.
+            // Stored preferences fail closed without a store; the explicit headless registry ignores them.
             return parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
         }
         ensureMigrated(store);

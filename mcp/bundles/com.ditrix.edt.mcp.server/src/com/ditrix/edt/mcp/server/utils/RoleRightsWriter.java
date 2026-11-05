@@ -248,6 +248,29 @@ public final class RoleRightsWriter
     public static Result apply(IProject project, Configuration config, Role role,
         List<JsonObject> rights, List<JsonObject> templates, JsonObject roleProperties)
     {
+        long id = ReadToolExecution.readOnHost(project, "Read role identity", () -> ((IBmObject)role).bmGetId());
+        return applyWithId(project, config, role, id, rights, templates, roleProperties);
+    }
+
+    public static Result apply(IProject project, String fqn, List<JsonObject> rights,
+        List<JsonObject> templates, JsonObject roleProperties)
+    {
+        return ReadToolExecution.readOnHost(project, "Prepare role write", () -> {
+            var root = ProjectContext.resolveMetadataRoot(project.getName());
+            if (!root.ok()) return (java.util.function.Supplier<Result>)() -> Result.failed(root.errorJson());
+            var node = MetadataNodeResolver.resolveExistingWithYoFallback(root.scope(), fqn).node;
+            if (node == null || !(node.object instanceof Role role) || !(role instanceof IBmObject bm))
+                return (java.util.function.Supplier<Result>)() -> Result.failed(ToolResult.error("Role not found: " + fqn).toJson());
+            long id = bm.bmGetId();
+            // Native rights tasks rebind this opaque handle with toTransactionObject before use.
+            return (java.util.function.Supplier<Result>)() -> applyWithId(project, null, role, id,
+                rights, templates, roleProperties);
+        }).get();
+    }
+
+    private static Result applyWithId(IProject project, Configuration config, Role role, long roleBmId,
+        List<JsonObject> rights, List<JsonObject> templates, JsonObject roleProperties)
+    {
         if (rights.isEmpty() && templates.isEmpty() && roleProperties == null)
         {
             return Result.failed(ToolResult.error("Nothing to apply to the role: provide at least one " //$NON-NLS-1$
@@ -282,8 +305,6 @@ public final class RoleRightsWriter
                 + "generator). Ensure the EDT workbench is fully started, then retry.").toJson()); //$NON-NLS-1$
         }
 
-        long roleBmId = ((IBmObject)role).bmGetId();
-
         Context ctx = new Context(project, config, holder.model, role, roleBmId, rightInfos, eventBroker,
             sorter);
         return applyResolved(ctx, fqnGenerator, rights, templates, roleProperties);
@@ -312,7 +333,9 @@ public final class RoleRightsWriter
         // the log line and the caller-facing refusal - sit in the catch blocks below, which run
         // AFTER the last BM task has finished, where role.getName() would be an EMF feature read on
         // the bare calling thread with no transaction open at all.
-        String roleName = BmTransactions.read(ctx.model, "ReadRoleName", (tx, pm) -> ctx.role.getName()); //$NON-NLS-1$
+        String roleName = BmTransactions.read(ctx.model, "ReadRoleName", (tx, pm) -> //$NON-NLS-1$
+            (com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? (Role)tx.getObjectById(ctx.roleBmId) : ctx.role).getName());
         // Assigned by the bootstrap inside the try and read from BOTH catch blocks: when the
         // bootstrap could name the rights resource, every refusal raised after it still owes the
         // caller that name to export under (see Result#rightsFqn). WHETHER to export is a separate
@@ -413,26 +436,27 @@ public final class RoleRightsWriter
      */
     private static List<RightPlan> planRights(Context ctx, List<JsonObject> rights)
     {
+        return BmTransactions.read(ctx.model, "Plan role rights", (tx, monitor) -> {
+        Configuration config = com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+            ? (Configuration)tx.getTopObjectByFqn("Configuration") : ctx.config;
         List<RightPlan> plan = new ArrayList<>(rights.size());
         for (JsonObject entry : rights)
         {
             String objectFqn = str(entry.get(KEY_OBJECT));
-            MdObject targetMd = resolveObject(ctx.config, objectFqn);
+            MdObject targetMd = resolveObject(config, objectFqn);
             if (targetMd == null)
             {
-                throw new RoleWriteException(objectNotFound(ctx.config, objectFqn));
+                throw new RoleWriteException(objectNotFound(config, objectFqn));
             }
             EObject target = targetMd;
 
             String rightName = str(entry.get(KEY_RIGHT));
             // The right is resolved by walking rightInfos.getRights(object) - a model read - so it runs
             // inside a read boundary; only the resolved Right handle (a task input) escapes.
-            Right right = BmTransactions.read(ctx.model, "ResolveRight", //$NON-NLS-1$
-                (tx, pm) -> resolveRight(ctx.rightInfos, target, rightName));
+            Right right = resolveRight(ctx.rightInfos, target, rightName);
             if (right == null)
             {
-                throw new RoleWriteException(BmTransactions.read(ctx.model, "RightNotFound", //$NON-NLS-1$
-                    (tx, pm) -> rightNotFound(ctx.rightInfos, target, rightName, objectFqn)));
+                throw new RoleWriteException(rightNotFound(ctx.rightInfos, target, rightName, objectFqn));
             }
 
             RightValue value = parseRightValue(entry.get(KEY_VALUE));
@@ -443,17 +467,16 @@ public final class RoleRightsWriter
                 List<String> fieldNames = strList(entry.get("rlsFields")); //$NON-NLS-1$
                 // DbViewUtil.getRlsFields reads DB-view derived data - a model read - so resolve inside
                 // a read boundary; only the resolved field collection (a task input) escapes.
-                fields = BmTransactions.read(ctx.model, "ResolveRlsFields", //$NON-NLS-1$
-                    (tx, pm) -> resolveRlsFields(targetMd, fieldNames));
+                fields = resolveRlsFields(targetMd, fieldNames);
                 if (fields == null)
                 {
-                    throw new RoleWriteException(BmTransactions.read(ctx.model, "RlsFieldsNotFound", //$NON-NLS-1$
-                        (tx, pm) -> rlsFieldsNotFound(targetMd, fieldNames)));
+                    throw new RoleWriteException(rlsFieldsNotFound(targetMd, fieldNames));
                 }
             }
             plan.add(new RightPlan(target, right, value, rls, fields));
         }
         return plan;
+        });
     }
 
     /**

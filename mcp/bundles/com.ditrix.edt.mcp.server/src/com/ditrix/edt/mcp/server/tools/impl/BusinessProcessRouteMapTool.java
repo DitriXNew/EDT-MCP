@@ -223,13 +223,14 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
                 + "'. Refresh the project and retry.").toJson();
         }
         Snapshot snapshot = BmTransactions.read(model, "ReadBusinessProcessRouteMap", (tx, pm) -> {
-            var node = MetadataNodeResolver.resolveExisting(ctx.scope, args.fqn());
+            var currentScope = transactionScope(ctx, tx);
+            var node = MetadataNodeResolver.resolveExisting(currentScope, args.fqn());
             BusinessProcess owner = requireBusinessProcess(node == null ? null : node.object,
                 node != null && node.topLevel, args.fqn());
             requireSupportedOwner(owner);
             if (!args.action().equals("get"))
             {
-                String refusal = VendorSupportGuard.refusalForFqn(ctx.scope, args.fqn(),
+                String refusal = VendorSupportGuard.refusalForFqn(currentScope, args.fqn(),
                     VendorSupportGuard.Intent.MODIFY);
                 if (refusal != null)
                 {
@@ -248,14 +249,14 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
                     + "'. Refresh the project and retry.");
             }
             GraphicalScheme existing = content.scheme();
-            String language = MetadataLanguageUtils.resolveLanguageCode(ctx.config, args.language());
+            String language = MetadataLanguageUtils.resolveLanguageCode(currentScope.configuration(), args.language());
             if (args.request() != null)
             {
                 boolean titles = args.request().points().stream().anyMatch(point -> point.title() != null)
                     || args.request().connections().stream().anyMatch(connection -> connection.title() != null);
                 if (titles)
                 {
-                    language = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, "title", args.language(),
+                    language = MetadataLanguageUtils.resolveSynonymLanguage(currentScope.configuration(), "title", args.language(),
                         "route-map titles");
                 }
             }
