@@ -1027,7 +1027,7 @@ def test_form_rename_immediately_after_module_write_updates_reference():
         "mode": "replace", "overwrite": True, "source": source,
     })
     assert_ok(written, "write the reference immediately before rename")
-    result = call("rename_metadata_object", {
+    result = rename_call({
         "projectName": PROJECT, "objectFqn": _form_fqn("Group", group),
         "newName": renamed, "confirm": True,
     })
