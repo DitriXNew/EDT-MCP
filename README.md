@@ -332,7 +332,10 @@ On Windows, the first tool call opens a normal EDT window if necessary; closing 
 
 **What the headless host can do.** Everything except six tools that need a real window: `get_content_assist`, `open_editor`, `get_form_screenshot`, `get_form_layout_snapshot`, `get_template_screenshot` and `edt_dialog`. BSL analysis, metadata and form writes, rename, delete and database update all run without a window. `get_symbol_info` returns the signature and parameters without the editor hover documentation.
 
-**There is nothing to agree to on this host.** Per-tool disabling, read-only presets and the destructive-consent window do not apply, so adding `-headless` to a client configuration removes those restrictions for that agent. Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
+> [!WARNING]
+> **stdio with `-headless` allows everything, by design.** Choosing this mode is the decision to allow every operation. There is no interaction on this host, so there is nothing to agree to, and no setting or safeguard limits it: per-tool disabling, read-only presets and the destructive-consent window do not apply. Add `-headless` only for an agent you trust with the whole workspace.
+
+Preview/confirm steps and tool preconditions still apply, and autosort stays your setting. A headless client that attaches to an already open windowed EDT follows the windowed rules.
 
 ### VS Code / GitHub Copilot
 
