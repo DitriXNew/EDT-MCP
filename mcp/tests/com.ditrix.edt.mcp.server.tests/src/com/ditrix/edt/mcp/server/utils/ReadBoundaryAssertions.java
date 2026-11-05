@@ -19,6 +19,18 @@ public final class ReadBoundaryAssertions
         check(value, new IdentityHashMap<>());
     }
 
+    public static void assertPreparationResult(String taskName, Object value)
+    {
+        // Native form rename builds the workspace outside BM; its target rebinds on access.
+        if ("Prepare form element rename".equals(taskName))
+        {
+            assertTrue("Only the direct form rename target may cross this read",
+                value instanceof com._1c.g5.v8.dt.mcore.NamedElement);
+            return;
+        }
+        assertNoLiveBmValue(value);
+    }
+
     private static void check(Object value, Map<Object, Boolean> visited)
     {
         if (value == null || visited.put(value, true) != null) return;

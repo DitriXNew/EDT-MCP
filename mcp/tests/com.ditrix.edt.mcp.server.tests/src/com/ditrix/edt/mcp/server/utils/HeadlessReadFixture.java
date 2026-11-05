@@ -50,8 +50,9 @@ public final class HeadlessReadFixture implements AutoCloseable
             reads++; depth++;
             try
             {
-                Object result = ((IBmTask<?>)inv.getArgument(0)).execute(null, null);
-                ReadBoundaryAssertions.assertNoLiveBmValue(result);
+                IBmTask<?> task = inv.getArgument(0);
+                Object result = task.execute(null, null);
+                ReadBoundaryAssertions.assertPreparationResult(task.getName(), result);
                 return result;
             }
             finally { depth--; }

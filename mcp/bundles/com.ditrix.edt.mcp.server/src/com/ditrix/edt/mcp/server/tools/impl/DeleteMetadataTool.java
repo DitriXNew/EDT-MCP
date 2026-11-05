@@ -1192,6 +1192,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     (tx, pm) -> nestedSubsystems((Subsystem)object, normFqn))
             : Collections.emptyList();
 
+        return () -> createMdClassDelete(project, normFqn, registrationFqn, object, containerFqn,
+            confirm, force, refactoringService, descendants);
+    }
+
+    private String createMdClassDelete(IProject project, String normFqn, String registrationFqn,
+        MdObject object, String containerFqn, boolean confirm, boolean force,
+        IMdRefactoringService refactoringService, List<String> descendants)
+    {
+        // Native initialization builds the workspace, so it must run after the preparation read ends.
         IRefactoring refactoring;
         try
         {
@@ -1200,24 +1209,27 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         catch (RuntimeException e)
         {
             Activator.logError("Could not prepare delete refactoring for " + normFqn, e); //$NON-NLS-1$
-            return () -> ToolResult.error("Could not prepare deletion of '" + normFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Could not prepare deletion of '" + normFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName() + "'. Nothing was deleted. Use list_projects to check the project " //$NON-NLS-1$
                 + "state and get_metadata_details to verify the target, then retry delete_metadata.") //$NON-NLS-1$
                 .toJson();
         }
         if (refactoring == null)
         {
-            return () -> ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Failed to create delete refactoring for: " + normFqn
+                + ". Nothing was deleted. Use get_metadata_details to verify the target, then retry.").toJson(); //$NON-NLS-1$
         }
 
-        if (!confirm)
-        {
-            String preview = buildPreview(normFqn, refactoring, descendants);
-            return () -> preview;
-        }
-        RefactoringProblems problems = collectRefactoringProblems(refactoring);
-        return () -> performDelete(project, normFqn, registrationFqn, containerFqn, refactoring, force,
-            descendants, problems);
+        return DeleteMetadataTool.<java.util.function.Supplier<String>>readPreparation(project, () -> {
+            if (!confirm)
+            {
+                String preview = buildPreview(normFqn, refactoring, descendants);
+                return () -> preview;
+            }
+            RefactoringProblems problems = collectRefactoringProblems(refactoring);
+            return () -> performDelete(project, normFqn, registrationFqn, containerFqn, refactoring, force,
+                descendants, problems);
+        }).get();
     }
 
     private String buildPreview(String fqn, IRefactoring refactoring, List<String> descendants)

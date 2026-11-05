@@ -1135,7 +1135,7 @@ public final class FormElementWriter
         /**
          * @param formModel the transaction-bound editable content form
          * @param tx the active BM read transaction
-         * @return the read result (must not leak transaction-bound EObjects)
+         * @return the read result; only native form rename carries its rebindable target outside BM
          */
         T run(EObject formModel, IBmTransaction tx);
     }

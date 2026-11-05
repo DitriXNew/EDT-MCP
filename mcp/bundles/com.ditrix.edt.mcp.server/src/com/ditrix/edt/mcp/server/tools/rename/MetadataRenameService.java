@@ -337,6 +337,15 @@ public class MetadataRenameService
                 "Nothing was renamed.")).toJson(); //$NON-NLS-1$
         }
 
+        return () -> createMdClassRename(project, objectFqn, newName, targetObject, confirm,
+            disableRequest, expectedHash, maxResults, progress, refactoringService);
+    }
+
+    private String createMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService)
+    {
+        // Native initialization builds the workspace, so it must run after the preparation read ends.
         // Create refactoring (returns collection because it may also rename in extension projects)
         Collection<IRefactoring> refactorings;
         try
@@ -346,33 +355,36 @@ public class MetadataRenameService
         catch (RuntimeException e)
         {
             Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
-            return () -> ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
                 + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
                 + "retry rename_metadata_object.").toJson(); //$NON-NLS-1$
         }
         if (refactorings == null || refactorings.isEmpty())
         {
-            return () -> ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Failed to create rename refactoring for: " + objectFqn
+                + ". Nothing was renamed. Use get_metadata_details to verify the target, then retry.").toJson(); //$NON-NLS-1$
         }
 
-        String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
-        if (lockedReferrers != null)
-        {
-            return () -> ToolResult.error(lockedReferrers).toJson();
-        }
-        if (!confirm)
-        {
-            // Preview mode - collect all items and problems
-            String preview = buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
-            return () -> preview;
-        }
-        else
-        {
-            // Execute mode - perform the rename, applying any disabled indices
-            return () -> performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
-                "metadata object"); //$NON-NLS-1$
-        }
+        return ReadToolExecution.<java.util.function.Supplier<String>>readOnHost(project, "Prepare metadata rename changes", () -> {
+            String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
+            if (lockedReferrers != null)
+            {
+                return () -> ToolResult.error(lockedReferrers).toJson();
+            }
+            if (!confirm)
+            {
+                // Preview mode - collect all items and problems
+                String preview = buildPreview(project, objectFqn, newName, targetObject, refactorings, maxResults);
+                return () -> preview;
+            }
+            else
+            {
+                // Execute mode - perform the rename, applying any disabled indices
+                return () -> performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
+                    "metadata object"); //$NON-NLS-1$
+            }
+        }).get();
     }
 
     /**
@@ -474,40 +486,55 @@ public class MetadataRenameService
                     + "Button / Group / Decoration / Table / Column ('...Attribute.A.Column.Name' or " //$NON-NLS-1$
                     + "'...Attribute.A.Column.TabularSection.Name'))."); //$NON-NLS-1$
 
-            // Only the old name and the refactoring leave the read transaction - never the element.
-            FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
+            String[] oldName = new String[1];
+            NamedElement target = FormElementWriter.readEditableForm(fctx,
                 "Prepare form element rename", (formModel, tx) -> { //$NON-NLS-1$
                     EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                     if (member == null)
                     {
-                        return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
-                            formModel, ref, normFqn));
+                        String advice = FormElementWriter.kindMismatchAdvice(formModel, ref, normFqn);
+                        throw new FormValidationException(ToolResult.error("Form element not found."
+                            + (advice == null || advice.isEmpty()
+                                ? " Use get_metadata_details to list the form's elements." : advice)).toJson());
                     }
                     String designerChild = designerChildRefusal(member, ref);
                     if (designerChild != null)
                     {
-                        return FormRenameTarget.refused(designerChild);
+                        throw new FormValidationException(ToolResult.error(designerChild).toJson());
                     }
                     if (!(member instanceof NamedElement))
                     {
-                        return FormRenameTarget.refused("Form element '" + ref.name //$NON-NLS-1$
-                            + "' cannot be renamed: its model type carries no renameable name."); //$NON-NLS-1$
+                        throw new FormValidationException(ToolResult.error("Form element '" + ref.name //$NON-NLS-1$
+                            + "' cannot be renamed: its model type carries no renameable name.").toJson()); //$NON-NLS-1$
                     }
                     String duplicate = duplicateNameRefusal(formModel, member, ref, newName);
                     if (duplicate != null)
                     {
-                        return FormRenameTarget.refused(duplicate);
+                        throw new FormValidationException(ToolResult.error(duplicate).toJson());
                     }
-                    return FormRenameTarget.of(((NamedElement)member).getName(),
-                        formRefactoringService.createFormRenameRefactoring((NamedElement)member,
-                            newName));
+                    oldName[0] = ((NamedElement)member).getName();
+                    return (NamedElement)member;
                 });
 
-            if (target.error != null)
+            // BM rebinds the element on access; native initialization must run outside the read.
+            IRefactoring refactoring;
+            try
             {
-                return ToolResult.error(target.error).toJson();
+                refactoring = formRefactoringService.createFormRenameRefactoring(target, newName);
             }
-            Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
+            catch (RuntimeException failure)
+            {
+                Activator.logError("Could not prepare form rename for " + normFqn, failure); //$NON-NLS-1$
+                return ToolResult.error("Could not prepare rename of form element '" + normFqn //$NON-NLS-1$
+                    + "'. Nothing was renamed; no cascade started. Use get_metadata_details to verify " //$NON-NLS-1$
+                    + "the element, then retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+            }
+            if (refactoring == null)
+            {
+                return ToolResult.error("EDT created no rename refactoring for '" + normFqn
+                    + "'. Nothing was renamed. Use get_metadata_details to verify the element, then retry.").toJson();
+            }
+            Collection<IRefactoring> refactorings = Collections.singletonList(refactoring);
             String lockedReferrers = ReadToolExecution.readOnHost(project, "Check form rename referrers",
                 () -> supportLockRefusal(normFqn, refactorings));
             if (lockedReferrers != null)
@@ -516,7 +543,7 @@ public class MetadataRenameService
             }
             if (!confirm)
             {
-                return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
+                return renderPreview(normFqn, newName, oldName[0], refactorings, maxResults,
                     Collections.emptyMap(), Collections.emptyList());
             }
             return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
@@ -724,41 +751,6 @@ public class MetadataRenameService
         }
         return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
             + ". Pick a different name."; //$NON-NLS-1$
-    }
-
-    /** What survives the prepare read transaction: the old name plus EDT's refactoring, or an error. */
-    private static final class FormRenameTarget
-    {
-        private final String oldName;
-        private final IRefactoring refactoring;
-        private final String error;
-
-        private FormRenameTarget(String oldName, IRefactoring refactoring, String error)
-        {
-            this.oldName = oldName;
-            this.refactoring = refactoring;
-            this.error = error;
-        }
-
-        static FormRenameTarget of(String oldName, IRefactoring refactoring)
-        {
-            return refactoring == null
-                ? new FormRenameTarget(null, null, "EDT created no rename refactoring for this " //$NON-NLS-1$
-                    + "form element.") //$NON-NLS-1$
-                : new FormRenameTarget(oldName, refactoring, null);
-        }
-
-        static FormRenameTarget notFound(String advice)
-        {
-            return new FormRenameTarget(null, null, "Form element not found." //$NON-NLS-1$
-                + (advice == null || advice.isEmpty()
-                    ? " Use get_metadata_details to list the form's elements." : advice)); //$NON-NLS-1$
-        }
-
-        static FormRenameTarget refused(String error)
-        {
-            return new FormRenameTarget(null, null, error);
-        }
     }
 
     /**

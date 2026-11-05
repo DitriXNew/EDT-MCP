@@ -96,6 +96,18 @@ public class ReadToolExecutionTest
         assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertNoLiveBmValue(description));
     }
 
+    @Test public void onlyTheNamedFormRenameReadMayReturnItsDirectNativeTarget()
+    {
+        var target = org.mockito.Mockito.mock(com._1c.g5.v8.dt.mcore.NamedElement.class,
+            org.mockito.Mockito.withSettings().extraInterfaces(com._1c.g5.v8.bm.core.IBmObject.class));
+        ReadBoundaryAssertions.assertPreparationResult("Prepare form element rename", target);
+        assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertNoLiveBmValue(target));
+        assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertPreparationResult("Other read", target));
+        record Wrapped(Object target) { }
+        assertThrows(AssertionError.class, () -> ReadBoundaryAssertions.assertPreparationResult(
+            "Prepare form element rename", new Wrapped(target)));
+    }
+
     @Test public void transitiveHierarchyKeepsOneWorkbenchDisplayForRootAndChunks() throws Exception
     {
         String saved = System.getProperty("eclipse.application");
