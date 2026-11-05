@@ -18,6 +18,56 @@ import org.junit.Test;
  */
 public class ReflectionUtilsTest
 {
+    @Test
+    public void optionalPublicMethodIncludesInheritedInterfaceMethods() throws Exception
+    {
+        Method method = ReflectionUtils.publicMethodOrNull(PublicApi.class, "value", String.class);
+        assertNotNull(method);
+        assertEquals("exact", ReflectionUtils.invoke(method, new PublicApi() { }, "exact"));
+        assertNull(ReflectionUtils.publicMethodOrNull(PublicApi.class, "absent"));
+    }
+
+    @Test
+    public void invocationPreservesCheckedExceptionsAndErrors() throws Exception
+    {
+        for (Throwable cause : new Throwable[] {new Exception("platform failure"), new NoSuchMethodError("linkage"),
+            new OutOfMemoryError("fatal VM failure")})
+        {
+            PublicApi target = new PublicApi()
+            {
+                @Override public String value(String value) throws Exception
+                {
+                    if (cause instanceof Exception exception)
+                    {
+                        throw exception;
+                    }
+                    throw (Error)cause;
+                }
+            };
+            try
+            {
+                ReflectionUtils.invoke(PublicApi.class.getMethod("value", String.class), target, "unused");
+                fail("Expected the platform failure");
+            }
+            catch (Exception | Error e)
+            {
+                assertSame(cause, e);
+            }
+        }
+    }
+
+    public interface ParentApi
+    {
+        default String value(String value) throws Exception
+        {
+            return value;
+        }
+    }
+
+    public interface PublicApi extends ParentApi
+    {
+    }
+
     // ========== invokeMethod ==========
 
     @Test

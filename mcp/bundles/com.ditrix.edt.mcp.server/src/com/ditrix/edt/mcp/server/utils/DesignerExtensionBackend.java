@@ -72,7 +72,7 @@ public final class DesignerExtensionBackend implements Backend
             arguments.setAccess(settings.access());
             arguments.setUsername(settings.userName());
             arguments.setPassword(settings.password());
-            arguments.setAdditionalInfobaseParameters(settings.additionalProperties());
+            applyAdditionalInfobaseParameters(arguments, reference, settings.additionalProperties());
         }
         Class<?> poolType = PlatformServicesSupport.bundle().loadClass(CONNECTION_PACKAGE + "DesignerSessionPool");
         Object pool = PlatformServicesSupport.resolve(poolType);
@@ -113,6 +113,26 @@ public final class DesignerExtensionBackend implements Backend
                 throw exception;
             }
             throw new IllegalStateException("EDT Designer session failed; inspect the EDT Error Log.", cause);
+        }
+    }
+
+    /** EDT 2026.1 launches Designer with the parameters stored on the infobase reference. */
+    static void applyAdditionalInfobaseParameters(Object arguments, InfobaseReference reference,
+        String parameters) throws Exception
+    {
+        Class<?> api = arguments instanceof RuntimeExecutionArguments
+            ? RuntimeExecutionArguments.class : arguments.getClass();
+        Method setter = ReflectionUtils.publicMethodOrNull(api, "setAdditionalInfobaseParameters", String.class);
+        if (setter != null)
+        {
+            ReflectionUtils.invoke(setter, arguments, parameters);
+        }
+        else if (parameters != null && !parameters.isEmpty()
+            && !parameters.equals(reference.getAdditionalParameters()))
+        {
+            throw new IllegalArgumentException("EDT 2026.1 cannot carry the resolved additionalProperties setting"
+                + " to Designer because it differs from the infobase reference's Additional parameters."
+                + " Resave the infobase access settings in EDT, or clear Additional parameters and retry.");
         }
     }
 

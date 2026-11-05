@@ -4,6 +4,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 /**
@@ -15,6 +16,40 @@ public final class ReflectionUtils
     private ReflectionUtils()
     {
         // Utility class
+    }
+
+    /** Looks up an optional public API once, including inherited interface methods. */
+    public static Method publicMethodOrNull(Class<?> type, String name, Class<?>... parameterTypes)
+    {
+        try
+        {
+            return type.getMethod(name, parameterTypes);
+        }
+        catch (NoSuchMethodException e)
+        {
+            return null;
+        }
+    }
+
+    /** Invokes a resolved API while preserving the platform failure across the reflection boundary. */
+    public static Object invoke(Method method, Object target, Object... arguments) throws Exception
+    {
+        try
+        {
+            return method.invoke(target, arguments);
+        }
+        catch (InvocationTargetException e)
+        {
+            if (e.getCause() instanceof Exception cause)
+            {
+                throw cause;
+            }
+            if (e.getCause() instanceof Error cause)
+            {
+                throw cause;
+            }
+            throw new IllegalStateException("EDT API invocation failed: " + method.getName(), e.getCause());
+        }
     }
 
     /**
