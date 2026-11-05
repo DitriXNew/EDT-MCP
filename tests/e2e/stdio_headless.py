@@ -13,7 +13,8 @@ from read_host_contracts import MOVED_TOOLS, run_contracts, run_runtime_precondi
 from headless_development_contracts import (READ_TOOLS, WRITE_TOOLS, run_metadata_writes, seed_and_read_modules,
                                            run_designer_writes, run_additional_reads,
                                            prepare_quick_fix_fixture, run_quick_fix,
-                                           run_adoption, run_auxiliary_writes, run_registration_writes)
+                                           run_adoption, run_auxiliary_writes, run_registration_writes,
+                                           failure_details)
 
 
 APPLICATION = "com.ditrix.edt.mcp.server.stdioHost"
@@ -46,7 +47,7 @@ def host_environment(project):
 def call(client, name, arguments):
     response = client.request("tools/call", {"name": name, "arguments": arguments})
     if "error" in response or response.get("result", {}).get("isError"):
-        raise AssertionError("Headless call failed: " + name)
+        raise AssertionError("Headless call failed: " + name + "\n" + failure_details(Result(response)))
     return response["result"]
 
 

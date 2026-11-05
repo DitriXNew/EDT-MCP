@@ -12,9 +12,142 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import stdio_headless as S
 import read_host_contracts as C
+import headless_development_contracts as D
+import harness as H
 
 
 class HeadlessDriverTest(unittest.TestCase):
+    def test_auxiliary_driver_waits_for_native_effects_and_checks_deleted_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, workspace = root / "project", root / "workspace"
+            settings = project / ".settings"
+            settings.mkdir(parents=True)
+            workspace.mkdir()
+            pending = []
+            ready = {"TestConfiguration": True}
+            deleted = []
+            def invoke(tool, arguments):
+                if tool == "project_checks":
+                    name = arguments["profile"]
+                    if arguments["action"] == "createProfile":
+                        (settings / (name + ".cset")).write_text("{}", encoding="utf-8")
+                    else:
+                        pending.append(name)
+                elif tool == "merge_rules":
+                    Path(arguments["filePath"]).write_text("GetFromOther", encoding="utf-8")
+                elif tool == "create_project":
+                    name = arguments["name"]
+                    (workspace / name).mkdir()
+                    ready[name] = False
+                elif tool == "list_projects":
+                    rows = [{"name": name, "state": "ready" if done else "building"}
+                            for name, done in ready.items()]
+                    return H.Result({"result": {"structuredContent": {"projects": rows}}})
+                elif tool == "delete_project":
+                    name = arguments["projectName"]
+                    self.assertTrue(ready[name], "deletion must wait for the build")
+                    if arguments.get("confirm"):
+                        self.assertTrue(arguments["deleteContent"])
+                        (workspace / name).rmdir()
+                        deleted.append(name)
+                elif tool != "git":
+                    self.fail("Unexpected tool " + tool)
+                return H.Result({"result": {"structuredContent": {"success": True}}})
+            def finish_background_work(_):
+                if pending:
+                    encoded = "".join(c if ord(c) < 128 else "\\u%04X" % ord(c) for c in pending.pop())
+                    (settings / "com.e1c.g5.v8.dt.check.prefs").write_text(
+                        "activeProfile=" + encoded + "\n", encoding="utf-8")
+                ready.update({name: True for name in ready})
+            with patch.object(H.time, "sleep", side_effect=finish_background_work) as wait, \
+                 patch.object(D.subprocess, "run"):
+                D.run_auxiliary_writes(invoke, project, workspace, root)
+            self.assertEqual(4, wait.call_count)
+            self.assertEqual(["HeadlessDeleteProject", "УдаляемыйПроект"], deleted)
+            self.assertEqual([], list(workspace.iterdir()))
+
+    def test_writes_wait_for_observed_ready_without_retrying_the_mutation(self):
+        for name in D.READY_WRITES:
+            calls = []
+            def invoke(tool, arguments):
+                calls.append(tool)
+                if tool == "list_projects":
+                    state = "building" if len(calls) == 1 else "ready"
+                    return H.Result({"result": {"structuredContent": {"projects": [
+                        {"name": "Disposable", "state": state}]}}})
+                return H.Result({"result": {"structuredContent": {"success": True}}})
+            with patch.object(H.time, "sleep") as wait:
+                D._ok(invoke, name, {"projectName": "Disposable"})
+            self.assertEqual(["list_projects", "list_projects", name], calls)
+            self.assertEqual(1, wait.call_count)
+
+    def test_unready_or_missing_project_never_reaches_the_mutation(self):
+        for state in ("building", None):
+            calls = []
+            def invoke(tool, arguments):
+                calls.append(tool)
+                rows = [] if state is None else [{"name": "Disposable", "state": state}]
+                return H.Result({"result": {"structuredContent": {"projects": rows}}})
+            with patch.object(H.time, "time", side_effect=[0, 181]), patch.object(H.time, "sleep"):
+                with self.assertRaisesRegex(AssertionError, "requires a ready project"):
+                    D._ok(invoke, "delete_project", {"projectName": "Disposable", "confirm": True})
+            self.assertEqual(["list_projects"], calls)
+
+    def test_real_mutation_failure_is_never_retried(self):
+        calls = []
+        def invoke(tool, arguments):
+            calls.append(tool)
+            if tool == "list_projects":
+                return H.Result({"result": {"structuredContent": {"projects": [
+                    {"name": "Disposable", "state": "ready"}]}}})
+            return H.Result({"result": {"isError": True, "structuredContent": {"error": "disk failure"}}})
+        with self.assertRaisesRegex(H.E2EAssertion, "disk failure"):
+            D._ok(invoke, "create_metadata", {"projectName": "Disposable"})
+        self.assertEqual(["list_projects", "create_metadata"], calls)
+
+    def test_failed_call_keeps_structured_error_and_all_content_text(self):
+        response = {"result": {"isError": True, "structuredContent": {"error": "model is building"},
+            "content": [{"text": "Wait for project readiness"}, {"text": "Additional platform detail"}]}}
+        client = SimpleNamespace(request=lambda *args: response)
+        for invoke in (lambda: S.call(client, "create_metadata", {}),
+                       lambda: D._ok(lambda *args: H.Result(response), "create_metadata", {})):
+            with self.assertRaises((AssertionError, H.E2EAssertion)) as raised:
+                invoke()
+            for text in ("create_metadata", "model is building", "Wait for project readiness",
+                         "Additional platform detail"):
+                self.assertIn(text, str(raised.exception))
+
+    def test_rpc_error_is_visible_and_success_is_unchanged(self):
+        client = SimpleNamespace(request=lambda *args: {"error": {"code": -32602, "message": "bad argument"}})
+        with self.assertRaisesRegex(AssertionError, "bad argument"):
+            S.call(client, "delete_project", {})
+        success = {"isError": False, "structuredContent": {"success": True}}
+        client.request = lambda *args: {"result": success}
+        self.assertIs(success, S.call(client, "delete_project", {}))
+
+    def test_profile_wait_observes_delayed_disk_flush_in_both_languages(self):
+        for name in ("HeadlessProfile", "ПрофильБезОкна"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                prefs = Path(directory) / "checks.prefs"
+                def flush(_):
+                    encoded = "".join(c if ord(c) < 128 else "\\u%04X" % ord(c) for c in name)
+                    prefs.write_text("activeProfile=" + encoded + "\n", encoding="utf-8")
+                with patch.object(H.time, "sleep", side_effect=flush) as wait:
+                    D._wait_for_active_profile(prefs, name)
+                self.assertEqual(1, wait.call_count)
+                self.assertTrue(prefs.is_file())
+
+    def test_profile_wait_rejects_missing_stale_or_prefix_only_disk_values(self):
+        for value in (None, "OldProfile", "HeadlessProfileOther"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                prefs = Path(directory) / "checks.prefs"
+                if value is not None:
+                    prefs.write_text("activeProfile=" + value + "\n", encoding="utf-8")
+                with patch.object(H.time, "time", side_effect=[0, 0, 100]), patch.object(H.time, "sleep"):
+                    with self.assertRaisesRegex(H.E2EAssertion, "activeProfile must persist as HeadlessProfile"):
+                        D._wait_for_active_profile(prefs, "HeadlessProfile", timeout=1)
+
     def test_driver_calls_all_migrated_contracts_through_the_bootstrap(self):
         calls = []
         cases = C.baseline_cases()

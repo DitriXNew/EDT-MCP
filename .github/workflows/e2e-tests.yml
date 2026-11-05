@@ -536,6 +536,18 @@ jobs:
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 
+      - name: Upload stdio headless host logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-headless-log-${{ inputs.edt }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/stdio-headless/host.log
+            ${{ runner.temp }}/stdio-headless/workspace/.metadata/.log
+            ${{ runner.temp }}/stdio-headless/workspace/.metadata/.bak_*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+
       - name: Stop EDT
         if: always()
         run: kill "${edt_pid:-0}" 2>/dev/null || true

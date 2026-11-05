@@ -1,11 +1,12 @@
 """Development acceptance against a disposable project; disk reads precede rescue calls."""
 
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
-from harness import assert_ok, assert_contains
+from harness import assert_ok, assert_contains, poll_disk_contains_all, wait_for_named_projects_ready
 
 
 READ_TOOLS = ("go_to_definition", "find_references", "get_method_call_hierarchy", "validate_query",
@@ -16,6 +17,9 @@ WRITE_TOOLS = ("create_metadata", "modify_metadata", "sort_metadata", "clone_met
                "business_process_route_map", "adopt_metadata_object", "project_checks", "merge_rules", "git",
                "apply_quick_fix", "delete_project", "delete_infobase", "update_database",
                "evaluate_expression", "infobase_sessions", "infobase_extensions", "ask_workmate")
+READY_WRITES = ("create_metadata", "modify_metadata", "sort_metadata", "clone_metadata_object",
+                "rename_metadata_object", "delete_metadata", "dcs", "business_process_route_map",
+                "adopt_metadata_object", "project_checks", "delete_project")
 
 
 def prepare_quick_fix_fixture(project):
@@ -47,9 +51,26 @@ def run_quick_fix(invoke, project):
     assert all(_registered(project, "Catalog." + name) for name in ("HeadlessFixEnglish", "ИсправлениеБезОкна"))
 
 
+def failure_details(result):
+    details = []
+    if isinstance(result.structured, dict) and result.structured.get("error"):
+        details.append(str(result.structured["error"]))
+    for part in result.result.get("content", []):
+        text = part.get("text", part.get("resource", {}).get("text", ""))
+        if text and text not in details:
+            details.append(text)
+    if result.rpc_error:
+        details.append(json.dumps(result.rpc_error, ensure_ascii=False))
+    return "\n".join(details)
+
+
 def _ok(invoke, name, arguments):
+    if name in READY_WRITES and arguments.get("projectName"):
+        project = arguments["projectName"]
+        states = wait_for_named_projects_ready([project], ctx=name, invoke=invoke)
+        assert states.get(project) == "ready", "%s requires a ready project: %r" % (name, states)
     result = invoke(name, arguments)
-    assert_ok(result, name + " on the unattended host")
+    assert_ok(result, name + " on the unattended host\n" + failure_details(result))
     return result
 
 
@@ -137,6 +158,7 @@ def run_auxiliary_writes(invoke, project, workspace, temp_directory=None):
         assert (project / ".settings" / (name + ".cset")).is_file()
         _ok(invoke, "project_checks", {"projectName": "TestConfiguration", "action": "switch", "profile": name})
         prefs = project / ".settings/com.e1c.g5.v8.dt.check.prefs"
+        _wait_for_active_profile(prefs, name)
         assert prefs.is_file(), "switch must persist its active-profile preference"
     with tempfile.TemporaryDirectory(dir=temp_directory) as directory:
         file = Path(directory) / "headless-rules.xml"
@@ -158,6 +180,18 @@ def run_auxiliary_writes(invoke, project, workspace, temp_directory=None):
         _ok(invoke, "delete_project", {"projectName": name})
         _ok(invoke, "delete_project", {"projectName": name, "confirm": True, "deleteContent": True})
         assert not (workspace / name).exists(), "confirmed project deletion must remove the directory"
+
+
+def _wait_for_active_profile(prefs, name, timeout=90):
+    def matches(text):
+        entries = dict(line.split("=", 1) for line in text.splitlines()
+                       if "=" in line and not line.startswith("#"))
+        value = entries.get("activeProfile", "")
+        return re.sub(r"\\u([0-9a-fA-F]{4})", lambda match: chr(int(match[1], 16)), value) == name
+
+    text = poll_disk_contains_all(str(prefs), [], timeout=timeout,
+                                 ctx="activeProfile must persist as " + name, check=matches)
+    assert matches(text), "switch must persist the exact active profile"
 
 
 def run_registration_writes(invoke, workspace, launcher_file):
