@@ -178,19 +178,134 @@ public class FormGenerationSupportTest
                 when(project.getScriptVariant()).thenReturn(dialect);
                 when(project.getInterfaceCompatibilityMode()).thenReturn(InterfaceCompatibilityMode.TAXI);
                 IFormGenerator generator = mock(IFormGenerator.class);
-                IFormFieldGenerator fields = mock(IFormFieldGenerator.class);
-                FormFieldInfo root = new FormFieldInfo("", true, null, null, false);
-                when(fields.getFormGeneratorFields(owner, type, dialect, Version.V8_3_27,
-                    Version.V8_3_26)).thenReturn(root);
+                CompatibilityFields fields = new CompatibilityFields();
+                FormFieldInfo root = fields.root;
                 Form result = FormFactory.eINSTANCE.createForm();
                 String language = dialect == ScriptVariant.ENGLISH ? "en" : "ru";
                 when(generator.generateForm(owner, descriptor, type, dialect, language, Version.V8_3_27,
                     root, 1, InterfaceCompatibilityMode.TAXI)).thenReturn(result);
                 assertSame(result, FormGenerationSupport.generate(owner, descriptor, type, project,
                     language, generator, fields));
+                assertEquals(1, fields.calls);
+                assertSame(owner, fields.owner);
+                assertEquals(type, fields.type);
+                assertEquals(dialect, fields.dialect);
+                assertEquals(Version.V8_3_27, fields.version);
+                assertEquals(Version.V8_3_26, fields.compatibility);
                 verify(generator).generateForm(owner, descriptor, type, dialect, language, Version.V8_3_27,
                     root, 1, InterfaceCompatibilityMode.TAXI);
             }
+        }
+    }
+
+    @Test
+    public void olderWizardUsesFourArgumentsAndTheProjectVersion()
+    {
+        for (ScriptVariant dialect : new ScriptVariant[] {ScriptVariant.ENGLISH, ScriptVariant.RUSSIAN})
+        {
+            LegacyFields fields = new LegacyFields();
+            MdObject owner = MdClassFactory.eINSTANCE.createInformationRegister();
+            BasicForm descriptor = MdClassFactory.eINSTANCE.createInformationRegisterForm();
+            IV8Project project = mock(IV8Project.class);
+            when(project.getVersion()).thenReturn(Version.V8_3_27);
+            when(project.getCompatibilityMode()).thenReturn(CompatibilityMode.VERSION8_326);
+            when(project.getScriptVariant()).thenReturn(dialect);
+            IFormGenerator generator = mock(IFormGenerator.class);
+            Form result = FormFactory.eINSTANCE.createForm();
+            when(generator.generateForm(owner, descriptor, FormType.LIST, dialect, "en", Version.V8_3_27,
+                fields.root, 1, null)).thenReturn(result);
+            assertSame(result, FormGenerationSupport.generate(owner, descriptor, FormType.LIST, project,
+                "en", generator, fields));
+            assertEquals(1, fields.calls);
+            assertSame(owner, fields.owner);
+            assertEquals(FormType.LIST, fields.type);
+            assertEquals(dialect, fields.dialect);
+            assertEquals(Version.V8_3_27, fields.version);
+        }
+    }
+
+    @Test
+    public void reflectiveFailuresRefuseBeforeGeneratingOrWritingContent()
+    {
+        for (LegacyFields fields : new LegacyFields[] {new LegacyFields(), new CompatibilityFields()})
+        {
+            for (Throwable cause : new Throwable[] {new IllegalStateException("field generation failed"),
+                new NoSuchMethodError("generator dependency")})
+            {
+                fields.failure = cause;
+                fields.calls = 0;
+                InformationRegister owner = MdClassFactory.eINSTANCE.createInformationRegister();
+                BasicForm descriptor = MdClassFactory.eINSTANCE.createInformationRegisterForm();
+                IV8Project project = mock(IV8Project.class);
+                when(project.getVersion()).thenReturn(Version.V8_3_27);
+                IFormGenerator generator = mock(IFormGenerator.class);
+                try
+                {
+                    FormGenerationSupport.generate(owner, descriptor, FormType.LIST, project, "en", generator, fields);
+                    fail("Expected field generation refusal");
+                }
+                catch (FormValidationException e)
+                {
+                    assertSame(cause, cause instanceof Error ? e.getCause().getCause() : e.getCause());
+                    assertTrue(e.json(), e.json().contains("\"success\":false"));
+                    assertTrue(e.json(), e.json().contains("LIST"));
+                    assertTrue(e.json(), e.json().contains("generateContent=false"));
+                }
+                assertEquals(1, fields.calls);
+                assertTrue(owner.getForms().isEmpty());
+                assertEquals(null, owner.getDefaultListForm());
+                assertEquals(null, descriptor.getForm());
+                org.mockito.Mockito.verifyZeroInteractions(generator);
+            }
+        }
+    }
+
+    public static class LegacyFields
+    {
+        final FormFieldInfo root = new FormFieldInfo("", true, null, null, false);
+        int calls;
+        MdObject owner;
+        FormType type;
+        ScriptVariant dialect;
+        Version version;
+        Throwable failure;
+
+        public FormFieldInfo getFormGeneratorFields(MdObject owner, FormType type,
+            ScriptVariant dialect, Version version)
+        {
+            calls++;
+            this.owner = owner;
+            this.type = type;
+            this.dialect = dialect;
+            this.version = version;
+            if (failure instanceof RuntimeException exception)
+            {
+                throw exception;
+            }
+            if (failure instanceof Error error)
+            {
+                throw error;
+            }
+            return root;
+        }
+    }
+
+    public static class CompatibilityFields extends LegacyFields
+    {
+        Version compatibility;
+
+        public FormFieldInfo getFormGeneratorFields(MdObject owner, FormType type,
+            ScriptVariant dialect, Version version, Version compatibility)
+        {
+            this.compatibility = compatibility;
+            return super.getFormGeneratorFields(owner, type, dialect, version);
+        }
+
+        @Override
+        public FormFieldInfo getFormGeneratorFields(MdObject owner, FormType type,
+            ScriptVariant dialect, Version version)
+        {
+            throw new AssertionError("The compatibility-aware overload must be preferred");
         }
     }
 

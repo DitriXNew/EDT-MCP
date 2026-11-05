@@ -36,6 +36,98 @@ import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class DesignerExtensionBackendTest
 {
+    @Test public void newerArgumentsReceiveTheExactAdditionalParametersIncludingEmptyValues() throws Exception
+    {
+        for (String value : new String[] {"/WA- /N\"Other user\" /Z tenant", "", null})
+        {
+            CurrentArguments arguments = new CurrentArguments();
+            InfobaseReference reference = mock(InfobaseReference.class);
+            DesignerExtensionBackend.applyAdditionalInfobaseParameters(arguments, reference, value);
+            assertEquals(1, arguments.calls);
+            assertEquals(value, arguments.parameters);
+            verifyZeroInteractions(reference);
+        }
+    }
+
+    @Test public void olderArgumentsSkipEmptySettingsWithoutReadingOrChangingTheReference() throws Exception
+    {
+        InfobaseReference reference = mock(InfobaseReference.class);
+        DesignerExtensionBackend.applyAdditionalInfobaseParameters(new LegacyArguments(), reference, null);
+        DesignerExtensionBackend.applyAdditionalInfobaseParameters(new LegacyArguments(), reference, "");
+        verifyZeroInteractions(reference);
+    }
+
+    @Test public void olderDesignerCarriesNonEmptySettingsThroughTheInfobaseReference() throws Exception
+    {
+        String value = "/WA- /N\"Other user\" /Z tenant";
+        InfobaseReference reference = mock(InfobaseReference.class);
+        when(reference.getAdditionalParameters()).thenReturn(value);
+        DesignerExtensionBackend.applyAdditionalInfobaseParameters(new LegacyArguments(), reference, value);
+        verify(reference).getAdditionalParameters();
+        verifyNoMoreInteractions(reference);
+    }
+
+    @Test public void olderDesignerRefusesSettingsThatTheReferenceWouldDrop() throws Exception
+    {
+        for (String stored : new String[] {null, "", "/Z different"})
+        {
+            InfobaseReference reference = mock(InfobaseReference.class);
+            when(reference.getAdditionalParameters()).thenReturn(stored);
+            try
+            {
+                DesignerExtensionBackend.applyAdditionalInfobaseParameters(new LegacyArguments(), reference,
+                    "/Z tenant");
+                fail("Additional parameters would be lost");
+            }
+            catch (IllegalArgumentException expected)
+            {
+                assertTrue(expected.getMessage().contains("additionalProperties"));
+                assertTrue(expected.getMessage().contains("clear Additional parameters"));
+            }
+            verify(reference).getAdditionalParameters();
+            verifyNoMoreInteractions(reference);
+        }
+    }
+
+    @Test public void reflectiveSetterFailurePreservesItsCauseAndNeverFallsBack() throws Exception
+    {
+        CurrentArguments arguments = new CurrentArguments();
+        arguments.failure = new IllegalStateException("setter failed");
+        InfobaseReference reference = mock(InfobaseReference.class);
+        try
+        {
+            DesignerExtensionBackend.applyAdditionalInfobaseParameters(arguments, reference, "/Z tenant");
+            fail("Expected the setter failure");
+        }
+        catch (IllegalStateException expected)
+        {
+            assertSame(arguments.failure, expected);
+        }
+        assertEquals(1, arguments.calls);
+        verifyZeroInteractions(reference);
+    }
+
+    public static class LegacyArguments
+    {
+    }
+
+    public static class CurrentArguments extends LegacyArguments
+    {
+        int calls;
+        String parameters;
+        RuntimeException failure;
+
+        public void setAdditionalInfobaseParameters(String parameters)
+        {
+            calls++;
+            if (failure != null)
+            {
+                throw failure;
+            }
+            this.parameters = parameters;
+        }
+    }
+
     @Test public void cachedConnectionSignaturesExistInTheResolvedEdtPlatform() throws Exception
     {
         String pkg = "com._1c.g5.v8.dt.internal.platform.services.core.runtimes.execution.";

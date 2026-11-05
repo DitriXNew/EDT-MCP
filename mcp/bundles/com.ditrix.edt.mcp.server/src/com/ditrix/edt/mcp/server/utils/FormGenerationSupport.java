@@ -5,6 +5,7 @@
  */
 package com.ditrix.edt.mcp.server.utils;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 
@@ -20,8 +21,10 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.RegisterWriteMode;
+import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.wiring.ServiceAccess;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /** Wizard generation and purpose-specific default references. Call model operations in a BM transaction. */
@@ -125,13 +128,38 @@ public final class FormGenerationSupport
     }
 
     static EObject generate(MdObject owner, BasicForm form, FormType type, IV8Project project,
-        String languageCode, IFormGenerator generator, IFormFieldGenerator fields)
+        String languageCode, IFormGenerator generator, Object fields)
     {
         Version version = project.getVersion();
         Version compatibility = project.getCompatibilityMode() == null
             ? version : Version.parseCompatibilityMode(project.getCompatibilityMode());
-        FormFieldInfo root = fields.getFormGeneratorFields(owner, type, project.getScriptVariant(), version,
-            compatibility);
+        FormFieldInfo root;
+        try
+        {
+            Class<?> api = fields instanceof IFormFieldGenerator ? IFormFieldGenerator.class : fields.getClass();
+            Method method = ReflectionUtils.publicMethodOrNull(api, "getFormGeneratorFields",
+                MdObject.class, FormType.class, ScriptVariant.class, Version.class, Version.class);
+            if (method != null)
+            {
+                root = (FormFieldInfo)ReflectionUtils.invoke(method, fields, owner, type,
+                    project.getScriptVariant(), version, compatibility);
+            }
+            else
+            {
+                method = api.getMethod("getFormGeneratorFields", MdObject.class, FormType.class,
+                    ScriptVariant.class, Version.class);
+                root = (FormFieldInfo)ReflectionUtils.invoke(method, fields, owner, type,
+                    project.getScriptVariant(), version);
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logError("EDT field generation failed for formType " + type, e);
+            FormValidationException failure = invalid("EDT field generation failed for formType " + type
+                + ". Check the EDT Error Log and retry, or set generateContent=false to create an empty form.");
+            failure.initCause(e);
+            throw failure;
+        }
         EObject content = generator.generateForm(owner, form, type, project.getScriptVariant(), languageCode,
             version, root, 1, project.getInterfaceCompatibilityMode());
         if (content == null)
