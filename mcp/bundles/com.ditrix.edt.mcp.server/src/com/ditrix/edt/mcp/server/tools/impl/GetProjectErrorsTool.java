@@ -90,6 +90,9 @@ public class GetProjectErrorsTool implements IMcpTool
     /** The EXACT, resolver-backed model-address filter (mutually exclusive with {@link #PARAM_OBJECTS}). */
     static final String PARAM_OBJECT_FQNS = "objectFqns"; //$NON-NLS-1$
 
+    /** The EXACT (normalised) module-path filter, AND-ed with every other filter. */
+    static final String PARAM_MODULE_PATHS = "modulePaths"; //$NON-NLS-1$
+
     /** structuredContent field: the addresses that resolved to a real model node. */
     static final String KEY_OBJECTS_RESOLVED = "objectsResolved"; //$NON-NLS-1$
 
@@ -133,6 +136,9 @@ public class GetProjectErrorsTool implements IMcpTool
                     + "(Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - " //$NON-NLS-1$
                     + "EDT indexes the marker there - so the result can carry problems from " //$NON-NLS-1$
                     + "elsewhere in that object. Returns objectsNotFound / objectsUnsupported." ) //$NON-NLS-1$
+            .stringArrayProperty(PARAM_MODULE_PATHS,
+                "Exact module paths as shown in the Module path column, e.g. 'CommonModules/X/Module.bsl'; " //$NON-NLS-1$
+                    + "AND-ed with the other filters.") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table; detailed = adds stored Offset/Length and 'Has docs'", //$NON-NLS-1$
@@ -241,12 +247,47 @@ public class GetProjectErrorsTool implements IMcpTool
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
 
+        List<String> modulePaths = modulePathsOf(params);
+
         if (!objectFqns.isEmpty())
         {
             return getProjectErrorsByAddress(projectName, severity, checkId, objectFqns, limit,
-                detailed);
+                detailed, modulePaths);
         }
-        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed);
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, false, modulePaths);
+    }
+
+    /** The normalised, non-blank {@code modulePaths} entries of a call, in request order (never {@code null}). */
+    static List<String> modulePathsOf(Map<String, String> params)
+    {
+        List<String> paths = new ArrayList<>();
+        for (String entry : cleanedEntries(JsonUtils.extractArrayArgument(params, PARAM_MODULE_PATHS)))
+        {
+            String normalized = MarkerRows.normalizeModulePath(entry);
+            if (normalized != null)
+            {
+                paths.add(normalized);
+            }
+        }
+        return paths;
+    }
+
+    /**
+     * Appends the not-found note for {@code modulePaths} entries that name no module file - only when
+     * {@code projectName} is given (with no project there is no single place to look the path up).
+     */
+    private static void appendModulePathsNotFound(StringBuilder md, String projectName, List<String> modulePaths)
+    {
+        if (projectName == null || projectName.isEmpty() || modulePaths == null || modulePaths.isEmpty())
+        {
+            return;
+        }
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (ctx.exists())
+        {
+            MarkerRows.appendModulePathsNotFoundWarning(md, projectName,
+                MarkerRows.missingModulePaths(ctx.project(), modulePaths));
+        }
     }
     
     /**
@@ -301,6 +342,18 @@ public class GetProjectErrorsTool implements IMcpTool
     static String getProjectErrors(String projectName, String severity, String checkId,
         List<String> objects, int limit, boolean detailed, boolean exactScope)
     {
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, exactScope,
+            Collections.<String> emptyList());
+    }
+
+    /**
+     * As {@link #getProjectErrors(String, String, String, List, int, boolean, boolean)} plus the
+     * {@code modulePaths} filter (normalised paths; empty = no module filter). The filter is applied to
+     * each marker BEFORE the limit, so {@code limit} counts only the rows of the requested modules.
+     */
+    static String getProjectErrors(String projectName, String severity, String checkId,
+        List<String> objects, int limit, boolean detailed, boolean exactScope, List<String> modulePaths)
+    {
         try
         {
             IMarkerManager markerManager = Activator.getDefault().getMarkerManager();
@@ -330,7 +383,8 @@ public class GetProjectErrorsTool implements IMcpTool
 
             final Set<String> finalObjects = scanFilterVariants(objects, exactScope);
 
-            Map<IProject, List<Marker>> markersByProject = groupMarkersByProject(markerManager, projectName);
+            Map<IProject, List<Marker>> markersByProject =
+                MarkerRows.groupMarkersByProject(markerManager, projectName);
 
             // Markers whose presentation could not be resolved even inside a transaction.
             // They are NOT dropped, but they are surfaced differently depending on context,
@@ -343,7 +397,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
             final CollectContext collectContext = new CollectContext(finalSeverityFilter,
                 finalCheckId, finalObjects, checkRepository, fixRepository, limit, unresolvedShown,
-                unresolvedFilteredOut, exactScope);
+                unresolvedFilteredOut, exactScope, null, MarkerRows.modulePathKeys(modulePaths));
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
                 collectContext);
 
@@ -352,7 +406,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
             if (errors.isEmpty())
             {
-                appendNoErrorsSection(md, projectName, severity, objects, PARAM_OBJECTS);
+                appendNoErrorsSection(md, projectName, severity, objects, PARAM_OBJECTS, modulePaths);
             }
             else
             {
@@ -364,6 +418,8 @@ public class GetProjectErrorsTool implements IMcpTool
             // entry that matched nothing is indistinguishable from a typo. Only the exact
             // objectFqns input can answer that question - see getProjectErrorsByAddress.
             appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
+            // modulePaths, by contrast, names files: an unknown path is a provable miss.
+            appendModulePathsNotFound(md, projectName, modulePaths);
 
             return md.toString();
         }
@@ -521,6 +577,17 @@ public class GetProjectErrorsTool implements IMcpTool
     static String getProjectErrorsByAddress(String projectName, String severity, String checkId,
         List<String> objectFqns, int limit, boolean detailed)
     {
+        return getProjectErrorsByAddress(projectName, severity, checkId, objectFqns, limit, detailed,
+            Collections.<String> emptyList());
+    }
+
+    /**
+     * As {@link #getProjectErrorsByAddress(String, String, String, List, int, boolean)} plus the
+     * {@code modulePaths} filter, AND-ed with the resolved addresses and applied before the limit.
+     */
+    static String getProjectErrorsByAddress(String projectName, String severity, String checkId,
+        List<String> objectFqns, int limit, boolean detailed, List<String> modulePaths)
+    {
         try
         {
             IMarkerManager markerManager = Activator.getDefault().getMarkerManager();
@@ -555,18 +622,20 @@ public class GetProjectErrorsTool implements IMcpTool
                     checkId, Collections.<String> emptySet(),
                     Activator.getDefault().getCheckRepository(), Activator.getDefault().getFixRepository(),
                     limit, unresolvedShown, unresolvedFilteredOut, true,
-                    filterVariantsByProject(resolution.scopeByProject));
-                errors = collectErrors(groupMarkersByProject(markerManager, projectName),
+                    filterVariantsByProject(resolution.scopeByProject), MarkerRows.modulePathKeys(modulePaths));
+                errors = collectErrors(MarkerRows.groupMarkersByProject(markerManager, projectName),
                     bmModelManager, collectContext);
             }
 
             String report = assembleAddressReport(errors, projectName, severity, objectFqns,
-                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut);
+                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut, modulePaths);
             if (resolution.error != null)
             {
                 return resolution.error;
             }
-            return addressPayload(report, errors, resolution);
+            StringBuilder withModuleNote = new StringBuilder(report);
+            appendModulePathsNotFound(withModuleNote, projectName, modulePaths);
+            return addressPayload(withModuleNote.toString(), errors, resolution);
         }
         catch (Exception e)
         {
@@ -618,6 +687,15 @@ public class GetProjectErrorsTool implements IMcpTool
         List<String> objectFqns, int limit, boolean detailed, AddressResolution resolution,
         int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
+        return assembleAddressReport(errors, projectName, severity, objectFqns, limit, detailed, resolution,
+            unresolvedShown, unresolvedFilteredOut, Collections.<String> emptyList());
+    }
+
+    /** As the overload without {@code modulePaths}, echoing that filter in the empty-report banner. */
+    static String assembleAddressReport(List<ErrorInfo> errors, String projectName, String severity,
+        List<String> objectFqns, int limit, boolean detailed, AddressResolution resolution,
+        int[] unresolvedShown, int[] unresolvedFilteredOut, List<String> modulePaths)
+    {
         if (resolution.resolved.isEmpty()
             && (!resolution.notFound.isEmpty() || !resolution.unsupported.isEmpty()))
         {
@@ -628,7 +706,7 @@ public class GetProjectErrorsTool implements IMcpTool
         StringBuilder md = new StringBuilder();
         if (errors.isEmpty())
         {
-            appendNoErrorsSection(md, projectName, severity, objectFqns, PARAM_OBJECT_FQNS);
+            appendNoErrorsSection(md, projectName, severity, objectFqns, PARAM_OBJECT_FQNS, modulePaths);
         }
         else
         {
@@ -2268,38 +2346,6 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Groups all markers by their owning project in a single pass, honoring an optional
-     * {@code projectName} filter. {@link Marker#getProject()} does not touch
-     * {@code resolvedDataCache}, so this is safe outside a BM transaction. Grouping once avoids
-     * re-streaming all markers per project (previously O(markers x projects)). Marker
-     * presentation must still be resolved inside a BM read transaction bound to a single
-     * project's model, so the subsequent processing stays project by project.
-     *
-     * @param markerManager the marker manager supplying the markers
-     * @param projectName the project name filter, may be {@code null}/empty for all projects
-     * @return markers grouped by project, in encounter order
-     */
-    private static Map<IProject, List<Marker>> groupMarkersByProject(IMarkerManager markerManager,
-        String projectName)
-    {
-        Map<IProject, List<Marker>> markersByProject = new LinkedHashMap<>();
-        markerManager.markers().forEach(marker -> {
-            IProject markerProject = marker.getProject();
-            if (markerProject == null || !markerProject.exists())
-            {
-                return;
-            }
-            if (projectName != null && !projectName.isEmpty()
-                && !projectName.equals(markerProject.getName()))
-            {
-                return;
-            }
-            markersByProject.computeIfAbsent(markerProject, k -> new ArrayList<>()).add(marker);
-        });
-        return markersByProject;
-    }
-
-    /**
      * Collects matching {@link ErrorInfo} entries from the per-project markers, applying the
      * severity/checkId/objects filters and respecting {@code limit}. Each project's markers are
      * processed inside a BM read transaction (when a model is available) so that
@@ -2313,7 +2359,7 @@ public class GetProjectErrorsTool implements IMcpTool
      *     two unresolved-marker out-counters)
      * @return the collected errors, capped at {@code context.limit}
      */
-    private static List<ErrorInfo> collectErrors(Map<IProject, List<Marker>> markersByProject,
+    static List<ErrorInfo> collectErrors(Map<IProject, List<Marker>> markersByProject,
         IBmModelManager bmModelManager, CollectContext context)
     {
         final List<ErrorInfo> errors = new ArrayList<>();
@@ -2345,10 +2391,12 @@ public class GetProjectErrorsTool implements IMcpTool
             // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
             IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
 
+            // The modulePaths filter runs inside the row builder, so it narrows the stream BEFORE the limit.
             Runnable collector = () -> projectMarkers.stream()
-                .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
-                    projectObjects, context.checkRepository, context.fixRepository,
-                    context.unresolvedShown, context.unresolvedFilteredOut, context.exactScope))
+                .map(marker -> MarkerRows.buildIfMatches(marker, context.severityFilter, context.checkId,
+                    projectObjects, context.modulePathKeys, context.checkRepository, context.fixRepository,
+                    context.unresolvedShown, context.unresolvedFilteredOut, context.exactScope,
+                    ErrorInfo::new))
                 .filter(Objects::nonNull)
                 .limit(remaining)
                 .forEach(errors::add);
@@ -2376,7 +2424,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * the two unresolved-marker out-counters. The {@code int[]} counters are shared references whose
      * contents are advanced exactly as before. Bundles the parameters without changing any value.
      */
-    private static final class CollectContext
+    static final class CollectContext
     {
         final MarkerSeverity severityFilter;
         final String checkId;
@@ -2394,20 +2442,15 @@ public class GetProjectErrorsTool implements IMcpTool
          * marker at all.
          */
         final Map<String, Set<String>> objectsByProject;
-
-        CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
-            ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
-            int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope)
-        {
-            this(severityFilter, checkId, objects, checkRepository, fixRepository, limit,
-                unresolvedShown, unresolvedFilteredOut, exactScope, null);
-        }
+        /** The {@code modulePaths} keys ({@link MarkerRows#modulePathKeys}); empty = no module filter. */
+        final Set<String> modulePathKeys;
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
             ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
             int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
-            Map<String, Set<String>> objectsByProject)
+            Map<String, Set<String>> objectsByProject, Set<String> modulePathKeys)
         {
+            this.modulePathKeys = modulePathKeys != null ? modulePathKeys : Collections.<String> emptySet();
             this.severityFilter = severityFilter;
             this.checkId = checkId;
             this.objects = objects;
@@ -2469,6 +2512,18 @@ public class GetProjectErrorsTool implements IMcpTool
     static void appendNoErrorsSection(StringBuilder md, String projectName, String severity,
         List<String> objects, String objectsParam)
     {
+        appendNoErrorsSection(md, projectName, severity, objects, objectsParam, null);
+    }
+
+    /**
+     * As {@link #appendNoErrorsSection(StringBuilder, String, String, List, String)}, also echoing the
+     * {@code modulePaths} filter when one was applied.
+     *
+     * @param modulePaths the normalised module-path filter, may be {@code null}/empty
+     */
+    static void appendNoErrorsSection(StringBuilder md, String projectName, String severity,
+        List<String> objects, String objectsParam, List<String> modulePaths)
+    {
         md.append("# No Errors Found\n\n"); //$NON-NLS-1$
         if (projectName != null && !projectName.isEmpty())
         {
@@ -2484,6 +2539,10 @@ public class GetProjectErrorsTool implements IMcpTool
             // exact filter names itself so the two reports are not confusable.
             String label = PARAM_OBJECT_FQNS.equals(objectsParam) ? "objectFqns filter" : "Objects filter"; //$NON-NLS-1$ //$NON-NLS-2$
             md.append(label).append(": ").append(String.join(", ", objects)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (modulePaths != null && !modulePaths.isEmpty())
+        {
+            md.append("Module paths filter: ").append(String.join(", ", modulePaths)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         md.append("\nNo configuration problems match the specified criteria."); //$NON-NLS-1$
     }

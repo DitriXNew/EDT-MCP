@@ -3343,11 +3343,43 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary').",
+    "description": "See validation problem counts grouped by project, severity, check, module or object. Parameters and examples: get_tool_guide('get_problem_summary').",
     "inputSchema": {
       "properties": {
+        "checkId": {
+          "type": "string"
+        },
+        "groupBy": {
+          "enum": [
+            "check",
+            "module",
+            "object"
+          ],
+          "type": "string"
+        },
+        "modulePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "projectName": {
           "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "ERRORS",
+            "BLOCKER",
+            "CRITICAL",
+            "MAJOR",
+            "MINOR",
+            "TRIVIAL",
+            "NONE"
+          ],
+          "type": "string"
+        },
+        "top": {
+          "type": "integer"
         }
       },
       "required": [],
@@ -3427,6 +3459,13 @@
         },
         "limit": {
           "type": "integer"
+        },
+        "modulePaths": {
+          "description": "Exact module paths as shown in the Module path column, e.g. 'CommonModules/X/Module.bsl'; AND-ed with the other filters.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "objectFqns": {
           "description": "EXACT model addresses; mutually exclusive with objects. A MEMBER address (Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - EDT indexes the marker there - so the result can carry problems from elsewhere in that object. Returns objectsNotFound / objectsUnsupported.",

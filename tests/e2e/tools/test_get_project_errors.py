@@ -826,6 +826,66 @@ def test_exact_address_scopes_to_problems_inside_the_node():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# modulePaths - EXACT (normalised) module filter
+# ──────────────────────────────────────────────────────────────────────────────
+
+# A module path that cannot exist in the fixture, so the not-found note is deterministic.
+NO_SUCH_MODULE_PATH = "CommonModules/NoSuchModule_e2e_xyz/Module.bsl"
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_module_paths_keeps_only_the_seeded_module():
+    """modulePaths keeps ONLY the rows of the named module: every data row carries that
+    Module path. The marker is seeded, so an empty table cannot pass vacuously."""
+    _seed_bsl_error_and_wait()
+    # The src/ prefix and backslashes are normalised away: the key is the Module path column.
+    requested = "src\\" + SEEDED_MODULE_PATH.replace("/", "\\")
+    r = call("get_project_errors", {"projectName": PROJECT, "modulePaths": [requested]})
+    assert_ok(r, "modulePaths on the seeded module")
+    text = _report(r)
+    assert_contains(text, "# Configuration Problems", "the seeded marker must be listed")
+    data = _rows(text)[2:]
+    if not data:
+        _fail("modulePaths returned no rows for the seeded module:\n%s" % text[:600])
+    for row in data:
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        # Description | Location | Module path | Line | Check code | Fix registered
+        if len(cells) < 3 or cells[2] != SEEDED_MODULE_PATH:
+            _fail("a row of another module leaked through modulePaths: %r" % row)
+    assert_not_contains(text, "modulePaths not found",
+                        "an existing module must not be reported as missing")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_module_paths_unknown_path_is_reported_not_silently_clean():
+    """A path that names no module must not read like a clean module: with projectName the
+    report says the path was not found."""
+    r = call("get_project_errors", {"projectName": PROJECT, "modulePaths": [NO_SUCH_MODULE_PATH]})
+    assert_ok(r, "modulePaths with an unknown path")
+    assert_contains(r.text, "# No Errors Found", "nothing can match an unknown module")
+    assert_contains(r.text, "Module paths filter: " + NO_SUCH_MODULE_PATH,
+                    "the banner echoes the filter")
+    assert_contains(r.text, "modulePaths not found in %s: %s" % (PROJECT, NO_SUCH_MODULE_PATH),
+                    "the unknown path is named, not silently clean")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_module_paths_combines_with_check_id():
+    """modulePaths is AND-ed with the other filters: an existing module plus a checkId that
+    matches nothing gives the empty report, and the existing module is NOT called missing."""
+    r = call("get_project_errors", {"projectName": PROJECT, "checkId": NO_MATCH_CHECK,
+                                    "modulePaths": [SEEDED_MODULE_PATH]})
+    assert_ok(r, "modulePaths + no-match checkId")
+    assert_contains(r.text, "# No Errors Found", "the checkId filter still applies")
+    assert_contains(r.text, "Module paths filter: " + SEEDED_MODULE_PATH,
+                    "the banner echoes the module filter")
+    assert_not_contains(r.text, "modulePaths not found",
+                        "an existing module must not be reported as missing")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX
 # ──────────────────────────────────────────────────────────────────────────────
 

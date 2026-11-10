@@ -869,6 +869,110 @@ public class GetProjectErrorsToolTest
             exact.toString().contains("objectFqns filter: Catalog.Products")); //$NON-NLS-1$
     }
 
+    // ========== modulePaths: exact (normalised) module filter ==========
+
+    @Test
+    public void testSchemaDeclaresModulePaths()
+    {
+        JsonObject props = JsonParser.parseString(new GetProjectErrorsTool().getInputSchema())
+            .getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
+        JsonObject modulePaths = props.getAsJsonObject("modulePaths"); //$NON-NLS-1$
+        assertNotNull("modulePaths must be declared", modulePaths); //$NON-NLS-1$
+        assertEquals("array", modulePaths.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testModulePathsProseSurvivesCompaction()
+    {
+        // The value shape (a src-relative path, as in the Module path column) is the one fact the
+        // array schema cannot state, so it must reach tools/list.
+        JsonObject wire = com.ditrix.edt.mcp.server.protocol.InputSchemaCompactor.compact(GetProjectErrorsTool.NAME,
+            JsonParser.parseString(new GetProjectErrorsTool().getInputSchema())).getAsJsonObject()
+            .getAsJsonObject("properties").getAsJsonObject("modulePaths"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("modulePaths must keep its description on the wire", wire.get("description")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(wire.get("description").getAsString().contains("CommonModules/")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testModulePathsKeepsOnlyRowsOfThosePaths()
+    {
+        List<ErrorInfo> errors = collect(100, Arrays.asList(MODULE_B),
+            moduleMarker("SU1", MODULE_A), moduleMarker("SU2", MODULE_B), moduleMarker("SU3", MODULE_A)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(1, errors.size());
+        assertEquals("SU2", errors.get(0).checkCode); //$NON-NLS-1$
+        assertEquals(MODULE_B, errors.get(0).modulePath);
+    }
+
+    @Test
+    public void testModulePathsNormalizesSrcPrefixSlashesAndCase()
+    {
+        List<ErrorInfo> errors = collect(100, Arrays.asList("src\\commonmodules\\b\\MODULE.bsl"), //$NON-NLS-1$
+            moduleMarker("SU1", MODULE_A), moduleMarker("SU2", MODULE_B)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, errors.size());
+        assertEquals("SU2", errors.get(0).checkCode); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModulePathsExcludesRowsWithoutAModule()
+    {
+        List<ErrorInfo> errors = collect(100, Arrays.asList(MODULE_A),
+            moduleMarker("SU1", null), moduleMarker("SU2", MODULE_A)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, errors.size());
+        assertEquals("SU2", errors.get(0).checkCode); //$NON-NLS-1$
+
+        // Without the filter the metadata-only marker is reported as before.
+        assertEquals(2, collect(100, Collections.<String> emptyList(),
+            moduleMarker("SU1", null), moduleMarker("SU2", MODULE_A)).size()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testModulePathsIsAppliedBeforeTheLimit()
+    {
+        // limit 1 and the only matching marker is the THIRD: a filter applied after the limit
+        // would return nothing.
+        List<ErrorInfo> errors = collect(1, Arrays.asList(MODULE_B),
+            moduleMarker("SU1", MODULE_A), moduleMarker("SU2", MODULE_A), moduleMarker("SU3", MODULE_B)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(1, errors.size());
+        assertEquals("SU3", errors.get(0).checkCode); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoErrorsBannerEchoesModulePaths()
+    {
+        StringBuilder md = new StringBuilder();
+        GetProjectErrorsTool.appendNoErrorsSection(md, "P", null, null, GetProjectErrorsTool.PARAM_OBJECTS, //$NON-NLS-1$
+            Arrays.asList(MODULE_A, MODULE_B));
+        assertTrue(md.toString(), md.toString().contains("Module paths filter: " + MODULE_A + ", " + MODULE_B)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        StringBuilder none = new StringBuilder();
+        GetProjectErrorsTool.appendNoErrorsSection(none, "P", null, null, GetProjectErrorsTool.PARAM_OBJECTS, //$NON-NLS-1$
+            Collections.<String> emptyList());
+        assertFalse(none.toString(), none.toString().contains("Module paths")); //$NON-NLS-1$
+    }
+
+    private static final String MODULE_A = "CommonModules/A/Module.bsl"; //$NON-NLS-1$
+    private static final String MODULE_B = "CommonModules/B/Module.bsl"; //$NON-NLS-1$
+
+    /** Runs the real collector (no BM model: the best-effort branch) over one project's markers. */
+    private static List<ErrorInfo> collect(int limit, List<String> modulePaths, Marker... markers)
+    {
+        Map<IProject, List<Marker>> byProject = new LinkedHashMap<>();
+        byProject.put(project("P"), Arrays.asList(markers)); //$NON-NLS-1$
+        GetProjectErrorsTool.CollectContext context = new GetProjectErrorsTool.CollectContext(null, null,
+            Collections.<String> emptySet(), null, null, limit, new int[1], new int[1], false, null,
+            com.ditrix.edt.mcp.server.utils.MarkerRows.modulePathKeys(modulePaths));
+        return GetProjectErrorsTool.collectErrors(byProject, null, context);
+    }
+
+    private static Marker moduleMarker(String checkCode, String modulePath)
+    {
+        Marker marker = marker(MarkerSeverity.MAJOR, checkCode, "msg", "P"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(marker.getObjectPresentation()).thenReturn("CommonModule.X.Module"); //$NON-NLS-1$
+        when(marker.getExtraInfo()).thenReturn(modulePath == null ? extraInfo(null, null)
+            : extraInfo("platform:/resource/P/src/" + modulePath + "#/0", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return marker;
+    }
+
     // ========== objectFqns: address classification ==========
 
     @Test
