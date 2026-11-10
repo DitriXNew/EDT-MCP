@@ -1891,6 +1891,214 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    @Test
+    public void testNoObserverReleaseWhileAStartIsClaimed()
+    {
+        ServerApp app = new ServerApp("ClaimedStartReleaseProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.StartClaim claim =
+            StandaloneServerStateRecovery.claimStartWithinBound(app.project, APPLICATION_ID, 1_000L, null);
+        assertNotNull(claim);
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        try
+        {
+            assertFalse("a start that still claims the server may still be running; only its own " //$NON-NLS-1$
+                + "conclusive end releases the hold", //$NON-NLS-1$
+                StandaloneServerStateRecovery.releaseHoldIfStartedOutside(app.project,
+                    APPLICATION_ID, app.server));
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            claim.close();
+            assertTrue(StandaloneServerStateRecovery.releaseHoldIfStartedOutside(app.project,
+                APPLICATION_ID, app.server));
+        }
+        finally
+        {
+            claim.close();
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnOkStartThatLeavesTheServerStoppedKeepsTheHold()
+    {
+        ServerApp app = new ServerApp("OkButStoppedStartProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        try
+        {
+            StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager,
+                new StateSettingService(app.server, 4), StandaloneServerPortConflictPolicy.CANCEL, 30_000L);
+            assertEquals(StandaloneServerStateRecovery.StartKind.FAILED, outcome.kind());
+            assertTrue("STOPPED after an OK start is a start that did not take", outcome.conclusive()); //$NON-NLS-1$
+            assertTrue(outcome.detail(), outcome.detail().contains("reads STOPPED")); //$NON-NLS-1$
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnOkStartStillStartingIsInconclusiveAndKeepsTheHold()
+    {
+        ServerApp app = new ServerApp("OkButStartingStartProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        try
+        {
+            StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager,
+                new StateSettingService(app.server, 1), StandaloneServerPortConflictPolicy.CANCEL, 30_000L);
+            assertEquals(StandaloneServerStateRecovery.StartKind.FAILED, outcome.kind());
+            assertFalse("STARTING may still become a running server", outcome.conclusive()); //$NON-NLS-1$
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testTheApplicationLockIsHeldAcrossTheWorkAndRefusesWhenTaken() throws Exception
+    {
+        String project = "ApplicationLockProject"; //$NON-NLS-1$
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock = LaunchLifecycleUtils.lockFor(project, APPLICATION_ID);
+            if (lock.tryAcquire(5_000L, null).acquired())
+            {
+                try
+                {
+                    held.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                finally
+                {
+                    lock.unlock();
+                }
+            }
+        }, "test: application lock holder"); //$NON-NLS-1$
+        holder.setDaemon(true);
+        holder.start();
+        AtomicInteger ran = new AtomicInteger();
+        try
+        {
+            assertTrue(held.await(10, TimeUnit.SECONDS));
+            try
+            {
+                StandaloneServerStateRecovery.runUnderApplicationLock(project, APPLICATION_ID, 200L,
+                    null, "Nothing was built.", ran::incrementAndGet); //$NON-NLS-1$
+                throw new AssertionError("a taken application lock must refuse the work"); //$NON-NLS-1$
+            }
+            catch (ApplicationException refused)
+            {
+                assertTrue(refused.getMessage(), refused.getMessage().contains("Nothing was built.")); //$NON-NLS-1$
+            }
+            assertEquals(0, ran.get());
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000L);
+        }
+        AtomicReference<Boolean> heldDuringWork = new AtomicReference<>();
+        StandaloneServerStateRecovery.runUnderApplicationLock(project, APPLICATION_ID, 5_000L, null,
+            "Nothing was built.", () -> heldDuringWork.set(Boolean.valueOf( //$NON-NLS-1$
+                LaunchLifecycleUtils.lockFor(project, APPLICATION_ID).isHeldByCurrentThread())));
+        assertEquals(Boolean.TRUE, heldDuringWork.get());
+    }
+
+    @Test
+    public void testTheDefaultApplicationPreflightAndWorkRunUnderItsLock()
+    {
+        ServerApp app = new ServerApp("DefaultAppLockProject", new FakeServer(4, null)); //$NON-NLS-1$
+        Mockito.when(app.manager.getApplication(app.project, APPLICATION_ID))
+            .thenReturn(Optional.of(app.application));
+        AtomicReference<Boolean> lockedDuringWork = new AtomicReference<>();
+        StandaloneServerStateRecovery.defaultApplicationStartableThen(app.project, app.manager,
+            APPLICATION_ID, 5_000L, null, "Nothing was built.", () -> lockedDuringWork.set( //$NON-NLS-1$
+                Boolean.valueOf(LaunchLifecycleUtils.lockFor("DefaultAppLockProject", APPLICATION_ID) //$NON-NLS-1$
+                    .isHeldByCurrentThread())));
+        assertEquals("the dump that prepares the application must run under its infobase lock", //$NON-NLS-1$
+            Boolean.TRUE, lockedDuringWork.get());
+
+        // ...and the pre-flight inside that lock still refuses a held server.
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        AtomicInteger ran = new AtomicInteger();
+        try
+        {
+            assertHeldRefusal(() -> StandaloneServerStateRecovery.defaultApplicationStartableThen(
+                app.project, app.manager, APPLICATION_ID, 5_000L, null, "Nothing was built.", //$NON-NLS-1$
+                ran::incrementAndGet));
+            assertEquals(0, ran.get());
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnUnfinishedExplicitStopKeepsItsRecordPastTheRecoveryCap() throws Exception
+    {
+        long originalCap = StandaloneServerStateRecovery.stopInFlightCapMs;
+        StandaloneServerStateRecovery.stopInFlightCapMs = 150L;
+        ServerApp app = new ServerApp("ExplicitStopNoCapProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            entered.countDown();
+            release.await(30, TimeUnit.SECONDS);
+            app.server.setState(4);
+            return null;
+        }).when(app.manager).cleanup(Mockito.same(app.application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
+        Thread caller = new Thread(() -> StandaloneServerStateRecovery.stopGuarded(app.project,
+            app.application, APPLICATION_ID, app.manager, 30_000L,
+            StandaloneServerStateRecovery.StopPolicy.RUNNING), "test: abandoned explicit stop"); //$NON-NLS-1$
+        caller.setDaemon(true);
+        caller.start();
+        try
+        {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            long deadline = System.currentTimeMillis() + 30_000L;
+            while (caller.isAlive() && System.currentTimeMillis() < deadline)
+            {
+                caller.interrupt();
+                caller.join(200L);
+            }
+            assertFalse(caller.isAlive());
+            Thread.sleep(1_000L);
+            assertNotNull("a still-running explicit stop must not be dropped by a time cap", //$NON-NLS-1$
+                StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            release.countDown();
+            StandaloneServerStateRecovery.stopInFlightCapMs = originalCap;
+        }
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID) != null
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        try
+        {
+            assertNull("the record ends when EDT's cleanup Job ends", //$NON-NLS-1$
+                StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
     /** Runs {@code action} and requires the explicit-stop hold refusal. */
     private static void assertHeldRefusal(Runnable action)
     {
@@ -1933,6 +2141,25 @@ public class StandaloneServerStateRecoveryTest
                 return null;
             }).when(manager).cleanup(Mockito.same(application), Mockito.any(ExecutionContext.class),
                 Mockito.any(IProgressMonitor.class));
+        }
+    }
+
+    /** A service that reports the start OK and leaves the fake server in a chosen state. */
+    public static final class StateSettingService
+    {
+        private final FakeServer server;
+        private final int state;
+
+        StateSettingService(FakeServer server, int state)
+        {
+            this.server = server;
+            this.state = state;
+        }
+
+        public IStatus startServer(Object passedServer, String launchMode, Object monitor)
+        {
+            server.setState(state);
+            return Status.OK_STATUS;
         }
     }
 

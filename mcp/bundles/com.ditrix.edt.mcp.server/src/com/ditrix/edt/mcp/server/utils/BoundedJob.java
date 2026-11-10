@@ -304,10 +304,31 @@ public final class BoundedJob
          */
         public DeferredCleanup(Runnable cleanup, long capMs, String timerName)
         {
+            this(cleanup, Math.max(1L, capMs), timerName, true);
+        }
+
+        private DeferredCleanup(Runnable cleanup, long capMs, String timerName, boolean capped)
+        {
             this.cleanup = cleanup;
-            this.capMs = Math.max(1L, capMs);
+            this.capMs = capped ? capMs : NO_CAP;
             this.timerName = timerName;
         }
+
+        /**
+         * A cleanup with NO time cap: after an inconclusive wait it runs only on the Job's terminal
+         * notification. For ownership whose early release is worse than a retained record - a stop
+         * that, finishing late, would take down a server started in the meantime.
+         *
+         * @param cleanup the release, invoked exactly once
+         * @return the uncapped cleanup
+         */
+        public static DeferredCleanup untilJobFinished(Runnable cleanup)
+        {
+            return new DeferredCleanup(cleanup, NO_CAP, null, false);
+        }
+
+        /** Marker for {@link #untilJobFinished}: no deadline is ever scheduled. */
+        private static final long NO_CAP = -1L;
 
         /** Records the underlying Job's terminal notification. */
         public void jobFinished()
@@ -336,7 +357,7 @@ public final class BoundedJob
             {
                 cleanOnce();
             }
-            if (!cleaned.get())
+            if (!cleaned.get() && capMs != NO_CAP)
             {
                 scheduleDeadline();
             }

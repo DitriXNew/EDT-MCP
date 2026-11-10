@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -445,6 +446,36 @@ public class StandaloneServerToolTest
         }
     }
 
+    @Test
+    public void testTheStoppedProcessIsReadUnderTheGuardRightBeforeTheStop()
+    {
+        Fixture fixture = new Fixture("StandaloneServerGuardedCaptureProject", 2, true); //$NON-NLS-1$
+        // The hold is installed under the recovery guard just before EDT's cleanup is dispatched,
+        // so a process read made at that point sees it; a read made before the guard does not.
+        fixture.env.captureProbe = () -> StandaloneServerStateRecovery.heldSince(fixture.project,
+            APPLICATION_ID) != null;
+        String result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        assertTrue(result, JsonParser.parseString(result).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("the verified process must be read once, under the guard, before the stop", //$NON-NLS-1$
+            List.of(Boolean.TRUE), fixture.env.captures);
+    }
+
+    @Test
+    public void testAStartThatDoesNotReachStartedIsNotReportedStarted()
+    {
+        Fixture fixture = new Fixture("StandaloneServerUnprovenStartProject", 4, false); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(fixture.project, APPLICATION_ID);
+        fixture.env.startedState = 1;
+        String result = StandaloneServerTool.run(request("start", false), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("STARTING", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+    }
+
     // ==================== helpers ====================
 
     private StandaloneServerTool.Request request(String action, boolean confirm)
@@ -549,15 +580,17 @@ public class StandaloneServerToolTest
     public static final class FakeService
     {
         private final ToolFakeServer server;
+        private final int startedState;
 
-        FakeService(ToolFakeServer server)
+        FakeService(ToolFakeServer server, int startedState)
         {
             this.server = server;
+            this.startedState = startedState;
         }
 
         public IStatus startServer(Object passedServer, String launchMode, Object monitor)
         {
-            server.state = 2;
+            server.state = startedState;
             server.launch = launch(false);
             return Status.OK_STATUS;
         }
@@ -570,7 +603,10 @@ public class StandaloneServerToolTest
         final AtomicInteger consents = new AtomicInteger();
         volatile boolean alive;
         volatile ConsentDecision decision = ConsentDecision.ALLOW;
+        volatile int startedState = 2;
         volatile Runnable onConsent;
+        volatile BooleanSupplier captureProbe;
+        final List<Boolean> captures = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         FakeEnvironment(ToolFakeServer server)
         {
@@ -580,6 +616,11 @@ public class StandaloneServerToolTest
         @Override
         public StandaloneServerTool.LiveProcess liveProcess(Object passedServer)
         {
+            BooleanSupplier probe = captureProbe;
+            if (probe != null)
+            {
+                captures.add(Boolean.valueOf(probe.getAsBoolean()));
+            }
             return server.launch == null ? null
                 : new StandaloneServerTool.LiveProcess(4242L, () -> alive);
         }
@@ -621,7 +662,7 @@ public class StandaloneServerToolTest
         @Override
         public Object service()
         {
-            return new FakeService(server);
+            return new FakeService(server, startedState);
         }
 
         @Override

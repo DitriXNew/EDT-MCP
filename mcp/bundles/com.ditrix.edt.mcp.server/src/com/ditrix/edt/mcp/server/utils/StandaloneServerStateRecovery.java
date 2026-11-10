@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
 import java.util.function.Supplier;
@@ -805,6 +806,23 @@ public final class StandaloneServerStateRecovery
     public static Recovery stopGuarded(IProject project, IApplication application,
         String applicationId, IApplicationManager manager, long timeoutMs, StopPolicy policy)
     {
+        return stopGuarded(project, application, applicationId, manager, timeoutMs, policy, null);
+    }
+
+    /**
+     * {@link #stopGuarded(IProject, IApplication, String, IApplicationManager, long, StopPolicy)}
+     * that hands the server to {@code beforeDispatch} UNDER the guard, after the final state
+     * re-check and immediately before EDT's cleanup is dispatched - so whatever the caller reads
+     * from it (the ibsrv process to verify) belongs to the server this call actually stops.
+     *
+     * @param beforeDispatch called with the WST server right before the cleanup, or {@code null};
+     *     not called when nothing is dispatched
+     * @return the outcome, never {@code null}
+     */
+    public static Recovery stopGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, long timeoutMs, StopPolicy policy,
+        Consumer<Object> beforeDispatch)
+    {
         if (project == null || applicationId == null)
         {
             return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
@@ -930,6 +948,24 @@ public final class StandaloneServerStateRecovery
             Recovery outcome = null;
             try
             {
+                if (beforeDispatch != null)
+                {
+                    try
+                    {
+                        beforeDispatch.accept(server);
+                    }
+                    catch (RuntimeException e) // NOSONAR a failed read must not leave the in-flight record without its stop
+                    {
+                        Activator.logError("Standalone server: the pre-dispatch read failed; the stop " //$NON-NLS-1$
+                            + "proceeds without it: " + applicationId, e); //$NON-NLS-1$
+                    }
+                    catch (Error e)
+                    {
+                        // Nothing was dispatched, so nothing may stay recorded as in flight.
+                        stop.release();
+                        throw e;
+                    }
+                }
                 outcome = runStop(manager, resolvedApplication, applicationId, remainingMs,
                     stop, policy == StopPolicy.RUNNING ? EXPLICIT_STOP_LOG : STALE_STOP_LOG);
             }
@@ -1040,8 +1076,10 @@ public final class StandaloneServerStateRecovery
         }
         try
         {
-            if (guard.stopInFlight.get() != null || !runningWithLiveLaunch(server)
-                || !guard.hold.compareAndSet(observed, null))
+            // A claimed start is not "somebody else's" start: an explicit start that timed out
+            // keeps its claim while it may still run, and only its own conclusive end releases.
+            if (guard.stopInFlight.get() != null || guard.startClaim.get() != null
+                || !runningWithLiveLaunch(server) || !guard.hold.compareAndSet(observed, null))
             {
                 return false;
             }
@@ -1369,7 +1407,19 @@ public final class StandaloneServerStateRecovery
                     return new StartOutcome(StartKind.FAILED, failure, result.conclusive(),
                         result.portsReassigned(), result.portReassignmentOutcomeUnknown());
                 }
-                awaitState(server, STATE_STARTED, START_OBSERVE_TIMEOUT_MS);
+                Integer observed = awaitState(server, STATE_STARTED, START_OBSERVE_TIMEOUT_MS);
+                if (observed == null || observed.intValue() != STATE_STARTED)
+                {
+                    // EDT said OK, but the server does not read STARTED: the start is not proven,
+                    // so the hold stays. STARTING (or an unreadable state) may still turn into a
+                    // running server; anything else is a start that did not take.
+                    boolean mayStillStart = observed == null || observed.intValue() == STATE_STARTING;
+                    return new StartOutcome(StartKind.FAILED, "EDT reported the start as done, but the " //$NON-NLS-1$
+                        + "server reads " + (observed == null ? "an unreadable state" //$NON-NLS-1$ //$NON-NLS-2$
+                            : stateName(observed.intValue()))
+                        + " " + (START_OBSERVE_TIMEOUT_MS / 1000) + "s later", //$NON-NLS-1$ //$NON-NLS-2$
+                        !mayStillStart, result.portsReassigned(), false);
+                }
                 guard.hold.set(null);
                 return new StartOutcome(StartKind.STARTED, null, true, result.portsReassigned(),
                     false);
@@ -1531,6 +1581,19 @@ public final class StandaloneServerStateRecovery
         }
         RecoveryGuard guard = STOP_LOCKS.get(stopLockKey(project, applicationId));
         return guard == null ? null : guard.stopInFlight.get();
+    }
+
+    /**
+     * How long ago the stop of this application whose cleanup has not reported finishing started.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return whole seconds, or {@code null} when no dispatched cleanup is outstanding
+     */
+    public static Long stopInFlightSeconds(IProject project, String applicationId)
+    {
+        StopInFlight stop = stopInFlightFor(project, applicationId);
+        return stop == null ? null : Long.valueOf(stop.elapsedSeconds());
     }
 
     /** Shared diagnosis for an application whose dispatched stop has not reported finishing. */
@@ -1771,9 +1834,24 @@ public final class StandaloneServerStateRecovery
     private static Recovery runStop(IApplicationManager manager, IApplication application,
         String applicationId, long timeoutMs, StopInFlight stopInFlight, String logSubject)
     {
-        BoundedJob.DeferredCleanup ownership = stopInFlight == null ? null
-            : new BoundedJob.DeferredCleanup(stopInFlight::release, stopInFlightCapMs,
+        BoundedJob.DeferredCleanup ownership;
+        if (stopInFlight == null)
+        {
+            ownership = null;
+        }
+        else if (EXPLICIT_STOP_LOG.equals(logSubject))
+        {
+            // An explicit stop keeps its record until EDT's cleanup Job has really ended: a time
+            // cap would let a start (and the hold's release) slip in while the belated cleanup can
+            // still take the new server down. A Job that never ends keeps refusing starts with a
+            // text naming the way out (Servers view, EDT restart); the stale recovery keeps its cap.
+            ownership = BoundedJob.DeferredCleanup.untilJobFinished(stopInFlight::release);
+        }
+        else
+        {
+            ownership = new BoundedJob.DeferredCleanup(stopInFlight::release, stopInFlightCapMs,
                 "Standalone server stop ownership safety cap: " + applicationId); //$NON-NLS-1$
+        }
         BoundedJob.Result result = null;
         try
         {
@@ -2877,14 +2955,40 @@ public final class StandaloneServerStateRecovery
      */
     public static void ensureDefaultApplicationStartable(IProject project)
     {
+        ensureDefaultApplicationStartableThen(project, 0L, null, null, null);
+    }
+
+    /**
+     * The default-application pre-flight followed by {@code work} (the dump that prepares, and so
+     * starts, that application), BOTH under the application's infobase lock
+     * ({@link LaunchLifecycleUtils#lockFor}) - the lock an explicit {@code standalone_server}
+     * stop takes first. Without it a confirmed stop could land between the pre-flight and the
+     * prepare, and the work would start the server the stop just held.
+     *
+     * <p>When the default application cannot be resolved, the pre-flight is skipped exactly as
+     * {@link #ensureDefaultApplicationStartable} always did (logged) and {@code work} runs unlocked:
+     * there is no application id to lock, and EDT's own prepare then fails on its own terms.
+     *
+     * @param project the project whose default application the work prepares (may be {@code null})
+     * @param lockTimeoutMs the bound on waiting for the application's lock
+     * @param monitor cancellation for the lock wait (may be {@code null})
+     * @param nothingDone the sentence appended to a lock refusal, e.g. {@code "Nothing was built."}
+     * @param work the work to run, or {@code null} for the pre-flight alone (then no lock is taken)
+     * @throws ApplicationException when the lock is not acquired, or the pre-flight refuses
+     */
+    public static void ensureDefaultApplicationStartableThen(IProject project, long lockTimeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
         if (project == null)
         {
+            runIfPresent(work);
             return;
         }
         Activator activator = Activator.getDefault();
         IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
         if (manager == null)
         {
+            runIfPresent(work);
             return;
         }
         LaunchLifecycleUtils.DefaultApplicationLookup defaultApp = LaunchLifecycleUtils
@@ -2899,9 +3003,65 @@ public final class StandaloneServerStateRecovery
                 + project.getName() + ": the project's default application could not be resolved (" //$NON-NLS-1$
                 + defaultApp.failure()
                 + "). A stale STARTED server will not be settled before the next start.", null); //$NON-NLS-1$
+            runIfPresent(work);
             return;
         }
-        ensureStartable(project, null, defaultApp.id(), manager);
+        defaultApplicationStartableThen(project, manager, defaultApp.id(), lockTimeoutMs, monitor,
+            nothingDone, work);
+    }
+
+    /** The resolved-default-application half of {@link #ensureDefaultApplicationStartableThen}. */
+    static void defaultApplicationStartableThen(IProject project, IApplicationManager manager,
+        String applicationId, long lockTimeoutMs, IProgressMonitor monitor, String nothingDone,
+        Runnable work)
+    {
+        if (work == null || applicationId == null || applicationId.isBlank())
+        {
+            ensureStartable(project, null, applicationId, manager);
+            runIfPresent(work);
+            return;
+        }
+        runUnderApplicationLock(project.getName(), applicationId, lockTimeoutMs, monitor,
+            nothingDone, () -> {
+                ensureStartable(project, null, applicationId, manager);
+                work.run();
+            });
+    }
+
+    /**
+     * Runs {@code work} holding {@link LaunchLifecycleUtils#lockFor} for one application, acquired
+     * within a bound.
+     *
+     * @throws ApplicationException naming why the lock was not acquired, plus {@code nothingDone}
+     */
+    static void runUnderApplicationLock(String projectName, String applicationId, long timeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
+        LaunchLock lock = LaunchLifecycleUtils.lockFor(projectName, applicationId);
+        Acquisition acquisition = lock.tryAcquire(timeoutMs, monitor);
+        if (!acquisition.acquired())
+        {
+            throw new ApplicationException(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+                projectName, applicationId, timeoutMs)
+                + (nothingDone == null ? "" : " " + nothingDone) //$NON-NLS-1$ //$NON-NLS-2$
+                + " Wait for that operation to finish and retry."); //$NON-NLS-1$
+        }
+        try
+        {
+            work.run();
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    private static void runIfPresent(Runnable work)
+    {
+        if (work != null)
+        {
+            work.run();
+        }
     }
 
     /** What the pre-flight decided to do about the server's current state. */

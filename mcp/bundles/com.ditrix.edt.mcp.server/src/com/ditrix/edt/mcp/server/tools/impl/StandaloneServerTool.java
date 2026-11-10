@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IProject;
@@ -380,7 +381,11 @@ public class StandaloneServerTool implements IMcpTool
         String state = stateOf(server);
         if (message == null)
         {
-            message = "The standalone server is " + state //$NON-NLS-1$
+            Long stopSeconds = StandaloneServerStateRecovery.stopInFlightSeconds(project, applicationId);
+            message = (stopSeconds == null ? "" : "A stop of it started " + stopSeconds //$NON-NLS-1$ //$NON-NLS-2$
+                + "s ago has not reported finishing; every start is refused until it ends (wait, " //$NON-NLS-1$
+                + "or end it in EDT's Servers view; an EDT restart clears it). ") //$NON-NLS-1$
+                + "The standalone server is " + state //$NON-NLS-1$
                 + (StandaloneServerStateRecovery.heldSince(project, applicationId) != null
                     ? " and held stopped; plugin-driven starts are refused until " + NAME //$NON-NLS-1$
                         + "(action='start')." //$NON-NLS-1$
@@ -442,10 +447,14 @@ public class StandaloneServerTool implements IMcpTool
         }
 
         // Read again right before the stop: consent can take a person's time.
-        LiveProcess process = env.liveProcess(server);
+        // The process to verify is read UNDER the recovery guard, after its final state re-check
+        // and right before EDT's cleanup: a server relaunched from EDT's Servers view in between
+        // would otherwise hand over the previous, already exited ibsrv.
+        AtomicReference<LiveProcess> captured = new AtomicReference<>();
         Recovery recovery = StandaloneServerStateRecovery.stopGuarded(project, application,
             applicationId, manager, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            StopPolicy.RUNNING);
+            StopPolicy.RUNNING, guardedServer -> captured.set(env.liveProcess(guardedServer)));
+        LiveProcess process = captured.get();
         if (!recovery.recovered())
         {
             return stopFailure(request, project, application, server, recovery);
@@ -641,6 +650,7 @@ public class StandaloneServerTool implements IMcpTool
                 : ToolResult.error("The standalone server of '" + applicationId + "' was not started: " //$NON-NLS-1$ //$NON-NLS-2$
                     + outcome.detail() + ". Nothing was started. Check " + NAME //$NON-NLS-1$
                     + "(action='status') and retry."); //$NON-NLS-1$
+            result.put(KEY_STATE, stateOf(server));
             return heldFlag(base(result, request.action, request, application, server), project,
                 applicationId).toJson();
         }
@@ -666,6 +676,7 @@ public class StandaloneServerTool implements IMcpTool
                 result = stopped != null ? ToolResult.errorAfterMutation(text + retry)
                     : ToolResult.error(text + retry);
             }
+            result.put(KEY_STATE, stateOf(server));
             return heldFlag(base(result, request.action, request, application, server), project,
                 applicationId).toJson();
         }
