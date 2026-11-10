@@ -136,6 +136,15 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
                         purgeByEventSource(source, true);
                     }
                 }
+                else if (source instanceof IDebugTarget && ev.isStepStart())
+                {
+                    // A 1C step fires RESUME on the target and the thread only gets a CHANGE
+                    // event, so a step started outside the step tool (an EDT toolbar button)
+                    // shows up only here. A plain resume also fires a target RESUME with
+                    // detail 1 (STEP_INTO), so the event alone proves nothing: each registered
+                    // thread's own isStepping() decides.
+                    forgetSteppingThreads((IDebugTarget) source);
+                }
                 break;
             case DebugEvent.TERMINATE:
                 if (source instanceof IDebugTarget)
@@ -219,6 +228,109 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     }
 
     /**
+     * Forgets the state of every registered thread of the target that is stepping: its
+     * thread ids, the frames registered for it and the snapshot it owns. This is the
+     * cleanup for a step started outside the step tool, which EDT reports only as a
+     * step-detail RESUME on the target.
+     *
+     * <p>The cleanup is per thread, never per application. An application can hold
+     * several registered stops, and the event is dispatched asynchronously: a late
+     * RESUME arrives after the stepping thread (or another thread) already stopped
+     * again and produced a fresh snapshot, and that snapshot must survive. A thread
+     * that is not stepping keeps everything; so does one whose state cannot be read.
+     *
+     * <p>A plain resume also fires a target RESUME with detail 1, but it leaves its
+     * threads RESUMED, not STEPPING, so it is a no-op here; the thread RESUME it fires
+     * as well is handled by the thread branch of {@link #handleEvent}.
+     *
+     * <p>Package-visible for headless unit testing.
+     *
+     * @param target the debug target named by the RESUME event
+     */
+    synchronized void forgetSteppingThreads(IDebugTarget target)
+    {
+        if (target == null)
+        {
+            return;
+        }
+        List<IThread> stepping = new ArrayList<>();
+        for (IThread thread : threadsById.values())
+        {
+            if (thread != null && !containsIdentity(stepping, thread) && isSteppingOn(thread, target))
+            {
+                stepping.add(thread);
+            }
+        }
+        if (stepping.isEmpty())
+        {
+            return;
+        }
+        threadsById.entrySet().removeIf(entry -> {
+            if (containsIdentity(stepping, entry.getValue()))
+            {
+                threadAppId.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+        framesById.entrySet().removeIf(entry -> {
+            if (containsIdentity(stepping, threadOf(entry.getValue())))
+            {
+                frameAppId.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+        snapshots.values().removeIf(snapshot -> containsIdentity(stepping, snapshot.thread));
+        notifyAll();
+    }
+
+    /**
+     * @return {@code true} when the thread belongs to the target (identity) and reports
+     *     stepping. An unreadable state answers {@code false}: the thread is kept. Never throws.
+     */
+    private static boolean isSteppingOn(IThread thread, IDebugTarget target)
+    {
+        try
+        {
+            return thread.getDebugTarget() == target && thread.isStepping();
+        }
+        catch (Exception ex)
+        {
+            return false; // state unknown — keep the thread
+        }
+    }
+
+    /** @return the frame's thread, or {@code null} when it cannot be read. Never throws. */
+    private static IThread threadOf(IStackFrame frame)
+    {
+        try
+        {
+            return frame != null ? frame.getThread() : null;
+        }
+        catch (Exception ex)
+        {
+            return null; // unknown owner — keep the frame
+        }
+    }
+
+    private static boolean containsIdentity(List<IThread> threads, Object candidate)
+    {
+        if (candidate == null)
+        {
+            return false;
+        }
+        for (IThread thread : threads)
+        {
+            if (thread == candidate)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * @return {@code true} when the registered thread belongs to the debug-event
      *     source: it IS the source thread, or its debug target / launch is the
      *     source. Identity comparison only; best-effort, never throws.
@@ -255,7 +367,9 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
             return;
         }
         // Always a new stop: a 1C step fires its RESUME on the target, so one thread can suspend
-        // twice with no thread RESUME between. Ids handed out earlier keep resolving.
+        // twice with no thread RESUME between. Ids handed out earlier for this thread stop
+        // resolving when the target's step RESUME is dispatched while the thread is still
+        // stepping; a RESUME dispatched after the thread stopped again leaves them alive.
         long threadId = idGenerator.getAndIncrement();
         threadsById.put(threadId, thread);
         threadAppId.put(threadId, appId);
