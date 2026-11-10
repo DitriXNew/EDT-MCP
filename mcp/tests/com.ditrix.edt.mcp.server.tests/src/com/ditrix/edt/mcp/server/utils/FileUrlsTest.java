@@ -74,12 +74,34 @@ public class FileUrlsTest
     }
 
     @Test
-    public void aLiteralPercentDirectoryWinsOverItsDecodedSibling() throws Exception
+    public void anEncodedUrlKeepsItsDecodedDirectoryBesideALiteralSibling() throws Exception
     {
-        Path literal = directory("a%20b");
-        directory("a b");
+        Path decoded = directory("a b");
+        directory("a%20b");
 
-        assertEquals(literal, FileUrls.toPath(rawUrl(literal)));
+        assertEquals(decoded, FileUrls.toPath(encodedUrl(decoded)));
+    }
+
+    @Test
+    public void anEncodedHashOrPercentKeepsItsDecodedDirectoryBesideALiteralSibling() throws Exception
+    {
+        Path hash = directory("a#b");
+        directory("a%23b");
+        Path percent = directory("100%");
+        directory("100%25");
+
+        assertEquals(hash, FileUrls.toPath(encodedUrl(hash)));
+        assertEquals(percent, FileUrls.toPath(encodedUrl(percent)));
+    }
+
+    @Test
+    public void aRawUrlThatAlsoParsesResolvesAsTheStrictConversionDidWhenBothExist() throws Exception
+    {
+        // The text "a%20b" is ambiguous; with both spellings present the strict reading wins, as before.
+        Path literal = directory("a%20b");
+        Path decoded = directory("a b");
+
+        assertEquals(decoded, FileUrls.toPath(rawUrl(literal)));
     }
 
     @Test

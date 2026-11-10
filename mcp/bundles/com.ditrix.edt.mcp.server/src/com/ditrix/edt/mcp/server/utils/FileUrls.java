@@ -19,13 +19,15 @@ import org.eclipse.core.runtime.URIUtil;
  * <p>
  * Eclipse locations usually carry a raw, unencoded URL ({@code file:/C:/Program Files/...}), which
  * {@link URL#toURI()} rejects, and which is not a URI at all when the path holds a space, a bare
- * {@code %} or a {@code #}. A correctly encoded URL is possible as well, so the two forms are told
- * apart by the filesystem:
+ * {@code %} or a {@code #}. A correctly encoded URL is possible as well, and the same text can be
+ * either form, so the two are told apart by the filesystem:
  * <ol>
- * <li>the URL text is read <b>literally</b> first: an existing directory really named
- * {@code a%20b} must not be swapped for a sibling {@code a b};</li>
- * <li>only when the literal path does not exist is the URL decoded strictly, so that
- * {@code Program%20Files} reaches {@code Program Files};</li>
+ * <li>when the URL parses as a URI and its strictly decoded path exists, that path is returned, as
+ * {@code Path.of(url.toURI())} always did: a location that resolved before resolves the same way,
+ * even when a sibling carries the literal spelling;</li>
+ * <li>otherwise the URL text is read <b>literally</b>, which covers the raw URLs the strict
+ * conversion rejects (a space, a bare {@code %}) and a directory really named {@code a%20b} with no
+ * {@code a b} beside it;</li>
  * <li>when neither exists the literal path is returned, and the caller's own access to it reports
  * the path as the platform spelled it.</li>
  * </ol>
@@ -39,7 +41,8 @@ public final class FileUrls
     }
 
     /**
-     * Resolves a {@code file:} URL to a path, reading it literally first (see the class comment).
+     * Resolves a {@code file:} URL to a path: the strict decoding when it exists, else the literal
+     * reading (see the class comment).
      *
      * @param url the URL to convert
      * @return the path the URL denotes
@@ -56,13 +59,12 @@ public final class FileUrls
         {
             throw new IOException("Not a file URL: " + url);
         }
-        Path literal = literalPath(url);
-        if (Files.exists(literal))
-        {
-            return literal;
-        }
         Path strict = strictPath(url);
-        return strict != null && Files.exists(strict) ? strict : literal;
+        if (strict != null && Files.exists(strict))
+        {
+            return strict;
+        }
+        return literalPath(url);
     }
 
     /**

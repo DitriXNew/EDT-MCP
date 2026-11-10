@@ -191,8 +191,11 @@ public final class PrivatePaths
      * <p>
      * Localized or renamed account names are not stable, so the well-known SIDs identify these accounts. The JDK has
      * no public route from a SID to a principal, and {@code LookupAccountName} rejects SID strings. The JDK's Windows
-     * principals are defined by their SID, which makes {@code hashCode()} the SID string's hash. The source ACL is
-     * protected by the operating system, and anything unexpected there fails closed with an {@link IOException}.
+     * principals are defined by their SID, which makes {@code hashCode()} the SID string's hash. That hash is 32
+     * bits, not an identity: two principals sharing it fail closed with an {@link IOException}, and so does a
+     * missing one, but a lone principal whose SID merely collides would be taken in place of an absent real
+     * account. Producing that ACL requires rewriting the DACL of the system directory, which only accounts
+     * already trusted here (TrustedInstaller, SYSTEM, Administrators) may do.
      *
      * @param entries the ACL entries of the Windows system directory
      * @return exactly the SYSTEM and Administrators principals
