@@ -385,6 +385,7 @@ public class StandaloneServerTool implements IMcpTool
             message = (stopSeconds == null ? "" : "A stop of it started " + stopSeconds //$NON-NLS-1$ //$NON-NLS-2$
                 + "s ago has not reported finishing; every start is refused until it ends (wait, " //$NON-NLS-1$
                 + "or end it in EDT's Servers view; an EDT restart clears it). ") //$NON-NLS-1$
+                + startClaimNote(project, applicationId)
                 + "The standalone server is " + state //$NON-NLS-1$
                 + (StandaloneServerStateRecovery.heldSince(project, applicationId) != null
                     ? " and held stopped; plugin-driven starts are refused until " + NAME //$NON-NLS-1$
@@ -392,6 +393,15 @@ public class StandaloneServerTool implements IMcpTool
                     : "."); //$NON-NLS-1$
         }
         return result.put(McpKeys.MESSAGE, message).toJson();
+    }
+
+    /** Names a start that still claims the server (an explicit start whose Job has not ended). */
+    private static String startClaimNote(IProject project, String applicationId)
+    {
+        Long seconds = StandaloneServerStateRecovery.startClaimSeconds(project, applicationId);
+        return seconds == null ? "" : "A start of it began " + seconds //$NON-NLS-1$ //$NON-NLS-2$
+            + "s ago and has not reported finishing; until it ends the hold is not released and " //$NON-NLS-1$
+            + "stops are refused (wait, or end it in EDT's Servers view; an EDT restart clears it). "; //$NON-NLS-1$
     }
 
     // ==================== stop / restart ====================
@@ -478,6 +488,10 @@ public class StandaloneServerTool implements IMcpTool
         }
         if (restart)
         {
+            if (processAlive == null)
+            {
+                return restartNotVerified(request, project, application, server, env, snapshot);
+            }
             return start(request, manager, project, application, env, snapshot);
         }
         ToolResult result = base(ToolResult.success(), ACTION_STOP, request, application, server)
@@ -560,6 +574,25 @@ public class StandaloneServerTool implements IMcpTool
             + "' was not stopped: " + recovery.detail() + ". Nothing was dispatched to EDT. Retry " //$NON-NLS-1$ //$NON-NLS-2$
             + "once " + NAME + "(action='status') reports STARTED or STOPPED."), //$NON-NLS-1$ //$NON-NLS-2$
             request.action, request, application, server), project, applicationId).toJson();
+    }
+
+    /**
+     * A restart whose stop succeeded but whose ibsrv exit could not be verified (no process id
+     * was read under the guard): starting again could run a second ibsrv - even on reassigned
+     * ports - while the old one may still hold the file infobase, so it is not started.
+     */
+    private static String restartNotVerified(Request request, IProject project,
+        IApplication application, Object server, Environment env, Snapshot snapshot)
+    {
+        ToolResult result = base(ToolResult.errorAfterMutation("The standalone server was stopped " //$NON-NLS-1$
+            + "(ending " + snapshot.whatEnds() + "), but its ibsrv process id could not be read, so " //$NON-NLS-1$ //$NON-NLS-2$
+            + "its exit was not verified and it was NOT started again: a second ibsrv could start " //$NON-NLS-1$
+            + "while the old one may still hold the file infobase. It stays held stopped. Check " //$NON-NLS-1$
+            + NAME + "(action='status'), then call " + NAME + "(action='start')."), //$NON-NLS-1$ //$NON-NLS-2$
+            request.action, request, application, server);
+        snapshot.putInto(result);
+        describeServer(result, project, application, server, env, false);
+        return result.toJson();
     }
 
     /** One shape for a stop that found the server already STOPPED, read before or under the guard. */

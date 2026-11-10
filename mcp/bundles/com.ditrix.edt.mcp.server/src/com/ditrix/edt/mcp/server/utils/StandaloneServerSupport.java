@@ -690,48 +690,67 @@ public final class StandaloneServerSupport
         StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs,
         Runnable operationCleanup, Runnable cleanupInstalled)
     {
+        return startServerGuarded(service, server, operationName, launchMode, infobaseName,
+            serverName, portPolicy, timeoutMs, cleanupCapMs, operationCleanup, cleanupInstalled,
+            false);
+    }
+
+    /**
+     * Same guarded start; with {@code operationUntilJobFinished} the operation claim is released
+     * only on the start Job's terminal notification (never by {@code cleanupCapMs}), while the
+     * unattended dialog guards keep their cap. For an explicit start whose claim must outlive an
+     * inconclusive wait for as long as the start can still run.
+     */
+    public static GuardedStartResult startServerGuarded(Object service, Object server, // NOSONAR one argument per independent concern
+        String operationName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs,
+        Runnable operationCleanup, Runnable cleanupInstalled, boolean operationUntilJobFinished)
+    {
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
         boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null,
             infobaseName, portPolicy, serverName);
         InfobaseAuthDialogSuppressor.markActivityStart();
-        Runnable cleanup = () -> {
+        Runnable guardsCleanup = () -> {
             try
             {
-                try
+                if (autoConfirmerArmed)
                 {
-                    if (autoConfirmerArmed)
-                    {
-                        LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                            portPolicy, serverName);
-                    }
-                }
-                finally
-                {
-                    try
-                    {
-                        if (conflicts != null)
-                        {
-                            conflicts.close();
-                        }
-                    }
-                    finally
-                    {
-                        InfobaseAuthDialogSuppressor.markActivityEnd();
-                    }
+                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                        portPolicy, serverName);
                 }
             }
             finally
             {
-                if (operationCleanup != null)
+                try
                 {
-                    operationCleanup.run();
+                    if (conflicts != null)
+                    {
+                        conflicts.close();
+                    }
                 }
+                finally
+                {
+                    InfobaseAuthDialogSuppressor.markActivityEnd();
+                }
+            }
+        };
+        boolean separateOperation = operationUntilJobFinished && operationCleanup != null;
+        Runnable cleanup = operationCleanup == null || separateOperation ? guardsCleanup : () -> {
+            try
+            {
+                guardsCleanup.run();
+            }
+            finally
+            {
+                operationCleanup.run();
             }
         };
         BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(cleanup,
             cleanupCapMs, operationName + " unattended-guard safety cap"); //$NON-NLS-1$
+        BoundedJob.DeferredCleanup operationOwnership = separateOperation
+            ? BoundedJob.DeferredCleanup.untilJobFinished(operationCleanup) : null;
         IStatus[] status = new IStatus[1];
         BoundedJob.Result bounded = null;
         try
@@ -742,7 +761,19 @@ public final class StandaloneServerSupport
             }
             bounded = BoundedJob.run(operationName, timeoutMs,
                 monitor -> status[0] = startServer(service, server, launchMode, monitor),
-                deferredCleanup::jobFinished);
+                () -> {
+                    try
+                    {
+                        deferredCleanup.jobFinished();
+                    }
+                    finally
+                    {
+                        if (operationOwnership != null)
+                        {
+                            operationOwnership.jobFinished();
+                        }
+                    }
+                });
             boolean conclusive = !BoundedJob.isInconclusive(bounded.getOutcome());
             String conflictFailure = conflicts != null && conflicts.portConflicted()
                 ? LaunchUpdateDialogAutoConfirmer.portConflictError(
@@ -760,8 +791,18 @@ public final class StandaloneServerSupport
         {
             // BoundedJob rethrows Error only after its Job has already terminated. Otherwise its
             // concrete outcome is the sole authority on whether the guards may be released now.
-            deferredCleanup.afterBoundedWait(bounded == null
-                || !BoundedJob.isInconclusive(bounded.getOutcome()));
+            boolean ended = bounded == null || !BoundedJob.isInconclusive(bounded.getOutcome());
+            try
+            {
+                deferredCleanup.afterBoundedWait(ended);
+            }
+            finally
+            {
+                if (operationOwnership != null)
+                {
+                    operationOwnership.afterBoundedWait(ended);
+                }
+            }
         }
     }
 

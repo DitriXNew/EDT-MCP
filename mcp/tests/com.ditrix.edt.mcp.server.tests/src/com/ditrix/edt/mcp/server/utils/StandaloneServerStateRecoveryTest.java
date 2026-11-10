@@ -2099,6 +2099,79 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    @Test
+    public void testAnUnfinishedExplicitStartKeepsItsClaimPastTheGuardCap() throws Exception
+    {
+        long originalCap = StandaloneServerStateRecovery.explicitStartGuardCapMs;
+        StandaloneServerStateRecovery.explicitStartGuardCapMs = 150L;
+        ServerApp app = new ServerApp("ExplicitStartNoCapProject", new FakeServer(4, launch(false))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try
+        {
+            StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager,
+                new BlockingRestorationService(started, release), StandaloneServerPortConflictPolicy.CANCEL,
+                6_000L);
+            assertFalse("the start did not finish within its bound", outcome.conclusive()); //$NON-NLS-1$
+            Thread.sleep(1_000L);
+            // The start reaches RUNNING under a live launch while its Job is still going.
+            app.server.setState(2);
+            assertNotNull("an unfinished explicit start keeps its claim past the guard cap", //$NON-NLS-1$
+                StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID));
+            assertFalse("only the start's own conclusive end may release the hold", //$NON-NLS-1$
+                StandaloneServerStateRecovery.releaseHoldIfStartedOutside(app.project, APPLICATION_ID,
+                    app.server));
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            release.countDown();
+            StandaloneServerStateRecovery.explicitStartGuardCapMs = originalCap;
+        }
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID) != null
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        try
+        {
+            assertNull("the claim ends when the start Job ends", //$NON-NLS-1$
+                StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testTheStartObservationStaysInsideTheWholeStartBound()
+    {
+        ServerApp app = new ServerApp("BoundedObservationProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        try
+        {
+            long begin = System.nanoTime();
+            StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager,
+                new SlowStateSettingService(app.server, 1, 5_500L), StandaloneServerPortConflictPolicy.CANCEL,
+                6_500L);
+            long elapsedMs = (System.nanoTime() - begin) / 1_000_000L;
+            assertEquals(StandaloneServerStateRecovery.StartKind.FAILED, outcome.kind());
+            assertFalse("an unobserved STARTED is inconclusive", outcome.conclusive()); //$NON-NLS-1$
+            assertTrue("the observation must fit the 6.5s bound, not add 5s after it: " + elapsedMs, //$NON-NLS-1$
+                elapsedMs < 8_500L);
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
     /** Runs {@code action} and requires the explicit-stop hold refusal. */
     private static void assertHeldRefusal(Runnable action)
     {
@@ -2158,6 +2231,35 @@ public class StandaloneServerStateRecoveryTest
 
         public IStatus startServer(Object passedServer, String launchMode, Object monitor)
         {
+            server.setState(state);
+            return Status.OK_STATUS;
+        }
+    }
+
+    /** A service that takes a while, then reports OK and leaves the fake server in a chosen state. */
+    public static final class SlowStateSettingService
+    {
+        private final FakeServer server;
+        private final int state;
+        private final long delayMs;
+
+        SlowStateSettingService(FakeServer server, int state, long delayMs)
+        {
+            this.server = server;
+            this.state = state;
+            this.delayMs = delayMs;
+        }
+
+        public IStatus startServer(Object passedServer, String launchMode, Object monitor)
+        {
+            try
+            {
+                Thread.sleep(delayMs);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
             server.setState(state);
             return Status.OK_STATUS;
         }

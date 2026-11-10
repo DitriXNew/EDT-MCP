@@ -476,6 +476,25 @@ public class StandaloneServerToolTest
         assertTrue(json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testARestartWhoseStoppedProcessWasNotVerifiedDoesNotStartAgain()
+    {
+        Fixture fixture = new Fixture("StandaloneServerUnverifiedRestartProject", 2, true); //$NON-NLS-1$
+        fixture.env.noProcess = true;
+        String result = StandaloneServerTool.run(request("restart", true), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("the stop itself happened", json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("STOPPED", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("an unread process is not a verified exit", json.has("processAlive")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result, json.get("error").getAsString().contains("action='start'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("nothing may be started while the old ibsrv may still run", 4, //$NON-NLS-1$
+            fixture.server.getServerState());
+        assertEquals(1, fixture.cleanups.get());
+    }
+
     // ==================== helpers ====================
 
     private StandaloneServerTool.Request request(String action, boolean confirm)
@@ -604,6 +623,7 @@ public class StandaloneServerToolTest
         volatile boolean alive;
         volatile ConsentDecision decision = ConsentDecision.ALLOW;
         volatile int startedState = 2;
+        volatile boolean noProcess;
         volatile Runnable onConsent;
         volatile BooleanSupplier captureProbe;
         final List<Boolean> captures = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -621,7 +641,7 @@ public class StandaloneServerToolTest
             {
                 captures.add(Boolean.valueOf(probe.getAsBoolean()));
             }
-            return server.launch == null ? null
+            return server.launch == null || noProcess ? null
                 : new StandaloneServerTool.LiveProcess(4242L, () -> alive);
         }
 

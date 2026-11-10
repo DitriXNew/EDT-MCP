@@ -142,6 +142,14 @@ public final class StandaloneServerStateRecovery
     /** How long an explicit start waits to observe the server RUNNING after EDT reported OK. */
     private static final long START_OBSERVE_TIMEOUT_MS = 5_000L;
 
+    /**
+     * Cap on an explicit start's unattended dialog guards after an inconclusive wait. Its start
+     * CLAIM is not capped: it is released only when the start Job really ends. Mutable only so
+     * tests can shrink it.
+     */
+    static volatile long explicitStartGuardCapMs =
+        StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS;
+
     /** Test seam for a UI thread that never answers the bounded shell probe. */
     static volatile LongFunction<LaunchLifecycleUtils.ShellProbe> stopShellProbe =
         LaunchLifecycleUtils::grabActiveShellWithin;
@@ -1399,15 +1407,17 @@ public final class StandaloneServerStateRecovery
                         "Starting standalone server: " + applicationId, ILaunchManager.DEBUG_MODE, //$NON-NLS-1$
                         LaunchLifecycleUtils.conflictAttributionName(application),
                         StandaloneServerSupport.nameOfServer(server), portPolicy, remainingMs,
-                        StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, claim::close,
-                        claim::handoff);
+                        explicitStartGuardCapMs, claim::close, claim::handoff, true);
                 String failure = result.failure();
                 if (failure != null)
                 {
                     return new StartOutcome(StartKind.FAILED, failure, result.conclusive(),
                         result.portsReassigned(), result.portReassignmentOutcomeUnknown());
                 }
-                Integer observed = awaitState(server, STATE_STARTED, START_OBSERVE_TIMEOUT_MS);
+                // The observation lives inside the whole start's bound, not after it: with no time
+                // left it is one immediate read, and an unobserved STARTED is inconclusive below.
+                long observeMs = Math.min(START_OBSERVE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                Integer observed = awaitState(server, STATE_STARTED, observeMs);
                 if (observed == null || observed.intValue() != STATE_STARTED)
                 {
                     // EDT said OK, but the server does not read STARTED: the start is not proven,
@@ -1417,7 +1427,7 @@ public final class StandaloneServerStateRecovery
                     return new StartOutcome(StartKind.FAILED, "EDT reported the start as done, but the " //$NON-NLS-1$
                         + "server reads " + (observed == null ? "an unreadable state" //$NON-NLS-1$ //$NON-NLS-2$
                             : stateName(observed.intValue()))
-                        + " " + (START_OBSERVE_TIMEOUT_MS / 1000) + "s later", //$NON-NLS-1$ //$NON-NLS-2$
+                        + " " + observeMs + "ms later", //$NON-NLS-1$ //$NON-NLS-2$
                         !mayStillStart, result.portsReassigned(), false);
                 }
                 guard.hold.set(null);
@@ -1594,6 +1604,22 @@ public final class StandaloneServerStateRecovery
     {
         StopInFlight stop = stopInFlightFor(project, applicationId);
         return stop == null ? null : Long.valueOf(stop.elapsedSeconds());
+    }
+
+    /**
+     * How long ago the start that currently claims this application began - an explicit start
+     * whose Job has not ended keeps its claim until it does.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return whole seconds, or {@code null} when no start claims the application
+     */
+    public static Long startClaimSeconds(IProject project, String applicationId)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        StartClaim claim = guard == null ? null : guard.startClaim.get();
+        return claim == null ? null
+            : Long.valueOf((System.currentTimeMillis() - claim.startedAtMs) / 1000L);
     }
 
     /** Shared diagnosis for an application whose dispatched stop has not reported finishing. */
@@ -2575,6 +2601,7 @@ public final class StandaloneServerStateRecovery
     public static final class StartClaim implements AutoCloseable
     {
         private final RecoveryGuard guard;
+        private final long startedAtMs = System.currentTimeMillis();
         private final AtomicBoolean handedOff = new AtomicBoolean();
         private final AtomicBoolean released = new AtomicBoolean();
 
