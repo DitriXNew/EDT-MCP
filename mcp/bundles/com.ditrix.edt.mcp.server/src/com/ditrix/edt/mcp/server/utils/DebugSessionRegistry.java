@@ -136,6 +136,14 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
                         purgeByEventSource(source, true);
                     }
                 }
+                else if (source instanceof IDebugTarget && ev.isStepStart())
+                {
+                    // A 1C step fires RESUME on the target and the thread only gets a CHANGE
+                    // event, so a step started outside the step tool (an EDT toolbar button)
+                    // shows up only here. The event names no thread: each registered thread
+                    // of the target answers for itself in the purge.
+                    purgeByEventSource(source, true);
+                }
                 break;
             case DebugEvent.TERMINATE:
                 if (source instanceof IDebugTarget)
@@ -168,20 +176,23 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
      * produce — i.e. minted {@code ServerApplication.<app>} keys.
      *
      * <p>A thread matches when it IS the source, or its debug target / launch is the
-     * source (TERMINATE events may carry any of the three).
+     * source. TERMINATE events may carry any of the three; a RESUME carries a thread,
+     * or a target when it reports a step.
      *
      * <p>{@code onlyIfNotSuspended} guards RESUME events against asynchronous event
      * dispatch: a LATE resume event — dispatched after a poll-based tool (step /
      * wait_for_break) already observed the NEXT suspend and injected a fresh
-     * snapshot for the same thread — must not destroy that fresh snapshot. If the
-     * source thread still reports suspended, the resume is stale news; skip.
+     * snapshot for the same thread — must not destroy that fresh snapshot. The guard
+     * applies to each matching registered thread: one that still reports suspended
+     * does not make its application stale, the resume is stale news for that thread.
+     * An application is purged as soon as one of its matching threads is not suspended.
      *
      * <p>Package-visible for headless unit testing.
      *
      * @param source the debug-event source ({@link IThread}, {@link IDebugTarget}
      *     or {@link ILaunch}; anything else is ignored)
-     * @param onlyIfNotSuspended when {@code true} and the source is a thread that
-     *     still reports suspended, the purge is skipped (RESUME semantics)
+     * @param onlyIfNotSuspended when {@code true}, a matching registered thread that
+     *     still reports suspended does not condemn its application (RESUME semantics)
      */
     synchronized void purgeByEventSource(Object source, boolean onlyIfNotSuspended)
     {
@@ -189,25 +200,13 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         {
             return;
         }
-        if (onlyIfNotSuspended && source instanceof IThread)
-        {
-            try
-            {
-                if (((IThread) source).isSuspended())
-                {
-                    return; // late event — the thread is already suspended again
-                }
-            }
-            catch (Exception ex)
-            {
-                // state unknown — fall through and purge (resume was reported)
-            }
-        }
         List<String> stale = new ArrayList<>();
         for (Map.Entry<Long, String> entry : threadAppId.entrySet())
         {
             IThread thread = threadsById.get(entry.getKey());
-            if (thread != null && matchesEventSource(thread, source) && !stale.contains(entry.getValue()))
+            if (thread != null && matchesEventSource(thread, source)
+                && !(onlyIfNotSuspended && reportsSuspended(thread))
+                && !stale.contains(entry.getValue()))
             {
                 stale.add(entry.getValue());
             }
@@ -215,6 +214,23 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         for (String appId : stale)
         {
             forgetApplication(appId);
+        }
+    }
+
+    /**
+     * @return {@code true} when the thread reports suspended, so a RESUME event about it
+     *     is late news. An unknown state answers {@code false}: a resume was reported, so
+     *     the purge goes ahead. Never throws.
+     */
+    private static boolean reportsSuspended(IThread thread)
+    {
+        try
+        {
+            return thread.isSuspended();
+        }
+        catch (Exception ex)
+        {
+            return false; // state unknown — purge (resume was reported)
         }
     }
 
@@ -255,7 +271,9 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
             return;
         }
         // Always a new stop: a 1C step fires its RESUME on the target, so one thread can suspend
-        // twice with no thread RESUME between. Ids handed out earlier keep resolving.
+        // twice with no thread RESUME between. Ids handed out earlier stop resolving when the
+        // target's step-detail RESUME is dispatched while the thread is still running; only a
+        // RESUME dispatched after the thread stopped again leaves them alive.
         long threadId = idGenerator.getAndIncrement();
         threadsById.put(threadId, thread);
         threadAppId.put(threadId, appId);
