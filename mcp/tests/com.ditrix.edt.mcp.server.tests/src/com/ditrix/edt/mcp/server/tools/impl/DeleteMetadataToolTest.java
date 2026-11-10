@@ -491,11 +491,104 @@ public class DeleteMetadataToolTest
         String tail = schema.getAsJsonArray("required").toString();
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("fqn is conditional on operations being absent", tail.contains("\"fqn\""));
-        assertEquals(2, schema.getAsJsonArray("oneOf").size());
-        assertEquals("fqn", schema.getAsJsonArray("oneOf").get(0).getAsJsonObject()
-            .getAsJsonArray("required").get(0).getAsString());
-        assertEquals("operations", schema.getAsJsonArray("oneOf").get(1).getAsJsonObject()
-            .getAsJsonArray("required").get(0).getAsString());
+        assertFalse("a root oneOf makes Claude's API reject the whole tool list", schema.has("oneOf")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a root anyOf makes Claude's API reject the whole tool list", schema.has("anyOf")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a root allOf makes Claude's API reject the whole tool list", schema.has("allOf")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("object", schema.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject properties = schema.getAsJsonObject("properties"); //$NON-NLS-1$
+        assertTrue("fqn must stay a declared property", properties.has("fqn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("operations must stay a declared property", properties.has("operations")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ---- the exactly-one contract the schema cannot carry ------------------------------------------
+
+    /** Runs a call the request validation must refuse and returns its error text. */
+    private static String refusalOf(Map<String, String> args)
+    {
+        JsonObject result = JsonParser.parseString(new DeleteMetadataTool().execute(args)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        return result.get("error").getAsString(); //$NON-NLS-1$
+    }
+
+    private static void assertExactlyOneRefusal(String error)
+    {
+        assertTrue(error, error.contains("fqn")); //$NON-NLS-1$
+        assertTrue(error, error.contains("operations")); //$NON-NLS-1$
+        assertTrue(error, error.contains("required")); //$NON-NLS-1$
+        assertTrue(error, error.contains("exactly one")); //$NON-NLS-1$
+        assertFalse("the refusal must come before the project is looked up: " + error, //$NON-NLS-1$
+            error.contains("not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNeitherFqnNorOperationsIsRefusedNamingBoth()
+    {
+        assertExactlyOneRefusal(refusalOf(Map.of("projectName", "NoProject"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNeitherFqnNorOperationsIsRefusedEvenWhenConfirmed()
+    {
+        assertExactlyOneRefusal(refusalOf(Map.of("projectName", "NoProject", "confirm", "true"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testEmptyFqnGetsTheExactlyOneRefusal()
+    {
+        assertExactlyOneRefusal(refusalOf(Map.of("projectName", "NoProject", "fqn", ""))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testBlankFqnGetsTheExactlyOneRefusal()
+    {
+        assertExactlyOneRefusal(refusalOf(Map.of("projectName", "NoProject", "fqn", "   "))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testMissingFqnIsReportedBeforeTheAtomicMisuse()
+    {
+        String error = refusalOf(Map.of("projectName", "NoProject", "atomic", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertExactlyOneRefusal(error);
+        assertFalse(error, error.contains("Omit atomic")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAtomicWithASingleFqnKeepsItsOwnRefusal()
+    {
+        assertEquals("atomic is only supported with operations. Omit atomic for a single fqn.", //$NON-NLS-1$
+            refusalOf(Map.of("projectName", "NoProject", "fqn", "Catalog.X", "atomic", "true"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+    }
+
+    @Test
+    public void testPassingBothKeepsTheStructuredBatchRefusal()
+    {
+        JsonObject result = JsonParser.parseString(new DeleteMetadataTool().execute(Map.of(
+            "projectName", "NoProject", //$NON-NLS-1$ //$NON-NLS-2$
+            "fqn", "Catalog.X", //$NON-NLS-1$ //$NON-NLS-2$
+            "operations", "[{\"action\":\"delete\",\"fqn\":\"Catalog.Catalog.Form.ItemForm.Command.A\"}]"))) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("invalidBatch", result.get("reason").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, result.getAsJsonArray("errors").size()); //$NON-NLS-1$
+        String error = result.getAsJsonArray("errors").get(0).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error, error.contains("Parameter 'fqn' is not supported in a batch")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Pass operations")); //$NON-NLS-1$
+        assertEquals(0, result.getAsJsonArray("applied").size()); //$NON-NLS-1$
+        assertFalse(result.get("committed").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASingleFqnPassesRequestValidation()
+    {
+        assertNull(new DeleteMetadataTool().validateRequest(Map.of("projectName", "P", "fqn", "Catalog.X"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testDescriptionStatesTheExactlyOneContract()
+    {
+        String description = new DeleteMetadataTool().getDescription();
+        assertTrue(description, description.contains("exactly one of fqn or operations")); //$NON-NLS-1$
     }
 
     @Test

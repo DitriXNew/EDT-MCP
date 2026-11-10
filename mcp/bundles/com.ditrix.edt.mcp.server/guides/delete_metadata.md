@@ -31,8 +31,8 @@ After a forced md-refactoring delete, the tool waits for export and reads the re
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
-- `fqn` (required unless `operations` is provided) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member (e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - an attribute / tabular section / dimension / resource / enum value / command / template / recalculation / type-specific child - can be deleted by its FQN.
-- `operations` (alternative to `fqn`) - 1..100 `{action: "delete", fqn: "..."}` objects addressing members of ONE form. See the atomic batch contract below.
+- `fqn` (exactly one of `fqn` / `operations` is required) - the delete target. Top object: 'Type.Name' (e.g. 'Catalog.Products' deletes the whole catalog). Member: 'Type.Name.Kind.Name', including a NESTED member (e.g. 'Catalog.X.TabularSection.T.Attribute.A'). Any node create_metadata can address - an attribute / tabular section / dimension / resource / enum value / command / template / recalculation / type-specific child - can be deleted by its FQN.
+- `operations` (alternative to `fqn`; passing both is refused) - 1..100 `{action: "delete", fqn: "..."}` objects addressing members of ONE form. See the atomic batch contract below.
 - `atomic` (batch only, default true) - must be true. Non-atomic execution is not supported.
 - `confirm` (optional, default false) - false previews, true applies.
 - `force` (optional, default false) - on confirm=true, delete despite blocking incoming references or platform prohibitions. Incoming references are left dangling; prohibitions are overridden - except a vendor-support lock, which is never overridden. Does nothing in preview.
