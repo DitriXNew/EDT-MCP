@@ -926,4 +926,135 @@ public class StandaloneServerSupportTest
             return result;
         }
     }
+
+    // ==================== explicit start: dialog guards of a queued start (#890) ====================
+
+    @Test
+    public void aJobBoundStartAQueuedJobKeepsItsDialogGuardsUntilTheJobEnds() throws Exception
+    {
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        int before = InfobaseAuthDialogSuppressor.inFlightCount();
+        java.util.concurrent.atomic.AtomicInteger claimReleases = new java.util.concurrent.atomic.AtomicInteger();
+        StandaloneServerSupport.GuardedStartResult result;
+        jobs.suspend();
+        try
+        {
+            result = StandaloneServerSupport.startServerGuarded(
+                new FakeStartService(org.eclipse.core.runtime.Status.OK_STATUS), new Object(),
+                "test: queued explicit start", "debug", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                StandaloneServerPortConflictPolicy.REASSIGN, 30_000L, 300_000L,
+                claimReleases::incrementAndGet, null, true);
+            assertTrue("a start the suspended manager holds may still run", result.mayStillRun()); //$NON-NLS-1$
+            assertEquals("its auth-dialog suppression must stay armed for when it runs", //$NON-NLS-1$
+                before + 1, InfobaseAuthDialogSuppressor.inFlightCount());
+            assertEquals(0, claimReleases.get());
+        }
+        finally
+        {
+            jobs.resume();
+        }
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while ((claimReleases.get() == 0 || InfobaseAuthDialogSuppressor.inFlightCount() != before)
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertEquals("the end notification releases the claim", 1, claimReleases.get()); //$NON-NLS-1$
+        assertEquals("and the guards", before, InfobaseAuthDialogSuppressor.inFlightCount()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aCappedStartAQueuedJobStillReleasesItsDialogGuardsAtOnce()
+    {
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        int before = InfobaseAuthDialogSuppressor.inFlightCount();
+        jobs.suspend();
+        try
+        {
+            StandaloneServerSupport.startServerGuarded(
+                new FakeStartService(org.eclipse.core.runtime.Status.OK_STATUS), new Object(),
+                "test: queued capped start", "debug", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                StandaloneServerPortConflictPolicy.CANCEL, 30_000L, 300_000L);
+            assertEquals("the capped callers keep their established classification", before, //$NON-NLS-1$
+                InfobaseAuthDialogSuppressor.inFlightCount());
+        }
+        finally
+        {
+            jobs.resume();
+        }
+    }
+
+    // ==================== explicit stop: process-exit verification (#890) ====================
+
+    @Test
+    public void awaitProcessExitReturnsAsSoonAsTheProcessIsGone()
+    {
+        java.util.concurrent.atomic.AtomicInteger polls = new java.util.concurrent.atomic.AtomicInteger();
+        long started = System.nanoTime();
+        boolean exited = StandaloneServerSupport.awaitProcessExit(() -> polls.incrementAndGet() < 3,
+            10_000L, 10L);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+        assertTrue("the process stopped answering alive on the third poll", exited);
+        assertEquals(3, polls.get());
+        assertTrue("the wait must end long before its bound: " + elapsedMs, elapsedMs < 5_000L);
+    }
+
+    @Test
+    public void awaitProcessExitReportsATimeoutHonestly()
+    {
+        long started = System.nanoTime();
+        boolean exited = StandaloneServerSupport.awaitProcessExit(() -> true, 150L, 10L);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+        assertFalse("a process that never exits must not be reported gone", exited);
+        assertTrue("the wait must last its whole bound: " + elapsedMs, elapsedMs >= 140L);
+    }
+
+    @Test
+    public void aMissingLaunchHasNoProcess() throws Exception
+    {
+        assertFalse(StandaloneServerSupport.proceedAtLivePid(new NoLaunchServer(),
+            pid -> fail("no process")));
+        assertFalse(StandaloneServerSupport.liveProcess(null).isPresent());
+        assertFalse(StandaloneServerSupport.liveProcess(new NoLaunchServer()).isPresent());
+    }
+
+    @Test
+    public void anErrorFromTheLaunchAccessorIsWrappedAsTheSessionCommandsAlwaysDid()
+    {
+        try
+        {
+            StandaloneServerSupport.proceedAtLivePid(new ErrorLaunchServer(), pid -> fail("no process"));
+            fail("a failing accessor must not read as a missing launch");
+        }
+        catch (IllegalStateException wrapped)
+        {
+            assertTrue(String.valueOf(wrapped.getCause()), wrapped.getCause() instanceof NoClassDefFoundError);
+        }
+        catch (Exception other)
+        {
+            fail("an Error cause must be wrapped in IllegalStateException, not rethrown as " + other);
+        }
+        catch (NoClassDefFoundError bare)
+        {
+            fail("an Error cause must be wrapped, not rethrown bare");
+        }
+    }
+
+    /** A WST server whose launch accessor fails with an Error, as a missing class would. */
+    public static final class ErrorLaunchServer
+    {
+        public Object getLaunch()
+        {
+            throw new NoClassDefFoundError("simulated missing WST class"); //$NON-NLS-1$
+        }
+    }
+
+    /** A WST server with no launch, as the pid read addresses it. */
+    public static final class NoLaunchServer
+    {
+        public Object getLaunch()
+        {
+            return null;
+        }
+    }
 }

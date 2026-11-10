@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**107 tools.**
+**108 tools.**
 
 ## Core
 
@@ -173,6 +173,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`revalidate_objects`](revalidate_objects.md) | Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild… |
 | [`set_branch_infobase`](set_branch_infobase.md) | Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: get_tool_guide('set_branch_infobase'). |
 | [`set_infobase_credentials`](set_infobase_credentials.md) | STORE infobase credentials (user/password) in EDT settings so update_database and launch can authenticate. The secret PERSISTS beyond this call, and addressi… |
+| [`standalone_server`](standalone_server.md) | Report, stop or start the EDT standalone server (ibsrv) of a wst-server application. DESTRUCTIVE for stop/restart: it ends every session and client of that s… |
 | [`switch_git_branch`](switch_git_branch.md) | Change the active version of an EDT project through Git branch checkout. Parameters and examples: get_tool_guide('switch_git_branch'). |
 | [`update_database`](update_database.md) | Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear… |
 | [`validate_xdto_package`](validate_xdto_package.md) | Check an XDTO package for configuration validation problems. Reads the markers EDT computed EARLIER - it does not validate on demand, so a verdict right afte… |

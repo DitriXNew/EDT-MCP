@@ -47,7 +47,7 @@ public enum ToolGroup
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
         "Application and infobase management, external-object builds, launch, testing, " //$NON-NLS-1$
             + "background jobs, and Workmate", //$NON-NLS-1$
-        "edt_dialog", "get_applications", "infobase_sessions", "infobase_extensions", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "edt_dialog", "get_applications", "infobase_sessions", "infobase_extensions", "standalone_server", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "create_launch_config", "delete_launch_config", //$NON-NLS-1$ //$NON-NLS-2$
         "create_infobase", "delete_infobase", "update_database", "launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "terminate_launch", "run_yaxunit_tests", "ask_workmate", "get_job_status", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$

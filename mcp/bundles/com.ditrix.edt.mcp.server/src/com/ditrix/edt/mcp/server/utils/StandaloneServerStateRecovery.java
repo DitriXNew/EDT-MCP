@@ -6,11 +6,14 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
 import java.util.function.Supplier;
@@ -129,6 +132,23 @@ public final class StandaloneServerStateRecovery
     private static final long SETTLE_POLL_MS = 250L;
 
     private static final long STOP_SHELL_TIMEOUT_MS = 250L;
+
+    /** Log subject of a recovery stop (a stale STARTED server). */
+    private static final String STALE_STOP_LOG = "Stale standalone server"; //$NON-NLS-1$
+
+    /** Log subject of an explicit {@code standalone_server} stop. */
+    private static final String EXPLICIT_STOP_LOG = "Standalone server (explicit stop)"; //$NON-NLS-1$
+
+    /** How long an explicit start waits to observe the server RUNNING after EDT reported OK. */
+    private static final long START_OBSERVE_TIMEOUT_MS = 5_000L;
+
+    /**
+     * Cap on an explicit start's unattended dialog guards after an inconclusive wait. Its start
+     * CLAIM is not capped: it is released only when the start Job really ends. Mutable only so
+     * tests can shrink it.
+     */
+    static volatile long explicitStartGuardCapMs =
+        StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS;
 
     /** Test seam for a UI thread that never answers the bounded shell probe. */
     static volatile LongFunction<LaunchLifecycleUtils.ShellProbe> stopShellProbe =
@@ -252,7 +272,7 @@ public final class StandaloneServerStateRecovery
      * @param state the numeric state ({@code org.eclipse.wst.server.core.IServer.STATE_*})
      * @return the name, or the number itself for a state WST does not define
      */
-    static String stateName(int state)
+    public static String stateName(int state)
     {
         switch (state)
         {
@@ -396,8 +416,19 @@ public final class StandaloneServerStateRecovery
     {
         String applicationId = target.applicationId;
         IProject project = target.project;
-        Recovery recovery = stopServerForRefusal(project, null, applicationId,
-            applicationManager(), refusal);
+        Recovery recovery;
+        try
+        {
+            recovery = stopForRetry(project, applicationId,
+                () -> stopServerForRefusal(project, null, applicationId, applicationManager(),
+                    refusal));
+        }
+        catch (ApplicationException held)
+        {
+            // Same CoreException shape as the pre-flight's refusal in launchWithRecovery.
+            throw new CoreException(
+                new Status(IStatus.ERROR, Activator.PLUGIN_ID, held.getMessage(), held));
+        }
         if (!recovery.recovered())
         {
             throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
@@ -486,7 +517,8 @@ public final class StandaloneServerStateRecovery
                 == com.ditrix.edt.mcp.server.HostKind.HEADLESS
                     ? HeadlessInfobaseUpdate.update(application, updateType, context, monitor)
                     : manager.update(application, updateType, context, monitor), guard,
-                refusal -> stopServerForRefusal(project, application, applicationId, manager, refusal),
+                refusal -> stopForRetry(project, applicationId,
+                    () -> stopServerForRefusal(project, application, applicationId, manager, refusal)),
                 applicationId);
         }
         catch (RuntimeException failure)
@@ -598,6 +630,26 @@ public final class StandaloneServerStateRecovery
     }
 
     /**
+     * The reactive stop before a retry, followed by the explicit-stop hold check: a hold installed
+     * after the pre-flight passed must still keep the retry from starting the server.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param stop the recovery stop
+     * @return the stop's outcome when the retry may proceed
+     * @throws ApplicationException when the server is now held stopped
+     */
+    static Recovery stopForRetry(IProject project, String applicationId, Supplier<Recovery> stop)
+    {
+        Recovery recovery = stop.get();
+        if (recovery.recovered())
+        {
+            refuseWhileHeld(project, applicationId, null);
+        }
+        return recovery;
+    }
+
+    /**
      * The recovery stop, but only for the one state that cannot resolve itself. A refusal naming
      * {@code STARTING}/{@code STOPPING} belongs to an operation still in flight — reported, never
      * interfered with.
@@ -657,6 +709,127 @@ public final class StandaloneServerStateRecovery
     /** Same guarded stale stop constrained by the caller's remaining operation deadline. */
     private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
         String applicationId, IApplicationManager manager, long timeoutMs)
+    {
+        return stopGuarded(project, application, applicationId, manager, timeoutMs,
+            StopPolicy.STALE_ONLY);
+    }
+
+    /** Which server states a guarded stop acts on. */
+    public enum StopPolicy
+    {
+        /**
+         * Only the stuck state: {@code STARTED} with the owning launch gone. Anything else is
+         * somebody's healthy server and is left alone (the recovery's contract).
+         */
+        STALE_ONLY,
+        /**
+         * An explicit stop ({@code standalone_server}): any server that is not {@code STOPPED},
+         * with or without a live launch; a start or stop in flight is waited out first. It also
+         * installs the stop hold BEFORE the cleanup is dispatched.
+         */
+        RUNNING,
+        /**
+         * Hold a server the caller observed STOPPED, without stopping anything: the explicit
+         * stop of an already stopped server, which asks no consent. Under the guard it holds the
+         * server only when it is still STOPPED; a server somebody started meanwhile is refused,
+         * because ending its sessions would need a fresh preview and consent.
+         */
+        HOLD_ONLY
+    }
+
+    /** What a guarded stop decided to do about one server state. */
+    enum StopDecision
+    {
+        /** Dispatch EDT's cleanup. */
+        STOP,
+        /** A start or stop is in flight: wait for it to settle, then decide again. */
+        WAIT_SETTLE,
+        /** Nothing to stop. */
+        NOOP,
+        /** The state could not be read; stopping would act on nothing anybody confirmed. */
+        UNREADABLE,
+        /** A hold-only request found the server no longer STOPPED; nothing may be stopped. */
+        NOT_STOPPED
+    }
+
+    /**
+     * The guarded-stop decision for one server state under a policy, kept pure so the whole rule
+     * is testable without an EDT runtime. {@link StopPolicy#STALE_ONLY} is exactly
+     * {@link #decide(Integer, Boolean)}.
+     *
+     * @param state the WST server state, or {@code null} when it could not be read
+     * @param liveLaunch whether the server holds a live launch, or {@code null} when unknown
+     * @param policy which states the stop acts on
+     * @return the decision, never {@code null}
+     */
+    static StopDecision decideStop(Integer state, Boolean liveLaunch, StopPolicy policy)
+    {
+        if (policy == StopPolicy.STALE_ONLY)
+        {
+            return switch (decide(state, liveLaunch))
+            {
+                case STOP_STALE -> StopDecision.STOP;
+                case WAIT_SETTLE -> StopDecision.WAIT_SETTLE;
+                case PROCEED -> StopDecision.NOOP;
+            };
+        }
+        if (state == null)
+        {
+            return StopDecision.UNREADABLE;
+        }
+        if (isTransitional(state))
+        {
+            return StopDecision.WAIT_SETTLE;
+        }
+        if (state == STATE_STOPPED)
+        {
+            return StopDecision.NOOP;
+        }
+        // EDT's own stop does nothing for a STOPPED server; every other state - RUNNING with or
+        // without a live launch, or one WST names UNKNOWN - is what an explicit stop is for. A
+        // hold-only request never stops anything.
+        return policy == StopPolicy.HOLD_ONLY ? StopDecision.NOT_STOPPED : StopDecision.STOP;
+    }
+
+    /**
+     * Stops the standalone server of an application through EDT's own application lifecycle,
+     * deciding under the application's recovery guard whether to act at all.
+     *
+     * <p>{@link StopPolicy#STALE_ONLY} is the recovery's stop, unchanged.
+     * {@link StopPolicy#RUNNING} is an explicit stop: it waits out a start or stop in flight
+     * ({@link #SETTLE_TIMEOUT_MS}), refuses an unreadable state, and installs the stop hold
+     * BEFORE dispatching the cleanup, so a plugin-driven start is refused from that instant on.
+     * The hold is kept when the cleanup may still be running and when the server stopped; a
+     * cleanup that conclusively failed restores the hold that was there before.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param application the application when already resolved (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param manager the application manager (may be {@code null})
+     * @param timeoutMs the caller's remaining deadline
+     * @param policy which states the stop acts on
+     * @return the outcome, never {@code null}; {@link Recovery#alreadyStopped()} marks a server
+     *     an explicit stop found already stopped
+     */
+    public static Recovery stopGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, long timeoutMs, StopPolicy policy)
+    {
+        return stopGuarded(project, application, applicationId, manager, timeoutMs, policy, null);
+    }
+
+    /**
+     * {@link #stopGuarded(IProject, IApplication, String, IApplicationManager, long, StopPolicy)}
+     * that hands the server to {@code beforeDispatch} UNDER the guard, after the final state
+     * re-check and immediately before EDT's cleanup is dispatched - so whatever the caller reads
+     * from it (the ibsrv process to verify) belongs to the server this call actually stops.
+     *
+     * @param beforeDispatch called with the WST server right before the cleanup, or {@code null};
+     *     not called when nothing is dispatched
+     * @return the outcome, never {@code null}
+     */
+    public static Recovery stopGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, long timeoutMs, StopPolicy policy,
+        Consumer<Object> beforeDispatch)
     {
         if (project == null || applicationId == null)
         {
@@ -718,11 +891,48 @@ public final class StandaloneServerStateRecovery
                 return Recovery.failed("its server could not be resolved, so stopping it would " //$NON-NLS-1$
                     + "have acted on a state nothing could confirm"); //$NON-NLS-1$
             }
-            if (decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
+            StopDecision decision = decideStop(serverState(server), hasLiveLaunch(server), policy);
+            if (policy == StopPolicy.STALE_ONLY)
             {
-                Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
-                    + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
-                return Recovery.stopped();
+                if (decision != StopDecision.STOP)
+                {
+                    Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
+                        + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
+                    return Recovery.stopped();
+                }
+            }
+            else
+            {
+                if (decision == StopDecision.WAIT_SETTLE)
+                {
+                    // The settle wait spends the stop's own deadline, never more than its bound.
+                    long settleMs = Math.min(SETTLE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                    Integer settled = awaitSettled(server, applicationId, null, settleMs);
+                    decision = decideStop(settled, hasLiveLaunch(server), policy);
+                    if (decision == StopDecision.WAIT_SETTLE)
+                    {
+                        return Recovery.failed("it is " + stateName(settled.intValue()) //$NON-NLS-1$
+                            + " and did not settle within " + settleMs //$NON-NLS-1$
+                            + "ms: another start or stop holds it"); //$NON-NLS-1$
+                    }
+                }
+                if (decision == StopDecision.UNREADABLE)
+                {
+                    return Recovery.failed("its state could not be read, so stopping it would " //$NON-NLS-1$
+                        + "have acted on a state nothing could confirm"); //$NON-NLS-1$
+                }
+                if (decision == StopDecision.NOT_STOPPED)
+                {
+                    Integer now = serverState(server);
+                    return Recovery.failed("it is no longer STOPPED (it is " //$NON-NLS-1$
+                        + (now == null ? "in an unreadable state" : stateName(now.intValue())) //$NON-NLS-1$
+                        + "), and holding it would need its sessions ended first"); //$NON-NLS-1$
+                }
+                if (decision == StopDecision.NOOP)
+                {
+                    guard.hold.compareAndSet(null, new StopHold());
+                    return Recovery.foundStopped();
+                }
             }
             long remainingMs = remainingRecoveryTimeMs(deadline);
             if (remainingMs <= 0L)
@@ -730,16 +940,561 @@ public final class StandaloneServerStateRecovery
                 return Recovery.failed("the operation deadline elapsed before the stop began"); //$NON-NLS-1$
             }
             // The cleanup runs on its own job and can outlive the unlock below, so the guard takes
-            // ownership of it BEFORE it is dispatched. Every non-null write happens under this
-            // lock; the release is identity-scoped and needs none.
+            // ownership of it BEFORE it is dispatched - and, for an explicit stop, before the hold
+            // is installed, so nothing can observe the hold without also seeing the stop in flight
+            // (a hold is never released while a stop is in flight). Every non-null write happens
+            // under this lock; the release is identity-scoped and needs none.
             StopInFlight stop = new StopInFlight(guard);
             guard.stopInFlight.set(stop);
-            return runStop(manager, resolvedApplication, applicationId, remainingMs, stop);
+            // An explicit stop holds the server stopped from BEFORE its cleanup is dispatched, so
+            // no plugin-driven start can slip in between the stop and the caller's next step.
+            StopHold previousHold = null;
+            StopHold newHold = null;
+            if (policy == StopPolicy.RUNNING)
+            {
+                newHold = new StopHold();
+                previousHold = guard.hold.getAndSet(newHold);
+            }
+            Recovery outcome = null;
+            try
+            {
+                if (beforeDispatch != null)
+                {
+                    try
+                    {
+                        beforeDispatch.accept(server);
+                    }
+                    catch (RuntimeException e) // NOSONAR a failed read must not leave the in-flight record without its stop
+                    {
+                        Activator.logError("Standalone server: the pre-dispatch read failed; the stop " //$NON-NLS-1$
+                            + "proceeds without it: " + applicationId, e); //$NON-NLS-1$
+                    }
+                    catch (Error e)
+                    {
+                        // Nothing was dispatched, so nothing may stay recorded as in flight.
+                        stop.release();
+                        throw e;
+                    }
+                }
+                // The pre-dispatch read spends the same deadline: what is left of it after the
+                // read, not before, bounds the cleanup. With nothing left nothing is dispatched.
+                long dispatchMs = remainingRecoveryTimeMs(deadline);
+                if (dispatchMs <= 0L)
+                {
+                    stop.release();
+                    outcome = Recovery.failed(
+                        "the operation deadline elapsed before the stop could be dispatched"); //$NON-NLS-1$
+                    return outcome;
+                }
+                outcome = runStop(manager, resolvedApplication, applicationId, dispatchMs,
+                    stop, policy == StopPolicy.RUNNING ? EXPLICIT_STOP_LOG : STALE_STOP_LOG);
+            }
+            finally
+            {
+                if (newHold != null)
+                {
+                    settleExplicitHold(guard, server, newHold, previousHold, outcome);
+                }
+            }
+            return outcome;
         }
         finally
         {
             guard.lock.unlock();
         }
+    }
+
+    /**
+     * Decides, after an explicit stop's cleanup, whether its hold stands. Called under the guard.
+     *
+     * <ul>
+     *   <li>stopped: the hold stands - and is put back if anything cleared it meanwhile;</li>
+     *   <li>may still be running: the hold stands (the in-flight record refuses starts anyway);</li>
+     *   <li>conclusively failed, or the stop threw (its Job has ended - see {@link #runStop}):
+     *       the hold stands only when the server reads STOPPED now; otherwise the previous hold
+     *       is restored, because the server may well be running and nobody stopped it.</li>
+     * </ul>
+     */
+    private static void settleExplicitHold(RecoveryGuard guard, Object server, StopHold newHold,
+        StopHold previousHold, Recovery outcome)
+    {
+        if (outcome != null && outcome.recovered())
+        {
+            guard.hold.compareAndSet(null, newHold);
+            return;
+        }
+        if (outcome != null && outcome.stopStillInFlight())
+        {
+            return;
+        }
+        Integer state = serverState(server);
+        if (state != null && state.intValue() == STATE_STOPPED)
+        {
+            guard.hold.compareAndSet(null, newHold);
+            return;
+        }
+        guard.hold.compareAndSet(newHold, previousHold);
+    }
+
+    /**
+     * Installs a hold directly, without the guard's checks. Production code holds a server only
+     * through {@link #stopGuarded} ({@link StopPolicy#RUNNING} or {@link StopPolicy#HOLD_ONLY});
+     * this exists for tests that need a held server without a stop. The existing hold, if any,
+     * keeps its timestamp.
+     *
+     * @param project the project owning the application (never {@code null})
+     * @param applicationId the application id (never {@code null})
+     */
+    public static void holdStopped(IProject project, String applicationId)
+    {
+        stopLockFor(project, applicationId).hold.compareAndSet(null, new StopHold());
+    }
+
+    /**
+     * Clears an explicit stop's hold unconditionally. Production code releases a hold only by a
+     * successful {@link #startExplicitly} or by {@link #releaseHoldIfStartedOutside}; this exists
+     * for test cleanup. Idempotent.
+     *
+     * @param project the project owning the application (may be {@code null} - no-op)
+     * @param applicationId the application id (may be {@code null} - no-op)
+     * @return {@code true} when a hold was released
+     */
+    public static boolean releaseHold(IProject project, String applicationId)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        return guard != null && guard.hold.getAndSet(null) != null;
+    }
+
+    /** How long a guarded hold release waits for the recovery guard before keeping the hold. */
+    private static final long HOLD_RELEASE_LOCK_TIMEOUT_MS = 2_000L;
+
+    /**
+     * Releases the hold when somebody started the server outside this plugin (EDT's Servers view):
+     * it reads RUNNING with a live launch. Decided under the recovery guard, never while a stop of
+     * it is in flight, and only for the hold observed before the guard was taken - a newer hold
+     * is never cleared. A guard that does not become available within a short bound keeps the
+     * hold: the guard is held by a stop or a start whose outcome this read cannot know.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param server the application's WST server (may be {@code null} - nothing is released)
+     * @return {@code true} when this call released a hold
+     */
+    public static boolean releaseHoldIfStartedOutside(IProject project, String applicationId,
+        Object server)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        StopHold observed = guard == null ? null : guard.hold.get();
+        if (observed == null || server == null)
+        {
+            return false;
+        }
+        Acquisition acquisition = guard.lock.tryAcquire(HOLD_RELEASE_LOCK_TIMEOUT_MS, null);
+        if (!acquisition.acquired())
+        {
+            return false;
+        }
+        try
+        {
+            // A claimed start is not "somebody else's" start: an explicit start that timed out
+            // keeps its claim while it may still run, and only its own conclusive end releases.
+            if (guard.stopInFlight.get() != null || guard.startClaim.get() != null
+                || !runningWithLiveLaunch(server) || !guard.hold.compareAndSet(observed, null))
+            {
+                return false;
+            }
+            Activator.logInfo("Standalone server: started outside standalone_server, so its " //$NON-NLS-1$
+                + "stop hold is released: " + applicationId); //$NON-NLS-1$
+            return true;
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /**
+     * When the explicit-stop hold on this application was installed.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the ISO-8601 instant, or {@code null} when the server is not held
+     */
+    public static String heldSince(IProject project, String applicationId)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        StopHold hold = guard == null ? null : guard.hold.get();
+        return hold == null ? null : hold.since.truncatedTo(ChronoUnit.SECONDS).toString();
+    }
+
+    /**
+     * The refusal a plugin-driven start meets while an explicit stop holds the server.
+     *
+     * @param projectName the project owning the application
+     * @param applicationId the application id
+     * @param since when the hold was installed (ISO-8601)
+     * @return the actionable refusal
+     */
+    public static String heldStoppedFailure(String projectName, String applicationId, String since)
+    {
+        return "The standalone server of application '" + applicationId //$NON-NLS-1$
+            + "' is held stopped by standalone_server(action='stop') since " + since //$NON-NLS-1$
+            + ". Nothing was started. Release it with standalone_server(action='start', " //$NON-NLS-1$
+            + "projectName='" + projectName + "', applicationId='" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
+            + "'), or inspect it with action='status'. A start from EDT's Servers view also " //$NON-NLS-1$
+            + "releases the hold."; //$NON-NLS-1$
+    }
+
+    /**
+     * Refuses a plugin-driven start while an explicit stop holds the server, unless the server is
+     * already RUNNING with a live launch - somebody started it from EDT, which releases the hold.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param server the WST server when the caller has it, or {@code null} (the hold then
+     *     refuses: whether somebody started the server cannot be read)
+     * @throws ApplicationException while the hold stands
+     */
+    private static void refuseWhileHeld(IProject project, String applicationId, Object server)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        StopHold hold = guard == null ? null : guard.hold.get();
+        if (hold == null)
+        {
+            return;
+        }
+        if (releaseHoldIfStartedOutside(project, applicationId, server))
+        {
+            return;
+        }
+        StopHold current = guard.hold.get();
+        if (current == null)
+        {
+            // Released by a concurrent explicit start or observer; nothing holds it any more.
+            return;
+        }
+        throw new ApplicationException(heldStoppedFailure(project.getName(), applicationId,
+            current.since.truncatedTo(ChronoUnit.SECONDS).toString()));
+    }
+
+    /**
+     * {@link #refuseWhileHeld} for a caller that has no server: resolves it from the application,
+     * or by a bounded lookup of {@code project + applicationId} (never by a bare server name),
+     * only when a hold exists. A server that cannot be resolved keeps the hold refusing.
+     */
+    private static void refuseWhileHeldResolving(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        if (guard == null || guard.hold.get() == null)
+        {
+            return;
+        }
+        Object server = null;
+        if (application != null)
+        {
+            server = serverQuietly(application);
+        }
+        else if (manager != null)
+        {
+            try
+            {
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                        applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+                server = lookup.failure() != null ? null : serverQuietly(lookup.application());
+            }
+            catch (RuntimeException e) // NOSONAR an unresolvable server keeps the hold refusing
+            {
+                server = null;
+            }
+        }
+        refuseWhileHeld(project, applicationId, server);
+    }
+
+    /** Whether the server is STARTED and still holds a live launch (EDT's "already running"). */
+    public static boolean runningWithLiveLaunch(Object server)
+    {
+        Integer state = serverState(server);
+        return state != null && state.intValue() == STATE_STARTED
+            && Boolean.TRUE.equals(hasLiveLaunch(server));
+    }
+
+    /** The server behind an application, or {@code null} on any failure. */
+    private static Object serverQuietly(IApplication application)
+    {
+        try
+        {
+            return resolveServer(application);
+        }
+        catch (RuntimeException e) // NOSONAR the hold check must not fail an operation by itself
+        {
+            return null;
+        }
+    }
+
+    /** How an explicit start ended. */
+    public enum StartKind
+    {
+        /** EDT reported the start OK; the hold is released. */
+        STARTED,
+        /** The server was already RUNNING with a live launch; the hold is released. */
+        ALREADY_RUNNING,
+        /** Nothing was dispatched; {@link StartOutcome#detail()} says why. */
+        REFUSED,
+        /** The start was dispatched and did not succeed (or did not finish); the hold stays. */
+        FAILED
+    }
+
+    /** Outcome of {@link #startExplicitly}. */
+    public static final class StartOutcome
+    {
+        private final StartKind kind;
+        private final String detail;
+        private final boolean conclusive;
+        private final boolean portsReassigned;
+        private final boolean portReassignmentOutcomeUnknown;
+
+        private StartOutcome(StartKind kind, String detail, boolean conclusive,
+            boolean portsReassigned, boolean portReassignmentOutcomeUnknown)
+        {
+            this.kind = kind;
+            this.detail = detail;
+            this.conclusive = conclusive;
+            this.portsReassigned = portsReassigned;
+            this.portReassignmentOutcomeUnknown = portReassignmentOutcomeUnknown;
+        }
+
+        static StartOutcome refused(String detail)
+        {
+            return new StartOutcome(StartKind.REFUSED, detail, true, false, false);
+        }
+
+        /** @return how the start ended */
+        public StartKind kind()
+        {
+            return kind;
+        }
+
+        /** @return why it was refused or failed, or {@code null} on success */
+        public String detail()
+        {
+            return detail;
+        }
+
+        /** @return {@code false} when a dispatched start may still be running */
+        public boolean conclusive()
+        {
+            return conclusive;
+        }
+
+        /** @return whether EDT moved the server to other ports (policy reassign) */
+        public boolean portsReassigned()
+        {
+            return portsReassigned;
+        }
+
+        /** @return whether an unfinished reassign start may still rewrite the configuration */
+        public boolean portReassignmentOutcomeUnknown()
+        {
+            return portReassignmentOutcomeUnknown;
+        }
+    }
+
+    /**
+     * Starts the standalone server of an application on an explicit request
+     * ({@code standalone_server}), under the same recovery guard and start-claim lifecycle the
+     * restoration start uses, and releases the explicit-stop hold once EDT reports the start OK.
+     *
+     * <p>A server already RUNNING with a live launch is left alone (and released); a start or stop
+     * in flight is waited out; a stale {@code STARTED} server whose launch is gone is first
+     * returned to {@code STOPPED} by the recovery's own stop. A failed or unfinished start keeps
+     * the hold.
+     *
+     * @param project the project owning the application
+     * @param application the resolved application
+     * @param applicationId the application id
+     * @param manager the application manager
+     * @param service the EDT standalone-server service (reflective)
+     * @param portPolicy the answer to EDT's port-conflict prompt
+     * @param timeoutMs the bound on the whole start
+     * @return the outcome, never {@code null}
+     */
+    public static StartOutcome startExplicitly(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, Object service,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs)
+    {
+        if (project == null || application == null || applicationId == null || manager == null)
+        {
+            return StartOutcome.refused("the start target is incomplete"); //$NON-NLS-1$
+        }
+        if (service == null)
+        {
+            return StartOutcome.refused("the EDT standalone-server service is not available"); //$NON-NLS-1$
+        }
+        long deadline = recoveryDeadline(timeoutMs);
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        Acquisition acquisition = guard.lock.tryAcquire(timeoutMs, null);
+        if (!acquisition.acquired())
+        {
+            return StartOutcome.refused(recoveryLockFailure(acquisition));
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return StartOutcome.refused("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
+            StopInFlight running = guard.stopInFlight.get();
+            if (running != null)
+            {
+                return StartOutcome.refused(stopInFlightDetail(running));
+            }
+            Object server = resolveServer(application);
+            if (server == null)
+            {
+                return StartOutcome.refused("EDT could not resolve the application's standalone server"); //$NON-NLS-1$
+            }
+            if (runningWithLiveLaunch(server))
+            {
+                guard.hold.set(null);
+                return new StartOutcome(StartKind.ALREADY_RUNNING, null, true, false, false);
+            }
+            Integer state = serverState(server);
+            if (isTransitional(state))
+            {
+                // The settle wait spends the whole start's deadline, never more than its own bound.
+                long settleMs = Math.min(SETTLE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                state = awaitSettled(server, applicationId, null, settleMs);
+                if (isTransitional(state))
+                {
+                    return StartOutcome.refused("it is " + stateName(state.intValue()) //$NON-NLS-1$
+                        + " and did not settle within " + settleMs //$NON-NLS-1$
+                        + "ms: another start or stop holds it"); //$NON-NLS-1$
+                }
+                if (runningWithLiveLaunch(server))
+                {
+                    guard.hold.set(null);
+                    return new StartOutcome(StartKind.ALREADY_RUNNING, null, true, false, false);
+                }
+            }
+            Boolean liveLaunch = hasLiveLaunch(server);
+            if (state != null && state.intValue() == STATE_STARTED && Boolean.FALSE.equals(liveLaunch))
+            {
+                long remainingMs = remainingRecoveryTimeMs(deadline);
+                if (remainingMs <= 0L)
+                {
+                    return StartOutcome.refused(
+                        "the deadline elapsed before its stale STARTED state could be normalized"); //$NON-NLS-1$
+                }
+                // Re-entry stays on this thread, exactly as the restoration's normalization does.
+                Recovery normalized = stopStaleServerGuarded(project, application, applicationId,
+                    manager, remainingMs);
+                if (!normalized.recovered())
+                {
+                    return StartOutcome.refused("its stale STARTED state could not be normalized " //$NON-NLS-1$
+                        + "to STOPPED: " + normalized.detail()); //$NON-NLS-1$
+                }
+                state = serverState(server);
+                liveLaunch = hasLiveLaunch(server);
+            }
+            if (state == null || liveLaunch == null)
+            {
+                return StartOutcome.refused("its current state could not be confirmed"); //$NON-NLS-1$
+            }
+            if (state.intValue() != STATE_STOPPED)
+            {
+                return StartOutcome.refused("its current state is " + stateName(state.intValue()) //$NON-NLS-1$
+                    + ", not STOPPED"); //$NON-NLS-1$
+            }
+            long remainingMs = remainingRecoveryTimeMs(deadline);
+            if (remainingMs < MIN_RESTORATION_START_WAIT_MS)
+            {
+                return StartOutcome.refused("too little time remained to observe a start"); //$NON-NLS-1$
+            }
+            StartClaim claim = new StartClaim(guard);
+            guard.startClaim.set(claim);
+            try
+            {
+                StandaloneServerSupport.GuardedStartResult result =
+                    StandaloneServerSupport.startServerGuarded(service, server,
+                        "Starting standalone server: " + applicationId, ILaunchManager.DEBUG_MODE, //$NON-NLS-1$
+                        LaunchLifecycleUtils.conflictAttributionName(application),
+                        StandaloneServerSupport.nameOfServer(server), portPolicy, remainingMs,
+                        explicitStartGuardCapMs, claim::close, claim::handoff, true);
+                String failure = result.failure();
+                if (failure != null)
+                {
+                    // A start a suspended Job manager still holds has not ended: it may run after
+                    // the resume, so it is inconclusive and its claim waits for its terminal
+                    // notification (see startServerGuarded), never for this return.
+                    boolean mayStillRun = result.mayStillRun();
+                    return new StartOutcome(StartKind.FAILED, mayStillRun && result.conclusive()
+                        ? "EDT's job manager holds the start without running it (it is suspended); " //$NON-NLS-1$
+                            + "it may still run once the manager resumes" //$NON-NLS-1$
+                        : failure, !mayStillRun, result.portsReassigned(),
+                        result.portReassignmentOutcomeUnknown());
+                }
+                // The observation lives inside the whole start's bound, not after it: with no time
+                // left it is one immediate read, and an unobserved STARTED is inconclusive below.
+                long observeMs = Math.min(START_OBSERVE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                Integer observed = awaitState(server, STATE_STARTED, observeMs);
+                if (observed == null || observed.intValue() != STATE_STARTED)
+                {
+                    // EDT said OK, but the server does not read STARTED: the start is not proven,
+                    // so the hold stays. STARTING (or an unreadable state) may still turn into a
+                    // running server; anything else is a start that did not take.
+                    boolean mayStillStart = observed == null || observed.intValue() == STATE_STARTING;
+                    return new StartOutcome(StartKind.FAILED, "EDT reported the start as done, but the " //$NON-NLS-1$
+                        + "server reads " + (observed == null ? "an unreadable state" //$NON-NLS-1$ //$NON-NLS-2$
+                            : stateName(observed.intValue()))
+                        + " " + observeMs + "ms later", //$NON-NLS-1$ //$NON-NLS-2$
+                        !mayStillStart, result.portsReassigned(), false);
+                }
+                guard.hold.set(null);
+                return new StartOutcome(StartKind.STARTED, null, true, result.portsReassigned(),
+                    false);
+            }
+            finally
+            {
+                claim.closeIfNotHandedOff();
+            }
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /** Polls, bounded, until the server reaches {@code wanted}; returns the last state read. */
+    private static Integer awaitState(Object server, int wanted, long timeoutMs)
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        Integer state = serverState(server);
+        while ((state == null || state.intValue() != wanted) && System.nanoTime() - deadline < 0L)
+        {
+            try
+            {
+                Thread.sleep(SETTLE_POLL_MS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return state;
+            }
+            state = serverState(server);
+        }
+        return state;
+    }
+
+    /** The guard of an application, read without creating one. */
+    private static RecoveryGuard guardIfPresent(IProject project, String applicationId)
+    {
+        if (project == null || applicationId == null)
+        {
+            return null;
+        }
+        return STOP_LOCKS.get(stopLockKey(project, applicationId));
     }
 
     /**
@@ -859,6 +1614,35 @@ public final class StandaloneServerStateRecovery
         return guard == null ? null : guard.stopInFlight.get();
     }
 
+    /**
+     * How long ago the stop of this application whose cleanup has not reported finishing started.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return whole seconds, or {@code null} when no dispatched cleanup is outstanding
+     */
+    public static Long stopInFlightSeconds(IProject project, String applicationId)
+    {
+        StopInFlight stop = stopInFlightFor(project, applicationId);
+        return stop == null ? null : Long.valueOf(stop.elapsedSeconds());
+    }
+
+    /**
+     * How long ago the start that currently claims this application began - an explicit start
+     * whose Job has not ended keeps its claim until it does.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return whole seconds, or {@code null} when no start claims the application
+     */
+    public static Long startClaimSeconds(IProject project, String applicationId)
+    {
+        RecoveryGuard guard = guardIfPresent(project, applicationId);
+        StartClaim claim = guard == null ? null : guard.startClaim.get();
+        return claim == null ? null
+            : Long.valueOf((System.currentTimeMillis() - claim.startedAtMs) / 1000L);
+    }
+
     /** Shared diagnosis for an application whose dispatched stop has not reported finishing. */
     private static String stopInFlightDetail(StopInFlight stop)
     {
@@ -923,12 +1707,30 @@ public final class StandaloneServerStateRecovery
     public static StartClaim claimStartWithinBound(IProject project, String applicationId,
         IProgressMonitor monitor)
     {
-        return claimStartWithinBound(project, applicationId,
+        return claimStartWithinBound(project, applicationId, null,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor);
+    }
+
+    /**
+     * Same claim with the application's WST server, so an explicit-stop hold on a server somebody
+     * started from EDT is released instead of refusing the claim.
+     */
+    public static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        Object server, IProgressMonitor monitor)
+    {
+        return claimStartWithinBound(project, applicationId, server,
             StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor);
     }
 
     /** Testable deadline form of the start claim. */
     static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        long lockTimeoutMs, IProgressMonitor monitor)
+    {
+        return claimStartWithinBound(project, applicationId, null, lockTimeoutMs, monitor);
+    }
+
+    /** Testable deadline form of the start claim with the server, when the caller has it. */
+    static StartClaim claimStartWithinBound(IProject project, String applicationId, Object server,
         long lockTimeoutMs, IProgressMonitor monitor)
     {
         if (project == null || applicationId == null)
@@ -945,6 +1747,9 @@ public final class StandaloneServerStateRecovery
         }
         try
         {
+            // An explicit stop's hold refuses outright: returning null would read as "another
+            // start owns it" and let the caller proceed without a claim.
+            refuseWhileHeld(project, applicationId, server);
             if (guard.startClaim.get() != null)
             {
                 return null;
@@ -1068,24 +1873,62 @@ public final class StandaloneServerStateRecovery
     private static Recovery runStop(IApplicationManager manager, IApplication application,
         String applicationId, long timeoutMs, StopInFlight stopInFlight)
     {
-        BoundedJob.DeferredCleanup ownership = stopInFlight == null ? null
-            : new BoundedJob.DeferredCleanup(stopInFlight::release, stopInFlightCapMs,
+        return runStop(manager, application, applicationId, timeoutMs, stopInFlight,
+            STALE_STOP_LOG);
+    }
+
+    /** Same bounded cleanup, logged under the caller's subject (a stale or an explicit stop). */
+    private static Recovery runStop(IApplicationManager manager, IApplication application,
+        String applicationId, long timeoutMs, StopInFlight stopInFlight, String logSubject)
+    {
+        BoundedJob.DeferredCleanup ownership;
+        if (stopInFlight == null)
+        {
+            ownership = null;
+        }
+        else if (EXPLICIT_STOP_LOG.equals(logSubject))
+        {
+            // An explicit stop keeps its record until EDT's cleanup Job has really ended: a time
+            // cap would let a start (and the hold's release) slip in while the belated cleanup can
+            // still take the new server down. A Job that never ends keeps refusing starts with a
+            // text naming the way out (Servers view, EDT restart); the stale recovery keeps its cap.
+            ownership = BoundedJob.DeferredCleanup.untilJobFinished(stopInFlight::release);
+        }
+        else
+        {
+            ownership = new BoundedJob.DeferredCleanup(stopInFlight::release, stopInFlightCapMs,
                 "Standalone server stop ownership safety cap: " + applicationId); //$NON-NLS-1$
+        }
         BoundedJob.Result result = null;
         try
         {
-            result = runStopBounded(manager, application, applicationId, timeoutMs, ownership);
-            return classifyStop(result, applicationId, timeoutMs);
+            result = runStopBounded(manager, application, applicationId, timeoutMs, ownership,
+                logSubject);
+            boolean explicit = EXPLICIT_STOP_LOG.equals(logSubject);
+            if (explicit && result.getOutcome() == BoundedJob.Outcome.NOT_RUN)
+            {
+                // A suspended Job manager still holds the queued cleanup and runs it after the
+                // resume: not a stop that never ran, but one that may still run. Its record stays
+                // until EDT's terminal notification (done, also sent when it is cancelled first).
+                Activator.logError(logSubject + ": the stop is held by a suspended Job manager and " //$NON-NLS-1$
+                    + "may still run: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failedInFlight("EDT's job manager holds the stop without running it " //$NON-NLS-1$
+                    + "(it is suspended); it may still run once the manager resumes"); //$NON-NLS-1$
+            }
+            return classifyStop(result, applicationId, timeoutMs, logSubject);
         }
         finally
         {
             // The concrete outcome is the sole authority on whether ownership may be released
             // now; a null result means BoundedJob rethrew an Error, which it does only after its
-            // Job has already terminated.
+            // Job has already terminated. An explicit stop's ownership is job-bound: only a run
+            // that PROVABLY ended releases it here (NOT_RUN does not); otherwise the Job's
+            // terminal notification does.
             if (ownership != null)
             {
-                ownership.afterBoundedWait(result == null
-                    || !BoundedJob.isInconclusive(result.getOutcome()));
+                ownership.afterBoundedWait(EXPLICIT_STOP_LOG.equals(logSubject)
+                    ? BoundedJob.provablyEnded(result)
+                    : result == null || !BoundedJob.isInconclusive(result.getOutcome()));
             }
         }
     }
@@ -1093,9 +1936,10 @@ public final class StandaloneServerStateRecovery
     /** Dispatches EDT's cleanup on its own job under the caller's deadline. */
     private static BoundedJob.Result runStopBounded(IApplicationManager manager,
         IApplication application, String applicationId, long timeoutMs,
-        BoundedJob.DeferredCleanup ownership)
+        BoundedJob.DeferredCleanup ownership, String logSubject)
     {
-        Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
+        Activator.logInfo(logSubject + ": stopping it" //$NON-NLS-1$
+            + (STALE_STOP_LOG.equals(logSubject) ? " so the operation can proceed: " : ": ") //$NON-NLS-1$ //$NON-NLS-2$
             + applicationId);
         return BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
             timeoutMs, monitor -> manager.cleanup(application, stopContext(timeoutMs), monitor),
@@ -1117,12 +1961,16 @@ public final class StandaloneServerStateRecovery
 
     /** Turns one bounded stop outcome into the recovery contract its callers act on. */
     private static Recovery classifyStop(BoundedJob.Result result, String applicationId,
-        long timeoutMs)
+        long timeoutMs, String logSubject)
     {
         if (result.isSuccess())
         {
-            recordStoppedServer(applicationId);
-            Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
+            if (STALE_STOP_LOG.equals(logSubject))
+            {
+                // Only a recovery stop is one the current operation may restore afterwards.
+                recordStoppedServer(applicationId);
+            }
+            Activator.logInfo(logSubject + ": stopped: " + applicationId); //$NON-NLS-1$
             return Recovery.stopped();
         }
         // The OUTCOME is classified before the failure, not after it: an INTERRUPTED run carries
@@ -1132,7 +1980,7 @@ public final class StandaloneServerStateRecovery
         BoundedJob.Outcome outcome = result.getOutcome();
         if (outcome == BoundedJob.Outcome.TIMED_OUT || outcome == BoundedJob.Outcome.INTERRUPTED)
         {
-            Activator.logError("Stale standalone server: stopping it did not finish (" //$NON-NLS-1$
+            Activator.logError(logSubject + ": stopping it did not finish (" //$NON-NLS-1$
                 + outcome + "): " + applicationId, result.getFailure()); //$NON-NLS-1$
             return Recovery.failedInFlight(outcome == BoundedJob.Outcome.INTERRUPTED
                 ? "the wait for it was interrupted" //$NON-NLS-1$
@@ -1141,12 +1989,12 @@ public final class StandaloneServerStateRecovery
         }
         if (result.getFailure() != null)
         {
-            Activator.logError("Stale standalone server: stopping it failed: " + applicationId, //$NON-NLS-1$
+            Activator.logError(logSubject + ": stopping it failed: " + applicationId, //$NON-NLS-1$
                 result.getFailure());
-            return Recovery.failed("stopping it failed: " //$NON-NLS-1$
+            return Recovery.failedAfterDispatch("stopping it failed: " //$NON-NLS-1$
                 + PlatformFailures.describe(result.getFailure()));
         }
-        Activator.logError("Stale standalone server: stopping it did not run (" //$NON-NLS-1$
+        Activator.logError(logSubject + ": stopping it did not run (" //$NON-NLS-1$
             + outcome + "): " + applicationId, null); //$NON-NLS-1$
         return Recovery.failed("it never ran (" + outcome + ")"); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -1544,6 +2392,12 @@ public final class StandaloneServerStateRecovery
                 return RestorationStartOutcome.skipped("was not restored because " //$NON-NLS-1$
                     + stopInFlightDetail(stopping) + "."); //$NON-NLS-1$
             }
+            if (guard.hold.get() != null)
+            {
+                return RestorationStartOutcome.skipped("was not restored because " //$NON-NLS-1$
+                    + "standalone_server(action='stop') holds it stopped; start it with " //$NON-NLS-1$
+                    + "standalone_server(action='start')."); //$NON-NLS-1$
+            }
             Integer state = serverState(server);
             Boolean liveLaunch = hasLiveLaunch(server);
             if (Boolean.TRUE.equals(liveLaunch))
@@ -1723,6 +2577,20 @@ public final class StandaloneServerStateRecovery
         private final LaunchLock lock = new LaunchLock();
         private final AtomicReference<StartClaim> startClaim = new AtomicReference<>();
         private final AtomicReference<StopInFlight> stopInFlight = new AtomicReference<>();
+        /** Set by an explicit {@code standalone_server} stop; refuses plugin-driven starts. */
+        private final AtomicReference<StopHold> hold = new AtomicReference<>();
+    }
+
+    /**
+     * An explicit stop's promise that the server stays stopped until an explicit start.
+     *
+     * <p>In memory only: an EDT restart clears it, and EDT's own UI (the Servers view, a Run
+     * button) never consults it. A plugin-driven start that finds the server already RUNNING with
+     * a live launch (somebody started it from EDT) releases it instead of refusing.
+     */
+    private static final class StopHold
+    {
+        private final Instant since = Instant.now();
     }
 
     /**
@@ -1768,6 +2636,7 @@ public final class StandaloneServerStateRecovery
     public static final class StartClaim implements AutoCloseable
     {
         private final RecoveryGuard guard;
+        private final long startedAtMs = System.currentTimeMillis();
         private final AtomicBoolean handedOff = new AtomicBoolean();
         private final AtomicBoolean released = new AtomicBoolean();
 
@@ -2039,6 +2908,9 @@ public final class StandaloneServerStateRecovery
         // Before the state read, not after it: a foreign cleanup that already reached STOPPED
         // leaves a state this pre-flight would happily proceed on.
         refuseWhileStopInFlight(project, applicationId);
+        // Before any early return below: an explicit stop's hold must refuse even a start whose
+        // state this pre-flight could not read.
+        refuseWhileHeldResolving(project, application, applicationId, manager);
         try
         {
             IApplication resolvedApplication = application;
@@ -2100,6 +2972,7 @@ public final class StandaloneServerStateRecovery
             return;
         }
         refuseWhileStopInFlight(project, applicationId);
+        refuseWhileHeld(project, applicationId, server);
         try
         {
             if (server == null)
@@ -2144,18 +3017,120 @@ public final class StandaloneServerStateRecovery
      */
     public static void ensureDefaultApplicationStartable(IProject project)
     {
+        ensureDefaultApplicationStartableThen(project, 0L, null, null, null);
+    }
+
+    /**
+     * The default-application pre-flight followed by {@code work} (the dump that prepares, and so
+     * starts, that application), BOTH under the application's infobase lock
+     * ({@link LaunchLifecycleUtils#lockFor}) - the lock an explicit {@code standalone_server}
+     * stop takes first. Without it a confirmed stop could land between the pre-flight and the
+     * prepare, and the work would start the server the stop just held.
+     *
+     * <p>When the default application cannot be resolved, the pre-flight is skipped exactly as
+     * {@link #ensureDefaultApplicationStartable} always did (logged) and {@code work} runs unlocked:
+     * there is no application id to lock, and EDT's own prepare then fails on its own terms.
+     *
+     * @param project the project whose default application the work prepares (may be {@code null})
+     * @param lockTimeoutMs the bound on waiting for the application's lock
+     * @param monitor cancellation for the lock wait (may be {@code null})
+     * @param nothingDone the sentence appended to a lock refusal, e.g. {@code "Nothing was built."}
+     * @param work the work to run, or {@code null} for the pre-flight alone (then no lock is taken)
+     * @throws ApplicationException when the lock is not acquired, or the pre-flight refuses
+     */
+    public static void ensureDefaultApplicationStartableThen(IProject project, long lockTimeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
         if (project == null)
         {
+            runIfPresent(work);
             return;
         }
         Activator activator = Activator.getDefault();
         IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
         if (manager == null)
         {
+            withoutApplicationManagerThen(project, nothingDone, work);
             return;
         }
-        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp = LaunchLifecycleUtils
-            .resolveDefaultApplication(project, null, manager, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp;
+        try
+        {
+            defaultApp = LaunchLifecycleUtils.resolveDefaultApplication(project, null, manager,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        }
+        catch (RuntimeException e) // NOSONAR a lookup that raised establishes nothing, like one that timed out
+        {
+            defaultApp = new LaunchLifecycleUtils.DefaultApplicationLookup(null,
+                "the default-application lookup raised " + PlatformFailures.describe(e)); //$NON-NLS-1$
+        }
+        defaultApplicationLookupThen(project, manager, defaultApp, lockTimeoutMs, monitor,
+            nothingDone, work);
+    }
+
+    /**
+     * The no-application-manager branch of {@link #ensureDefaultApplicationStartableThen}: without
+     * the manager the default application, its lock and its hold cannot be resolved, yet the
+     * work's own prepare may still start it. The work keeps running as it always did UNLESS a
+     * {@code standalone_server} stop holds any server of this project - then it is refused, since
+     * the held server could be the one the work starts.
+     *
+     * @throws ApplicationException when the work would run blind past a hold of this project
+     */
+    static void withoutApplicationManagerThen(IProject project, String nothingDone, Runnable work)
+    {
+        if (work != null)
+        {
+            String held = heldApplicationOf(project);
+            if (held != null)
+            {
+                throw new ApplicationException("EDT's application manager is not available, so the " //$NON-NLS-1$
+                    + "default application of project '" + project.getName() //$NON-NLS-1$
+                    + "' could not be checked, while standalone_server(action='stop') holds the " //$NON-NLS-1$
+                    + "standalone server of application '" + held + "' stopped. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + (nothingDone == null ? "" : nothingDone + " ") //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Release it with standalone_server(action='start', projectName='" //$NON-NLS-1$
+                    + project.getName() + "', applicationId='" + held + "'), or retry once EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "has finished starting."); //$NON-NLS-1$
+            }
+        }
+        runIfPresent(work);
+    }
+
+    /** Any application of the project an explicit stop holds, or {@code null}. */
+    private static String heldApplicationOf(IProject project)
+    {
+        String prefix = project.getName() + "\u0000"; //$NON-NLS-1$
+        for (Map.Entry<String, RecoveryGuard> entry : STOP_LOCKS.entrySet())
+        {
+            if (entry.getKey().startsWith(prefix) && entry.getValue().hold.get() != null)
+            {
+                return entry.getKey().substring(prefix.length());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The lookup-dependent half of {@link #ensureDefaultApplicationStartableThen}. A lookup that
+     * did not conclude (timed out or raised) REFUSES the work: the work prepares - and so starts -
+     * the default application, and with no id neither its lock nor the explicit-stop hold could
+     * be checked. A concluded "no default application" still runs the work unlocked: there is no
+     * application whose server the work could start.
+     */
+    static void defaultApplicationLookupThen(IProject project, IApplicationManager manager,
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp, long lockTimeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
+        if (defaultApp.inconclusive() && work != null)
+        {
+            throw new ApplicationException("The default application of project '" //$NON-NLS-1$
+                + project.getName() + "' could not be determined (" + defaultApp.failure() //$NON-NLS-1$
+                + "), so its infobase lock and a standalone_server stop hold could not be checked. " //$NON-NLS-1$
+                + (nothingDone == null ? "" : nothingDone + " ") //$NON-NLS-1$ //$NON-NLS-2$
+                + "Retry once EDT is responsive, or check the project's applications with " //$NON-NLS-1$
+                + "get_applications."); //$NON-NLS-1$
+        }
         if (defaultApp.inconclusive())
         {
             // The pre-flight is skipped, and that must not be silent (#622). This method has no
@@ -2166,9 +3141,65 @@ public final class StandaloneServerStateRecovery
                 + project.getName() + ": the project's default application could not be resolved (" //$NON-NLS-1$
                 + defaultApp.failure()
                 + "). A stale STARTED server will not be settled before the next start.", null); //$NON-NLS-1$
+            runIfPresent(work);
             return;
         }
-        ensureStartable(project, null, defaultApp.id(), manager);
+        defaultApplicationStartableThen(project, manager, defaultApp.id(), lockTimeoutMs, monitor,
+            nothingDone, work);
+    }
+
+    /** The resolved-default-application half of {@link #ensureDefaultApplicationStartableThen}. */
+    static void defaultApplicationStartableThen(IProject project, IApplicationManager manager,
+        String applicationId, long lockTimeoutMs, IProgressMonitor monitor, String nothingDone,
+        Runnable work)
+    {
+        if (work == null || applicationId == null || applicationId.isBlank())
+        {
+            ensureStartable(project, null, applicationId, manager);
+            runIfPresent(work);
+            return;
+        }
+        runUnderApplicationLock(project.getName(), applicationId, lockTimeoutMs, monitor,
+            nothingDone, () -> {
+                ensureStartable(project, null, applicationId, manager);
+                work.run();
+            });
+    }
+
+    /**
+     * Runs {@code work} holding {@link LaunchLifecycleUtils#lockFor} for one application, acquired
+     * within a bound.
+     *
+     * @throws ApplicationException naming why the lock was not acquired, plus {@code nothingDone}
+     */
+    static void runUnderApplicationLock(String projectName, String applicationId, long timeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
+        LaunchLock lock = LaunchLifecycleUtils.lockFor(projectName, applicationId);
+        Acquisition acquisition = lock.tryAcquire(timeoutMs, monitor);
+        if (!acquisition.acquired())
+        {
+            throw new ApplicationException(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+                projectName, applicationId, timeoutMs)
+                + (nothingDone == null ? "" : " " + nothingDone) //$NON-NLS-1$ //$NON-NLS-2$
+                + " Wait for that operation to finish and retry."); //$NON-NLS-1$
+        }
+        try
+        {
+            work.run();
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    private static void runIfPresent(Runnable work)
+    {
+        if (work != null)
+        {
+            work.run();
+        }
     }
 
     /** What the pre-flight decided to do about the server's current state. */
@@ -2231,7 +3262,14 @@ public final class StandaloneServerStateRecovery
     private static Integer awaitSettled(Object server, String applicationId,
         IProgressMonitor monitor)
     {
-        long deadline = System.currentTimeMillis() + SETTLE_TIMEOUT_MS;
+        return awaitSettled(server, applicationId, monitor, SETTLE_TIMEOUT_MS);
+    }
+
+    /** Same settling wait under a caller-supplied bound (at most the caller's remaining time). */
+    private static Integer awaitSettled(Object server, String applicationId,
+        IProgressMonitor monitor, long settleTimeoutMs)
+    {
+        long deadline = System.currentTimeMillis() + Math.max(0L, settleTimeoutMs);
         Integer state = serverState(server);
         while (isTransitional(state) && System.currentTimeMillis() < deadline
             && (monitor == null || !monitor.isCanceled()))
@@ -2250,8 +3288,8 @@ public final class StandaloneServerStateRecovery
         if (isTransitional(state) && (monitor == null || !monitor.isCanceled()))
         {
             Activator.logInfo("Standalone server: it is still " + stateName(state.intValue()) //$NON-NLS-1$
-                + " after " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
-                + "s; proceeding and letting EDT decide: " + applicationId); //$NON-NLS-1$
+                + " after " + settleTimeoutMs //$NON-NLS-1$
+                + "ms; proceeding and letting EDT decide: " + applicationId); //$NON-NLS-1$
         }
         return state;
     }
@@ -2378,7 +3416,7 @@ public final class StandaloneServerStateRecovery
      * @param server the WST server object (never {@code null})
      * @return the state, or {@code null} when it could not be read
      */
-    static Integer serverState(Object server)
+    public static Integer serverState(Object server)
     {
         try
         {
@@ -2401,7 +3439,7 @@ public final class StandaloneServerStateRecovery
      *     none, and {@code null} when the answer could not be determined (an unknown launch type,
      *     a reflective failure) — which the decision treats as "do not touch it"
      */
-    static Boolean hasLiveLaunch(Object server)
+    public static Boolean hasLiveLaunch(Object server)
     {
         try
         {
@@ -2474,19 +3512,57 @@ public final class StandaloneServerStateRecovery
         private final String detail;
         private final boolean stopStillInFlight;
         private final Acquisition guardFailure;
+        private final boolean alreadyStopped;
+        private boolean dispatched;
 
         private Recovery(boolean recovered, String detail, boolean stopStillInFlight)
         {
-            this(recovered, detail, stopStillInFlight, null);
+            this(recovered, detail, stopStillInFlight, null, false);
         }
 
         private Recovery(boolean recovered, String detail, boolean stopStillInFlight,
             Acquisition guardFailure)
         {
+            this(recovered, detail, stopStillInFlight, guardFailure, false);
+        }
+
+        private Recovery(boolean recovered, String detail, boolean stopStillInFlight,
+            Acquisition guardFailure, boolean alreadyStopped)
+        {
             this.recovered = recovered;
             this.detail = detail;
             this.stopStillInFlight = stopStillInFlight;
             this.guardFailure = guardFailure;
+            this.alreadyStopped = alreadyStopped;
+        }
+
+        /** An explicit stop found the server already STOPPED and dispatched nothing. */
+        static Recovery foundStopped()
+        {
+            return new Recovery(true, null, false, null, true);
+        }
+
+        /** @return {@code true} when an explicit stop found nothing to stop */
+        public boolean alreadyStopped()
+        {
+            return alreadyStopped;
+        }
+
+        /**
+         * A stop EDT ran and that ended with a failure: something was dispatched, and the server
+         * may have changed state on the way, unlike a stop refused before dispatch.
+         */
+        static Recovery failedAfterDispatch(String detail)
+        {
+            Recovery recovery = new Recovery(false, detail, false, null, false);
+            recovery.dispatched = true;
+            return recovery;
+        }
+
+        /** @return {@code true} when EDT's cleanup ran and failed (not refused before dispatch) */
+        public boolean dispatchedAndFailed()
+        {
+            return dispatched;
         }
 
         /** No stop was dispatched and ownership could not be checked under the guard. */

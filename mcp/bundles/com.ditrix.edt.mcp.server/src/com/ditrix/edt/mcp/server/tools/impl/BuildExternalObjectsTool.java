@@ -130,6 +130,12 @@ public class BuildExternalObjectsTool implements IMcpTool
     private static final long BUILD_TIMEOUT_MS = 300_000L;
 
     /**
+     * Bound on waiting for the default application's infobase lock inside the build Job - the
+     * same bound {@code infobase_sessions} waits, well inside {@link #BUILD_TIMEOUT_MS}.
+     */
+    private static final long APPLICATION_LOCK_TIMEOUT_MS = 30_000L;
+
+    /**
      * Prefix written into each built object's Comment so the deliverable .epf/.erf records when it was
      * built (the maintainer's "version bump"). The label is real 1C object-comment DATA ("Время сборки: "),
      * written as Unicode escapes (like {@code MetadataTypeUtils} does for its Cyrillic type tokens) for
@@ -535,19 +541,24 @@ public class BuildExternalObjectsTool implements IMcpTool
                     // has just launched is still STARTING, and EDT starts only a STOPPED one — the
                     // start then fails the whole dump with its "can only start server that is
                     // stopped" refusal. Settling the state first turns that race into a short wait.
-                    StandaloneServerStateRecovery.ensureDefaultApplicationStartable(bc.project);
-                    for (Target target : bc.targets)
-                    {
-                        // The caller stops waiting at BUILD_TIMEOUT_MS and cancels this job, but
-                        // cancellation is cooperative: without this check the job would keep
-                        // deleting outputs and stamping Comments long after the tool reported the
-                        // timeout. Each object is a mutation, so the check belongs per object.
-                        if (monitor.isCanceled())
-                        {
-                            break;
-                        }
-                        results.add(dumpOne(bc, target, buildStamp, monitor));
-                    }
+                    // The pre-flight and every dump run under the default application's infobase
+                    // lock, so an explicit standalone_server stop cannot land between them.
+                    StandaloneServerStateRecovery.ensureDefaultApplicationStartableThen(bc.project,
+                        APPLICATION_LOCK_TIMEOUT_MS, monitor, "Nothing was built.", () -> { //$NON-NLS-1$
+                            for (Target target : bc.targets)
+                            {
+                                // The caller stops waiting at BUILD_TIMEOUT_MS and cancels this
+                                // job, but cancellation is cooperative: without this check the job
+                                // would keep deleting outputs and stamping Comments long after the
+                                // tool reported the timeout. Each object is a mutation, so the
+                                // check belongs per object.
+                                if (monitor.isCanceled())
+                                {
+                                    break;
+                                }
+                                results.add(dumpOne(bc, target, buildStamp, monitor));
+                            }
+                        });
                 }
                 catch (Throwable t) // NOSONAR a dump failure must be captured, never crash the Job
                 {

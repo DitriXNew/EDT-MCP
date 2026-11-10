@@ -6035,6 +6035,128 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Report, stop or start the EDT standalone server (ibsrv) of a wst-server application. DESTRUCTIVE for stop/restart: it ends every session and client of that server - call once WITHOUT confirm to preview them, then with confirm=true. A stopped server stays held until action=start. Full parameters and examples: call get_tool_guide('standalone_server').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "status (default) reads the server; stop and restart end its sessions; start releases the hold a stop leaves.",
+          "enum": [
+            "status",
+            "stop",
+            "start",
+            "restart"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Application ID from get_applications; defaults to the project's default application. Must be a wst-server application.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "For stop/restart: omit to preview what ends, true to do it. Refused on status/start.",
+          "type": "boolean"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "standaloneServerPortConflict": {
+          "description": "For start/restart only. Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "standalone_server",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "alreadyRunning": {
+          "type": "boolean"
+        },
+        "alreadyStopped": {
+          "type": "boolean"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "clientLaunches": {
+          "type": "integer"
+        },
+        "confirmationRequired": {
+          "type": "boolean"
+        },
+        "databaseDirectory": {
+          "type": "string"
+        },
+        "debugTargets": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "heldSince": {
+          "type": "string"
+        },
+        "heldStopped": {
+          "type": "boolean"
+        },
+        "infobaseUrl": {
+          "type": "string"
+        },
+        "liveLaunch": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mutationCommitted": {
+          "type": "boolean"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "portsReassigned": {
+          "type": "boolean"
+        },
+        "processAlive": {
+          "type": "boolean"
+        },
+        "project": {
+          "type": "string"
+        },
+        "serverName": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "object"
+        },
+        "state": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false

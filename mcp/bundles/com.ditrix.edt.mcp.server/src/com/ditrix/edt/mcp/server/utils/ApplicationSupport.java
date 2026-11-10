@@ -97,6 +97,73 @@ public final class ApplicationSupport
     }
 
     /**
+     * Resolves the explicit application, or the project's default application when
+     * {@code applicationId} is blank, with one bounded read. Shared by the standalone-server tools
+     * that address an application the same way ({@code infobase_sessions},
+     * {@code standalone_server}).
+     *
+     * @param manager the resolved application manager (never {@code null})
+     * @param project the resolved open project
+     * @param projectName the project name echoed into the messages
+     * @param applicationId the explicit application id, or {@code null}/blank for the default
+     * @param timeoutMs the caller-side deadline for the one bounded application read
+     * @param nothingDone the caller's sentence saying what it did NOT do, e.g.
+     *     {@code "No session was listed or terminated"} (no trailing period)
+     * @return the resolved application, or the error JSON to return verbatim
+     */
+    public static ApplicationResolution resolveApplication(IApplicationManager manager,
+        IProject project, String projectName, String applicationId, long timeoutMs,
+        String nothingDone)
+    {
+        boolean byDefault = applicationId == null || applicationId.isBlank();
+        BoundedRead<Optional<IApplication>> read = byDefault
+            ? getDefaultApplicationBounded(manager, project, timeoutMs)
+            : getApplicationBounded(manager, project, applicationId, timeoutMs);
+        if (!read.concluded())
+        {
+            // A refusal, not a not-found: the read never concluded, so whether the application
+            // exists is unknown. The DEFAULT-application route also names the cheap way round it:
+            // passing applicationId skips the wedge-prone default lookup entirely.
+            return ApplicationResolution.error(ToolResult.error(read.deadlineFailure()
+                + ". " + nothingDone + ", and this says nothing about whether " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the application exists. " //$NON-NLS-1$
+                + (byDefault
+                    ? "Pass applicationId explicitly (get_applications lists the ids) to skip the " //$NON-NLS-1$
+                        + "default-application lookup, or retry once EDT is responsive." //$NON-NLS-1$
+                    : "Retry once EDT is responsive.")).toJson()); //$NON-NLS-1$
+        }
+        Optional<IApplication> application = read.valueOrRethrow();
+        if (application.isEmpty())
+        {
+            String target = byDefault
+                ? "Project '" + projectName + "' has no default application." //$NON-NLS-1$ //$NON-NLS-2$
+                : "Application not found: " + applicationId + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            return ApplicationResolution.error(ToolResult.error(target
+                + " Use get_applications to choose a standalone-server application.").toJson()); //$NON-NLS-1$
+        }
+        return ApplicationResolution.of(application.get());
+    }
+
+    /**
+     * Outcome of {@link #resolveApplication}: exactly one of the application or the error JSON.
+     *
+     * @param application the resolved application, or {@code null} on error
+     * @param errorJson the error JSON to return verbatim, or {@code null} on success
+     */
+    public static record ApplicationResolution(IApplication application, String errorJson)
+    {
+        static ApplicationResolution of(IApplication application)
+        {
+            return new ApplicationResolution(application, null);
+        }
+
+        static ApplicationResolution error(String errorJson)
+        {
+            return new ApplicationResolution(null, errorJson);
+        }
+    }
+
+    /**
      * One {@link IApplicationManager} read, for {@link #readBounded} to run off the caller's
      * thread.
      *

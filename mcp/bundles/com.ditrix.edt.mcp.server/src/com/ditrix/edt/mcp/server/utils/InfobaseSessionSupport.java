@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
@@ -29,14 +28,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.LongConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.debug.core.ILaunch;
-import org.eclipse.debug.core.model.IProcess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.e1c.g5.dt.applications.IApplication;
@@ -54,10 +50,6 @@ import com.e1c.g5.v8.dt.platform.standaloneserver.core.SessionCommandBuilder;
  */
 public final class InfobaseSessionSupport
 {
-    /** Internal EDT interface matched by name to keep the WST implementation package optional. */
-    private static final String STANDALONE_SERVER_PROCESS_INTERFACE =
-        "com.e1c.g5.v8.dt.internal.platform.standaloneserver.wst.core.IStandaloneServerProcess"; //$NON-NLS-1$
-
     /** EDT uses the same deadline for its own standalone-server session cleanup command. */
     private static final long COMMAND_TIMEOUT_MS = 10_000L;
 
@@ -460,42 +452,13 @@ public final class InfobaseSessionSupport
         CallerState callerAnswered, AtomicReference<CommandExecution> execution,
         PidCommand command) throws Exception
     {
-        Object launchObject = invokeNoArg(server, "getLaunch"); //$NON-NLS-1$
-        if (!(launchObject instanceof ILaunch))
+        AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+        boolean proceeded = StandaloneServerSupport.proceedAtLivePid(server,
+            pid -> executeAtPidIfActive(pid, monitor, callerAnswered, execution, callbackFailure,
+                command));
+        if (proceeded && callbackFailure.get() != null)
         {
-            return;
-        }
-        IProcess[] processes = ((ILaunch)launchObject).getProcesses();
-        if (processes == null)
-        {
-            return;
-        }
-        for (IProcess process : processes)
-        {
-            Class<?> processInterface = namedInterface(process == null ? null : process.getClass(),
-                STANDALONE_SERVER_PROCESS_INTERFACE);
-            if (processInterface == null)
-            {
-                continue;
-            }
-            AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
-            LongConsumer consumer = pid -> executeAtPidIfActive(pid, monitor, callerAnswered,
-                execution, callbackFailure, command);
-            try
-            {
-                Method proceed = processInterface.getMethod("proceedSessionCleanup", //$NON-NLS-1$
-                    LongConsumer.class);
-                proceed.invoke(process, consumer);
-            }
-            catch (InvocationTargetException e)
-            {
-                throwAsException(e.getCause() != null ? e.getCause() : e);
-            }
-            if (callbackFailure.get() != null)
-            {
-                throwAsException(callbackFailure.get());
-            }
-            return;
+            throwAsException(callbackFailure.get());
         }
     }
 
@@ -576,28 +539,6 @@ public final class InfobaseSessionSupport
     private static boolean callEnded(IProgressMonitor monitor, CallerState callerAnswered)
     {
         return monitor.isCanceled() || callerAnswered.get();
-    }
-
-    /** Finds an implemented interface recursively by its fully qualified name. */
-    private static Class<?> namedInterface(Class<?> type, String interfaceName)
-    {
-        if (type == null)
-        {
-            return null;
-        }
-        for (Class<?> candidate : type.getInterfaces())
-        {
-            if (interfaceName.equals(candidate.getName()))
-            {
-                return candidate;
-            }
-            Class<?> nested = namedInterface(candidate, interfaceName);
-            if (nested != null)
-            {
-                return nested;
-            }
-        }
-        return namedInterface(type.getSuperclass(), interfaceName);
     }
 
     /** Runs one ibcmd process, drains both streams concurrently, and force-kills it on timeout. */

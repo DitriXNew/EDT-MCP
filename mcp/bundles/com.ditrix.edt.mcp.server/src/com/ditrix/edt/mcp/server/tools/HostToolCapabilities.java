@@ -63,6 +63,7 @@ public final class HostToolCapabilities
         define("set_infobase_credentials", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("delete_infobase", Capability.HEADLESS, "EDT 2026.2.2 real headless host previewed and confirmed unregistering a private file infobase; registration removal and preserved database file verified on disk");
         define("infobase_sessions", Capability.HEADLESS_DEGRADED, "Real headless admission reaches native preconditions without consent; terminating a live server session still needs disposable runtime acceptance");
+        define("standalone_server", Capability.HEADLESS_DEGRADED, "Status reads the WST server reflectively; stop runs EDT's application cleanup, whose server behaviour delegate lives in a UI bundle, and start uses the WST service - both unmeasured on a headless host");
         define("infobase_extensions", Capability.HEADLESS_DEGRADED, "Real headless list reaches Designer runtime and fails on denied profile access in the sandbox; extension writes remain unmeasured");
         define("update_database", Capability.HEADLESS_DEGRADED, "Real headless file-infobase update reaches the core synchronization API and returns a bounded Designer connection error; successful apply and active-session acceptance remain unmeasured");
         define("launch", Capability.HEADLESS_DEGRADED, "Explicit synchronous headless path exists; platform launch delegates/dialogs need live validation");
