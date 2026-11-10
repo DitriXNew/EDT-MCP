@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -154,7 +155,7 @@ public class SearchInCodeTool implements IMcpTool
         {
             outputMode = MODE_FULL;
         }
-        outputMode = outputMode.toLowerCase();
+        outputMode = outputMode.toLowerCase(Locale.ROOT);
         if (!MODE_FULL.equals(outputMode) && !SearchResultFormatter.MODE_LINES.equals(outputMode)
             && !MODE_COUNT.equals(outputMode) && !MODE_FILES.equals(outputMode))
         {

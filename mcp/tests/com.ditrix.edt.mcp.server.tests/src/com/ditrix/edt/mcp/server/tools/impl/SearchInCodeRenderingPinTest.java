@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.core.runtime.CoreException;
@@ -122,6 +123,26 @@ public class SearchInCodeRenderingPinTest
             + BETA + ":1: Needle\n" //$NON-NLS-1$
             + "```\n", //$NON-NLS-1$
             search("needle", "outputMode", "LINES", "limit", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+    }
+
+    @Test
+    public void testUpperCaseModesResolveUnderATurkishDefaultLocale()
+    {
+        // A default-locale case fold turns "LINES"/"FILES" into dotless-i spellings under tr,
+        // so the mode would be refused; the fold must be locale-independent.
+        Locale saved = Locale.getDefault();
+        try
+        {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR")); //$NON-NLS-1$
+            assertEquals(search("needle", "outputMode", "lines", "limit", "2"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                search("needle", "outputMode", "LINES", "limit", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            assertEquals(search("needle", "outputMode", "files"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                search("needle", "outputMode", "FILES")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        finally
+        {
+            Locale.setDefault(saved);
+        }
     }
 
     @Test
