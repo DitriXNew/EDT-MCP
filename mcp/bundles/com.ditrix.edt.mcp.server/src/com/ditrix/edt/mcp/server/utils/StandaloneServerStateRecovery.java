@@ -1411,8 +1411,15 @@ public final class StandaloneServerStateRecovery
                 String failure = result.failure();
                 if (failure != null)
                 {
-                    return new StartOutcome(StartKind.FAILED, failure, result.conclusive(),
-                        result.portsReassigned(), result.portReassignmentOutcomeUnknown());
+                    // A start a suspended Job manager still holds has not ended: it may run after
+                    // the resume, so it is inconclusive and its claim waits for its terminal
+                    // notification (see startServerGuarded), never for this return.
+                    boolean mayStillRun = result.mayStillRun();
+                    return new StartOutcome(StartKind.FAILED, mayStillRun && result.conclusive()
+                        ? "EDT's job manager holds the start without running it (it is suspended); " //$NON-NLS-1$
+                            + "it may still run once the manager resumes" //$NON-NLS-1$
+                        : failure, !mayStillRun, result.portsReassigned(),
+                        result.portReassignmentOutcomeUnknown());
                 }
                 // The observation lives inside the whole start's bound, not after it: with no time
                 // left it is one immediate read, and an unobserved STARTED is inconclusive below.
@@ -1883,17 +1890,31 @@ public final class StandaloneServerStateRecovery
         {
             result = runStopBounded(manager, application, applicationId, timeoutMs, ownership,
                 logSubject);
+            boolean explicit = EXPLICIT_STOP_LOG.equals(logSubject);
+            if (explicit && result.getOutcome() == BoundedJob.Outcome.NOT_RUN)
+            {
+                // A suspended Job manager still holds the queued cleanup and runs it after the
+                // resume: not a stop that never ran, but one that may still run. Its record stays
+                // until EDT's terminal notification (done, also sent when it is cancelled first).
+                Activator.logError(logSubject + ": the stop is held by a suspended Job manager and " //$NON-NLS-1$
+                    + "may still run: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failedInFlight("EDT's job manager holds the stop without running it " //$NON-NLS-1$
+                    + "(it is suspended); it may still run once the manager resumes"); //$NON-NLS-1$
+            }
             return classifyStop(result, applicationId, timeoutMs, logSubject);
         }
         finally
         {
             // The concrete outcome is the sole authority on whether ownership may be released
             // now; a null result means BoundedJob rethrew an Error, which it does only after its
-            // Job has already terminated.
+            // Job has already terminated. An explicit stop's ownership is job-bound: only a run
+            // that PROVABLY ended releases it here (NOT_RUN does not); otherwise the Job's
+            // terminal notification does.
             if (ownership != null)
             {
-                ownership.afterBoundedWait(result == null
-                    || !BoundedJob.isInconclusive(result.getOutcome()));
+                ownership.afterBoundedWait(EXPLICIT_STOP_LOG.equals(logSubject)
+                    ? BoundedJob.provablyEnded(result)
+                    : result == null || !BoundedJob.isInconclusive(result.getOutcome()));
             }
         }
     }

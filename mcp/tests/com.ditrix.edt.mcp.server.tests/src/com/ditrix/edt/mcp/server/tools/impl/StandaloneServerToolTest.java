@@ -495,6 +495,71 @@ public class StandaloneServerToolTest
         assertEquals(1, fixture.cleanups.get());
     }
 
+    @Test
+    public void testAStartASuspendedJobManagerHoldsIsReportedInconclusive() throws Exception
+    {
+        Fixture fixture = new Fixture("StandaloneServerSuspendedStartProject", 4, false); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(fixture.project, APPLICATION_ID);
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        String result;
+        jobs.suspend();
+        try
+        {
+            result = StandaloneServerTool.run(request("start", false), fixture.manager, //$NON-NLS-1$
+                fixture.project, fixture.application, fixture.env);
+        }
+        finally
+        {
+            jobs.resume();
+        }
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+        awaitNoStartClaim(fixture);
+    }
+
+    @Test
+    public void testAStopASuspendedJobManagerHoldsIsReportedInconclusive() throws Exception
+    {
+        Fixture fixture = new Fixture("StandaloneServerSuspendedStopProject", 2, true); //$NON-NLS-1$
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        String result;
+        jobs.suspend();
+        try
+        {
+            result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+                fixture.project, fixture.application, fixture.env);
+        }
+        finally
+        {
+            jobs.resume();
+        }
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("a stop that may still run keeps the server held", //$NON-NLS-1$
+            json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (StandaloneServerStateRecovery.stopInFlightSeconds(fixture.project, APPLICATION_ID) != null
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertNull(StandaloneServerStateRecovery.stopInFlightSeconds(fixture.project, APPLICATION_ID));
+    }
+
+    private static void awaitNoStartClaim(Fixture fixture) throws InterruptedException
+    {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (StandaloneServerStateRecovery.startClaimSeconds(fixture.project, APPLICATION_ID) != null
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertNull(StandaloneServerStateRecovery.startClaimSeconds(fixture.project, APPLICATION_ID));
+    }
+
     // ==================== helpers ====================
 
     private StandaloneServerTool.Request request(String action, boolean confirm)

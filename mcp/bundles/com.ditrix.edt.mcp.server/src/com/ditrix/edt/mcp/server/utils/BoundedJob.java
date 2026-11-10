@@ -258,6 +258,22 @@ public final class BoundedJob
     }
 
     /**
+     * Whether a bounded run PROVES its Job has ended, for ownership that must outlive anything the
+     * Job can still do. Stricter than {@code !isInconclusive}: {@link Outcome#NOT_RUN} is not proof
+     * (a suspended Job manager still holds the queued Job and runs it after resume), and neither is
+     * any other never-ran outcome - their terminal notification, which EDT also sends for a Job
+     * cancelled before it ran, is what ends such ownership.
+     *
+     * @param result the bounded result, or {@code null} when the run rethrew an {@link Error}
+     *     (which it does only after its Job has terminated)
+     * @return {@code true} only when the Job has definitely ended
+     */
+    public static boolean provablyEnded(Result result)
+    {
+        return result == null || result.getOutcome() == Outcome.COMPLETED;
+    }
+
+    /**
      * Runs {@code work} in a background job and waits at most {@code timeoutMs} for it.
      *
      * <p>An {@link Error} raised by the work is NOT captured as a result: it is rethrown on the

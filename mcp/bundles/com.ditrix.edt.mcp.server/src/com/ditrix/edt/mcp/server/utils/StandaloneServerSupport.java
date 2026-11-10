@@ -181,6 +181,16 @@ public final class StandaloneServerSupport
             return !BoundedJob.isInconclusive(bounded.getOutcome());
         }
 
+        /**
+         * Whether the start may still run: the wait was cut short, or the start never entered its
+         * work while a suspended Job manager may still hold it ({@link BoundedJob.Outcome#NOT_RUN}).
+         */
+        public boolean mayStillRun()
+        {
+            return !BoundedJob.provablyEnded(bounded)
+                && bounded.getOutcome() != BoundedJob.Outcome.TIMED_OUT_BEFORE_START;
+        }
+
         /** Known persistent port rewrite after a conclusive start. */
         public boolean portsReassigned()
         {
@@ -800,7 +810,8 @@ public final class StandaloneServerSupport
             {
                 if (operationOwnership != null)
                 {
-                    operationOwnership.afterBoundedWait(ended);
+                    // Job-bound ownership is released early only for a run that provably ended.
+                    operationOwnership.afterBoundedWait(BoundedJob.provablyEnded(bounded));
                 }
             }
         }

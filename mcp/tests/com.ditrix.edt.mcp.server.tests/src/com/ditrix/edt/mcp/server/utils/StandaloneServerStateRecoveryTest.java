@@ -2172,6 +2172,89 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    @Test
+    public void testAnExplicitStopASuspendedManagerHoldsKeepsItsRecordUntilTheJobEnds() throws Exception
+    {
+        ServerApp app = new ServerApp("SuspendedStopProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        try
+        {
+            jobs.suspend();
+            try
+            {
+                StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+                    app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+                    StandaloneServerStateRecovery.StopPolicy.RUNNING);
+                assertFalse(recovery.recovered());
+                assertTrue("a queued cleanup may still run after the resume: " + recovery.detail(), //$NON-NLS-1$
+                    recovery.stopStillInFlight());
+                assertNotNull("its ownership must outlive the bounded wait", //$NON-NLS-1$
+                    StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID));
+                assertNotNull("and the server stays held", //$NON-NLS-1$
+                    StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+                assertEquals(0, app.cleanups.get());
+            }
+            finally
+            {
+                jobs.resume();
+            }
+            long deadline = System.currentTimeMillis() + 10_000L;
+            while (StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID) != null
+                && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(20L);
+            }
+            assertNull("the record ends with the Job's terminal notification", //$NON-NLS-1$
+                StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID));
+            assertEquals("the queued cleanup ran after the resume", 1, app.cleanups.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnExplicitStartASuspendedManagerHoldsKeepsItsClaimUntilTheJobEnds() throws Exception
+    {
+        ServerApp app = new ServerApp("SuspendedStartProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        try
+        {
+            jobs.suspend();
+            try
+            {
+                StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+                    app.project, app.application, APPLICATION_ID, app.manager,
+                    new StartingService(app.server), StandaloneServerPortConflictPolicy.CANCEL, 30_000L);
+                assertEquals(StandaloneServerStateRecovery.StartKind.FAILED, outcome.kind());
+                assertFalse("a queued start may still run after the resume: " + outcome.detail(), //$NON-NLS-1$
+                    outcome.conclusive());
+                assertNotNull("its claim must outlive the bounded wait", //$NON-NLS-1$
+                    StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID));
+                assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            }
+            finally
+            {
+                jobs.resume();
+            }
+            long deadline = System.currentTimeMillis() + 10_000L;
+            while (StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID) != null
+                && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(20L);
+            }
+            assertNull("the claim ends with the Job's terminal notification", //$NON-NLS-1$
+                StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID));
+            assertEquals("the queued start ran after the resume", 2, app.server.getServerState()); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
     /** Runs {@code action} and requires the explicit-stop hold refusal. */
     private static void assertHeldRefusal(Runnable action)
     {
