@@ -784,7 +784,13 @@ public final class StandaloneServerSupport
                         }
                     }
                 });
-            boolean conclusive = !BoundedJob.isInconclusive(bounded.getOutcome());
+            // For a job-bound start (explicit), a start a suspended Job manager still holds
+            // (NOT_RUN) may still run and rewrite the ports, so its port outcome is unknown too;
+            // the capped callers keep their established classification.
+            boolean conclusive = separateOperation
+                ? BoundedJob.provablyEnded(bounded)
+                    || bounded.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START
+                : !BoundedJob.isInconclusive(bounded.getOutcome());
             String conflictFailure = conflicts != null && conflicts.portConflicted()
                 ? LaunchUpdateDialogAutoConfirmer.portConflictError(
                     conflicts.portConflictDetail(), conflicts.portConflictReason())

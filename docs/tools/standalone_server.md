@@ -48,7 +48,7 @@ A failed or unfinished start keeps the hold. When EDT's stop ran and failed, the
 - `applicationId` - an id from `get_applications`; omitted means the project's default application.
 - `action` - `status` (default), `stop`, `start` or `restart`.
 - `confirm` - for `stop`/`restart` only: omit for the preview, `true` to act. Refused on `status` and `start`.
-- `standaloneServerPortConflict` - for `start`/`restart` only: `cancel` (default) fails and names the busy ports; `reassign` lets EDT move the server to free ports and rewrites its configuration (`portsReassigned: true`).
+- `standaloneServerPortConflict` - for `start`/`restart` only: `cancel` (default) fails and names the busy ports; `reassign` lets EDT move the server to free ports and rewrites its configuration (`portsReassigned: true`). A start that has not finished (`mutationOutcomeUnknown: true`) reports no `portsReassigned`: with `reassign` it may still move the server when it runs, and the message says so.
 
 ## Examples
 

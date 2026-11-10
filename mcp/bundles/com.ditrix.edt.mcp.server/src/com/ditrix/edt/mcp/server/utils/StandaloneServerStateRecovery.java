@@ -974,7 +974,17 @@ public final class StandaloneServerStateRecovery
                         throw e;
                     }
                 }
-                outcome = runStop(manager, resolvedApplication, applicationId, remainingMs,
+                // The pre-dispatch read spends the same deadline: what is left of it after the
+                // read, not before, bounds the cleanup. With nothing left nothing is dispatched.
+                long dispatchMs = remainingRecoveryTimeMs(deadline);
+                if (dispatchMs <= 0L)
+                {
+                    stop.release();
+                    outcome = Recovery.failed(
+                        "the operation deadline elapsed before the stop could be dispatched"); //$NON-NLS-1$
+                    return outcome;
+                }
+                outcome = runStop(manager, resolvedApplication, applicationId, dispatchMs,
                     stop, policy == StopPolicy.RUNNING ? EXPLICIT_STOP_LOG : STALE_STOP_LOG);
             }
             finally
@@ -1351,12 +1361,14 @@ public final class StandaloneServerStateRecovery
             Integer state = serverState(server);
             if (isTransitional(state))
             {
-                state = awaitSettled(server, applicationId);
+                // The settle wait spends the whole start's deadline, never more than its own bound.
+                long settleMs = Math.min(SETTLE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                state = awaitSettled(server, applicationId, null, settleMs);
                 if (isTransitional(state))
                 {
                     return StartOutcome.refused("it is " + stateName(state.intValue()) //$NON-NLS-1$
-                        + " and did not settle within " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
-                        + "s: another start or stop holds it"); //$NON-NLS-1$
+                        + " and did not settle within " + settleMs //$NON-NLS-1$
+                        + "ms: another start or stop holds it"); //$NON-NLS-1$
                 }
                 if (runningWithLiveLaunch(server))
                 {
@@ -3039,8 +3051,41 @@ public final class StandaloneServerStateRecovery
             runIfPresent(work);
             return;
         }
-        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp = LaunchLifecycleUtils
-            .resolveDefaultApplication(project, null, manager, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp;
+        try
+        {
+            defaultApp = LaunchLifecycleUtils.resolveDefaultApplication(project, null, manager,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        }
+        catch (RuntimeException e) // NOSONAR a lookup that raised establishes nothing, like one that timed out
+        {
+            defaultApp = new LaunchLifecycleUtils.DefaultApplicationLookup(null,
+                "the default-application lookup raised " + PlatformFailures.describe(e)); //$NON-NLS-1$
+        }
+        defaultApplicationLookupThen(project, manager, defaultApp, lockTimeoutMs, monitor,
+            nothingDone, work);
+    }
+
+    /**
+     * The lookup-dependent half of {@link #ensureDefaultApplicationStartableThen}. A lookup that
+     * did not conclude (timed out or raised) REFUSES the work: the work prepares - and so starts -
+     * the default application, and with no id neither its lock nor the explicit-stop hold could
+     * be checked. A concluded "no default application" still runs the work unlocked: there is no
+     * application whose server the work could start.
+     */
+    static void defaultApplicationLookupThen(IProject project, IApplicationManager manager,
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp, long lockTimeoutMs,
+        IProgressMonitor monitor, String nothingDone, Runnable work)
+    {
+        if (defaultApp.inconclusive() && work != null)
+        {
+            throw new ApplicationException("The default application of project '" //$NON-NLS-1$
+                + project.getName() + "' could not be determined (" + defaultApp.failure() //$NON-NLS-1$
+                + "), so its infobase lock and a standalone_server stop hold could not be checked. " //$NON-NLS-1$
+                + (nothingDone == null ? "" : nothingDone + " ") //$NON-NLS-1$ //$NON-NLS-2$
+                + "Retry once EDT is responsive, or check the project's applications with " //$NON-NLS-1$
+                + "get_applications."); //$NON-NLS-1$
+        }
         if (defaultApp.inconclusive())
         {
             // The pre-flight is skipped, and that must not be silent (#622). This method has no
@@ -3172,7 +3217,14 @@ public final class StandaloneServerStateRecovery
     private static Integer awaitSettled(Object server, String applicationId,
         IProgressMonitor monitor)
     {
-        long deadline = System.currentTimeMillis() + SETTLE_TIMEOUT_MS;
+        return awaitSettled(server, applicationId, monitor, SETTLE_TIMEOUT_MS);
+    }
+
+    /** Same settling wait under a caller-supplied bound (at most the caller's remaining time). */
+    private static Integer awaitSettled(Object server, String applicationId,
+        IProgressMonitor monitor, long settleTimeoutMs)
+    {
+        long deadline = System.currentTimeMillis() + Math.max(0L, settleTimeoutMs);
         Integer state = serverState(server);
         while (isTransitional(state) && System.currentTimeMillis() < deadline
             && (monitor == null || !monitor.isCanceled()))
@@ -3191,8 +3243,8 @@ public final class StandaloneServerStateRecovery
         if (isTransitional(state) && (monitor == null || !monitor.isCanceled()))
         {
             Activator.logInfo("Standalone server: it is still " + stateName(state.intValue()) //$NON-NLS-1$
-                + " after " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
-                + "s; proceeding and letting EDT decide: " + applicationId); //$NON-NLS-1$
+                + " after " + settleTimeoutMs //$NON-NLS-1$
+                + "ms; proceeding and letting EDT decide: " + applicationId); //$NON-NLS-1$
         }
         return state;
     }

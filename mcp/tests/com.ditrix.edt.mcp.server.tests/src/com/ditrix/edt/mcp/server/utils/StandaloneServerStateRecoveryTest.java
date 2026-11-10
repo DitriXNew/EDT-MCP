@@ -2255,6 +2255,114 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    @Test
+    public void testAnInconclusiveDefaultApplicationLookupRefusesTheWork()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("InconclusiveDefaultAppProject"); //$NON-NLS-1$
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        AtomicInteger ran = new AtomicInteger();
+        try
+        {
+            StandaloneServerStateRecovery.defaultApplicationLookupThen(project, manager,
+                new LaunchLifecycleUtils.DefaultApplicationLookup(null,
+                    "the EDT default-application lookup did not finish within 30s"), //$NON-NLS-1$
+                5_000L, null, "Nothing was built.", ran::incrementAndGet); //$NON-NLS-1$
+            throw new AssertionError("an unknown default application must not be prepared blind"); //$NON-NLS-1$
+        }
+        catch (ApplicationException refused)
+        {
+            String message = refused.getMessage();
+            assertTrue(message, message.contains("could not be determined")); //$NON-NLS-1$
+            assertTrue(message, message.contains("did not finish within 30s")); //$NON-NLS-1$
+            assertTrue(message, message.contains("Nothing was built.")); //$NON-NLS-1$
+            assertTrue(message, message.contains("get_applications")); //$NON-NLS-1$
+        }
+        assertEquals(0, ran.get());
+        // A CONCLUDED "no default application" has no server to start: the work runs as before.
+        StandaloneServerStateRecovery.defaultApplicationLookupThen(project, manager,
+            new LaunchLifecycleUtils.DefaultApplicationLookup(null, null), 5_000L, null,
+            "Nothing was built.", ran::incrementAndGet); //$NON-NLS-1$
+        assertEquals(1, ran.get());
+    }
+
+    @Test
+    public void testAStopWhosePreDispatchReadSpendsTheDeadlineIsNotDispatched()
+    {
+        ServerApp app = new ServerApp("SpentDeadlineStopProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+            app.project, app.application, APPLICATION_ID, app.manager, 1_500L,
+            StandaloneServerStateRecovery.StopPolicy.RUNNING, server -> {
+                try
+                {
+                    Thread.sleep(2_000L);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        assertFalse(recovery.recovered());
+        assertFalse("nothing was dispatched, so nothing is in flight", recovery.stopStillInFlight()); //$NON-NLS-1$
+        assertFalse(recovery.dispatchedAndFailed());
+        assertEquals("the cleanup must not run on a spent deadline", 0, app.cleanups.get()); //$NON-NLS-1$
+        assertNull(StandaloneServerStateRecovery.stopInFlightSeconds(app.project, APPLICATION_ID));
+        assertNull("a stop that never ran leaves no hold on a running server", //$NON-NLS-1$
+            StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+    }
+
+    @Test
+    public void testTheStartSettleWaitStaysInsideTheWholeStartBound()
+    {
+        ServerApp app = new ServerApp("SettleBoundStartProject", new FakeServer(1, launch(true))); //$NON-NLS-1$
+        long begin = System.nanoTime();
+        StandaloneServerStateRecovery.StartOutcome outcome = StandaloneServerStateRecovery.startExplicitly(
+            app.project, app.application, APPLICATION_ID, app.manager, new StartingService(app.server),
+            StandaloneServerPortConflictPolicy.CANCEL, 2_000L);
+        long elapsedMs = (System.nanoTime() - begin) / 1_000_000L;
+        assertEquals(StandaloneServerStateRecovery.StartKind.REFUSED, outcome.kind());
+        assertTrue(outcome.detail(), outcome.detail().contains("did not settle")); //$NON-NLS-1$
+        assertTrue("a 2s start must not wait the 30s settle bound: " + elapsedMs, elapsedMs < 10_000L); //$NON-NLS-1$
+        assertEquals("nothing was started", 1, app.server.getServerState()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAQueuedReassignStartReportsItsPortOutcomeUnknown() throws Exception
+    {
+        ServerApp app = new ServerApp("QueuedReassignProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        try
+        {
+            StandaloneServerStateRecovery.StartOutcome outcome;
+            jobs.suspend();
+            try
+            {
+                outcome = StandaloneServerStateRecovery.startExplicitly(app.project, app.application,
+                    APPLICATION_ID, app.manager, new StartingService(app.server),
+                    StandaloneServerPortConflictPolicy.REASSIGN, 30_000L);
+            }
+            finally
+            {
+                jobs.resume();
+            }
+            assertFalse(outcome.conclusive());
+            assertFalse(outcome.portsReassigned());
+            assertTrue("a start that may still run may still move the ports", //$NON-NLS-1$
+                outcome.portReassignmentOutcomeUnknown());
+            long deadline = System.currentTimeMillis() + 10_000L;
+            while (StandaloneServerStateRecovery.startClaimSeconds(app.project, APPLICATION_ID) != null
+                && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(20L);
+            }
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
     /** Runs {@code action} and requires the explicit-stop hold refusal. */
     private static void assertHeldRefusal(Runnable action)
     {

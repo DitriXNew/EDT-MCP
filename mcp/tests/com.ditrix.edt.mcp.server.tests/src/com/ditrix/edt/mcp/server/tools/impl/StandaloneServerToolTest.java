@@ -549,6 +549,32 @@ public class StandaloneServerToolTest
         assertNull(StandaloneServerStateRecovery.stopInFlightSeconds(fixture.project, APPLICATION_ID));
     }
 
+    @Test
+    public void testAQueuedReassignStartSaysThePortsMayStillMove() throws Exception
+    {
+        Fixture fixture = new Fixture("StandaloneServerQueuedReassignProject", 4, false); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(fixture.project, APPLICATION_ID);
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        String result;
+        jobs.suspend();
+        try
+        {
+            result = StandaloneServerTool.run(new StandaloneServerTool.Request("P", "start", false, //$NON-NLS-1$ //$NON-NLS-2$
+                StandaloneServerPortConflictPolicy.REASSIGN), fixture.manager, fixture.project,
+                fixture.application, fixture.env);
+        }
+        finally
+        {
+            jobs.resume();
+        }
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertTrue(result, json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("an unfinished start must not claim the ports stayed", //$NON-NLS-1$
+            json.has("portsReassigned")); //$NON-NLS-1$
+        assertTrue(result, json.get("error").getAsString().contains("may still move the server")); //$NON-NLS-1$ //$NON-NLS-2$
+        awaitNoStartClaim(fixture);
+    }
+
     private static void awaitNoStartClaim(Fixture fixture) throws InterruptedException
     {
         long deadline = System.currentTimeMillis() + 10_000L;
