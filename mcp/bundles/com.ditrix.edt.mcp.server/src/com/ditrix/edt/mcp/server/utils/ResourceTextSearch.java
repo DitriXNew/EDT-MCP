@@ -60,15 +60,17 @@ public final class ResourceTextSearch implements IResourceVisitor
         List<String> read(IFile file) throws Exception; // NOSONAR mirrors BslModuleUtils.readFileLines
     }
 
-    /** One matched line with its numbered context window. */
+    /** One matched line, as read, with its numbered context window. */
     public static final class Match
     {
         private final int lineNumber;
+        private final String lineText;
         private final List<String> contextLines;
 
-        Match(int lineNumber, List<String> contextLines)
+        Match(int lineNumber, String lineText, List<String> contextLines)
         {
             this.lineNumber = lineNumber;
+            this.lineText = lineText;
             this.contextLines = Collections.unmodifiableList(contextLines);
         }
 
@@ -76,6 +78,15 @@ public final class ResourceTextSearch implements IResourceVisitor
         public int getLineNumber()
         {
             return lineNumber;
+        }
+
+        /**
+         * @return the matched line exactly as the file holds it (no line number, no trimming, and
+         *     not the matching transform's output)
+         */
+        public String getLineText()
+        {
+            return lineText;
         }
 
         /** @return the context window, each line rendered as {@code "<number>: <text>"} */
@@ -244,7 +255,7 @@ public final class ResourceTextSearch implements IResourceVisitor
                         context.add((j + 1) + ": " + lines.get(j)); //$NON-NLS-1$
                     }
                     matchesByFile.computeIfAbsent(displayPath, k -> new ArrayList<>())
-                        .add(new Match(i + 1, context));
+                        .add(new Match(i + 1, lines.get(i), context));
                     collectedMatches++;
                 }
             }

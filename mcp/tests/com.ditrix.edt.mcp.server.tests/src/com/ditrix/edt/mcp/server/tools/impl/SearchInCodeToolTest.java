@@ -102,6 +102,30 @@ public class SearchInCodeToolTest
     }
 
     @Test
+    public void testOutputModeEnumDeclaresLines()
+    {
+        java.util.Set<String> modes = new java.util.TreeSet<>();
+        for (com.google.gson.JsonElement element : com.google.gson.JsonParser
+            .parseString(new SearchInCodeTool().getInputSchema()).getAsJsonObject()
+            .getAsJsonObject("properties").getAsJsonObject("outputMode").getAsJsonArray("enum")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            modes.add(element.getAsString());
+        }
+        assertEquals(new java.util.TreeSet<>(java.util.Set.of("full", "lines", "count", "files")), modes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testInvalidOutputModeErrorNamesLines()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "P"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("query", "x"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("outputMode", "sideways"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SearchInCodeTool().execute(params);
+        assertTrue(result, result.contains("outputMode must be 'full', 'lines', 'count', or 'files'")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDescriptionSteersToGuide()
     {
         String desc = new SearchInCodeTool().getDescription();
