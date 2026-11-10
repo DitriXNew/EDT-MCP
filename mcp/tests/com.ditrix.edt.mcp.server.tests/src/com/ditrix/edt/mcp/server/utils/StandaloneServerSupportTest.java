@@ -927,6 +927,63 @@ public class StandaloneServerSupportTest
         }
     }
 
+    // ==================== explicit start: dialog guards of a queued start (#890) ====================
+
+    @Test
+    public void aJobBoundStartAQueuedJobKeepsItsDialogGuardsUntilTheJobEnds() throws Exception
+    {
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        int before = InfobaseAuthDialogSuppressor.inFlightCount();
+        java.util.concurrent.atomic.AtomicInteger claimReleases = new java.util.concurrent.atomic.AtomicInteger();
+        StandaloneServerSupport.GuardedStartResult result;
+        jobs.suspend();
+        try
+        {
+            result = StandaloneServerSupport.startServerGuarded(
+                new FakeStartService(org.eclipse.core.runtime.Status.OK_STATUS), new Object(),
+                "test: queued explicit start", "debug", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                StandaloneServerPortConflictPolicy.REASSIGN, 30_000L, 300_000L,
+                claimReleases::incrementAndGet, null, true);
+            assertTrue("a start the suspended manager holds may still run", result.mayStillRun()); //$NON-NLS-1$
+            assertEquals("its auth-dialog suppression must stay armed for when it runs", //$NON-NLS-1$
+                before + 1, InfobaseAuthDialogSuppressor.inFlightCount());
+            assertEquals(0, claimReleases.get());
+        }
+        finally
+        {
+            jobs.resume();
+        }
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while ((claimReleases.get() == 0 || InfobaseAuthDialogSuppressor.inFlightCount() != before)
+            && System.currentTimeMillis() < deadline)
+        {
+            Thread.sleep(20L);
+        }
+        assertEquals("the end notification releases the claim", 1, claimReleases.get()); //$NON-NLS-1$
+        assertEquals("and the guards", before, InfobaseAuthDialogSuppressor.inFlightCount()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aCappedStartAQueuedJobStillReleasesItsDialogGuardsAtOnce()
+    {
+        org.eclipse.core.runtime.jobs.IJobManager jobs = org.eclipse.core.runtime.jobs.Job.getJobManager();
+        int before = InfobaseAuthDialogSuppressor.inFlightCount();
+        jobs.suspend();
+        try
+        {
+            StandaloneServerSupport.startServerGuarded(
+                new FakeStartService(org.eclipse.core.runtime.Status.OK_STATUS), new Object(),
+                "test: queued capped start", "debug", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                StandaloneServerPortConflictPolicy.CANCEL, 30_000L, 300_000L);
+            assertEquals("the capped callers keep their established classification", before, //$NON-NLS-1$
+                InfobaseAuthDialogSuppressor.inFlightCount());
+        }
+        finally
+        {
+            jobs.resume();
+        }
+    }
+
     // ==================== explicit stop: process-exit verification (#890) ====================
 
     @Test

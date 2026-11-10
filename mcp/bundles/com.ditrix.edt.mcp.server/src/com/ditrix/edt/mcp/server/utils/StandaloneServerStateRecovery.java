@@ -905,13 +905,15 @@ public final class StandaloneServerStateRecovery
             {
                 if (decision == StopDecision.WAIT_SETTLE)
                 {
-                    Integer settled = awaitSettled(server, applicationId);
+                    // The settle wait spends the stop's own deadline, never more than its bound.
+                    long settleMs = Math.min(SETTLE_TIMEOUT_MS, remainingRecoveryTimeMs(deadline));
+                    Integer settled = awaitSettled(server, applicationId, null, settleMs);
                     decision = decideStop(settled, hasLiveLaunch(server), policy);
                     if (decision == StopDecision.WAIT_SETTLE)
                     {
                         return Recovery.failed("it is " + stateName(settled.intValue()) //$NON-NLS-1$
-                            + " and did not settle within " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
-                            + "s: another start or stop holds it"); //$NON-NLS-1$
+                            + " and did not settle within " + settleMs //$NON-NLS-1$
+                            + "ms: another start or stop holds it"); //$NON-NLS-1$
                     }
                 }
                 if (decision == StopDecision.UNREADABLE)
@@ -3048,7 +3050,7 @@ public final class StandaloneServerStateRecovery
         IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
         if (manager == null)
         {
-            runIfPresent(work);
+            withoutApplicationManagerThen(project, nothingDone, work);
             return;
         }
         LaunchLifecycleUtils.DefaultApplicationLookup defaultApp;
@@ -3064,6 +3066,49 @@ public final class StandaloneServerStateRecovery
         }
         defaultApplicationLookupThen(project, manager, defaultApp, lockTimeoutMs, monitor,
             nothingDone, work);
+    }
+
+    /**
+     * The no-application-manager branch of {@link #ensureDefaultApplicationStartableThen}: without
+     * the manager the default application, its lock and its hold cannot be resolved, yet the
+     * work's own prepare may still start it. The work keeps running as it always did UNLESS a
+     * {@code standalone_server} stop holds any server of this project - then it is refused, since
+     * the held server could be the one the work starts.
+     *
+     * @throws ApplicationException when the work would run blind past a hold of this project
+     */
+    static void withoutApplicationManagerThen(IProject project, String nothingDone, Runnable work)
+    {
+        if (work != null)
+        {
+            String held = heldApplicationOf(project);
+            if (held != null)
+            {
+                throw new ApplicationException("EDT's application manager is not available, so the " //$NON-NLS-1$
+                    + "default application of project '" + project.getName() //$NON-NLS-1$
+                    + "' could not be checked, while standalone_server(action='stop') holds the " //$NON-NLS-1$
+                    + "standalone server of application '" + held + "' stopped. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + (nothingDone == null ? "" : nothingDone + " ") //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Release it with standalone_server(action='start', projectName='" //$NON-NLS-1$
+                    + project.getName() + "', applicationId='" + held + "'), or retry once EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "has finished starting."); //$NON-NLS-1$
+            }
+        }
+        runIfPresent(work);
+    }
+
+    /** Any application of the project an explicit stop holds, or {@code null}. */
+    private static String heldApplicationOf(IProject project)
+    {
+        String prefix = project.getName() + "\u0000"; //$NON-NLS-1$
+        for (Map.Entry<String, RecoveryGuard> entry : STOP_LOCKS.entrySet())
+        {
+            if (entry.getKey().startsWith(prefix) && entry.getValue().hold.get() != null)
+            {
+                return entry.getKey().substring(prefix.length());
+            }
+        }
+        return null;
     }
 
     /**

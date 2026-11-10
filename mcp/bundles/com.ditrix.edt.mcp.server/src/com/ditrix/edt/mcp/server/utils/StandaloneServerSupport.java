@@ -810,7 +810,12 @@ public final class StandaloneServerSupport
             boolean ended = bounded == null || !BoundedJob.isInconclusive(bounded.getOutcome());
             try
             {
-                deferredCleanup.afterBoundedWait(ended);
+                // A job-bound (explicit) start's guards follow its claim: a start a suspended Job
+                // manager still holds (NOT_RUN) runs after the resume and must find its port and
+                // auth-dialog answers armed. They keep their safety cap (see the caller), because
+                // a globally armed dialog suppressor must not outlive a start that never runs.
+                deferredCleanup.afterBoundedWait(separateOperation
+                    ? BoundedJob.provablyEnded(bounded) : ended);
             }
             finally
             {

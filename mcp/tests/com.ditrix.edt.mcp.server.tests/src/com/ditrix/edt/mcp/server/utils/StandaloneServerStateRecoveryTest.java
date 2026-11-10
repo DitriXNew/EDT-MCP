@@ -2363,6 +2363,63 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    @Test
+    public void testWithoutAnApplicationManagerAHeldProjectRefusesTheWork()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("NoManagerHeldProject"); //$NON-NLS-1$
+        IProject other = Mockito.mock(IProject.class);
+        Mockito.when(other.getName()).thenReturn("NoManagerHeldProjectOther"); //$NON-NLS-1$
+        AtomicInteger ran = new AtomicInteger();
+        // No hold anywhere in this project (a hold of a similarly named project does not count):
+        // the work runs exactly as it always did.
+        StandaloneServerStateRecovery.holdStopped(other, APPLICATION_ID);
+        try
+        {
+            StandaloneServerStateRecovery.withoutApplicationManagerThen(project, "Nothing was built.", //$NON-NLS-1$
+                ran::incrementAndGet);
+            assertEquals(1, ran.get());
+
+            StandaloneServerStateRecovery.holdStopped(project, APPLICATION_ID);
+            try
+            {
+                StandaloneServerStateRecovery.withoutApplicationManagerThen(project,
+                    "Nothing was built.", ran::incrementAndGet); //$NON-NLS-1$
+                throw new AssertionError("a held server of the project must not be started blind"); //$NON-NLS-1$
+            }
+            catch (ApplicationException refused)
+            {
+                String message = refused.getMessage();
+                assertTrue(message, message.contains(APPLICATION_ID));
+                assertTrue(message, message.contains("Nothing was built.")); //$NON-NLS-1$
+                assertTrue(message, message.contains("standalone_server(action='start'")); //$NON-NLS-1$
+            }
+            assertEquals("nothing was built", 1, ran.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(project, APPLICATION_ID);
+            StandaloneServerStateRecovery.releaseHold(other, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testTheStopSettleWaitStaysInsideTheStopBound()
+    {
+        ServerApp app = new ServerApp("SettleBoundStopProject", new FakeServer(1, launch(false))); //$NON-NLS-1$
+        long begin = System.nanoTime();
+        StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+            app.project, app.application, APPLICATION_ID, app.manager, 2_000L,
+            StandaloneServerStateRecovery.StopPolicy.RUNNING);
+        long elapsedMs = (System.nanoTime() - begin) / 1_000_000L;
+        assertFalse(recovery.recovered());
+        assertFalse(recovery.stopStillInFlight());
+        assertTrue(recovery.detail(), recovery.detail().contains("did not settle")); //$NON-NLS-1$
+        assertTrue("a 2s stop must not wait the 30s settle bound: " + elapsedMs, elapsedMs < 10_000L); //$NON-NLS-1$
+        assertEquals(0, app.cleanups.get());
+        assertNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+    }
+
     /** Runs {@code action} and requires the explicit-stop hold refusal. */
     private static void assertHeldRefusal(Runnable action)
     {
