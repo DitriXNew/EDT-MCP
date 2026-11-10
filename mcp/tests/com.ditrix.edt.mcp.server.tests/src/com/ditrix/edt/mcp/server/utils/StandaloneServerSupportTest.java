@@ -926,4 +926,47 @@ public class StandaloneServerSupportTest
             return result;
         }
     }
+
+    // ==================== explicit stop: process-exit verification (#890) ====================
+
+    @Test
+    public void awaitProcessExitReturnsAsSoonAsTheProcessIsGone()
+    {
+        java.util.concurrent.atomic.AtomicInteger polls = new java.util.concurrent.atomic.AtomicInteger();
+        long started = System.nanoTime();
+        boolean exited = StandaloneServerSupport.awaitProcessExit(() -> polls.incrementAndGet() < 3,
+            10_000L, 10L);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+        assertTrue("the process stopped answering alive on the third poll", exited);
+        assertEquals(3, polls.get());
+        assertTrue("the wait must end long before its bound: " + elapsedMs, elapsedMs < 5_000L);
+    }
+
+    @Test
+    public void awaitProcessExitReportsATimeoutHonestly()
+    {
+        long started = System.nanoTime();
+        boolean exited = StandaloneServerSupport.awaitProcessExit(() -> true, 150L, 10L);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+        assertFalse("a process that never exits must not be reported gone", exited);
+        assertTrue("the wait must last its whole bound: " + elapsedMs, elapsedMs >= 140L);
+    }
+
+    @Test
+    public void theCurrentProcessReadsAliveAndAMissingLaunchHasNoPid() throws Exception
+    {
+        assertTrue(StandaloneServerSupport.isProcessAlive(ProcessHandle.current().pid()));
+        assertFalse(StandaloneServerSupport.proceedAtLivePid(new NoLaunchServer(),
+            pid -> fail("no process")));
+        assertFalse(StandaloneServerSupport.livePid(null).isPresent());
+    }
+
+    /** A WST server with no launch, as the pid read addresses it. */
+    public static final class NoLaunchServer
+    {
+        public Object getLaunch()
+        {
+            return null;
+        }
+    }
 }

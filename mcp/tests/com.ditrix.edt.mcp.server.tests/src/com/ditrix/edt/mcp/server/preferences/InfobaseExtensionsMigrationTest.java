@@ -20,7 +20,7 @@ public class InfobaseExtensionsMigrationTest
     @Test
     public void version18RegistersOnlyTheExtensionToolAndKeepsPriorSteps()
     {
-        assertEquals(22, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertEquals(23, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
         for (var additions : List.of(ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION))
         {
@@ -38,11 +38,11 @@ public class InfobaseExtensionsMigrationTest
             PreferenceStore store = stored(17, id, Set.of("owner_disabled", "obsolete_owner_tool"));
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = id.equals("analysis-only")
-                ? Set.of("owner_disabled", "obsolete_owner_tool", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog")
-                : Set.of("owner_disabled", "obsolete_owner_tool", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog");
+                ? Set.of("owner_disabled", "obsolete_owner_tool", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server")
+                : Set.of("owner_disabled", "obsolete_owner_tool", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server");
             assertEquals(expected, disabled(store));
             assertEquals(id, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
-            assertEquals(22, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+            assertEquals(23, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         }
     }
 
@@ -60,10 +60,10 @@ public class InfobaseExtensionsMigrationTest
             }
         });
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(List.of(Set.of("owner_disabled", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog")), published);
+        assertEquals(List.of(Set.of("owner_disabled", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server")), published);
         assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
-        assertEquals(22, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(23, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         writes.clear();
         ToolSettingsService.ensureMigratedForTest(store);
         assertTrue(writes.isEmpty());
@@ -80,7 +80,7 @@ public class InfobaseExtensionsMigrationTest
             assertEquals(before, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
             assertEquals(!id.isEmpty(), store.contains(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(id, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
-            assertEquals(22, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+            assertEquals(23, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         }
     }
 
@@ -107,14 +107,14 @@ public class InfobaseExtensionsMigrationTest
     @Test
     public void alreadyDisabledLaterToolsNeedOnlyTheVersionStamp()
     {
-        PreferenceStore store = stored(17, "analysis-only", Set.of("owner_disabled", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog"));
+        PreferenceStore store = stored(17, "analysis-only", Set.of("owner_disabled", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server"));
         String before = store.getString(PreferenceConstants.PREF_DISABLED_TOOLS);
         List<String> writes = new ArrayList<>();
         store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
         ToolSettingsService.ensureMigratedForTest(store);
         assertEquals(before, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertEquals(List.of(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
-        assertEquals(22, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(23, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     @Test

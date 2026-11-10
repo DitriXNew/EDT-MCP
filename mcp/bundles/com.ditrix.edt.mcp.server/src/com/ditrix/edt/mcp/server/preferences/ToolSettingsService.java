@@ -109,6 +109,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final Set<String> READ_ONLY_V22_ADDITIONS = Set.of("edt_dialog");
 
+    private static final Set<String> READ_ONLY_V23_ADDITIONS = Set.of("standalone_server"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
         Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
@@ -130,7 +132,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(19, ANALYSIS_ONLY_V19_ADDITIONS),
         Map.entry(20, READ_ONLY_V20_ADDITIONS),
         Map.entry(21, READ_ONLY_V21_ADDITIONS),
-        Map.entry(22, READ_ONLY_V22_ADDITIONS));
+        Map.entry(22, READ_ONLY_V22_ADDITIONS),
+        Map.entry(23, READ_ONLY_V23_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
@@ -152,7 +155,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Map.entry(18, READ_ONLY_V18_ADDITIONS),
         Map.entry(20, READ_ONLY_V20_ADDITIONS),
         Map.entry(21, READ_ONLY_V21_ADDITIONS),
-        Map.entry(22, READ_ONLY_V22_ADDITIONS));
+        Map.entry(22, READ_ONLY_V22_ADDITIONS),
+        Map.entry(23, READ_ONLY_V23_ADDITIONS));
 
     /*
      * Frozen history for v1-v12 and the one-shot v13 stamp only. Newer preset-owed steps use
@@ -562,6 +566,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             if (storedVersion < 22)
             {
                 changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V22_ADDITIONS);
+            }
+            if (storedVersion < 23)
+            {
+                changed |= storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V23_ADDITIONS);
             }
             if (changed)
             {

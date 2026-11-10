@@ -158,6 +158,9 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "update_database", //$NON-NLS-1$
         "infobase_sessions",
         "infobase_extensions", //$NON-NLS-1$
+        // Asks for stop/restart of a running server only; status, start and an already-stopped
+        // server end nothing.
+        "standalone_server", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
         "business_process_route_map", //$NON-NLS-1$

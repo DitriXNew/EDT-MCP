@@ -303,34 +303,11 @@ public class InfobaseSessionsTool implements IMcpTool
     static ResolvedApplication resolveApplication(IApplicationManager manager, IProject project,
         String projectName, String applicationId, long timeoutMs)
     {
-        boolean byDefault = applicationId == null || applicationId.isBlank();
-        ApplicationSupport.BoundedRead<Optional<IApplication>> read = byDefault
-            ? ApplicationSupport.getDefaultApplicationBounded(manager, project, timeoutMs)
-            : ApplicationSupport.getApplicationBounded(manager, project, applicationId, timeoutMs);
-        if (!read.concluded())
-        {
-            // A refusal, not a not-found: the read never concluded, so whether the application
-            // exists is unknown, and nothing was listed or terminated. The DEFAULT-application
-            // route also names the cheap way round it, exactly as create_launch_config's sibling
-            // refusal does: passing applicationId skips the wedge-prone default lookup entirely.
-            return ResolvedApplication.error(ToolResult.error(read.deadlineFailure()
-                + ". No session was listed or terminated, and this says nothing about whether " //$NON-NLS-1$
-                + "the application exists. " //$NON-NLS-1$
-                + (byDefault
-                    ? "Pass applicationId explicitly (get_applications lists the ids) to skip the " //$NON-NLS-1$
-                        + "default-application lookup, or retry once EDT is responsive." //$NON-NLS-1$
-                    : "Retry once EDT is responsive.")).toJson()); //$NON-NLS-1$
-        }
-        Optional<IApplication> application = read.valueOrRethrow();
-        if (application.isEmpty())
-        {
-            String target = byDefault
-                ? "Project '" + projectName + "' has no default application." //$NON-NLS-1$ //$NON-NLS-2$
-                : "Application not found: " + applicationId + "."; //$NON-NLS-1$ //$NON-NLS-2$
-            return ResolvedApplication.error(ToolResult.error(target
-                + " Use get_applications to choose a standalone-server application.").toJson()); //$NON-NLS-1$
-        }
-        return ResolvedApplication.of(application.get());
+        ApplicationSupport.ApplicationResolution resolution = ApplicationSupport.resolveApplication(
+            manager, project, projectName, applicationId, timeoutMs,
+            "No session was listed or terminated"); //$NON-NLS-1$
+        return resolution.errorJson() != null ? ResolvedApplication.error(resolution.errorJson())
+            : ResolvedApplication.of(resolution.application());
     }
 
     /** Renders a readable list or an explicit unreachable observation. */

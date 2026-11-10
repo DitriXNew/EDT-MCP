@@ -54,6 +54,8 @@ public final class ToolAnnotationClassifier
         "update_database", //$NON-NLS-1$
         "infobase_sessions",
         "infobase_extensions", //$NON-NLS-1$
+        // Stops (and restarts) a standalone server: every session and client of it ends.
+        "standalone_server", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
         "delete_project", //$NON-NLS-1$
         "delete_launch_config", //$NON-NLS-1$

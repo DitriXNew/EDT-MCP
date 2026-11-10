@@ -14,7 +14,12 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.LongConsumer;
 import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
@@ -22,6 +27,8 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.model.IProcess;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
@@ -59,6 +66,27 @@ public final class StandaloneServerSupport
 
     /** Hard cap for retaining a start's targeted dialog guard after an inconclusive wait. */
     public static final long INCONCLUSIVE_START_GUARD_CAP_MS = 300_000L;
+
+    /**
+     * How long an explicit stop waits for the {@code ibsrv} process to exit after EDT reports
+     * the server STOPPED. EDT's own process wait gives up after 6 seconds and then reports
+     * STOPPED anyway, so this bound sits well above it.
+     */
+    public static final long PROCESS_EXIT_TIMEOUT_MS = 20_000L;
+
+    /** How often {@link #awaitProcessExit} re-reads whether the process is still alive. */
+    public static final long PROCESS_EXIT_POLL_MS = 250L;
+
+    /**
+     * Bound on reading the server process id. EDT's process {@code terminate()} holds the same
+     * monitor {@code proceedSessionCleanup} takes for its whole process wait, so the read can
+     * block while somebody else is stopping the server.
+     */
+    public static final long PID_READ_TIMEOUT_MS = 10_000L;
+
+    /** Internal EDT interface matched by name to keep the WST implementation package optional. */
+    private static final String STANDALONE_SERVER_PROCESS_INTERFACE =
+        "com.e1c.g5.v8.dt.internal.platform.standaloneserver.wst.core.IStandaloneServerProcess"; //$NON-NLS-1$
 
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String WST_CORE_BUNDLE_ID =
@@ -342,6 +370,206 @@ public final class StandaloneServerSupport
     }
 
     /**
+     * Hands the live {@code ibsrv} process id of a running standalone server to {@code consumer}
+     * through EDT's public {@code IStandaloneServerProcess.proceedSessionCleanup(LongConsumer)},
+     * which calls back synchronously and only while the process still exists.
+     *
+     * <p>The process interface is matched by NAME, so the WST implementation package stays an
+     * optional dependency. The callback runs under EDT's process monitor; keep it short.
+     *
+     * @param server the WST server object (never {@code null})
+     * @param consumer receives the pid at most once
+     * @return {@code true} when the server's launch carries a standalone-server process and EDT
+     *     was asked for its pid; {@code false} when there is no live launch or no such process
+     * @throws Exception the real failure of a platform accessor or of the callback
+     */
+    public static boolean proceedAtLivePid(Object server, LongConsumer consumer) throws Exception
+    {
+        Object launchObject = invokeNoArg(server, "getLaunch"); //$NON-NLS-1$
+        if (!(launchObject instanceof ILaunch))
+        {
+            return false;
+        }
+        IProcess[] processes = ((ILaunch)launchObject).getProcesses();
+        if (processes == null)
+        {
+            return false;
+        }
+        for (IProcess process : processes)
+        {
+            Class<?> processInterface = namedInterface(process == null ? null : process.getClass(),
+                STANDALONE_SERVER_PROCESS_INTERFACE);
+            if (processInterface == null)
+            {
+                continue;
+            }
+            try
+            {
+                Method proceed = processInterface.getMethod("proceedSessionCleanup", //$NON-NLS-1$
+                    LongConsumer.class);
+                proceed.invoke(process, consumer);
+            }
+            catch (InvocationTargetException e)
+            {
+                throwUnwrapped(e.getCause() != null ? e.getCause() : e);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * The live {@code ibsrv} process id of a standalone server, read under
+     * {@link #PID_READ_TIMEOUT_MS}.
+     *
+     * @param server the WST server object (may be {@code null})
+     * @return the pid, or empty when no live server process is known or the read did not finish
+     */
+    public static OptionalLong livePid(Object server)
+    {
+        if (server == null)
+        {
+            return OptionalLong.empty();
+        }
+        AtomicLong captured = new AtomicLong(-1L);
+        BoundedJob.Result result = BoundedJob.run("Read standalone-server process id", //$NON-NLS-1$
+            PID_READ_TIMEOUT_MS,
+            monitor -> proceedAtLivePid(server, pid -> captured.compareAndSet(-1L, pid)));
+        long pid = captured.get();
+        if (!result.isSuccess() || pid < 0L)
+        {
+            if (result.getFailure() != null)
+            {
+                Activator.logError("standalone-server: the server process id could not be read", //$NON-NLS-1$
+                    result.getFailure());
+            }
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(pid);
+    }
+
+    /**
+     * Waits, bounded, for a process to exit.
+     *
+     * @param alive answers whether the process is still running (never {@code null})
+     * @param timeoutMs the bound on the wait
+     * @param pollMs how often {@code alive} is asked
+     * @return {@code true} when the process was observed gone before the bound elapsed
+     */
+    public static boolean awaitProcessExit(BooleanSupplier alive, long timeoutMs, long pollMs)
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+        while (true)
+        {
+            if (!alive.getAsBoolean())
+            {
+                return true;
+            }
+            if (System.nanoTime() - deadline >= 0L)
+            {
+                return false;
+            }
+            try
+            {
+                Thread.sleep(Math.max(1L, pollMs));
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return !alive.getAsBoolean();
+            }
+        }
+    }
+
+    /**
+     * Whether the process with this id is still running. A pid the operating system has since
+     * reused for another process reads as not alive: {@link ProcessHandle} compares start times.
+     *
+     * @param pid the process id
+     * @return {@code true} while that process runs
+     */
+    public static boolean isProcessAlive(long pid)
+    {
+        return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(Boolean.FALSE).booleanValue();
+    }
+
+    /**
+     * Reflective {@code IStandaloneServerService.getInfobaseUrl(StandaloneServerInfobase)}: the URL
+     * clients connect to. Best-effort.
+     *
+     * @param service the standalone-server service (may be {@code null})
+     * @param module the application's {@code StandaloneServerInfobase} module (may be {@code null})
+     * @return the URL text, or {@code null} when it could not be read
+     */
+    public static String infobaseUrlOf(Object service, Object module)
+    {
+        if (service == null || module == null)
+        {
+            return null;
+        }
+        try
+        {
+            Method getUrl = findMethod(service.getClass(), "getInfobaseUrl", 1); //$NON-NLS-1$
+            Object url = getUrl == null ? null : getUrl.invoke(service, module);
+            return url == null ? null : url.toString();
+        }
+        catch (Exception | LinkageError e) // NOSONAR best-effort report field, never a precondition
+        {
+            return null;
+        }
+    }
+
+    /** Invokes a public no-argument accessor and unwraps the platform's real failure. */
+    private static Object invokeNoArg(Object target, String methodName) throws Exception
+    {
+        try
+        {
+            return target.getClass().getMethod(methodName).invoke(target);
+        }
+        catch (InvocationTargetException e)
+        {
+            throwUnwrapped(e.getCause() != null ? e.getCause() : e);
+            return null;
+        }
+    }
+
+    /** Rethrows a reflective failure as itself. */
+    private static void throwUnwrapped(Throwable failure) throws Exception
+    {
+        if (failure instanceof Exception)
+        {
+            throw (Exception)failure;
+        }
+        if (failure instanceof Error)
+        {
+            throw (Error)failure;
+        }
+        throw new IllegalStateException(failure);
+    }
+
+    /** Finds an implemented interface recursively by its fully qualified name. */
+    private static Class<?> namedInterface(Class<?> type, String interfaceName)
+    {
+        if (type == null)
+        {
+            return null;
+        }
+        for (Class<?> candidate : type.getInterfaces())
+        {
+            if (interfaceName.equals(candidate.getName()))
+            {
+                return candidate;
+            }
+            Class<?> nested = namedInterface(candidate, interfaceName);
+            if (nested != null)
+            {
+                return nested;
+            }
+        }
+        return namedInterface(type.getSuperclass(), interfaceName);
+    }
+
+    /**
      * Resolves an EDT application without letting its synchronous UI-thread hop hold the caller
      * beyond {@code timeoutMs}.
      *
@@ -417,7 +645,7 @@ public final class StandaloneServerSupport
     }
 
     /** Best-effort reflective {@code IServer.getName()} for an already-resolved server. */
-    private static String nameOfServer(Object server)
+    public static String nameOfServer(Object server)
     {
         if (server == null)
         {

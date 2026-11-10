@@ -1416,6 +1416,335 @@ public class StandaloneServerStateRecoveryTest
         }
     }
 
+    // ==================== explicit stop, hold and start (#890) ====================
+
+    @Test
+    public void testTheExplicitStopDecisionTable()
+    {
+        StandaloneServerStateRecovery.StopPolicy running =
+            StandaloneServerStateRecovery.StopPolicy.RUNNING;
+        assertEquals(StandaloneServerStateRecovery.StopDecision.STOP,
+            StandaloneServerStateRecovery.decideStop(2, Boolean.TRUE, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.STOP,
+            StandaloneServerStateRecovery.decideStop(2, Boolean.FALSE, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.STOP,
+            StandaloneServerStateRecovery.decideStop(2, null, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.WAIT_SETTLE,
+            StandaloneServerStateRecovery.decideStop(1, Boolean.TRUE, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.WAIT_SETTLE,
+            StandaloneServerStateRecovery.decideStop(3, Boolean.FALSE, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.NOOP,
+            StandaloneServerStateRecovery.decideStop(4, Boolean.FALSE, running));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.UNREADABLE,
+            StandaloneServerStateRecovery.decideStop(null, Boolean.TRUE, running));
+    }
+
+    @Test
+    public void testTheStaleOnlyPolicyIsExactlyTheRecoveryDecision()
+    {
+        StandaloneServerStateRecovery.StopPolicy stale =
+            StandaloneServerStateRecovery.StopPolicy.STALE_ONLY;
+        assertEquals(StandaloneServerStateRecovery.StopDecision.NOOP,
+            StandaloneServerStateRecovery.decideStop(2, Boolean.TRUE, stale));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.STOP,
+            StandaloneServerStateRecovery.decideStop(2, Boolean.FALSE, stale));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.NOOP,
+            StandaloneServerStateRecovery.decideStop(2, null, stale));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.NOOP,
+            StandaloneServerStateRecovery.decideStop(null, Boolean.FALSE, stale));
+        assertEquals(StandaloneServerStateRecovery.StopDecision.WAIT_SETTLE,
+            StandaloneServerStateRecovery.decideStop(1, Boolean.FALSE, stale));
+    }
+
+    @Test
+    public void testTheStaleOnlyStopLeavesAHealthyServerAlone()
+    {
+        ServerApp app = new ServerApp("StaleOnlyHealthyProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+            app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+            StandaloneServerStateRecovery.StopPolicy.STALE_ONLY);
+        assertTrue(recovery.recovered());
+        assertFalse(recovery.alreadyStopped());
+        assertEquals("a server with a live launch is somebody's healthy server", 0, app.cleanups.get()); //$NON-NLS-1$
+        assertNull("the recovery never holds a server", //$NON-NLS-1$
+            StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+    }
+
+    @Test
+    public void testTheExplicitStopHoldsTheServerBeforeTheCleanupRuns() throws Exception
+    {
+        ServerApp app = new ServerApp("ExplicitStopHoldProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        AtomicReference<String> heldDuringCleanup = new AtomicReference<>();
+        Mockito.doAnswer(invocation -> {
+            heldDuringCleanup.set(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            app.cleanups.incrementAndGet();
+            app.server.setState(4);
+            return null;
+        }).when(app.manager).cleanup(Mockito.same(app.application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
+        try
+        {
+            StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+                app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+                StandaloneServerStateRecovery.StopPolicy.RUNNING);
+
+            assertTrue(recovery.detail(), recovery.recovered());
+            assertEquals("a live launch does not protect a server from an explicit stop", 1, //$NON-NLS-1$
+                app.cleanups.get());
+            assertNotNull("the hold must stand BEFORE EDT's cleanup runs", heldDuringCleanup.get()); //$NON-NLS-1$
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            assertHeldRefusal(() -> StandaloneServerStateRecovery.ensureStartable(app.project,
+                app.application, APPLICATION_ID, app.manager));
+            assertHeldRefusal(() -> StandaloneServerStateRecovery.ensureStartableWithinBound(app.project,
+                app.application, app.server, APPLICATION_ID, app.manager, null, null, null));
+            assertHeldRefusal(() -> StandaloneServerStateRecovery.claimStartWithinBound(app.project,
+                APPLICATION_ID, 1_000L, null));
+
+            assertTrue(StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID));
+            StandaloneServerStateRecovery.ensureStartable(app.project, app.application, APPLICATION_ID,
+                app.manager);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnAlreadyStoppedServerIsHeldWithoutACleanup()
+    {
+        ServerApp app = new ServerApp("ExplicitStopNoopProject", new FakeServer(4, null)); //$NON-NLS-1$
+        try
+        {
+            StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+                app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+                StandaloneServerStateRecovery.StopPolicy.RUNNING);
+            assertTrue(recovery.recovered());
+            assertTrue(recovery.alreadyStopped());
+            assertEquals(0, app.cleanups.get());
+            assertNotNull(StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAConclusivelyFailedStopLeavesNoHoldBehind()
+    {
+        ServerApp app = new ServerApp("ExplicitStopFailsProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        Mockito.doThrow(new ApplicationException("EDT refused the stop")).when(app.manager).cleanup( //$NON-NLS-1$
+            Mockito.same(app.application), Mockito.any(ExecutionContext.class),
+            Mockito.any(IProgressMonitor.class));
+        StandaloneServerStateRecovery.Recovery recovery = StandaloneServerStateRecovery.stopGuarded(
+            app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+            StandaloneServerStateRecovery.StopPolicy.RUNNING);
+        assertFalse(recovery.recovered());
+        assertFalse(recovery.stopStillInFlight());
+        assertNull("nothing was stopped, so nothing may stay held", //$NON-NLS-1$
+            StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+    }
+
+    @Test
+    public void testAnUnfinishedExplicitStopKeepsTheHoldAndItsInFlightRecord() throws Exception
+    {
+        ServerApp app = new ServerApp("ExplicitStopWedgedProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            app.cleanups.incrementAndGet();
+            entered.countDown();
+            release.await(30, TimeUnit.SECONDS);
+            app.server.setState(4);
+            return null;
+        }).when(app.manager).cleanup(Mockito.same(app.application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
+        AtomicReference<StandaloneServerStateRecovery.Recovery> outcome = new AtomicReference<>();
+        Thread caller = new Thread(() -> outcome.set(StandaloneServerStateRecovery.stopGuarded(
+            app.project, app.application, APPLICATION_ID, app.manager, 30_000L,
+            StandaloneServerStateRecovery.StopPolicy.RUNNING)), "test: abandoned explicit stop"); //$NON-NLS-1$
+        caller.setDaemon(true);
+        caller.start();
+        try
+        {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            long deadline = System.currentTimeMillis() + 30_000L;
+            while (caller.isAlive() && System.currentTimeMillis() < deadline)
+            {
+                caller.interrupt();
+                caller.join(200L);
+            }
+            assertFalse(caller.isAlive());
+            assertTrue(outcome.get().stopStillInFlight());
+            assertNotNull("a stop that may still run keeps the server held", //$NON-NLS-1$
+                StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            StandaloneServerStateRecovery.Recovery second = StandaloneServerStateRecovery.stopGuarded(
+                app.project, app.application, APPLICATION_ID, app.manager, 10_000L,
+                StandaloneServerStateRecovery.StopPolicy.RUNNING);
+            assertFalse(second.recovered());
+            assertTrue(second.detail(), second.detail().contains("an earlier stop of it started")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+            long deadline = System.currentTimeMillis() + 10_000L;
+            while (System.currentTimeMillis() < deadline)
+            {
+                StandaloneServerStateRecovery.StartClaim claim =
+                    StandaloneServerStateRecovery.claimStartWithinBound(app.project, APPLICATION_ID, 200L,
+                        null);
+                if (claim != null)
+                {
+                    claim.close();
+                    break;
+                }
+                Thread.sleep(20L);
+            }
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+        assertEquals(1, app.cleanups.get());
+    }
+
+    @Test
+    public void testAHoldIsReleasedWhenTheServerIsFoundRunningUnderALiveLaunch()
+    {
+        ServerApp app = new ServerApp("HoldReleasedByEdtStartProject", new FakeServer(2, launch(false))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        StandaloneServerStateRecovery.ensureStartable(app.project, app.application, APPLICATION_ID,
+            app.manager);
+        assertNull("somebody started it from EDT, so the hold no longer describes anything", //$NON-NLS-1$
+            StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+        assertEquals(0, app.cleanups.get());
+    }
+
+    @Test
+    public void testRestorationSkipsAHeldServer()
+    {
+        ServerApp app = new ServerApp("HeldRestorationProject", new FakeServer(4, null)); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        AtomicInteger restores = new AtomicInteger();
+        try
+        {
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(app.project, app.application,
+                    app.server, APPLICATION_ID, app.manager, 10_000L, () -> {
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            StandaloneServerStateRecovery.beginOperation();
+            String message;
+            try
+            {
+                StandaloneServerStateRecovery.recordStoppedServer(APPLICATION_ID);
+                message = StandaloneServerStateRecovery.appendRestorationOutcome("operation failed.", //$NON-NLS-1$
+                    "Standalone", applicationId -> outcome); //$NON-NLS-1$
+            }
+            finally
+            {
+                StandaloneServerStateRecovery.endOperation();
+            }
+            assertEquals(0, restores.get());
+            assertTrue(message, message.contains("holds it stopped")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    @Test
+    public void testAnExplicitStartReleasesTheHoldOnlyWhenItSucceeds()
+    {
+        ServerApp app = new ServerApp("ExplicitStartProject", new FakeServer(4, launch(true))); //$NON-NLS-1$
+        StandaloneServerStateRecovery.holdStopped(app.project, APPLICATION_ID);
+        try
+        {
+            StandaloneServerStateRecovery.StartOutcome failed = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager, new FailingRestorationService(),
+                StandaloneServerPortConflictPolicy.CANCEL, 30_000L);
+            assertEquals(StandaloneServerStateRecovery.StartKind.FAILED, failed.kind());
+            assertTrue(failed.detail(), failed.detail().contains("start failed")); //$NON-NLS-1$
+            assertNotNull("a failed start keeps the hold", //$NON-NLS-1$
+                StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+
+            StandaloneServerStateRecovery.StartOutcome started = StandaloneServerStateRecovery.startExplicitly(
+                app.project, app.application, APPLICATION_ID, app.manager,
+                new StartingService(app.server), StandaloneServerPortConflictPolicy.CANCEL, 30_000L);
+            assertEquals(started.detail(), StandaloneServerStateRecovery.StartKind.STARTED, started.kind());
+            assertNull("a successful start releases the hold", //$NON-NLS-1$
+                StandaloneServerStateRecovery.heldSince(app.project, APPLICATION_ID));
+            assertEquals(2, app.server.getServerState());
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.releaseHold(app.project, APPLICATION_ID);
+        }
+    }
+
+    /** Runs {@code action} and requires the explicit-stop hold refusal. */
+    private static void assertHeldRefusal(Runnable action)
+    {
+        try
+        {
+            action.run();
+            throw new AssertionError("a held server must refuse a plugin-driven start"); //$NON-NLS-1$
+        }
+        catch (ApplicationException refused)
+        {
+            assertTrue(refused.getMessage(),
+                refused.getMessage().contains("held stopped by standalone_server(action='stop')")); //$NON-NLS-1$
+            assertTrue(refused.getMessage(), refused.getMessage().contains("action='start'")); //$NON-NLS-1$
+        }
+    }
+
+    /** A wst-server application over a fake server, with a mocked manager counting cleanups. */
+    private static final class ServerApp
+    {
+        final IProject project = Mockito.mock(IProject.class);
+        final IApplication application;
+        final FakeServer server;
+        final IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        final AtomicInteger cleanups = new AtomicInteger();
+
+        ServerApp(String projectName, FakeServer server)
+        {
+            this.server = server;
+            Mockito.when(project.getName()).thenReturn(projectName);
+            IApplicationType type = Mockito.mock(IApplicationType.class);
+            Mockito.when(type.getId()).thenReturn(StandaloneServerSupport.WST_SERVER_APP_TYPE);
+            application = Mockito.mock(IApplication.class,
+                Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+            Mockito.when(application.getType()).thenReturn(type);
+            Mockito.when(application.getId()).thenReturn(APPLICATION_ID);
+            Mockito.when(((ServerBackedApplication)application).getServer()).thenReturn(server);
+            Mockito.doAnswer(invocation -> {
+                cleanups.incrementAndGet();
+                server.setState(4);
+                return null;
+            }).when(manager).cleanup(Mockito.same(application), Mockito.any(ExecutionContext.class),
+                Mockito.any(IProgressMonitor.class));
+        }
+    }
+
+    /** A standalone-server service whose start brings the fake server to STARTED. */
+    public static final class StartingService
+    {
+        private final FakeServer server;
+
+        StartingService(FakeServer server)
+        {
+            this.server = server;
+        }
+
+        public IStatus startServer(Object passedServer, String launchMode, Object monitor)
+        {
+            server.setState(2);
+            return Status.OK_STATUS;
+        }
+    }
+
     /** A WST server as the pre-flight addresses it: by the two public accessors it reads. */
     public static final class FakeServer
     {

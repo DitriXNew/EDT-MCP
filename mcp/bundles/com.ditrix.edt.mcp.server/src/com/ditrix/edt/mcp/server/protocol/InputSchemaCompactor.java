@@ -227,6 +227,11 @@ public final class InputSchemaCompactor
         // them prevents a compacted terminate call from losing its target and confirmation rules.
         keep.put("infobase_sessions", //$NON-NLS-1$
             asSet(McpKeys.APPLICATION_ID, McpKeys.ACTION, "sessionId", "all", "confirm")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // The default action, the default application, the preview-then-confirm rule and the
+        // start-only port answer live only in this prose.
+        keep.put("standalone_server", //$NON-NLS-1$
+            asSet(McpKeys.APPLICATION_ID, McpKeys.ACTION, "confirm", //$NON-NLS-1$
+                "standaloneServerPortConflict")); //$NON-NLS-1$
         // includeBodies=true returns the recorded request/response JSON VERBATIM, and that
         // path is deliberately not redacted (the redactor only sees the outer tool). The
         // warning that those bodies can carry infobase and personal data is the only thing
