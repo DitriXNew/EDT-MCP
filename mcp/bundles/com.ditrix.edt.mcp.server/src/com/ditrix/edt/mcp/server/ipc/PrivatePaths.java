@@ -7,15 +7,16 @@ package com.ditrix.edt.mcp.server.ipc;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 /** Owner-only IPC storage. Never traverse symbolic links or Windows directory reparse points. */
 public final class PrivatePaths
 {
+    private static final String SYSTEM_SID = "S-1-5-18";
+    private static final String ADMINISTRATORS_SID = "S-1-5-32-544";
+    private static final String PRIVILEGED_LOOKUP_FAILED = "Cannot resolve privileged Windows accounts for IPC storage validation";
     private static volatile UserPrincipal currentOwner;
     private static Set<UserPrincipal> windowsPrivilegedAccounts;
     private PrivatePaths() { }
@@ -165,32 +166,58 @@ public final class PrivatePaths
     private static synchronized Set<UserPrincipal> windowsPrivilegedAccounts(Path path) throws IOException
     {
         if (windowsPrivilegedAccounts != null) { return windowsPrivilegedAccounts; }
-        // Resolve well-known SIDs, since localized or renamed account names are not stable.
         // Mismatched Windows owners and non-user ACEs share this cached lookup.
-        String script = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
-            + "'S-1-5-18','S-1-5-32-544' | ForEach-Object {"
-            + "([System.Security.Principal.SecurityIdentifier]::new($_)).Translate([System.Security.Principal.NTAccount]).Value}";
-        Process process = new ProcessBuilder(Path.of(System.getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
-            "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
-            Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE)))
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        String root = System.getenv("SystemRoot");
+        if (root == null || root.isBlank()) { throw new IOException(PRIVILEGED_LOOKUP_FAILED + ": SystemRoot is not set"); }
         try
         {
-            if (!process.waitFor(3, TimeUnit.SECONDS) || process.exitValue() != 0)
-            { throw new IOException("Cannot resolve privileged Windows accounts for IPC storage validation"); }
-            String[] names = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip().split("\\R");
-            if (names.length != 2) { throw new IOException("Invalid privileged Windows account lookup result"); }
-            var lookup = path.getFileSystem().getUserPrincipalLookupService();
-            windowsPrivilegedAccounts = Set.of(lookup.lookupPrincipalByName(names[0]), lookup.lookupPrincipalByName(names[1]));
+            windowsPrivilegedAccounts = readWindowsPrivilegedAccounts(path.getFileSystem().getPath(root));
             return windowsPrivilegedAccounts;
         }
-        catch (InterruptedException e)
-        { Thread.currentThread().interrupt(); throw new IOException("Windows IPC storage validation interrupted"); }
-        finally
+        catch (InvalidPathException | SecurityException e)
+        { throw new IOException(PRIVILEGED_LOOKUP_FAILED + ": cannot read the SystemRoot directory", e); }
+    }
+
+    /** Reads the SYSTEM and Administrators principals from the ACL of the Windows system directory. */
+    public static Set<UserPrincipal> readWindowsPrivilegedAccounts(Path systemRoot) throws IOException
+    {
+        var view = Files.getFileAttributeView(systemRoot, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) { throw new IOException(PRIVILEGED_LOOKUP_FAILED + ": the system directory has no ACL view"); }
+        return selectWindowsPrivilegedAccounts(view.getAcl());
+    }
+
+    /**
+     * Selects the SYSTEM and Administrators principals from the ACL of the Windows system directory.
+     * <p>
+     * Localized or renamed account names are not stable, so the well-known SIDs identify these accounts. The JDK has
+     * no public route from a SID to a principal, and {@code LookupAccountName} rejects SID strings. The JDK's Windows
+     * principals are defined by their SID, which makes {@code hashCode()} the SID string's hash. The source ACL is
+     * protected by the operating system, and anything unexpected there fails closed with an {@link IOException}.
+     *
+     * @param entries the ACL entries of the Windows system directory
+     * @return exactly the SYSTEM and Administrators principals
+     * @throws IOException if either principal is absent or ambiguous
+     */
+    public static Set<UserPrincipal> selectWindowsPrivilegedAccounts(List<AclEntry> entries) throws IOException
+    {
+        UserPrincipal system = principalBySid(entries, SYSTEM_SID);
+        UserPrincipal administrators = principalBySid(entries, ADMINISTRATORS_SID);
+        if (system.equals(administrators))
+        { throw new IOException(PRIVILEGED_LOOKUP_FAILED + ": the well-known accounts are not distinct"); }
+        return Set.of(system, administrators);
+    }
+
+    private static UserPrincipal principalBySid(List<AclEntry> entries, String sid) throws IOException
+    {
+        Set<UserPrincipal> matches = new HashSet<>();
+        for (AclEntry entry : entries)
         {
-            if (process.isAlive()) { process.destroyForcibly(); }
-            process.getInputStream().close(); process.getErrorStream().close(); process.getOutputStream().close();
+            UserPrincipal principal = entry.principal();
+            if (principal instanceof GroupPrincipal && principal.hashCode() == sid.hashCode()) { matches.add(principal); }
         }
+        if (matches.size() != 1)
+        { throw new IOException(PRIVILEGED_LOOKUP_FAILED + ": expected one account for " + sid + " but found " + matches.size()); }
+        return matches.iterator().next();
     }
 
     public static FileChannel lockFile(Path path) throws IOException
