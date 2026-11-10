@@ -9,6 +9,9 @@ and renders markdown. outputMode selects the shape:
             + per-file "### <path>" sections with "**Line K:**" + ```bsl``` context blocks.
   - "count":           "## Search Count for \"<q>\"" + "**Total matches:** N in **M** files".
   - "files":           "## Search Files for \"<q>\"" + a "| File | Matches |" table.
+  - "lines":           "## Search Lines for \"<q>\"" + the "**Total:**" line of full mode + ONE
+            ```text``` fence of "<path>:<line>: <matched line verbatim>" rows (no per-file
+            headings, no context: contextLines is ignored; limit caps the rows as in full).
 A query with no hits renders the literal sentinel "No matches found.".
 
 Being a READ tool, EVERY test ends with assert_no_diff(): search must never mutate
@@ -31,7 +34,7 @@ Fixture truth used (TestConfiguration/src, English Names — verified on disk):
 Real execute() error paths targeted by the negative matrix (SearchInCodeTool.java):
   - missing projectName / query -> JsonUtils.requireArguments -> "<name> is required".
   - non-existent project         -> "Project not found: <name>".
-  - invalid outputMode enum      -> "outputMode must be 'full', 'count', or 'files'".
+  - invalid outputMode enum      -> "outputMode must be 'full', 'lines', 'count', or 'files'".
   - unknown metadataType         -> "Unknown metadataType '<t>'. Supported: ...".
   - invalid regex + isRegex=true -> "Invalid regex pattern '<q>': <detail>".
 """
@@ -192,6 +195,73 @@ def test_regex_mode_matches_pattern():
     assert_no_diff("a read tool must not touch the project on disk")
 
 
+MANAGED_APP = "Configuration/ManagedApplicationModule.bsl"
+
+
+def _lines_block(text):
+    """The rows of the single ```text fence of a lines-mode answer."""
+    start = text.index("```text\n") + len("```text\n")
+    end = text.index("\n```", start)
+    return text[start:end].split("\n")
+
+
+@e2e_test(tool="search_in_code", kind="read")
+def test_lines_mode_prints_path_line_text_without_file_headings():
+    """lines mode renders ONE fence of "<path>:<line>: <matched line verbatim>" rows. The
+    literal "A + B" is on line 2 of CommonModules/Calc/Module.bsl, written with a leading
+    TAB ("\\tВозврат A + B;"): the row must carry that tab byte-for-byte. No "### " file
+    heading and no "**Line" block may appear - those are the full-mode shape."""
+    r = call("search_in_code",
+             {"projectName": PROJECT, "query": "A + B", "outputMode": "lines"})
+    assert_ok(r, "lines mode for 'A + B'")
+
+    assert_contains(r.text, 'Search Lines for "A + B"', "lines mode must use the lines header")
+    rows = _lines_block(r.text)
+    assert "CommonModules/Calc/Module.bsl:2: \tВозврат A + B;" in rows, \
+        "the Calc row must be path:line: + the verbatim source line:\n" + r.text
+    assert_contains(r.text, "**Total:** %d matches in %d files" % (len(rows), len(rows)),
+                    "every match of this one-per-file literal is a row (no limit reached)")
+    assert_not_contains(r.text, "### ", "lines mode has no per-file headings")
+    assert_not_contains(r.text, "**Line", "lines mode has no per-match blocks")
+    assert_not_contains(r.text, "```bsl", "lines mode is one text fence, not bsl context blocks")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="search_in_code", kind="read")
+def test_lines_mode_ignores_context_lines():
+    """contextLines is ignored in lines mode: "EndProcedure" is on lines 4 and 11 of the
+    managed-app module, and with contextLines=5 the answer is still exactly those two rows -
+    no neighbouring line (e.g. line 3's TODO comment) and the same text as contextLines=0."""
+    wide = call("search_in_code",
+                {"projectName": PROJECT, "query": "EndProcedure", "outputMode": "lines",
+                 "contextLines": 5})
+    assert_ok(wide, "lines mode with contextLines=5")
+    assert _lines_block(wide.text) == [MANAGED_APP + ":4: EndProcedure",
+                                      MANAGED_APP + ":11: EndProcedure"], wide.text
+    assert_not_contains(wide.text, "TODO", "a context neighbour must not leak into lines mode")
+
+    narrow = call("search_in_code",
+                  {"projectName": PROJECT, "query": "EndProcedure", "outputMode": "lines",
+                   "contextLines": 0})
+    assert_ok(narrow, "lines mode with contextLines=0")
+    assert narrow.text == wide.text, "contextLines must not change a lines-mode answer"
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="search_in_code", kind="read")
+def test_lines_mode_respects_limit_and_prints_the_showing_notice():
+    """limit caps the rows as in full mode while the totals stay exact: limit=1 on the two
+    EndProcedure lines prints one row and "(showing 1 of 2)"."""
+    r = call("search_in_code",
+             {"projectName": PROJECT, "query": "EndProcedure", "outputMode": "lines",
+              "limit": 1})
+    assert_ok(r, "lines mode capped at 1")
+    assert_contains(r.text, "**Total:** 2 matches in 1 files (showing 1 of 2)",
+                    "the truncation notice names the exact total")
+    assert _lines_block(r.text) == [MANAGED_APP + ":4: EndProcedure"], r.text
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
 @e2e_test(tool="search_in_code", kind="read")
 def test_valid_query_with_no_hits_renders_sentinel():
     """A well-formed query that genuinely matches nothing must render the explicit
@@ -254,7 +324,7 @@ def test_nonexistent_project_errors_and_names_value():
 @e2e_test(tool="search_in_code", kind="read")
 def test_invalid_output_mode_enum_errors_actionably():
     """outputMode is an enum; an out-of-set value -> "outputMode must be 'full',
-    'count', or 'files'". This error IS actionable: it enumerates the valid values."""
+    'lines', 'count', or 'files'". This error IS actionable: it enumerates the valid values."""
     bad = "verbose_e2e"
     r = call("search_in_code",
              {"projectName": PROJECT, "query": "Error", "outputMode": bad})
@@ -265,7 +335,7 @@ def test_invalid_output_mode_enum_errors_actionably():
     # AUDIT: the error does not echo the rejected value ('verbose_e2e'); a better
     # message would name what was passed. Flagged; the enumerated valid set keeps it
     # actionable so the assertion is not weakened.
-    assert_error_quality(e, names=["outputMode"], suggests=["count", "files"])
+    assert_error_quality(e, names=["outputMode"], suggests=["lines", "count", "files"])
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

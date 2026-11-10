@@ -3,12 +3,14 @@ e2e tests for search_in_dcs (kind: read; the seeded scenarios are write-metadata
 
 Read tool: literal/regex full-text search over every *.dcs file under the project's src/ folder
 (the Template.dcs of report / object-owned templates and of common templates). It shares the
-scanner and the renderer with search_in_code, so the three output modes have the same shape:
+scanner and the renderer with search_in_code, so the output modes have the same shape:
   - "full"  (default): "## Search Results for \"<q>\"" + "**Total:** N matches in M files"
             + per-file "### <path>" sections, a "**Template:** `<FQN>`" line for a recognised
             template layout, and "**Line K:**" + ```xml``` context blocks.
   - "count":           "## Search Count for \"<q>\"" + "**Total matches:** N in **M** files".
   - "files":           "## Search Files for \"<q>\"" + a "| File | Template | Matches |" table.
+  - "lines":           "## Search Lines for \"<q>\"" + one ```text``` fence of
+            "<path> [Template: <FQN>]:<line>: <source line>" rows (no context).
 Paths are shown WITHOUT the leading src/, and that same string is what fileMask matches.
 A complete scan without hits renders "No matches found."; an incomplete one never does.
 
@@ -259,6 +261,30 @@ def test_modes_mask_limit_regex_and_case_over_several_templates():
 
 
 @e2e_test(tool="search_in_dcs", kind="write-metadata")
+def test_lines_mode_prints_path_template_and_the_source_line():
+    """lines mode: ONE ```text fence of "<path> [Template: <FQN>]:<line>: <source line>" rows.
+    The row's text is the exported XML line as written on disk (entities stay escaped), its number
+    is that line's number in the file, and contextLines is ignored."""
+    marker = MARKER + "LINES"
+    path = _seed_report("E2EDcsSearchLines", marker)
+    fqn = "Report.E2EDcsSearchLines.Template." + path.split("/")[3]
+    with open(os.path.join(PROJECT_DIR, "src", *path.split("/")), encoding="utf-8-sig") as handle:
+        disk_lines = handle.read().splitlines()
+    hits = [(i + 1, line) for i, line in enumerate(disk_lines) if marker in line]
+    assert len(hits) == 1, "the seeded schema carries the marker on one line: %s" % hits
+
+    r = _search(marker, outputMode="lines", contextLines=5)
+    assert_ok(r, "lines-mode search for the seeded marker")
+    assert_contains(r.text, 'Search Lines for "%s"' % marker, "the lines heading echoes the query")
+    assert_contains(r.text, "**Total:** 1 matches in 1 files", "exactly the seeded query line")
+    expected = "%s [Template: %s]:%d: %s" % (path, fqn, hits[0][0], hits[0][1])
+    assert_contains(r.text, "```text\n" + expected + "\n```\n",
+                    "one fenced row: path, template FQN, line number, verbatim source line")
+    assert_not_contains(r.text, "**Line", "lines mode has no per-match blocks")
+    assert_not_contains(r.text, "```xml", "lines mode is one text fence, not xml context blocks")
+
+
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_scope_dcs_is_not_bsl_and_bsl_is_not_dcs():
     """A marker written only into a BSL module is not found by search_in_dcs, and a marker only in
     a DCS schema is not found by search_in_code - each tool proves its positive control first."""
@@ -317,5 +343,6 @@ def test_missing_query_and_bad_output_mode_are_rejected():
     err = assert_error(call("search_in_dcs", {"projectName": PROJECT}), "missing query")
     assert_error_quality(err, names=["query"], ctx="missing query names the parameter")
     err = assert_error(_search("x", outputMode="sideways"), "bad outputMode")
-    assert_error_quality(err, names=["outputMode"], suggests=["full", "count", "files"], ctx="bad outputMode")
+    assert_error_quality(err, names=["outputMode"], suggests=["full", "lines", "count", "files"],
+                         ctx="bad outputMode")
     assert_no_diff("an invalid call must not touch the project on disk")

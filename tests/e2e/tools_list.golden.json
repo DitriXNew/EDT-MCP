@@ -5445,6 +5445,7 @@
         "outputMode": {
           "enum": [
             "full",
+            "lines",
             "count",
             "files"
           ],
@@ -5493,6 +5494,7 @@
         "outputMode": {
           "enum": [
             "full",
+            "lines",
             "count",
             "files"
           ],

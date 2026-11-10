@@ -12,7 +12,7 @@ Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the 
 | limit | — | integer | Max matches returned with context. Default: 100, max: 500 |
 | contextLines | — | integer | Lines of context before/after each match. Default: 2, max: 5 |
 | fileMask | — | string | Filter by file path substring, path without src/ (e.g. 'Reports/Stock' or 'CommonTemplates') |
-| outputMode | — | string (one of: full, count, files) | Output mode: 'full' (matches with context, default), 'count', or 'files' |
+| outputMode | — | string (one of: full, lines, count, files) | Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' row per match, no context), 'count', or 'files' |
 
 ## Guide
 Literal or regex full-text search inside the data composition schemas (DCS) of a project: every `*.dcs` file under the project's `src/` folder - the `Template.dcs` of report, data processor and other object-owned templates, and of common templates. It is the discovery step before `dcs`: a recognised export layout includes the template FQN to pass to `dcs`.
@@ -30,7 +30,7 @@ Literal or regex full-text search inside the data composition schemas (DCS) of a
 - `query` (required) - search string or regex; matched literally unless `isRegex=true`. XML entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, and decimal/hex character references) are decoded once per source line before matching, so use `&Period` or `A > 0` as query text. Each source line is matched on its own; a pattern spanning source lines will not match. Context blocks keep the original XML and source line numbers.
 - `caseSensitive` - default `false`.
 - `isRegex` - treat `query` as a Java regular expression; default `false`. An invalid pattern returns an error; pass `isRegex=false` to search the text literally.
-- `limit` - max matches returned with context; default 100, max 500. Counts in every mode are always exact regardless of `limit`.
+- `limit` - max matches returned (`full` blocks or `lines` rows); default 100, max 500. Counts in every mode are always exact regardless of `limit`.
 - `contextLines` - lines before/after each match; default 2, max 5 (`full` mode only).
 - `fileMask` - case-insensitive substring of the file path WITHOUT the leading `src/`, e.g. `Reports/Stock` or `CommonTemplates`.
 
@@ -42,11 +42,12 @@ A file in any other layout is reported by path only, with no FQN (`-` in `files`
 
 ## Output modes (`outputMode`)
 - `full` (default) - matches grouped by file, each file with its `**Template:**` FQN and `contextLines` of context in `xml` blocks, capped at `limit`.
+- `lines` - the `full` totals, then ONE fenced block with a `<path> [Template: <FQN>]:<line>: <source line>` row per match (`<path>:<line>: ...` when the layout has no FQN; the line is the original XML, entities still escaped), capped at `limit`; `contextLines` is ignored.
 - `count` - only the total match and file counts.
 - `files` - one row per file: path, template FQN, per-file match count.
 
 ## Completeness
-A file that cannot be read is skipped and reported as a warning. In `full` and `files` modes, when nothing matched but a file was skipped or the search was interrupted, the result says the scan is INCOMPLETE instead of `No matches found.`; `count` mode prints the warnings with the totals. An incomplete scan is not proof that the text is absent.
+A file that cannot be read is skipped and reported as a warning. In `full`, `lines` and `files` modes, when nothing matched but a file was skipped or the search was interrupted, the result says the scan is INCOMPLETE instead of `No matches found.`; `count` mode prints the warnings with the totals. An incomplete scan is not proof that the text is absent.
 
 ## Examples
 - `{projectName, query: "КоличествоОстаток"}` -> `### Reports/Stock/Templates/MainSchema/Template.dcs` with `**Template:** Report.Stock.Template.MainSchema` -> `dcs({projectName, fqn: "Report.Stock.Template.MainSchema", action: "get", type: "schema"})`.

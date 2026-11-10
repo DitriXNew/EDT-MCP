@@ -11,16 +11,17 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Renders a {@link ResourceTextSearch} result as Markdown in the three output modes the full-text
- * search tools share: {@code full} (matches with context, capped), {@code count} (exact totals
- * only) and {@code files} (one row per matched file with its exact count).
+ * Renders a {@link ResourceTextSearch} result as Markdown in the four output modes the full-text
+ * search tools share: {@code full} (matches with context, capped), {@code lines} (one
+ * {@code path:line: text} row per match, capped like {@code full}, no context), {@code count}
+ * (exact totals only) and {@code files} (one row per matched file with its exact count).
  * <p>
  * The text is the {@code search_in_code} contract, byte for byte: {@link #forCode()} configures
  * nothing beyond the {@code bsl} code fence. A tool may add two things and nothing else:
  * <ul>
  * <li>a per-file <b>address</b> (e.g. the DCS template FQN a {@code .dcs} file belongs to),
- * printed under the file heading in {@code full} mode and as an extra column in {@code files}
- * mode; a file without one prints none;</li>
+ * printed under the file heading in {@code full} mode, after the path in {@code lines} mode and
+ * as an extra column in {@code files} mode; a file without one prints none;</li>
  * <li>a <b>fail-closed empty result</b>: when nothing matched but the scan was incomplete, the
  * {@code "No matches found."} sentinel is replaced by a line that says the scan is incomplete,
  * so an absence is never claimed on files that were never read.</li>
@@ -30,6 +31,9 @@ public final class SearchResultFormatter
 {
     /** Output mode: matches with context. */
     public static final String MODE_FULL = "full"; //$NON-NLS-1$
+
+    /** Output mode: one {@code path:line: text} row per match in a single fence, no context. */
+    public static final String MODE_LINES = "lines"; //$NON-NLS-1$
 
     /** Output mode: totals only. */
     public static final String MODE_COUNT = "count"; //$NON-NLS-1$
@@ -91,10 +95,10 @@ public final class SearchResultFormatter
     /**
      * Renders the result in the given mode.
      *
-     * @param outputMode {@link #MODE_FULL}, {@link #MODE_COUNT} or {@link #MODE_FILES}; anything
-     *     else renders as {@code full}
+     * @param outputMode {@link #MODE_FULL}, {@link #MODE_LINES}, {@link #MODE_COUNT} or
+     *     {@link #MODE_FILES}; anything else renders as {@code full}
      * @param query the query as the caller sent it (echoed in the heading)
-     * @param search the finished scan
+     * @param search the finished scan ({@code full} and {@code lines} need its detailed matches)
      * @return the Markdown text
      */
     public String format(String outputMode, String query, ResourceTextSearch search)
@@ -106,6 +110,10 @@ public final class SearchResultFormatter
         else if (MODE_FILES.equals(outputMode))
         {
             return formatFiles(query, search);
+        }
+        else if (MODE_LINES.equals(outputMode))
+        {
+            return formatLines(query, search);
         }
         return formatFull(query, search);
     }
@@ -182,23 +190,7 @@ public final class SearchResultFormatter
     {
         StringBuilder sb = new StringBuilder();
         sb.append("## Search Results for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
-
-        int totalMatches = search.getTotalMatches();
-        sb.append("**Total:** ").append(totalMatches); //$NON-NLS-1$
-        sb.append(" matches in ").append(search.getTotalMatchedFiles()).append(" files"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append(Pagination.truncationNotice(search.getShownMatches(), totalMatches));
-        sb.append("\n"); //$NON-NLS-1$
-
-        if (search.getSkippedFiles() > 0)
-        {
-            sb.append(WARNING_PREFIX).append(search.getSkippedFiles())
-              .append(" file(s) could not be read (check EDT Error Log)\n"); //$NON-NLS-1$
-        }
-        if (search.wasInterrupted())
-        {
-            sb.append(INTERRUPTED_WARNING).append('\n');
-        }
-        sb.append("\n"); //$NON-NLS-1$
+        appendDetailTotals(sb, search);
 
         if (search.getMatchesByFile().isEmpty())
         {
@@ -229,6 +221,67 @@ public final class SearchResultFormatter
         }
 
         return sb.toString();
+    }
+
+    /**
+     * The compact rendering: the {@code full} totals and warnings, then ONE fence holding a
+     * {@code <path>[ [<label>: <address>]]:<line>: <matched line>} row per detailed match. The line
+     * is the file's own text ({@link ResourceTextSearch.Match#getLineText()}), never cut back out
+     * of the numbered context; the context window is not printed. The fence is the {@code text}
+     * language and is lengthened past the longest backtick run of the rows, so no source line can
+     * close it.
+     */
+    private String formatLines(String query, ResourceTextSearch search)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Search Lines for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
+        appendDetailTotals(sb, search);
+
+        if (search.getMatchesByFile().isEmpty())
+        {
+            sb.append(emptyResult(search));
+            return sb.toString();
+        }
+
+        StringBuilder rows = new StringBuilder();
+        for (Map.Entry<String, List<ResourceTextSearch.Match>> entry : search.getMatchesByFile().entrySet())
+        {
+            String address = addressOf == null ? null : addressOf.apply(entry.getKey());
+            String location = address == null ? entry.getKey()
+                : entry.getKey() + " [" + addressLabel + ": " + address + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            for (ResourceTextSearch.Match match : entry.getValue())
+            {
+                rows.append(location).append(':').append(match.getLineNumber()).append(": ") //$NON-NLS-1$
+                    .append(match.getLineText()).append('\n');
+            }
+        }
+        String fence = MarkdownUtils.codeBlockFence(rows);
+        sb.append(fence).append("text\n").append(rows).append(fence).append('\n'); //$NON-NLS-1$
+        return sb.toString();
+    }
+
+    /**
+     * The totals line, its truncation notice, the warnings and the blank line that {@code full}
+     * and {@code lines} share.
+     */
+    private static void appendDetailTotals(StringBuilder sb, ResourceTextSearch search)
+    {
+        int totalMatches = search.getTotalMatches();
+        sb.append("**Total:** ").append(totalMatches); //$NON-NLS-1$
+        sb.append(" matches in ").append(search.getTotalMatchedFiles()).append(" files"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(Pagination.truncationNotice(search.getShownMatches(), totalMatches));
+        sb.append("\n"); //$NON-NLS-1$
+
+        if (search.getSkippedFiles() > 0)
+        {
+            sb.append(WARNING_PREFIX).append(search.getSkippedFiles())
+              .append(" file(s) could not be read (check EDT Error Log)\n"); //$NON-NLS-1$
+        }
+        if (search.wasInterrupted())
+        {
+            sb.append(INTERRUPTED_WARNING).append('\n');
+        }
+        sb.append("\n"); //$NON-NLS-1$
     }
 
     /**

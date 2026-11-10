@@ -209,6 +209,27 @@ public final class MarkdownUtils
         return true;
     }
 
+    /**
+     * The backtick fence for a fenced code block holding {@code body}: three backticks, or one
+     * more than the longest backtick run anywhere in the body (CommonMark's rule), so no line of
+     * the body can close the block early.
+     *
+     * @param body the block content; {@code null} is treated as empty
+     * @return the opening (and closing) fence, at least three backticks
+     */
+    public static String codeBlockFence(CharSequence body)
+    {
+        int longestRun = 2;
+        int run = 0;
+        int length = body == null ? 0 : body.length();
+        for (int i = 0; i < length; i++)
+        {
+            run = body.charAt(i) == '`' ? run + 1 : 0;
+            longestRun = Math.max(longestRun, run);
+        }
+        return "`".repeat(longestRun + 1); //$NON-NLS-1$
+    }
+
     // ====================================================================
     // Table builders
     //

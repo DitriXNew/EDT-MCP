@@ -202,7 +202,7 @@ public class SearchInDcsReviewRegressionTest
     public void testGuideExplainsIncompleteFullFilesAndCountModes() throws CoreException
     {
         String guide = GuideLoader.load(SearchInDcsTool.NAME);
-        assertTrue(guide, guide.contains("In `full` and `files` modes,")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("In `full`, `lines` and `files` modes,")); //$NON-NLS-1$
         assertTrue(guide, guide.contains("`count` mode prints the warnings with the totals")); //$NON-NLS-1$
         schema("<query>x</query>\n"); //$NON-NLS-1$
         fixture.deleteOnDiskOnly("src/" + DCS_PATH); //$NON-NLS-1$
