@@ -3,12 +3,15 @@ e2e tests for read_method_source (kind: read).
 
 What the tool does
 ------------------
-Reads ONE procedure/function out of a BSL module by name, instead of returning
-the whole file. Params (all REQUIRED, see getInputSchema / requireArguments):
-  - projectName : EDT project name
-  - modulePath  : path from src/, e.g. 'CommonModules/MyModule/Module.bsl'
+Reads procedures/functions out of a BSL module by name, instead of returning
+the whole file. Params (see getInputSchema / execute):
+  - projectName : EDT project name (required)
+  - modulePath  : path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)
   - methodName  : procedure/function name, CASE-INSENSITIVE (findMethod uses
-                  equalsIgnoreCase)
+                  equalsIgnoreCase) -> the single-method answer below
+  - methodNames : up to 50 names read in one call -> one front matter for the module,
+                  then one '### <Name>' section per found method in request order
+  At least one of methodName / methodNames is required.
 There is NO line/column/position parameter — addressing is purely by method
 NAME. So the generic "position with no symbol / out-of-range line/column"
 negatives do not apply to this tool; the negative matrix below is adapted to
@@ -39,8 +42,9 @@ Error contract — TWO DISTINCT shapes (verified in the Java)
 -----------------------------------------------------------
 1. is_error TRUE (ToolResult.error -> {"success":false,...}; the protocol handler
    diverts these to a structured JSON error so is_error is set):
-     - missing projectName / modulePath / methodName -> "<name> is required"
-       (JsonUtils.requireArguments, checked in THAT order)
+     - missing projectName / modulePath -> "<name> is required"
+       (JsonUtils.requireArguments, checked in THAT order); then neither methodName
+       nor methodNames -> "methodName is required (or pass methodNames, ...)"
      - non-existent project        -> "Project not found: <projectName>"
      - non-existent module file     -> "File not found: src/<modulePath>"
        (EMF loadModule returns null -> text fallback -> resolveModuleFile not
@@ -365,6 +369,140 @@ def test_missing_methodname_errors_clearly():
     assert_error_quality(e, names=["methodName"], suggests=[],
                          ctx="missing methodName names the param")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# methodNames — several methods of one module in one call (#889)
+# ──────────────────────────────────────────────────────────────────────────────
+_HASH_RE = r'contentHash:\s*"?([0-9a-f]{16})"?'
+
+
+def _module_hash():
+    import re
+    mod = call("read_module_source", {"projectName": PROJECT, "modulePath": CALC_MODULE})
+    assert_ok(mod, "read_module_source Calc for the module token")
+    m = re.search(_HASH_RE, mod.text or "")
+    assert m, "read_module_source must emit a 16-hex contentHash:\n%s" % (mod.text or "")[:300]
+    return m.group(1)
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_method_names_reads_add_and_test_in_one_call_with_one_hash():
+    """methodNames=[Add, Test] returns ONE front matter for the module and one section per
+    method, in request order. Mutation thinking:
+      - two '---' header blocks would mean the tool concatenated two single answers;
+      - 'methodsFound: 2' and both bodies prove both methods were located;
+      - the request [Test, Add] is the REVERSE of the module order, so Test's section
+        coming first pins request order (a module-order renderer would put Add first);
+      - the one contentHash must equal read_module_source's whole-module token."""
+    import re
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "methodNames": ["Test", "Add"],
+    })
+    assert_ok(r, "read_method_source methodNames [Test, Add]")
+    text = r.text or ""
+    assert r.structured is None, "read_method_source is a MARKDOWN tool"
+    assert text.startswith("---\n"), "the answer must open with the one front matter:\n%s" % text[:200]
+    assert text.count("\n---\n") == 1, "exactly one front-matter block expected:\n%s" % text[:600]
+    assert_contains(text, "methodsFound: 2", "both methods were found")
+    assert_not_contains(text, "methodsNotFound", "nothing is missing")
+    assert_not_contains(text, "\nmethod: ", "the sectioned answer has no single-method key")
+    hashes = re.findall(_HASH_RE, text)
+    assert len(hashes) == 1, "one contentHash for the whole call, got %r" % hashes
+    assert hashes[0] == _module_hash(), "contentHash must equal read_module_source's token"
+    test_at = text.find("### Test")
+    add_at = text.find("### Add")
+    assert 0 <= test_at < add_at, "sections must follow the REQUEST order (Test, then Add):\n%s" % text
+    assert_contains(text, "Процедура Test() Экспорт", "Test's real signature")
+    assert_contains(text, "Результат = Add(1, 2);", "Test's real body")
+    assert_contains(text, "Функция Add(A, B) Экспорт", "Add's real signature")
+    assert_contains(text, "Возврат A + B;", "Add's real body")
+    assert_contains(text, "Procedure · export · lines 5-7", "Test's summary line")
+    assert_contains(text, "Function · export · lines 1-3", "Add's summary line")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_method_names_partial_miss_lists_not_found_and_returns_found():
+    """One real and one missing name: the found method is rendered, the missing one is
+    named in methodsNotFound, and the call is NOT the all-missing listing."""
+    missing = "NoSuchMethod_e2e"
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "methodNames": [missing, "Test"],
+    })
+    assert_ok(r, "partial miss is a success")
+    assert_contains(r.text, "methodsFound: 1", "one method found")
+    assert_contains(r.text, 'methodsNotFound: ["%s"]' % missing,
+                    "the missing name is reported as a double-quoted YAML string")
+    assert_contains(r.text, "### Test", "the found method still gets its section")
+    assert_contains(r.text, "Результат = Add(1, 2);", "Test's real body")
+    assert_not_contains(r.text, "Available methods", "a partial miss is not the not-found listing")
+    assert_not_contains(r.text, "Возврат A + B;", "Add was not requested")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_method_names_all_missing_lists_available_methods():
+    """Every requested name missing: the existing not-found listing, naming EVERY requested
+    name and listing the module's real methods (success-with-listing, as for methodName)."""
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE,
+        "methodNames": ["Nope1_e2e", "Nope2_e2e"],
+    })
+    assert_ok(r, "all-missing returns the benign listing")
+    assert_contains(r.text, "Error: Methods 'Nope1_e2e', 'Nope2_e2e' not found in " + CALC_MODULE,
+                    "the listing names every requested name")
+    assert_contains(r.text, "Available methods", "the listing offers the module's methods")
+    assert_contains(r.text, "- Add", "Add is listed")
+    assert_contains(r.text, "- Test", "Test is listed")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_neither_name_parameter_errors_naming_both():
+    """Neither methodName nor methodNames: a structured error naming both parameters and the
+    discovery tool. An empty methodNames array counts as absent."""
+    for extra in ({}, {"methodNames": []}):
+        args = {"projectName": PROJECT, "modulePath": CALC_MODULE}
+        args.update(extra)
+        r = call("read_method_source", args)
+        e = assert_error(r, "no method name at all %r" % (extra,))
+        assert_error_quality(e, names=["methodName", "methodNames"], suggests=["get_module_structure"],
+                             ctx="the refusal names both name parameters")
+    assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_more_than_fifty_method_names_is_refused():
+    """methodNames is capped at 50 entries; a longer list is refused (never truncated)."""
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE,
+        "methodNames": ["M%d" % i for i in range(51)],
+    })
+    e = assert_error(r, "51 names")
+    assert_error_quality(e, names=["methodNames", "50"], suggests=["read_module_source"],
+                         ctx="the cap refusal names the limit and a way forward")
+    assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="read_method_source", kind="read")
+def test_legacy_method_name_shape_is_unchanged():
+    """methodName alone keeps the historical single-method answer byte for byte (front matter
+    with method/type/export/startLine/endLine, then the fence). Pinned against the committed
+    Calc fixture; only the hash value is matched by pattern."""
+    import re
+    r = call("read_method_source", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "methodName": "Add",
+    })
+    assert_ok(r, "read_method_source methodName=Add")
+    expected = (r'---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module\.bsl\n'
+                r'contentHash: "?[0-9a-f]{16}"?\nmethod: Add\ntype: Function\nexport: true\n'
+                r'startLine: 1\nendLine: 3\ntotalLines: 7\n---\n'
+                r'```bsl\nФункция Add\(A, B\) Экспорт\n\tВозврат A \+ B;\nКонецФункции\n```\n')
+    assert re.match(expected, r.text or ""), "legacy shape changed:\n%s" % (r.text or "")[:600]
+    assert_not_contains(r.text, "methodsFound", "methodName alone must not switch to sections")
+    assert_not_contains(r.text, "### ", "methodName alone must not switch to sections")
+    assert_no_diff("a read tool must not touch the project on disk")
 
 
 @e2e_test(tool="read_method_source", kind="read")

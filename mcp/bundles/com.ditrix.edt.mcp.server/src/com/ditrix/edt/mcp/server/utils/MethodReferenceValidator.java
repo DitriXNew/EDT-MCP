@@ -72,8 +72,8 @@ public final class MethodReferenceValidator
     // processes unicode escapes in comments too and a malformed one is a compile error.
     private static final Pattern EXPORT_KEYWORD_PATTERN = Pattern.compile(
         "(?:^|[^\\p{L}\\p{Nd}_])(?:" //$NON-NLS-1$
-            + "\u042D\u043A\u0441\u043F\u043E\u0440\u0442" // Экспорт //$NON-NLS-1$
-            + "|Export)(?:[^\\p{L}\\p{Nd}_]|$)", //$NON-NLS-1$
+            + BslModuleUtils.EXPORT_KEYWORD_ALTERNATION
+            + ")(?:[^\\p{L}\\p{Nd}_]|$)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     // ---- parse (pure) -----------------------------------------------------------------------------

@@ -4959,11 +4959,18 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source').",
+    "description": "Inspect the source of one or more BSL procedures or functions. Parameters and examples: get_tool_guide('read_method_source').",
     "inputSchema": {
       "properties": {
         "methodName": {
           "type": "string"
+        },
+        "methodNames": {
+          "description": "Several procedure/function names read in one call (up to 50); use instead of methodName. One of the two is required.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "modulePath": {
           "description": "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl'",
@@ -4975,8 +4982,7 @@
       },
       "required": [
         "projectName",
-        "modulePath",
-        "methodName"
+        "modulePath"
       ],
       "type": "object"
     },
