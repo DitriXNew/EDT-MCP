@@ -14,9 +14,9 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
@@ -419,33 +419,38 @@ public final class StandaloneServerSupport
     }
 
     /**
-     * The live {@code ibsrv} process id of a standalone server, read under
+     * The live {@code ibsrv} process of a standalone server, read under
      * {@link #PID_READ_TIMEOUT_MS}.
      *
+     * <p>The {@link ProcessHandle} is taken INSIDE EDT's callback, while EDT confirms the process
+     * exists, and the caller keeps polling that one handle. A handle remembers its process's
+     * start time, so it does not read a later, unrelated process that reuses the pid as alive -
+     * which a fresh {@code ProcessHandle.of(pid)} per poll would.
+     *
      * @param server the WST server object (may be {@code null})
-     * @return the pid, or empty when no live server process is known or the read did not finish
+     * @return the handle, or empty when no live server process is known or the read did not finish
      */
-    public static OptionalLong livePid(Object server)
+    public static Optional<ProcessHandle> liveProcess(Object server)
     {
         if (server == null)
         {
-            return OptionalLong.empty();
+            return Optional.empty();
         }
-        AtomicLong captured = new AtomicLong(-1L);
+        AtomicReference<ProcessHandle> captured = new AtomicReference<>();
         BoundedJob.Result result = BoundedJob.run("Read standalone-server process id", //$NON-NLS-1$
-            PID_READ_TIMEOUT_MS,
-            monitor -> proceedAtLivePid(server, pid -> captured.compareAndSet(-1L, pid)));
-        long pid = captured.get();
-        if (!result.isSuccess() || pid < 0L)
+            PID_READ_TIMEOUT_MS, monitor -> proceedAtLivePid(server,
+                pid -> ProcessHandle.of(pid).ifPresent(handle -> captured.compareAndSet(null, handle))));
+        ProcessHandle handle = captured.get();
+        if (!result.isSuccess() || handle == null)
         {
             if (result.getFailure() != null)
             {
                 Activator.logError("standalone-server: the server process id could not be read", //$NON-NLS-1$
                     result.getFailure());
             }
-            return OptionalLong.empty();
+            return Optional.empty();
         }
-        return OptionalLong.of(pid);
+        return Optional.of(handle);
     }
 
     /**
@@ -479,18 +484,6 @@ public final class StandaloneServerSupport
                 return !alive.getAsBoolean();
             }
         }
-    }
-
-    /**
-     * Whether the process with this id is still running. A pid the operating system has since
-     * reused for another process reads as not alive: {@link ProcessHandle} compares start times.
-     *
-     * @param pid the process id
-     * @return {@code true} while that process runs
-     */
-    public static boolean isProcessAlive(long pid)
-    {
-        return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(Boolean.FALSE).booleanValue();
     }
 
     /**
@@ -528,8 +521,14 @@ public final class StandaloneServerSupport
         }
         catch (InvocationTargetException e)
         {
-            throwUnwrapped(e.getCause() != null ? e.getCause() : e);
-            return null;
+            // As the session commands always read this accessor: an Exception passes through,
+            // anything else (an Error) is wrapped, never rethrown bare.
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : e);
         }
     }
 

@@ -17,10 +17,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -305,6 +307,144 @@ public class StandaloneServerToolTest
         assertEquals(0, fixture.cleanups.get());
     }
 
+    @Test
+    public void testStatusDuringAnInFlightStopKeepsTheHold() throws Exception
+    {
+        Fixture fixture = new Fixture("StandaloneServerInFlightStatusProject", 2, true); //$NON-NLS-1$
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            fixture.cleanups.incrementAndGet();
+            entered.countDown();
+            release.await(30, TimeUnit.SECONDS);
+            fixture.server.state = 4;
+            fixture.server.launch = null;
+            return null;
+        }).when(fixture.manager).cleanup(Mockito.same(fixture.application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
+        AtomicReference<String> stopped = new AtomicReference<>();
+        Thread stopper = new Thread(() -> stopped.set(StandaloneServerTool.run(request("stop", true), //$NON-NLS-1$
+            fixture.manager, fixture.project, fixture.application, fixture.env)),
+            "test: explicit stop in flight"); //$NON-NLS-1$
+        stopper.setDaemon(true);
+        stopper.start();
+        try
+        {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            // The server still reads STARTED under a live launch while EDT's cleanup runs - the
+            // very state a start from EDT's Servers view leaves. The hold must not be released.
+            String status = StandaloneServerTool.run(request("status", false), fixture.manager, //$NON-NLS-1$
+                fixture.project, fixture.application, fixture.env);
+            JsonObject json = JsonParser.parseString(status).getAsJsonObject();
+            assertTrue(status, json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+            assertFalse(status, status.contains("hold released")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            stopper.join(30_000L);
+        }
+        assertTrue(stopped.get(), JsonParser.parseString(stopped.get()).getAsJsonObject()
+            .get("success").getAsBoolean()); //$NON-NLS-1$
+        assertNotNull("the concluded stop must leave the server held", //$NON-NLS-1$
+            StandaloneServerStateRecovery.heldSince(fixture.project, APPLICATION_ID));
+    }
+
+    @Test
+    public void testStatusOmitsProcessAliveWhenNoProcessIdWasRead()
+    {
+        Fixture fixture = new Fixture("StandaloneServerStaleStatusProject", 2, false); //$NON-NLS-1$
+        String result = StandaloneServerTool.run(request("status", false), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertTrue(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("STARTED", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a stale server may still run an ibsrv nobody can name", //$NON-NLS-1$
+            json.has("processAlive")); //$NON-NLS-1$
+        assertFalse(json.has("pid")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStopEdtRanAndFailedDoesNotClaimNothingWasDispatched()
+    {
+        Fixture fixture = new Fixture("StandaloneServerDispatchedFailureProject", 2, true); //$NON-NLS-1$
+        Mockito.doAnswer(invocation -> {
+            fixture.cleanups.incrementAndGet();
+            throw new ApplicationException("EDT refused to stop it"); //$NON-NLS-1$
+        }).when(fixture.manager).cleanup(Mockito.same(fixture.application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
+        String result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result, result.contains("Nothing was dispatched")); //$NON-NLS-1$
+        assertTrue(result, result.contains("ran and failed")); //$NON-NLS-1$
+        assertTrue(json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("still running, so nothing may stay held", json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, fixture.cleanups.get());
+    }
+
+    @Test
+    public void testAStopRefusedBeforeDispatchSaysSo()
+    {
+        Fixture fixture = new Fixture("StandaloneServerRefusedStopProject", 2, true); //$NON-NLS-1$
+        StandaloneServerStateRecovery.StartClaim claim = StandaloneServerStateRecovery
+            .claimStartWithinBound(fixture.project, APPLICATION_ID, (IProgressMonitor)null);
+        assertNotNull(claim);
+        try
+        {
+            String result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+                fixture.project, fixture.application, fixture.env);
+            assertTrue(result, ToolResult.isErrorPayload(result));
+            assertTrue(result, result.contains("Nothing was dispatched to EDT")); //$NON-NLS-1$
+            assertEquals(0, fixture.cleanups.get());
+        }
+        finally
+        {
+            claim.close();
+        }
+    }
+
+    @Test
+    public void testAServerFoundStoppedUnderTheGuardHasTheAlreadyStoppedShape()
+    {
+        Fixture fixture = new Fixture("StandaloneServerStoppedMeanwhileProject", 2, true); //$NON-NLS-1$
+        fixture.env.onConsent = () -> {
+            fixture.server.state = 4;
+            fixture.server.launch = null;
+        };
+        String result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+            fixture.project, fixture.application, fixture.env);
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertTrue(result, json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, json.get("alreadyStopped").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("nothing was stopped by this call", json.has("mutationCommitted")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.get("heldStopped").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(0, fixture.cleanups.get());
+    }
+
+    @Test
+    public void testHoldingAnAlreadyStoppedServerRespectsAStartClaim()
+    {
+        Fixture fixture = new Fixture("StandaloneServerClaimedStoppedProject", 4, false); //$NON-NLS-1$
+        StandaloneServerStateRecovery.StartClaim claim = StandaloneServerStateRecovery
+            .claimStartWithinBound(fixture.project, APPLICATION_ID, (IProgressMonitor)null);
+        assertNotNull(claim);
+        try
+        {
+            String result = StandaloneServerTool.run(request("stop", true), fixture.manager, //$NON-NLS-1$
+                fixture.project, fixture.application, fixture.env);
+            assertTrue(result, ToolResult.isErrorPayload(result));
+            assertTrue(result, result.contains("another standalone start currently claims")); //$NON-NLS-1$
+            assertNull("a claimed server must not be held behind its start", //$NON-NLS-1$
+                StandaloneServerStateRecovery.heldSince(fixture.project, APPLICATION_ID));
+        }
+        finally
+        {
+            claim.close();
+        }
+    }
+
     // ==================== helpers ====================
 
     private StandaloneServerTool.Request request(String action, boolean confirm)
@@ -430,6 +570,7 @@ public class StandaloneServerToolTest
         final AtomicInteger consents = new AtomicInteger();
         volatile boolean alive;
         volatile ConsentDecision decision = ConsentDecision.ALLOW;
+        volatile Runnable onConsent;
 
         FakeEnvironment(ToolFakeServer server)
         {
@@ -437,15 +578,10 @@ public class StandaloneServerToolTest
         }
 
         @Override
-        public OptionalLong livePid(Object passedServer)
+        public StandaloneServerTool.LiveProcess liveProcess(Object passedServer)
         {
-            return server.launch == null ? OptionalLong.empty() : OptionalLong.of(4242L);
-        }
-
-        @Override
-        public boolean isProcessAlive(long pid)
-        {
-            return alive;
+            return server.launch == null ? null
+                : new StandaloneServerTool.LiveProcess(4242L, () -> alive);
         }
 
         @Override
@@ -474,6 +610,11 @@ public class StandaloneServerToolTest
         public ConsentDecision consent(ConsentPreview preview)
         {
             consents.incrementAndGet();
+            Runnable hook = onConsent;
+            if (hook != null)
+            {
+                hook.run();
+            }
             return decision;
         }
 

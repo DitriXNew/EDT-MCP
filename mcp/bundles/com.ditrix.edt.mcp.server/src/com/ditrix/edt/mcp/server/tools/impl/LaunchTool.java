@@ -812,7 +812,7 @@ public class LaunchTool implements IMcpTool
                         () -> staleServerStopped.set(true));
                     stage.set(StandalonePreparationStage.START_CLAIM);
                     startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
-                        context.project(), resolvedId, monitor);
+                        context.project(), resolvedId, lookup.server(), monitor);
                 }
                 catch (ApplicationException failure)
                 {

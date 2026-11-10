@@ -953,12 +953,43 @@ public class StandaloneServerSupportTest
     }
 
     @Test
-    public void theCurrentProcessReadsAliveAndAMissingLaunchHasNoPid() throws Exception
+    public void aMissingLaunchHasNoProcess() throws Exception
     {
-        assertTrue(StandaloneServerSupport.isProcessAlive(ProcessHandle.current().pid()));
         assertFalse(StandaloneServerSupport.proceedAtLivePid(new NoLaunchServer(),
             pid -> fail("no process")));
-        assertFalse(StandaloneServerSupport.livePid(null).isPresent());
+        assertFalse(StandaloneServerSupport.liveProcess(null).isPresent());
+        assertFalse(StandaloneServerSupport.liveProcess(new NoLaunchServer()).isPresent());
+    }
+
+    @Test
+    public void anErrorFromTheLaunchAccessorIsWrappedAsTheSessionCommandsAlwaysDid()
+    {
+        try
+        {
+            StandaloneServerSupport.proceedAtLivePid(new ErrorLaunchServer(), pid -> fail("no process"));
+            fail("a failing accessor must not read as a missing launch");
+        }
+        catch (IllegalStateException wrapped)
+        {
+            assertTrue(String.valueOf(wrapped.getCause()), wrapped.getCause() instanceof NoClassDefFoundError);
+        }
+        catch (Exception other)
+        {
+            fail("an Error cause must be wrapped in IllegalStateException, not rethrown as " + other);
+        }
+        catch (NoClassDefFoundError bare)
+        {
+            fail("an Error cause must be wrapped, not rethrown bare");
+        }
+    }
+
+    /** A WST server whose launch accessor fails with an Error, as a missing class would. */
+    public static final class ErrorLaunchServer
+    {
+        public Object getLaunch()
+        {
+            throw new NoClassDefFoundError("simulated missing WST class"); //$NON-NLS-1$
+        }
     }
 
     /** A WST server with no launch, as the pid read addresses it. */

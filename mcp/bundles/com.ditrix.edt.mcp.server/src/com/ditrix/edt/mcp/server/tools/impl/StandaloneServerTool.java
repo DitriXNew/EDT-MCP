@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.OptionalLong;
+import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IProject;
 
@@ -367,9 +367,7 @@ public class StandaloneServerTool implements IMcpTool
         }
         String applicationId = application.getId();
         String message;
-        if (StandaloneServerStateRecovery.heldSince(project, applicationId) != null
-            && StandaloneServerStateRecovery.runningWithLiveLaunch(server)
-            && StandaloneServerStateRecovery.releaseHold(project, applicationId))
+        if (StandaloneServerStateRecovery.releaseHoldIfStartedOutside(project, applicationId, server))
         {
             message = "hold released: the server was started outside " + NAME + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -419,13 +417,16 @@ public class StandaloneServerTool implements IMcpTool
             {
                 return start(request, manager, project, application, env, null);
             }
-            StandaloneServerStateRecovery.holdStopped(project, applicationId);
-            ToolResult result = base(ToolResult.success(), ACTION_STOP, request, application, server)
-                .put(KEY_ALREADY_STOPPED, true);
-            describeServer(result, project, application, server, env, false);
-            return result.put(McpKeys.MESSAGE, "The standalone server was already STOPPED, so " //$NON-NLS-1$
-                + "nothing was stopped; it is now held stopped until " + NAME //$NON-NLS-1$
-                + "(action='start'). The process id of its previous run is not known.").toJson(); //$NON-NLS-1$
+            // Under the recovery guard: a start that already claims the server is refused, and a
+            // server somebody started meanwhile is not stopped without a fresh preview and consent.
+            Recovery held = StandaloneServerStateRecovery.stopGuarded(project, application,
+                applicationId, manager, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+                StopPolicy.HOLD_ONLY);
+            if (!held.recovered())
+            {
+                return stopFailure(request, project, application, server, held);
+            }
+            return alreadyStoppedResult(request, project, application, server, env);
         }
 
         ConsentPreview consentPreview = new ConsentPreview(
@@ -441,7 +442,7 @@ public class StandaloneServerTool implements IMcpTool
         }
 
         // Read again right before the stop: consent can take a person's time.
-        OptionalLong pid = env.livePid(server);
+        LiveProcess process = env.liveProcess(server);
         Recovery recovery = StandaloneServerStateRecovery.stopGuarded(project, application,
             applicationId, manager, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
             StopPolicy.RUNNING);
@@ -449,36 +450,39 @@ public class StandaloneServerTool implements IMcpTool
         {
             return stopFailure(request, project, application, server, recovery);
         }
-        Boolean processAlive = null;
-        if (pid.isPresent())
+        if (recovery.alreadyStopped())
         {
-            long value = pid.getAsLong();
-            boolean exited = StandaloneServerSupport.awaitProcessExit(() -> env.isProcessAlive(value),
+            // Stopped by somebody else between the read above and the guarded re-read.
+            return restart ? start(request, manager, project, application, env, null)
+                : alreadyStoppedResult(request, project, application, server, env);
+        }
+        Boolean processAlive = null;
+        if (process != null)
+        {
+            boolean exited = StandaloneServerSupport.awaitProcessExit(process.alive(),
                 processExitTimeoutMs, StandaloneServerSupport.PROCESS_EXIT_POLL_MS);
             processAlive = Boolean.valueOf(!exited);
         }
         if (Boolean.TRUE.equals(processAlive))
         {
-            return lingeringProcess(request, project, application, server, env, pid.getAsLong());
+            return lingeringProcess(request, project, application, server, env, process.pid());
         }
         if (restart)
         {
             return start(request, manager, project, application, env, snapshot);
         }
         ToolResult result = base(ToolResult.success(), ACTION_STOP, request, application, server)
-            .put(KEY_MUTATION_COMMITTED, !recovery.alreadyStopped());
+            .put(KEY_MUTATION_COMMITTED, true);
         snapshot.putInto(result);
         describeServer(result, project, application, server, env, false);
         if (processAlive != null)
         {
-            result.put(KEY_PROCESS_ALIVE, false).put(KEY_PID, pid.getAsLong());
+            result.put(KEY_PROCESS_ALIVE, false).put(KEY_PID, process.pid());
         }
         String directory = env.databaseDirectory(application);
-        return result.put(McpKeys.MESSAGE, (recovery.alreadyStopped()
-            ? "The standalone server was already STOPPED; nothing was stopped. " //$NON-NLS-1$
-            : "The standalone server is stopped" //$NON-NLS-1$
+        return result.put(McpKeys.MESSAGE, "The standalone server is stopped" //$NON-NLS-1$
                 + (processAlive == null ? ". Its process id could not be read, so its exit was not " //$NON-NLS-1$
-                    + "verified separately. " : " and its ibsrv process has exited. ")) //$NON-NLS-1$ //$NON-NLS-2$
+                    + "verified separately. " : " and its ibsrv process has exited. ") //$NON-NLS-1$ //$NON-NLS-2$
             + (directory == null ? "" //$NON-NLS-1$
                 : "EDT's hold on the file infobase at " + directory + " is released; other " //$NON-NLS-1$ //$NON-NLS-2$
                     + "processes using it were not inspected. ") //$NON-NLS-1$
@@ -533,12 +537,32 @@ public class StandaloneServerTool implements IMcpTool
                 .put(KEY_HELD_STOPPED, StandaloneServerStateRecovery.heldSince(project, applicationId) != null)
                 .toJson();
         }
-        return base(ToolResult.error("The standalone server of '" + applicationId //$NON-NLS-1$
+        if (recovery.dispatchedAndFailed())
+        {
+            ToolResult result = base(ToolResult.errorWithUnknownMutationOutcome("EDT's stop of the " //$NON-NLS-1$
+                + "standalone server of '" + applicationId + "' ran and failed: " + recovery.detail() //$NON-NLS-1$ //$NON-NLS-2$
+                + ". It may have ended sessions or the server on the way; check " + NAME //$NON-NLS-1$
+                + "(action='status') before retrying."), request.action, request, application, //$NON-NLS-1$
+                server);
+            result.put(KEY_STATE, stateOf(server));
+            return heldFlag(result, project, applicationId).toJson();
+        }
+        return heldFlag(base(ToolResult.error("The standalone server of '" + applicationId //$NON-NLS-1$
             + "' was not stopped: " + recovery.detail() + ". Nothing was dispatched to EDT. Retry " //$NON-NLS-1$ //$NON-NLS-2$
             + "once " + NAME + "(action='status') reports STARTED or STOPPED."), //$NON-NLS-1$ //$NON-NLS-2$
-            request.action, request, application, server)
-            .put(KEY_HELD_STOPPED, StandaloneServerStateRecovery.heldSince(project, applicationId) != null)
-            .toJson();
+            request.action, request, application, server), project, applicationId).toJson();
+    }
+
+    /** One shape for a stop that found the server already STOPPED, read before or under the guard. */
+    private static String alreadyStoppedResult(Request request, IProject project,
+        IApplication application, Object server, Environment env)
+    {
+        ToolResult result = base(ToolResult.success(), ACTION_STOP, request, application, server)
+            .put(KEY_ALREADY_STOPPED, true);
+        describeServer(result, project, application, server, env, false);
+        return result.put(McpKeys.MESSAGE, "The standalone server was already STOPPED, so " //$NON-NLS-1$
+            + "nothing was stopped; it is now held stopped until " + NAME //$NON-NLS-1$
+            + "(action='start'). The process id of its previous run is not known.").toJson(); //$NON-NLS-1$
     }
 
     private static String lingeringProcess(Request request, IProject project,
@@ -685,18 +709,16 @@ public class StandaloneServerTool implements IMcpTool
         {
             result.put(KEY_LIVE_LAUNCH, liveLaunch.booleanValue());
         }
+        // processAlive is reported only for a process whose id was actually read: a stale STARTED
+        // server whose launch is gone may still have a live ibsrv nobody can name.
         if (readProcess && Boolean.TRUE.equals(liveLaunch))
         {
-            OptionalLong pid = env.livePid(server);
-            if (pid.isPresent())
+            LiveProcess process = env.liveProcess(server);
+            if (process != null)
             {
-                result.put(KEY_PID, pid.getAsLong());
-                result.put(KEY_PROCESS_ALIVE, env.isProcessAlive(pid.getAsLong()));
+                result.put(KEY_PID, process.pid());
+                result.put(KEY_PROCESS_ALIVE, process.alive().getAsBoolean());
             }
-        }
-        else if (readProcess && Boolean.FALSE.equals(liveLaunch))
-        {
-            result.put(KEY_PROCESS_ALIVE, false);
         }
         heldFlag(result, project, application.getId());
         String directory = env.databaseDirectory(application);
@@ -843,14 +865,19 @@ public class StandaloneServerTool implements IMcpTool
         }
     }
 
+    /**
+     * The ibsrv process of a running server: its id and an aliveness check bound to the process
+     * read at that moment (a later process reusing the id does not count).
+     */
+    record LiveProcess(long pid, BooleanSupplier alive)
+    {
+    }
+
     /** The platform reads and the consent gate the tool depends on; a seam for unit tests. */
     interface Environment
     {
-        /** @return the live ibsrv pid, or empty */
-        OptionalLong livePid(Object server);
-
-        /** @return whether that process still runs */
-        boolean isProcessAlive(long pid);
+        /** @return the live ibsrv process, or {@code null} when none could be read */
+        LiveProcess liveProcess(Object server);
 
         /** @return the ibcmd session list */
         ReadResult listSessions(IApplication application);
@@ -877,15 +904,11 @@ public class StandaloneServerTool implements IMcpTool
         Environment PRODUCTION = new Environment()
         {
             @Override
-            public OptionalLong livePid(Object server)
+            public LiveProcess liveProcess(Object server)
             {
-                return StandaloneServerSupport.livePid(server);
-            }
-
-            @Override
-            public boolean isProcessAlive(long pid)
-            {
-                return StandaloneServerSupport.isProcessAlive(pid);
+                return StandaloneServerSupport.liveProcess(server)
+                    .map(handle -> new LiveProcess(handle.pid(), handle::isAlive))
+                    .orElse(null);
             }
 
             @Override

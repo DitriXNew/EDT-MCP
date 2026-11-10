@@ -6,14 +6,14 @@ Only applications whose EDT type is `wst-server` are served; a file or client/se
 
 ## Actions
 
-- `status` (default) - reads the server: `state` (`STARTING`, `STARTED`, `STOPPING`, `STOPPED`, `UNKNOWN`), `liveLaunch`, the `ibsrv` `pid` and `processAlive`, `heldStopped`, `databaseDirectory` (file-backed only) and `infobaseUrl` (while `STARTED`). Takes no lock and changes nothing, except that it releases a hold when it finds the server running under a live launch (somebody started it from EDT).
+- `status` (default) - reads the server: `state` (`STARTING`, `STARTED`, `STOPPING`, `STOPPED`, `UNKNOWN`), `liveLaunch`, the `ibsrv` `pid` and `processAlive` (only when EDT still holds a live launch whose process id could be read; a stale `STARTED` server reports neither), `heldStopped`, `databaseDirectory` (file-backed only) and `infobaseUrl` (while `STARTED`). Takes no infobase lock and changes nothing, except that it releases a hold when it finds the server running under a live launch (somebody started it from EDT) - never while a stop of it is still in flight.
 - `stop` - **destructive**: every session of the infobase, every EDT client launch and the server's debug session end. Call it first WITHOUT `confirm`: the answer is `action: "preview"` with `confirmationRequired: true`, the `sessions` block (`reachable`, `count`, `designerCount`, non-personal rows), `clientLaunches` and `debugTargets`, and nothing is stopped. Repeat with `confirm=true` to stop. Active non-Designer sessions are a warning, not a refusal.
 - `start` - starts a stopped server and releases the hold. A server already running under a live launch is left alone (`alreadyRunning: true`).
 - `restart` - stop (preview first, `confirm=true` required) followed by a start in the same call.
 
 ## How the stop is verified
 
-The stop is EDT's own application cleanup, a forced stop of the WST server, run under the same per-application guard as the stale-server recovery and under the infobase lock that `update_database`, `launch` and `infobase_sessions` share. EDT reports `STOPPED` even when its own 6-second wait for the process gave up, so the tool waits up to 20 seconds for the `ibsrv` process it captured before the stop to exit:
+The stop is EDT's own application cleanup, a forced stop of the WST server, run under the same per-application guard as the stale-server recovery and under the per-infobase lock that `update_database`, `run_yaxunit_tests`, `infobase_sessions`, `infobase_extensions` and `export_configuration_to_file` also take (`launch` does not take it; it is refused by the hold instead). EDT reports `STOPPED` even when its own 6-second wait for the process gave up, so the tool waits up to 20 seconds for the `ibsrv` process it captured right before the stop to exit (the captured process, not whatever later process reuses its id):
 
 - process gone - `success: true`, `processAlive: false`, `mutationCommitted: true`;
 - process still alive - `success: false`, `processAlive: true` and the `pid`. Do NOT kill it with OS tools: a forced kill can damage a file infobase. Wait and call `status` again; if it never exits, stop it in EDT's Servers view or restart EDT.
@@ -24,9 +24,9 @@ A stop that does not finish within 60 seconds answers `mutationOutcomeUnknown: t
 
 ## The hold
 
-A confirmed `stop` (also on an already stopped server) holds the server stopped. Until `action=start`, every plugin-driven start of it is refused with a message naming this tool: `launch`, `run_yaxunit_tests`, `update_database`, `build_external_objects`, `export_configuration_to_file`, and the restoration of a server an operation stopped. The hold lives in memory only (an EDT restart clears it) and EDT's own UI does not consult it: starting the server from EDT's Servers view releases the hold the next time a tool sees the server running.
+A confirmed `stop` (also on an already stopped server - that one asks no consent, and is refused if another start already claims the server or somebody started it meanwhile) holds the server stopped. Until `action=start`, every plugin-driven start of it is refused with a message naming this tool: `launch`, `run_yaxunit_tests`, `update_database`, `build_external_objects`, `export_configuration_to_file`, and the restoration of a server an operation stopped. The hold lives in memory only (an EDT restart clears it) and EDT's own UI does not consult it: starting the server from EDT's Servers view releases the hold the next time a tool sees the server running under a live launch, unless a stop of it is still in flight.
 
-A failed or unfinished start keeps the hold. A stop that conclusively failed (nothing stopped) leaves the hold as it was.
+A failed or unfinished start keeps the hold. When EDT's stop ran and failed, the answer carries `mutationOutcomeUnknown: true`; the hold stands if the server reads STOPPED afterwards and is otherwise put back as it was. A stop refused before anything was dispatched says so and leaves the hold as it was.
 
 ## Parameter details
 
