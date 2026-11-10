@@ -172,6 +172,118 @@ public class SearchResultFormatterTest
         assertFalse(full, full.contains("INCOMPLETE")); //$NON-NLS-1$
     }
 
+    // ==================== lines mode ====================
+
+    private ResourceTextSearch scanLines(String query, int limit, int contextLines) throws CoreException
+    {
+        Pattern pattern = Pattern.compile(Pattern.quote(query),
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        ResourceTextSearch search = new ResourceTextSearch(pattern, ".bsl", null, null, limit, contextLines, true); //$NON-NLS-1$
+        fixture.project().findMember("src").accept(search); //$NON-NLS-1$
+        return search;
+    }
+
+    @Test
+    public void testLinesModePrintsPathLineAndMatchedLineInOneFence() throws CoreException
+    {
+        String text = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "needle", scan("needle", true)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 2 matches in 2 files\n\n" //$NON-NLS-1$
+            + "```text\n" //$NON-NLS-1$
+            + ALPHA + ":2: Needle one\n" //$NON-NLS-1$
+            + BETA + ":1: needle\n" //$NON-NLS-1$
+            + "```\n", text); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLinesModeIgnoresTheContextWindow() throws CoreException
+    {
+        SearchResultFormatter code = SearchResultFormatter.forCode();
+        String wide = code.format(SearchResultFormatter.MODE_LINES, "needle", scanLines("needle", 100, 5)); //$NON-NLS-1$ //$NON-NLS-2$
+        String none = code.format(SearchResultFormatter.MODE_LINES, "needle", scanLines("needle", 100, 0)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(none, wide);
+        assertFalse("no neighbouring line of the context window: " + wide, wide.contains(":1: x")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(wide, wide.contains("y\n")); //$NON-NLS-1$
+        assertFalse(wide, wide.contains("**Line")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLinesModeKeepsTruncationNoticeAndWarnings() throws CoreException
+    {
+        String capped = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "needle", scanLines("needle", 1, 2)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 2 matches in 2 files (showing 1 of 2)\n\n" //$NON-NLS-1$
+            + "```text\n" + ALPHA + ":2: Needle one\n```\n", capped); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String warned = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "needle", scanWithBetaUnreadable("needle", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 1 matches in 1 files\n" //$NON-NLS-1$
+            + "**Warning:** 1 file(s) could not be read (check EDT Error Log)\n\n" //$NON-NLS-1$
+            + "```text\n" + ALPHA + ":2: Needle one\n```\n", warned); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLinesModeEmptyResultUsesTheSentinelAndFailsClosedWithAnAddressFormatter() throws CoreException
+    {
+        String code = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "absent", scan("absent", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("## Search Lines for \"absent\"\n\n**Total:** 0 matches in 0 files\n\n" //$NON-NLS-1$
+            + SearchResultFormatter.NO_MATCHES, code);
+
+        String codeIncomplete = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "absent", scanWithBetaUnreadable("absent", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(codeIncomplete, codeIncomplete.endsWith("\n\n" + SearchResultFormatter.NO_MATCHES)); //$NON-NLS-1$
+
+        String dcs = SearchResultFormatter.withAddress("xml", "Template", ADDRESS) //$NON-NLS-1$ //$NON-NLS-2$
+            .format(SearchResultFormatter.MODE_LINES, "absent", scanWithBetaUnreadable("absent", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("## Search Lines for \"absent\"\n\n" //$NON-NLS-1$
+            + "**Total:** 0 matches in 0 files\n" //$NON-NLS-1$
+            + "**Warning:** 1 file(s) could not be read (check EDT Error Log)\n\n" //$NON-NLS-1$
+            + "No matches in the files that were read, but the scan is INCOMPLETE (1 file(s) could not be read), " //$NON-NLS-1$
+            + "so this is not proof that the text is absent - retry the search.\n", dcs); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLinesModeWithAddressPrintsItAfterThePath() throws CoreException
+    {
+        String text = SearchResultFormatter.withAddress("xml", "Template", ADDRESS) //$NON-NLS-1$ //$NON-NLS-2$
+            .format(SearchResultFormatter.MODE_LINES, "needle", scan("needle", true)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 2 matches in 2 files\n\n" //$NON-NLS-1$
+            + "```text\n" //$NON-NLS-1$
+            + ALPHA + " [Template: Addr.Alpha]:2: Needle one\n" //$NON-NLS-1$
+            + BETA + ":1: needle\n" //$NON-NLS-1$
+            + "```\n", text); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLinesModeLengthensTheFenceWhenALineCarriesBackticks() throws CoreException
+    {
+        fixture.file("src/CommonModules/Gamma/Module.bsl", "x = \"````needle\";\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String text = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_LINES, "needle", scan("needle", true)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(text, text.contains("\n\n`````text\n")); //$NON-NLS-1$
+        assertTrue(text, text.contains("CommonModules/Gamma/Module.bsl:1: x = \"````needle\";\n")); //$NON-NLS-1$
+        assertTrue(text, text.endsWith("\n`````\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFullModeIsUnchangedByALinesCapableFormatter() throws CoreException
+    {
+        // The byte-exact full rendering, with backticks in a line: full mode keeps its plain fence.
+        fixture.file("src/CommonModules/Gamma/Module.bsl", "```needle\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String text = SearchResultFormatter.forCode()
+            .format(SearchResultFormatter.MODE_FULL, "needle", scan("needle", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(text, text.contains("### CommonModules/Gamma/Module.bsl\n\n**Line 1:**\n```bsl\n1: ```needle\n```\n\n")); //$NON-NLS-1$
+    }
+
     @Test
     public void testAnIncompleteScanWithMatchesShowsTheMatchesAndTheWarning() throws CoreException
     {

@@ -20,7 +20,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.SearchFixtureProject;
 
 /**
- * Pins the exact text {@link SearchInCodeTool} returns in all three output modes on a real
+ * Pins the exact text {@link SearchInCodeTool} returns in every output mode on a real
  * workspace project. The scanner and the renderer were moved out of the tool into the shared
  * {@code ResourceTextSearch} / {@code SearchResultFormatter} (#541); these literals are the
  * pre-extraction output, so the move cannot change a byte of the {@code search_in_code} wire
@@ -94,6 +94,41 @@ public class SearchInCodeRenderingPinTest
             + "### CommonModules/Beta/Module.bsl\n\n" //$NON-NLS-1$
             + BETA_LINE_1,
             search("needle", "limit", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testLinesModeText()
+    {
+        // One fence, path:line: <the matched line verbatim>; the contextLines=1 the helper sends
+        // is ignored, so no neighbouring line and no "**Line" block appears.
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 4 matches in 3 files\n\n" //$NON-NLS-1$
+            + "```text\n" //$NON-NLS-1$
+            + ALPHA + ":3:     Message(\"Needle one\");\n" //$NON-NLS-1$
+            + BETA + ":1: Needle\n" //$NON-NLS-1$
+            + BETA + ":2: needle\n" //$NON-NLS-1$
+            + DOC + ":1: Needle here\n" //$NON-NLS-1$
+            + "```\n", //$NON-NLS-1$
+            search("needle", "outputMode", "lines")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testLinesModeTextWhenTheLimitTruncates()
+    {
+        assertEquals("## Search Lines for \"needle\"\n\n" //$NON-NLS-1$
+            + "**Total:** 4 matches in 3 files (showing 2 of 4)\n\n" //$NON-NLS-1$
+            + "```text\n" //$NON-NLS-1$
+            + ALPHA + ":3:     Message(\"Needle one\");\n" //$NON-NLS-1$
+            + BETA + ":1: Needle\n" //$NON-NLS-1$
+            + "```\n", //$NON-NLS-1$
+            search("needle", "outputMode", "LINES", "limit", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+    }
+
+    @Test
+    public void testLinesModeNoMatchText()
+    {
+        assertEquals("## Search Lines for \"absent\"\n\n**Total:** 0 matches in 0 files\n\nNo matches found.\n", //$NON-NLS-1$
+            search("absent", "outputMode", "lines")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test

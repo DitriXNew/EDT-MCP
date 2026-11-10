@@ -93,8 +93,9 @@ public class SearchInCodeTool implements IMcpTool
                 "Filter by metadata type (e.g. 'documents', 'catalogs', 'commonModules'); " + //$NON-NLS-1$
                 "more precise than fileMask. See guide for the full list.") //$NON-NLS-1$
             .enumProperty("outputMode", //$NON-NLS-1$
-                "Output mode: 'full' (matches with context, default), 'count', or 'files'", //$NON-NLS-1$
-                "full", MODE_COUNT, MODE_FILES) //$NON-NLS-1$
+                "Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' " //$NON-NLS-1$
+                + "row per match, no context), 'count', or 'files'", //$NON-NLS-1$
+                "full", SearchResultFormatter.MODE_LINES, MODE_COUNT, MODE_FILES) //$NON-NLS-1$
             .build();
     }
 
@@ -154,9 +155,10 @@ public class SearchInCodeTool implements IMcpTool
             outputMode = MODE_FULL;
         }
         outputMode = outputMode.toLowerCase();
-        if (!MODE_FULL.equals(outputMode) && !MODE_COUNT.equals(outputMode) && !MODE_FILES.equals(outputMode))
+        if (!MODE_FULL.equals(outputMode) && !SearchResultFormatter.MODE_LINES.equals(outputMode)
+            && !MODE_COUNT.equals(outputMode) && !MODE_FILES.equals(outputMode))
         {
-            return ToolResult.error("outputMode must be 'full', 'count', or 'files'").toJson(); //$NON-NLS-1$
+            return ToolResult.error("outputMode must be 'full', 'lines', 'count', or 'files'").toJson(); //$NON-NLS-1$
         }
 
         // Clamp limits
@@ -206,7 +208,8 @@ public class SearchInCodeTool implements IMcpTool
         }
 
         // Search
-        boolean collectDetails = MODE_FULL.equals(outputMode);
+        // full and lines both print detailed matches (lines prints no context, but keeps limit)
+        boolean collectDetails = MODE_FULL.equals(outputMode) || SearchResultFormatter.MODE_LINES.equals(outputMode);
         ResourceTextSearch search = new ResourceTextSearch(pattern, ".bsl", fileMask, //$NON-NLS-1$
             metadataFolderPrefix, maxResults, contextLines, collectDetails);
 

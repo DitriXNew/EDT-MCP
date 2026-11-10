@@ -312,6 +312,15 @@ public class MarkdownUtilsTest
     }
 
     @Test
+    public void testCodeBlockFenceIsThreeBackticksUnlessTheBodyHasALongerRun()
+    {
+        assertEquals("```", MarkdownUtils.codeBlockFence(null));
+        assertEquals("```", MarkdownUtils.codeBlockFence("a `b` ``c``\n"));
+        assertEquals("````", MarkdownUtils.codeBlockFence("x\n```\ny"));
+        assertEquals("``````", MarkdownUtils.codeBlockFence("``` then ````` later"));
+    }
+
+    @Test
     public void testInlineCodeKeepsABacktickOffTheFence()
     {
         // Both ends padded together: CommonMark strips one space from each side only when both
