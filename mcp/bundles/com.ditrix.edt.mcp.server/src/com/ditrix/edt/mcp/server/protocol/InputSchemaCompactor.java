@@ -136,8 +136,9 @@ public final class InputSchemaCompactor
         // priority sub-filters the TASK family only - a bookmark has no priority, and the
         // combination is rejected. The enum lists high|normal|low with nothing saying that.
         keep.put("get_markers", asSet("markerKind", "priority")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        // Two filters that are mutually exclusive and differ in matching semantics.
-        keep.put("get_project_errors", asSet("objects", "objectFqns")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Two filters that are mutually exclusive and differ in matching semantics; modulePaths carries
+        // its value shape (a src-relative module path), which the plain string array cannot state.
+        keep.put("get_project_errors", asSet("objects", "objectFqns", "modulePaths")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // Name-only compatibility filter vs Name-or-localized-Synonym discovery filter.
         keep.put("get_metadata_objects", asSet("nameFilter", "textFilter")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // 'callers' vs 'callees' - the enum values alone do not say which way they point.

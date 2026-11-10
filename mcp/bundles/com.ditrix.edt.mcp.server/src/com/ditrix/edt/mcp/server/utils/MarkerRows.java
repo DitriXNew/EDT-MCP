@@ -6,14 +6,23 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
 
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
+import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com._1c.g5.v8.dt.validation.marker.StandardExtraInfo;
@@ -82,8 +91,60 @@ public final class MarkerRows
         Set<String> objects, ICheckRepository checkRepository, IFixRepository fixRepository,
         int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope, Supplier<R> newRow)
     {
+        return buildIfMatches(marker, severityFilter, checkId, objects, Collections.<String> emptySet(),
+            checkRepository, fixRepository, unresolvedShown, unresolvedFilteredOut, exactScope, newRow);
+    }
+
+    /**
+     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, ICheckRepository, IFixRepository, int[],
+     * int[], boolean, Supplier)}, plus the {@code modulePaths} filter: with non-empty
+     * {@code modulePathKeys} (see {@link #modulePathKeys(Collection)}) only a marker whose BSL module
+     * path is one of them is kept, and a marker without a module is excluded. The module path is a map
+     * read on the marker, so the filter runs BEFORE the object presentation is resolved - an excluded
+     * marker costs no model read and is counted in neither unresolved counter.
+     *
+     * @param modulePathKeys the module-path keys to keep; empty keeps every marker
+     */
+    public static <R extends Row> R buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        IFixRepository fixRepository, int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
+        Supplier<R> newRow)
+    {
+        return buildIfMatches(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
+            fixRepository, unresolvedShown, unresolvedFilteredOut, exactScope, true, newRow);
+    }
+
+    /**
+     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, Set, ICheckRepository, IFixRepository,
+     * int[], int[], boolean, Supplier)}, with an explicit choice whether the object presentation is read.
+     * With {@code resolvePresentation == false} {@link Marker#getObjectPresentation()} - the one model read of
+     * a row - is never called: the row's {@code objectPresentation} stays {@code null} and neither unresolved
+     * counter moves, so a caller that never shows the location needs no BM read boundary for it. The objects
+     * filter compares against the presentation, so it cannot be combined with skipping it.
+     *
+     * @param resolvePresentation whether to read the object presentation
+     * @throws IllegalArgumentException when {@code resolvePresentation} is {@code false} and {@code objects}
+     *     is not empty
+     */
+    public static <R extends Row> R buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        IFixRepository fixRepository, int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
+        boolean resolvePresentation, Supplier<R> newRow)
+    {
+        if (!resolvePresentation && objects != null && !objects.isEmpty())
+        {
+            throw new IllegalArgumentException("The objects filter needs the object presentation"); //$NON-NLS-1$
+        }
+
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
+        {
+            return null;
+        }
+
+        // modulePaths filter: a map read on the marker, decided before any repository or model read.
+        if (modulePathKeys != null && !modulePathKeys.isEmpty()
+            && !modulePathMatches(moduleLocationOf(marker), modulePathKeys))
         {
             return null;
         }
@@ -120,15 +181,23 @@ public final class MarkerRows
         // Failure handling differs by context (see below), so we only record the outcome here.
         String objectPresentation = null;
         boolean presentationResolved;
-        try
+        if (!resolvePresentation)
         {
-            String p = marker.getObjectPresentation();
-            objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+            // Not asked for: no model read, no placeholder, no unresolved count (objectPresentation stays null).
             presentationResolved = true;
         }
-        catch (Exception e)
+        else
         {
-            presentationResolved = false;
+            try
+            {
+                String p = marker.getObjectPresentation();
+                objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+                presentationResolved = true;
+            }
+            catch (Exception e)
+            {
+                presentationResolved = false;
+            }
         }
 
         // Objects filter (FQN matching against the resolved object presentation)
@@ -368,5 +437,207 @@ public final class MarkerRows
             // A malformed URI is not actionable as a locator; fall back to no location.
             return null;
         }
+    }
+
+    /**
+     * The BSL module path of a marker, read from its extra info exactly as
+     * {@link #populateModuleLocation(Marker, Row)} does, or {@code null} for a metadata-only marker.
+     */
+    private static String moduleLocationOf(Marker marker)
+    {
+        IExtraInfoMap extraInfo = marker.getExtraInfo();
+        return extraInfo != null ? resolveBslModulePath(extraInfo.get(StandardExtraInfo.TEXT_URI_TO_PROBLEM))
+            : null;
+    }
+
+    /**
+     * Normalises a caller's module path to the shape of the {@code Module path} column: trimmed,
+     * {@code \} turned into {@code /}, a leading {@code /} and a leading {@code src/} (any case)
+     * dropped. The case of the programmatic names is kept; matching is case-insensitive through
+     * {@link #modulePathKeys(Collection)}. No other rewriting - in particular no ё/е fallback: a module
+     * path names a file, and a file name is matched as written.
+     *
+     * @param modulePath the caller's path, may be {@code null}
+     * @return the normalised path, or {@code null} when nothing is left
+     */
+    public static String normalizeModulePath(String modulePath)
+    {
+        if (modulePath == null)
+        {
+            return null;
+        }
+        String path = modulePath.trim().replace('\\', '/');
+        while (path.startsWith("/")) //$NON-NLS-1$
+        {
+            path = path.substring(1);
+        }
+        String sourcePrefix = BslModuleUtils.SOURCE_FOLDER + "/"; //$NON-NLS-1$
+        if (path.regionMatches(true, 0, sourcePrefix, 0, sourcePrefix.length()))
+        {
+            path = path.substring(sourcePrefix.length());
+        }
+        return path.isEmpty() ? null : path;
+    }
+
+    /**
+     * The refusal for {@code modulePaths} entries that are not blank but normalise to nothing
+     * ({@code "src/"}, {@code "/"}, {@code "\\"}): such an entry names no module, and dropping it silently
+     * would turn a list made only of them into "no filter" - the whole project instead of the asked scope.
+     * Blank entries are not reported: they stay ignored, as an empty array means no filter.
+     *
+     * @param modulePaths the caller's raw entries, may be {@code null}
+     * @return the error text naming each such entry and the expected form, or {@code null} when there is none
+     */
+    public static String unusableModulePathsError(Collection<String> modulePaths)
+    {
+        List<String> unusable = new ArrayList<>();
+        if (modulePaths != null)
+        {
+            for (String path : modulePaths)
+            {
+                if (path != null && !path.trim().isEmpty() && normalizeModulePath(path) == null)
+                {
+                    unusable.add("'" + path + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        if (unusable.isEmpty())
+        {
+            return null;
+        }
+        return "modulePaths entries name no module: " + String.join(", ", unusable) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Give a module path under the source folder, e.g. 'CommonModules/X/Module.bsl' (copy it from " //$NON-NLS-1$
+            + "the Module path column of get_project_errors), or omit modulePaths for every module."; //$NON-NLS-1$
+    }
+
+    /**
+     * The match keys of the requested module paths: each normalised ({@link #normalizeModulePath})
+     * and lower-cased with {@link Locale#ROOT}; blank entries are dropped.
+     *
+     * @param modulePaths the requested paths, may be {@code null}
+     * @return the keys in request order (never {@code null}; empty means "no filter")
+     */
+    public static Set<String> modulePathKeys(Collection<String> modulePaths)
+    {
+        Set<String> keys = new LinkedHashSet<>();
+        if (modulePaths != null)
+        {
+            for (String path : modulePaths)
+            {
+                String normalized = normalizeModulePath(path);
+                if (normalized != null)
+                {
+                    keys.add(normalized.toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Whether a row's module path passes the {@code modulePaths} filter. Empty keys keep everything;
+     * with keys, a row without a module never matches.
+     *
+     * @param modulePath the row's module path, may be {@code null}
+     * @param modulePathKeys the keys from {@link #modulePathKeys(Collection)}
+     * @return {@code true} when the row is kept
+     */
+    public static boolean modulePathMatches(String modulePath, Set<String> modulePathKeys)
+    {
+        if (modulePathKeys == null || modulePathKeys.isEmpty())
+        {
+            return true;
+        }
+        String normalized = normalizeModulePath(modulePath);
+        return normalized != null && modulePathKeys.contains(normalized.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Groups all markers by their owning project in a single pass, honoring an optional
+     * {@code projectName} filter. {@link Marker#getProject()} does not touch
+     * {@code resolvedDataCache}, so this is safe outside a BM transaction. Grouping once avoids
+     * re-streaming all markers per project (previously O(markers x projects)). Marker
+     * presentation must still be resolved inside a BM read transaction bound to a single
+     * project's model, so the subsequent processing stays project by project. A marker whose
+     * project is gone ({@code !exists()}) or unknown is skipped.
+     *
+     * @param markerManager the marker manager supplying the markers
+     * @param projectName the project name filter, may be {@code null}/empty for all projects
+     * @return markers grouped by project, in encounter order
+     */
+    public static Map<IProject, List<Marker>> groupMarkersByProject(IMarkerManager markerManager,
+        String projectName)
+    {
+        Map<IProject, List<Marker>> markersByProject = new LinkedHashMap<>();
+        markerManager.markers().forEach(marker -> {
+            IProject markerProject = marker.getProject();
+            if (markerProject == null || !markerProject.exists())
+            {
+                return;
+            }
+            if (projectName != null && !projectName.isEmpty()
+                && !projectName.equals(markerProject.getName()))
+            {
+                return;
+            }
+            markersByProject.computeIfAbsent(markerProject, k -> new ArrayList<>()).add(marker);
+        });
+        return markersByProject;
+    }
+
+    /**
+     * The requested module paths that name no module file in {@code project}, resolved with the shared
+     * {@link BslModuleUtils#resolveModuleFile(IProject, String)}. A path whose lookup cannot be decided
+     * (an ambiguous case-insensitive match, an unreadable resource tree) is NOT reported: only a proven
+     * miss is.
+     *
+     * @param project the project the paths are about
+     * @param modulePaths the normalised requested paths ({@link #normalizeModulePath})
+     * @return the paths with no module file, in request order (never {@code null})
+     */
+    public static List<String> missingModulePaths(IProject project, List<String> modulePaths)
+    {
+        List<String> missing = new ArrayList<>();
+        if (project == null || modulePaths == null)
+        {
+            return missing;
+        }
+        for (String path : modulePaths)
+        {
+            try
+            {
+                IFile file = BslModuleUtils.resolveModuleFile(project, path);
+                if (file == null || !file.exists())
+                {
+                    missing.add(path);
+                }
+            }
+            catch (IllegalArgumentException | IllegalStateException e)
+            {
+                // Ambiguous or unreadable: not proven missing, so say nothing.
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * Appends the note that some requested module paths name no module in the project, so they matched
+     * nothing - without it an unknown path reads exactly like a clean module. Nothing is appended for an
+     * empty list.
+     *
+     * @param md the Markdown builder
+     * @param projectName the project the paths were looked up in
+     * @param missing the paths with no module file
+     */
+    public static void appendModulePathsNotFoundWarning(StringBuilder md, String projectName, List<String> missing)
+    {
+        if (missing == null || missing.isEmpty())
+        {
+            return;
+        }
+        md.append("\n> ⚠️ modulePaths not found in ").append(projectName).append(": ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(String.join(", ", missing)) //$NON-NLS-1$
+            .append(" - no such module file, so they matched nothing. Copy the path from the Module path ") //$NON-NLS-1$
+            .append("column of get_project_errors, or list modules with list_modules."); //$NON-NLS-1$
     }
 }
