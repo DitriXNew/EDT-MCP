@@ -12,8 +12,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.eclipse.debug.core.DebugEvent;
@@ -366,157 +364,222 @@ public class DebugSessionRegistryTest
     private static final String OTHER_APP = "ServerApplication.Other"; //$NON-NLS-1$
 
     @Test
-    public void testATargetStepIntoForgetsAMintedSession() throws Exception
+    public void testATargetStepIntoForgetsTheSteppingThreadUnderAMintedKey() throws Exception
     {
-        assertATargetStepForgetsAMintedSession(DebugEvent.STEP_INTO);
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_INTO, MINTED_APP);
     }
 
     @Test
-    public void testATargetStepOverForgetsAMintedSession() throws Exception
+    public void testATargetStepOverForgetsTheSteppingThreadUnderAMintedKey() throws Exception
     {
-        assertATargetStepForgetsAMintedSession(DebugEvent.STEP_OVER);
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_OVER, MINTED_APP);
     }
 
     @Test
-    public void testATargetStepReturnForgetsAMintedSession() throws Exception
+    public void testATargetStepReturnForgetsTheSteppingThreadUnderAMintedKey() throws Exception
     {
-        assertATargetStepForgetsAMintedSession(DebugEvent.STEP_RETURN);
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_RETURN, MINTED_APP);
     }
 
     @Test
-    public void testATargetStepForgetsALaunchKeySession() throws Exception
+    public void testATargetStepIntoForgetsTheSteppingThreadUnderALaunchKey() throws Exception
     {
-        IThread thread = launchThread(LAUNCH_APP);
-        when(thread.isSuspended()).thenReturn(false);
-        Stop stop = stopOf(LAUNCH_APP, thread);
-
-        DebugSessionRegistry.get().handleEvent(
-            new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, DebugEvent.STEP_OVER));
-
-        assertForgotten(stop);
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_INTO, LAUNCH_APP);
     }
 
     @Test
-    public void testALateTargetStepKeepsAMintedSession() throws Exception
+    public void testATargetStepOverForgetsTheSteppingThreadUnderALaunchKey() throws Exception
+    {
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_OVER, LAUNCH_APP);
+    }
+
+    @Test
+    public void testATargetStepReturnForgetsTheSteppingThreadUnderALaunchKey() throws Exception
+    {
+        assertATargetStepForgetsTheSteppingThread(DebugEvent.STEP_RETURN, LAUNCH_APP);
+    }
+
+    @Test
+    public void testALateTargetStepKeepsASuspendedThreadUnderAMintedKey() throws Exception
     {
         IDebugTarget target = mock(IDebugTarget.class);
-        Stop stop = stopOf(MINTED_APP, threadOf(target, true));
+        // The step already ended: the thread stopped again before the event was dispatched.
+        Stop stop = stopOf(MINTED_APP, suspendedThread(target));
 
         DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
 
-        assertKept(stop);
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
     }
 
     @Test
-    public void testALateTargetStepKeepsALaunchKeySession() throws Exception
+    public void testALateTargetStepKeepsASuspendedThreadUnderALaunchKey() throws Exception
     {
-        // launchThread reports suspended: the thread already stopped again.
         IThread thread = launchThread(LAUNCH_APP);
-        Stop stop = stopOf(LAUNCH_APP, thread);
+        when(thread.isStepping()).thenReturn(false);
+        Stop stop = suspendEventStop(LAUNCH_APP, thread);
 
         DebugSessionRegistry.get().handleEvent(
             new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, DebugEvent.STEP_OVER));
 
-        assertKept(stop);
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
     }
 
     @Test
-    public void testAClientRequestResumeOnTheTargetIsANoOp() throws Exception
+    public void testTheTargetHalfOfAPlainResumeForgetsNothing() throws Exception
     {
-        assertATargetResumeIsANoOp(DebugEvent.CLIENT_REQUEST);
+        // EDT's plain resume leaves the thread RESUMED (not STEPPING) and then fires a target
+        // RESUME with the literal detail 1, which is also the value of STEP_INTO.
+        int plainResumeDetail = 1;
+        IDebugTarget target = mock(IDebugTarget.class);
+        Stop stop = stopOf(MINTED_APP, resumedThread(target));
+
+        DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, plainResumeDetail));
+
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
     }
 
     @Test
-    public void testAnUnspecifiedResumeOnTheTargetIsANoOp() throws Exception
+    public void testAPlainResumeSequenceForgetsTheResumedSessionAndKeepsASuspendedSibling() throws Exception
     {
-        assertATargetResumeIsANoOp(DebugEvent.UNSPECIFIED);
-    }
-
-    @Test
-    public void testAnEvaluationResumeOnTheTargetIsANoOp() throws Exception
-    {
-        assertATargetResumeIsANoOp(DebugEvent.EVALUATION);
-    }
-
-    @Test
-    public void testAnImplicitEvaluationResumeOnTheTargetIsANoOp() throws Exception
-    {
-        assertATargetResumeIsANoOp(DebugEvent.EVALUATION_IMPLICIT);
-    }
-
-    @Test
-    public void testAStepEndResumeOnTheTargetIsANoOp() throws Exception
-    {
-        assertATargetResumeIsANoOp(DebugEvent.STEP_END);
-    }
-
-    @Test
-    public void testATargetStepLeavesASuspendedSiblingUnderAnotherKey() throws Exception
-    {
-        // The purge walks a hash map keyed by ids that clear() never resets, so which of the two
-        // threads it meets first depends on the ids earlier tests used. A pass takes four ids and
-        // only the last two residues of the table put the sibling second: two passes cannot both
-        // land there, so at least one meets the suspended sibling first.
+        int plainResumeDetail = 1;
         DebugSessionRegistry registry = DebugSessionRegistry.get();
-        for (int pass = 0; pass < 2; pass++)
-        {
-            registry.clear();
-            IDebugTarget target = mock(IDebugTarget.class);
-            Stop sibling = stopOf(OTHER_APP, threadOf(target, true));
-            Stop stepped = stopOf(MINTED_APP, threadOf(target, false));
+        IDebugTarget target = mock(IDebugTarget.class);
+        Stop sibling = stopOf(OTHER_APP, suspendedThread(target));
+        IThread resumed = resumedThread(target);
+        Stop stop = stopOf(MINTED_APP, resumed);
 
-            registry.handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
+        registry.handleEvent(new DebugEvent(resumed, DebugEvent.RESUME, plainResumeDetail));
+        registry.handleEvent(new DebugEvent(target, DebugEvent.RESUME, plainResumeDetail));
 
-            assertForgotten(stepped);
-            assertKept(sibling);
-        }
+        assertNoStop(MINTED_APP);
+        assertIdsGone(stop);
+        assertCurrentStop(sibling);
+        assertIdsKept(sibling);
     }
 
     @Test
-    public void testATargetStepForgetsAKeyWhoseSnapshotThreadIsStillSuspended() throws Exception
+    public void testATargetStepKeepsTheFreshStopOfAnotherThreadUnderTheSameKey() throws Exception
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         IDebugTarget target = mock(IDebugTarget.class);
-        IThread running = threadOf(target, false);
-        IThread suspended = threadOf(target, true);
-        registry.injectSuspend(MINTED_APP, running);
-        long runningId = registry.getSnapshot(MINTED_APP).threadId;
-        registry.clearSnapshot(MINTED_APP);
-        registry.injectSuspend(MINTED_APP, suspended);
-        long suspendedId = registry.getSnapshot(MINTED_APP).threadId;
+        // An older stop of a thread that is stepping now, then a fresh stop of another thread.
+        Stop older = stopOf(MINTED_APP, steppingThread(target));
+        Stop fresh = stopOf(MINTED_APP, suspendedThread(target));
 
         registry.handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
 
-        assertFalse("one running thread is enough to forget the whole key", //$NON-NLS-1$
-            registry.hasSnapshot(MINTED_APP));
-        assertNull(registry.getThread(runningId));
-        assertNull(registry.getThread(suspendedId));
+        assertCurrentStop(fresh);
+        assertIdsKept(fresh);
+        assertIdsGone(older);
     }
 
     @Test
-    public void testAStepOnAnotherTargetPurgesNothing() throws Exception
+    public void testATargetStepKeepsASuspendedSiblingUnderAnotherKeyThatOnceHeldTheSteppingThread()
+        throws Exception
     {
-        IThread thread = threadOf(mock(IDebugTarget.class), false);
-        Stop stop = stopOf(MINTED_APP, thread);
+        IDebugTarget target = mock(IDebugTarget.class);
+        IThread stepping = steppingThread(target);
+        // The other key once held a stop of the stepping thread; its current stop is a suspended one.
+        Stop historical = stopOf(OTHER_APP, stepping);
+        Stop sibling = stopOf(OTHER_APP, suspendedThread(target));
+        Stop stepped = stopOf(MINTED_APP, stepping);
+
+        DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_INTO));
+
+        assertNoStop(MINTED_APP);
+        assertIdsGone(stepped);
+        assertIdsGone(historical);
+        assertCurrentStop(sibling);
+        assertIdsKept(sibling);
+    }
+
+    @Test
+    public void testAStepOnAnotherTargetForgetsNothing() throws Exception
+    {
+        Stop stop = stopOf(MINTED_APP, steppingThread(mock(IDebugTarget.class)));
 
         DebugSessionRegistry.get().handleEvent(
             new DebugEvent(mock(IDebugTarget.class), DebugEvent.RESUME, DebugEvent.STEP_OVER));
 
-        assertKept(stop);
-        verify(thread, never()).isSuspended();
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
     }
 
     @Test
-    public void testATargetStepForgetsASessionWhoseThreadStateIsUnknown() throws Exception
+    public void testAClientRequestResumeOnTheTargetForgetsNothing() throws Exception
+    {
+        assertATargetResumeForgetsNothing(DebugEvent.CLIENT_REQUEST);
+    }
+
+    @Test
+    public void testAnUnspecifiedResumeOnTheTargetForgetsNothing() throws Exception
+    {
+        assertATargetResumeForgetsNothing(DebugEvent.UNSPECIFIED);
+    }
+
+    @Test
+    public void testAnEvaluationResumeOnTheTargetForgetsNothing() throws Exception
+    {
+        assertATargetResumeForgetsNothing(DebugEvent.EVALUATION);
+    }
+
+    @Test
+    public void testAnImplicitEvaluationResumeOnTheTargetForgetsNothing() throws Exception
+    {
+        assertATargetResumeForgetsNothing(DebugEvent.EVALUATION_IMPLICIT);
+    }
+
+    @Test
+    public void testAStepEndResumeOnTheTargetForgetsNothing() throws Exception
+    {
+        assertATargetResumeForgetsNothing(DebugEvent.STEP_END);
+    }
+
+    @Test
+    public void testATargetStepKeepsAThreadWhoseSteppingStateCannotBeRead() throws Exception
     {
         IDebugTarget target = mock(IDebugTarget.class);
-        IThread thread = threadOf(target, false);
-        when(thread.isSuspended()).thenThrow(new IllegalStateException("disconnected")); //$NON-NLS-1$
+        IThread thread = steppingThread(target);
+        when(thread.isStepping()).thenThrow(new IllegalStateException("disconnected")); //$NON-NLS-1$
         Stop stop = stopOf(MINTED_APP, thread);
 
         DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
 
-        assertForgotten(stop);
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
+    }
+
+    @Test
+    public void testATargetStepKeepsAThreadWhoseTargetCannotBeRead() throws Exception
+    {
+        IDebugTarget target = mock(IDebugTarget.class);
+        IThread thread = steppingThread(target);
+        when(thread.getDebugTarget()).thenThrow(new IllegalStateException("disconnected")); //$NON-NLS-1$
+        Stop stop = stopOf(MINTED_APP, thread);
+
+        DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
+
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
+    }
+
+    @Test
+    public void testATargetStepKeepsAFrameWhoseThreadCannotBeRead() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IDebugTarget target = mock(IDebugTarget.class);
+        Stop stop = stopOf(MINTED_APP, steppingThread(target));
+        IStackFrame unknown = mock(IStackFrame.class);
+        when(unknown.getThread()).thenThrow(new IllegalStateException("disconnected")); //$NON-NLS-1$
+        long unknownRef = registry.registerFrame(unknown, MINTED_APP);
+
+        registry.handleEvent(new DebugEvent(target, DebugEvent.RESUME, DebugEvent.STEP_OVER));
+
+        assertIdsGone(stop);
+        assertSame("a frame of an unknown thread must be kept", unknown, registry.getFrame(unknownRef)); //$NON-NLS-1$
     }
 
     @Test
@@ -524,94 +587,145 @@ public class DebugSessionRegistryTest
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         IThread thread = launchThread(LAUNCH_APP);
+        Stop before = suspendEventStop(LAUNCH_APP, thread);
         when(thread.isSuspended()).thenReturn(false);
-        Stop before = stopOf(LAUNCH_APP, thread);
+        when(thread.isStepping()).thenReturn(true);
         registry.handleEvent(new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, DebugEvent.STEP_OVER));
+        assertNoStop(LAUNCH_APP);
 
+        when(thread.isStepping()).thenReturn(false);
         when(thread.isSuspended()).thenReturn(true);
         registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
 
         long after = registry.getSnapshot(LAUNCH_APP).threadId;
         assertFalse("the stop after the step must get its own id", before.threadId == after); //$NON-NLS-1$
         assertSame(thread, registry.getThread(after));
-        assertNull("the id handed out before the step must not come back", //$NON-NLS-1$
-            registry.getThread(before.threadId));
-        assertNull("the frameRef handed out before the step must not come back", //$NON-NLS-1$
-            registry.getFrame(before.frameRef));
+        assertIdsGone(before);
     }
 
-    @Test
-    public void testAPlainResumeSequenceLeavesASuspendedSiblingUnderAnotherKey() throws Exception
+    private static void assertATargetStepForgetsTheSteppingThread(int detail, String appId) throws Exception
     {
-        // EDT's plain resume passes the literal detail 1 to the thread and then to its target,
-        // and 1 is also the value of STEP_INTO: the target's half looks like a step.
-        int plainResumeDetail = 1;
-        DebugSessionRegistry registry = DebugSessionRegistry.get();
-        IDebugTarget target = mock(IDebugTarget.class);
-        Stop sibling = stopOf(OTHER_APP, threadOf(target, true));
-        IThread resumed = threadOf(target, false);
-        Stop stop = stopOf(MINTED_APP, resumed);
+        IThread thread;
+        Stop stop;
+        if (LAUNCH_APP.equals(appId))
+        {
+            thread = launchThread(appId);
+            stop = suspendEventStop(appId, thread);
+            when(thread.isSuspended()).thenReturn(false);
+            when(thread.isStepping()).thenReturn(true);
+        }
+        else
+        {
+            thread = steppingThread(mock(IDebugTarget.class));
+            stop = stopOf(appId, thread);
+        }
 
-        registry.handleEvent(new DebugEvent(resumed, DebugEvent.RESUME, plainResumeDetail));
-        registry.handleEvent(new DebugEvent(target, DebugEvent.RESUME, plainResumeDetail));
+        DebugSessionRegistry.get().handleEvent(new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, detail));
 
-        assertForgotten(stop);
-        assertKept(sibling);
+        assertNoStop(appId);
+        assertIdsGone(stop);
     }
 
-    private static void assertATargetStepForgetsAMintedSession(int detail) throws Exception
+    private static void assertATargetResumeForgetsNothing(int detail) throws Exception
     {
         IDebugTarget target = mock(IDebugTarget.class);
-        Stop stop = stopOf(MINTED_APP, threadOf(target, false));
+        Stop stop = stopOf(MINTED_APP, steppingThread(target));
 
         DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, detail));
 
-        assertForgotten(stop);
+        assertCurrentStop(stop);
+        assertIdsKept(stop);
     }
 
-    private static void assertATargetResumeIsANoOp(int detail) throws Exception
+    /** A thread of the target that is in the middle of a step: not suspended, stepping. */
+    private static IThread steppingThread(IDebugTarget target)
     {
-        IDebugTarget target = mock(IDebugTarget.class);
-        Stop stop = stopOf(MINTED_APP, threadOf(target, false));
-
-        DebugSessionRegistry.get().handleEvent(new DebugEvent(target, DebugEvent.RESUME, detail));
-
-        assertKept(stop);
+        return threadOf(target, false, true);
     }
 
-    /** A thread of the target; no launch attribute can yield a minted key for it. */
-    private static IThread threadOf(IDebugTarget target, boolean suspended) throws Exception
+    /** A thread of the target that is stopped: suspended, not stepping. */
+    private static IThread suspendedThread(IDebugTarget target)
+    {
+        return threadOf(target, true, false);
+    }
+
+    /** A thread of the target after a plain resume: neither suspended nor stepping. */
+    private static IThread resumedThread(IDebugTarget target)
+    {
+        return threadOf(target, false, false);
+    }
+
+    /** No launch attribute can yield a minted key for this thread. */
+    private static IThread threadOf(IDebugTarget target, boolean suspended, boolean stepping)
     {
         IThread thread = mock(IThread.class);
         when(thread.getDebugTarget()).thenReturn(target);
         when(thread.isSuspended()).thenReturn(suspended);
+        when(thread.isStepping()).thenReturn(stepping);
         return thread;
     }
 
-    /** A stop as a tool reply hands it out: the thread's stable id and one frameRef. */
+    /**
+     * A stop as a poller registers it and a tool reply hands it out: a newer stop replaces the
+     * key's snapshot (as a SUSPEND event does) and the ids handed out earlier stay registered.
+     */
     private static Stop stopOf(String appId, IThread thread)
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.clearSnapshot(appId);
         registry.injectSuspend(appId, thread);
-        IStackFrame frame = mock(IStackFrame.class);
         long threadId = registry.getSnapshot(appId).threadId;
+        IStackFrame frame = frameOf(thread);
         return new Stop(appId, thread, threadId, frame, registry.registerFrame(frame, appId));
     }
 
-    private static void assertForgotten(Stop stop) throws InterruptedException
+    /** A stop registered by a SUSPEND event, its frame registered under the derived key. */
+    private static Stop suspendEventStop(String appId, IThread thread)
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
-        assertFalse("the snapshot must be forgotten", registry.hasSnapshot(stop.appId)); //$NON-NLS-1$
-        assertNull("the threadId must stop resolving", registry.getThread(stop.threadId)); //$NON-NLS-1$
-        assertNull("the frameRef must stop resolving", registry.getFrame(stop.frameRef)); //$NON-NLS-1$
-        assertNull("a waiter must not get the old stop", registry.waitForSuspend(stop.appId, 0)); //$NON-NLS-1$
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+        long threadId = registry.getSnapshot(appId).threadId;
+        IStackFrame frame = frameOf(thread);
+        return new Stop(appId, thread, threadId, frame, registry.registerFrame(frame));
     }
 
-    private static void assertKept(Stop stop) throws InterruptedException
+    private static IStackFrame frameOf(IThread thread)
+    {
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getThread()).thenReturn(thread);
+        return frame;
+    }
+
+    private static void assertNoStop(String appId) throws InterruptedException
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
-        assertSame("the snapshot must be kept", stop.thread, registry.waitForSuspend(stop.appId, 0).thread); //$NON-NLS-1$
+        assertFalse("the snapshot must be forgotten", registry.hasSnapshot(appId)); //$NON-NLS-1$
+        assertNull("a waiter must not get the old stop", registry.waitForSuspend(appId, 0)); //$NON-NLS-1$
+    }
+
+    private static void assertCurrentStop(Stop stop) throws InterruptedException
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        assertTrue("the snapshot must be kept", registry.hasSnapshot(stop.appId)); //$NON-NLS-1$
+        DebugSessionRegistry.SuspendSnapshot current = registry.waitForSuspend(stop.appId, 0);
+        assertSame("the snapshot must be kept", stop.thread, current.thread); //$NON-NLS-1$
+        assertEquals("the snapshot must be the same stop", stop.threadId, current.threadId); //$NON-NLS-1$
+    }
+
+    private static void assertIdsGone(Stop stop)
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        assertNull("the threadId must stop resolving", registry.getThread(stop.threadId)); //$NON-NLS-1$
+        assertNull("the threadId must lose its key", registry.getThreadApplicationId(stop.threadId)); //$NON-NLS-1$
+        assertNull("the frameRef must stop resolving", registry.getFrame(stop.frameRef)); //$NON-NLS-1$
+    }
+
+    private static void assertIdsKept(Stop stop)
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
         assertSame("the threadId must keep resolving", stop.thread, registry.getThread(stop.threadId)); //$NON-NLS-1$
+        assertEquals("the threadId must keep its key", stop.appId, //$NON-NLS-1$
+            registry.getThreadApplicationId(stop.threadId));
         assertSame("the frameRef must keep resolving", stop.frame, registry.getFrame(stop.frameRef)); //$NON-NLS-1$
     }
 

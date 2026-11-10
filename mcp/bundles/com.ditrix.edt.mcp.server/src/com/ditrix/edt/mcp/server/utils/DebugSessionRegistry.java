@@ -140,9 +140,10 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
                 {
                     // A 1C step fires RESUME on the target and the thread only gets a CHANGE
                     // event, so a step started outside the step tool (an EDT toolbar button)
-                    // shows up only here. The event names no thread: each registered thread
-                    // of the target answers for itself in the purge.
-                    purgeByEventSource(source, true);
+                    // shows up only here. A plain resume also fires a target RESUME with
+                    // detail 1 (STEP_INTO), so the event alone proves nothing: each registered
+                    // thread's own isStepping() decides.
+                    forgetSteppingThreads((IDebugTarget) source);
                 }
                 break;
             case DebugEvent.TERMINATE:
@@ -176,23 +177,20 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
      * produce — i.e. minted {@code ServerApplication.<app>} keys.
      *
      * <p>A thread matches when it IS the source, or its debug target / launch is the
-     * source. TERMINATE events may carry any of the three; a RESUME carries a thread,
-     * or a target when it reports a step.
+     * source (TERMINATE events may carry any of the three).
      *
      * <p>{@code onlyIfNotSuspended} guards RESUME events against asynchronous event
      * dispatch: a LATE resume event — dispatched after a poll-based tool (step /
      * wait_for_break) already observed the NEXT suspend and injected a fresh
-     * snapshot for the same thread — must not destroy that fresh snapshot. The guard
-     * applies to each matching registered thread: one that still reports suspended
-     * does not make its application stale, the resume is stale news for that thread.
-     * An application is purged as soon as one of its matching threads is not suspended.
+     * snapshot for the same thread — must not destroy that fresh snapshot. If the
+     * source thread still reports suspended, the resume is stale news; skip.
      *
      * <p>Package-visible for headless unit testing.
      *
      * @param source the debug-event source ({@link IThread}, {@link IDebugTarget}
      *     or {@link ILaunch}; anything else is ignored)
-     * @param onlyIfNotSuspended when {@code true}, a matching registered thread that
-     *     still reports suspended does not condemn its application (RESUME semantics)
+     * @param onlyIfNotSuspended when {@code true} and the source is a thread that
+     *     still reports suspended, the purge is skipped (RESUME semantics)
      */
     synchronized void purgeByEventSource(Object source, boolean onlyIfNotSuspended)
     {
@@ -200,13 +198,25 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         {
             return;
         }
+        if (onlyIfNotSuspended && source instanceof IThread)
+        {
+            try
+            {
+                if (((IThread) source).isSuspended())
+                {
+                    return; // late event — the thread is already suspended again
+                }
+            }
+            catch (Exception ex)
+            {
+                // state unknown — fall through and purge (resume was reported)
+            }
+        }
         List<String> stale = new ArrayList<>();
         for (Map.Entry<Long, String> entry : threadAppId.entrySet())
         {
             IThread thread = threadsById.get(entry.getKey());
-            if (thread != null && matchesEventSource(thread, source)
-                && !(onlyIfNotSuspended && reportsSuspended(thread))
-                && !stale.contains(entry.getValue()))
+            if (thread != null && matchesEventSource(thread, source) && !stale.contains(entry.getValue()))
             {
                 stale.add(entry.getValue());
             }
@@ -218,20 +228,106 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     }
 
     /**
-     * @return {@code true} when the thread reports suspended, so a RESUME event about it
-     *     is late news. An unknown state answers {@code false}: a resume was reported, so
-     *     the purge goes ahead. Never throws.
+     * Forgets the state of every registered thread of the target that is stepping: its
+     * thread ids, the frames registered for it and the snapshot it owns. This is the
+     * cleanup for a step started outside the step tool, which EDT reports only as a
+     * step-detail RESUME on the target.
+     *
+     * <p>The cleanup is per thread, never per application. An application can hold
+     * several registered stops, and the event is dispatched asynchronously: a late
+     * RESUME arrives after the stepping thread (or another thread) already stopped
+     * again and produced a fresh snapshot, and that snapshot must survive. A thread
+     * that is not stepping keeps everything; so does one whose state cannot be read.
+     *
+     * <p>A plain resume also fires a target RESUME with detail 1, but it leaves its
+     * threads RESUMED, not STEPPING, so it is a no-op here; the thread RESUME it fires
+     * as well is handled by the thread branch of {@link #handleEvent}.
+     *
+     * <p>Package-visible for headless unit testing.
+     *
+     * @param target the debug target named by the RESUME event
      */
-    private static boolean reportsSuspended(IThread thread)
+    synchronized void forgetSteppingThreads(IDebugTarget target)
+    {
+        if (target == null)
+        {
+            return;
+        }
+        List<IThread> stepping = new ArrayList<>();
+        for (IThread thread : threadsById.values())
+        {
+            if (thread != null && !containsIdentity(stepping, thread) && isSteppingOn(thread, target))
+            {
+                stepping.add(thread);
+            }
+        }
+        if (stepping.isEmpty())
+        {
+            return;
+        }
+        threadsById.entrySet().removeIf(entry -> {
+            if (containsIdentity(stepping, entry.getValue()))
+            {
+                threadAppId.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+        framesById.entrySet().removeIf(entry -> {
+            if (containsIdentity(stepping, threadOf(entry.getValue())))
+            {
+                frameAppId.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+        snapshots.values().removeIf(snapshot -> containsIdentity(stepping, snapshot.thread));
+        notifyAll();
+    }
+
+    /**
+     * @return {@code true} when the thread belongs to the target (identity) and reports
+     *     stepping. An unreadable state answers {@code false}: the thread is kept. Never throws.
+     */
+    private static boolean isSteppingOn(IThread thread, IDebugTarget target)
     {
         try
         {
-            return thread.isSuspended();
+            return thread.getDebugTarget() == target && thread.isStepping();
         }
         catch (Exception ex)
         {
-            return false; // state unknown — purge (resume was reported)
+            return false; // state unknown — keep the thread
         }
+    }
+
+    /** @return the frame's thread, or {@code null} when it cannot be read. Never throws. */
+    private static IThread threadOf(IStackFrame frame)
+    {
+        try
+        {
+            return frame != null ? frame.getThread() : null;
+        }
+        catch (Exception ex)
+        {
+            return null; // unknown owner — keep the frame
+        }
+    }
+
+    private static boolean containsIdentity(List<IThread> threads, Object candidate)
+    {
+        if (candidate == null)
+        {
+            return false;
+        }
+        for (IThread thread : threads)
+        {
+            if (thread == candidate)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -271,9 +367,9 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
             return;
         }
         // Always a new stop: a 1C step fires its RESUME on the target, so one thread can suspend
-        // twice with no thread RESUME between. Ids handed out earlier stop resolving when the
-        // target's step-detail RESUME is dispatched while the thread is still running; only a
-        // RESUME dispatched after the thread stopped again leaves them alive.
+        // twice with no thread RESUME between. Ids handed out earlier for this thread stop
+        // resolving when the target's step RESUME is dispatched while the thread is still
+        // stepping; a RESUME dispatched after the thread stopped again leaves them alive.
         long threadId = idGenerator.getAndIncrement();
         threadsById.put(threadId, thread);
         threadAppId.put(threadId, appId);
