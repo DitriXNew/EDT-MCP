@@ -1254,7 +1254,7 @@ def test_missing_project_name_is_error():
 def test_missing_fqn_is_error():
     r = call("delete_metadata", {"projectName": PROJECT, "confirm": True})
     e = assert_error(r, "missing required fqn")
-    assert_error_quality(e, names=["fqn"], suggests=["required"])
+    assert_error_quality(e, names=["fqn", "operations"], suggests=["required", "exactly one"])
     assert_no_diff("a rejected call must not touch the project on disk")
 
 

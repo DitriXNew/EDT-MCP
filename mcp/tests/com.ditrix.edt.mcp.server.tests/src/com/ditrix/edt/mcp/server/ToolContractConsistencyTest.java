@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -56,6 +57,8 @@ public class ToolContractConsistencyTest
         VALID_TYPES.add("array"); //$NON-NLS-1$
         VALID_TYPES.add("object"); //$NON-NLS-1$
     }
+
+    private static final List<String> ROOT_COMBINATORS = List.of("oneOf", "anyOf", "allOf"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     private McpToolRegistry registry;
 
@@ -161,6 +164,48 @@ public class ToolContractConsistencyTest
     }
 
     @Test
+    public void testInputSchemaRootCarriesNoCombinator()
+    {
+        // The Claude Messages API rejects the whole tool list when any input_schema
+        // has one of these keywords at the top level, so one such tool costs them all.
+        List<String> problems = new ArrayList<>();
+        for (IMcpTool tool : registry.getAllTools())
+        {
+            JsonObject schema = parseObjectSchema(tool);
+            if (schema == null)
+            {
+                continue; // well-formedness is asserted by its own test
+            }
+            List<String> combinators = rootCombinatorsOf(schema);
+            if (!combinators.isEmpty())
+            {
+                problems.add(describe(tool) + ": schema root carries " + combinators); //$NON-NLS-1$
+            }
+        }
+        assertNoProblems("root combinator contract", problems); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCombinatorCheckSeesOnlyTheRoot()
+    {
+        // Literal keywords, not ROOT_COMBINATORS: dropping one from the list must turn this red.
+        for (String keyword : List.of("oneOf", "anyOf", "allOf")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            String branches = "[{\"required\":[\"a\"]},{\"required\":[\"b\"]}]"; //$NON-NLS-1$
+            JsonObject atRoot = JsonParser.parseString(
+                "{\"type\":\"object\",\"" + keyword + "\":" + branches + "}").getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertEquals(keyword + " at the root must be flagged", //$NON-NLS-1$
+                List.of(keyword), rootCombinatorsOf(atRoot));
+
+            JsonObject nested = JsonParser.parseString(
+                "{\"type\":\"object\",\"properties\":{\"a\":{\"" + keyword + "\":" + branches + "}}}") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .getAsJsonObject();
+            assertEquals(keyword + " inside a property is legal", //$NON-NLS-1$
+                List.of(), rootCombinatorsOf(nested));
+        }
+    }
+
+    @Test
     public void testEveryRequiredParamIsADeclaredProperty()
     {
         List<String> problems = new ArrayList<>();
@@ -237,6 +282,20 @@ public class ToolContractConsistencyTest
     }
 
     // === helpers ===
+
+    /** The combinator keywords present at the root of {@code schema}; nested ones are not inspected. */
+    static List<String> rootCombinatorsOf(JsonObject schema)
+    {
+        List<String> found = new ArrayList<>();
+        for (String keyword : ROOT_COMBINATORS)
+        {
+            if (schema.has(keyword))
+            {
+                found.add(keyword);
+            }
+        }
+        return found;
+    }
 
     private static String describe(IMcpTool tool)
     {
