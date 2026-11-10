@@ -9,6 +9,7 @@ import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.*;
+import java.util.regex.Pattern;
 import org.junit.*;
 import com.ditrix.edt.mcp.server.ipc.*;
 import com.ditrix.edt.mcp.server.protocol.*;
@@ -18,6 +19,13 @@ import com.google.gson.*;
 public class BootstrapPackagingTest extends StdioTestSupport
 {
     private static final String MAIN = "com.ditrix.edt.mcp.server.ipc.StdioEntry";
+    private static final String STDIO_ENTRY = "com/ditrix/edt/mcp/server/ipc/StdioEntry.class";
+    private static final String PRIVATE_PATHS = "com/ditrix/edt/mcp/server/ipc/PrivatePaths.class";
+    private static final String PRIVATE_PATHS_HELPER = "com/ditrix/edt/mcp/server/ipc/PrivatePaths$1.class";
+    private static final Pattern PROJECT_CLASS_REFERENCE = Pattern.compile("com/ditrix/[A-Za-z0-9_$/]+");
+    /** The entry runs before any EDT service and must not launch a process an antivirus can stop. */
+    private static final Pattern FORBIDDEN_ENTRY_REFERENCE = Pattern.compile(
+        "java/lang/ProcessBuilder|java/lang/Runtime(?![A-Za-z0-9_$])|(?i:powershell)|org/eclipse/|org/osgi/|com/google/gson/");
     private byte[] fakeRuntime;
     private record EntryFiles(Path directory, Path entry, Path runtime, Path marker) { }
     private record Execution(int exit, String stdout, String stderr) { }
@@ -373,7 +381,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
 
     @Test public void entryJarShipsItsCompletePrivatePathsFamilyWithoutRuntimeOrGsonClasses() throws Exception
     {
-        var files = entryFiles(); var classes = new HashSet<String>();
+        var files = entryFiles(); var classes = new HashSet<String>(); var referenced = new HashMap<String, Set<String>>();
         try (var jar = new JarFile(files.entry().toFile()))
         {
             assertEquals(MAIN, jar.getManifest().getMainAttributes().getValue("Main-Class"));
@@ -388,12 +396,43 @@ public class BootstrapPackagingTest extends StdioTestSupport
                 {
                     byte[] bytes = input.readAllBytes();
                     assertEquals("Entry classes must target Java 17", 61, ((bytes[6] & 255) << 8) | (bytes[7] & 255));
+                    // A class file stores its names as modified UTF-8, which stays ASCII for these names.
+                    String text = new String(bytes, StandardCharsets.ISO_8859_1);
+                    var forbidden = FORBIDDEN_ENTRY_REFERENCE.matcher(text);
+                    if (forbidden.find()) { fail(entry.getName() + " must not reference " + forbidden.group()); }
+                    var names = new HashSet<String>();
+                    var matcher = PROJECT_CLASS_REFERENCE.matcher(text);
+                    while (matcher.find()) { names.add(matcher.group() + ".class"); }
+                    referenced.put(entry.getName(), names);
+                    if (entry.getName().equals(PRIVATE_PATHS))
+                    {
+                        assertTrue("The reference scan must read the constant pool", text.contains("java/lang/ProcessHandle"));
+                        assertTrue("The reference scan must see PrivatePaths' helper", names.contains(PRIVATE_PATHS_HELPER));
+                    }
                 }
                 classes.add(entry.getName());
             }
         }
-        assertTrue("Entry must carry PrivatePaths", classes.contains("com/ditrix/edt/mcp/server/ipc/PrivatePaths.class"));
-        assertTrue("Entry must carry PrivatePaths' file-attribute helper", classes.contains("com/ditrix/edt/mcp/server/ipc/PrivatePaths$1.class"));
+        assertEquals("Entry must carry exactly StdioEntry and the PrivatePaths family",
+            Set.of(STDIO_ENTRY, PRIVATE_PATHS, PRIVATE_PATHS_HELPER), classes);
+        assertTrue("The reference scan must see StdioEntry's use of PrivatePaths", referenced.get(STDIO_ENTRY).contains(PRIVATE_PATHS));
+        for (var references : referenced.entrySet())
+        { assertTrue(references.getKey() + " must resolve inside the entry jar: " + references.getValue(), classes.containsAll(references.getValue())); }
+    }
+
+    @Test public void builtEntryAcceptsSystemAndAdministratorsGrants() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        var files = entryFiles(); var accounts = EndpointRegistryTest.windowsAccounts();
+        var view = Files.getFileAttributeView(files.runtime(), AclFileAttributeView.class);
+        var entries = new ArrayList<>(view.getAcl()); var full = EnumSet.allOf(AclEntryPermission.class);
+        entries.add(EndpointRegistryTest.grant(accounts.get("system"), full, false));
+        entries.add(EndpointRegistryTest.grant(accounts.get("administrators"), full, false));
+        view.setAcl(entries);
+        var result = runEntry(files);
+        assertEquals(result.stderr(), 0, result.exit());
+        assertEquals("runtime executed", Files.readString(files.marker()));
+        assertEquals("", result.stdout()); assertEquals("", result.stderr());
     }
 
     @Test public void embeddedJarContainsGeneratedSchemasAndNoPlatformClasses() throws Exception

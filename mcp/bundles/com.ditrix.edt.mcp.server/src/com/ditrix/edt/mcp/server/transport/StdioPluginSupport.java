@@ -5,13 +5,16 @@
  */
 package com.ditrix.edt.mcp.server.transport;
 
+import com.ditrix.edt.mcp.server.utils.FileUrls;
 import com.ditrix.edt.mcp.server.utils.Log;
 
 import java.io.IOException;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.osgi.service.datalocation.Location;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
@@ -31,7 +34,7 @@ public final class StdioPluginSupport
         catch (Exception e) { Log.warning("Cannot extract the stdio bootstrap (" + e.getClass().getSimpleName() + "); HTTP is unaffected.", e); }
         try
         {
-            Path workspace = Path.of(Platform.getInstanceLocation().getURL().toURI()).toRealPath();
+            Path workspace = realLocation(Platform.getInstanceLocation(), "instance");
             listener = new IpcListener(new EndpointRegistry(EndpointRegistry.privateDirectory(
                 EndpointRegistry.userDirectory().resolve("ipc")), workspace),
                 Activator.getDefault().getBundle().getVersion().toString(), bootstrap);
@@ -54,9 +57,7 @@ public final class StdioPluginSupport
 
     public static synchronized Path extractBootstrap() throws IOException
     {
-        Path install;
-        try { install = Path.of(Platform.getInstallLocation().getURL().toURI()).toRealPath(); }
-        catch (java.net.URISyntaxException e) { throw new IOException(e); }
+        Path install = realLocation(Platform.getInstallLocation(), "install");
         Path root = EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("bootstrap"));
         Path directory = EndpointRegistry.privateDirectory(root.resolve(EndpointRegistry.workspaceKey(install)));
         return extractBootstrap(directory, embedded("edt-mcp-runtime.jar"), embedded("edt-mcp-bootstrap.jar"), Files::delete);
@@ -138,11 +139,19 @@ public final class StdioPluginSupport
         { throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", e); }
     }
 
+    /** The real path of an Eclipse location; the URL may be raw (see {@link FileUrls}). */
+    static Path realLocation(Location location, String name) throws IOException
+    {
+        URL url = location == null ? null : location.getURL();
+        if (url == null) { throw new IOException("The EDT " + name + " location is not available"); }
+        return FileUrls.toPath(url).toRealPath();
+    }
+
     public static String clientConfiguration() throws Exception
     {
-        Path install = Path.of(Platform.getInstallLocation().getURL().toURI()).toRealPath();
-        Path workspace = Path.of(Platform.getInstanceLocation().getURL().toURI()).toRealPath();
-        Path configuration = Path.of(Platform.getConfigurationLocation().getURL().toURI()).toRealPath();
+        Path install = realLocation(Platform.getInstallLocation(), "install");
+        Path workspace = realLocation(Platform.getInstanceLocation(), "instance");
+        Path configuration = realLocation(Platform.getConfigurationLocation(), "configuration");
         boolean windows = System.getProperty("os.name").startsWith("Windows");
         var arguments = windows ? List.of("--launcher.ini", install.resolve("1cedt.ini").toString(), "--launcher.suppressErrors",
             "-nosplash", "-vm", Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
