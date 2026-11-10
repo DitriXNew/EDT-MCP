@@ -98,9 +98,10 @@ public class SearchInDcsTool implements IMcpTool
             .stringProperty("fileMask", //$NON-NLS-1$
                 "Filter by file path substring, path without src/ (e.g. 'Reports/Stock' or 'CommonTemplates')") //$NON-NLS-1$
             .enumProperty("outputMode", //$NON-NLS-1$
-                "Output mode: 'full' (matches with context, default), 'count', or 'files'", //$NON-NLS-1$
-                SearchResultFormatter.MODE_FULL, SearchResultFormatter.MODE_COUNT,
-                SearchResultFormatter.MODE_FILES)
+                "Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' " //$NON-NLS-1$
+                + "row per match, no context), 'count', or 'files'", //$NON-NLS-1$
+                SearchResultFormatter.MODE_FULL, SearchResultFormatter.MODE_LINES,
+                SearchResultFormatter.MODE_COUNT, SearchResultFormatter.MODE_FILES)
             .build();
     }
 
@@ -148,7 +149,7 @@ public class SearchInDcsTool implements IMcpTool
         outputMode = normalizeOutputMode(outputMode);
         if (outputMode == null)
         {
-            return ToolResult.error("outputMode must be 'full', 'count', or 'files'").toJson(); //$NON-NLS-1$
+            return ToolResult.error("outputMode must be 'full', 'lines', 'count', or 'files'").toJson(); //$NON-NLS-1$
         }
 
         limit = Pagination.clampLimit(limit, MAX_LIMIT);
@@ -173,7 +174,8 @@ public class SearchInDcsTool implements IMcpTool
         IProject project = ctx.project();
 
         ResourceTextSearch search = new ResourceTextSearch(pattern, DCS_EXTENSION, fileMask, null,
-            limit, contextLines, SearchResultFormatter.MODE_FULL.equals(outputMode),
+            limit, contextLines, SearchResultFormatter.MODE_FULL.equals(outputMode)
+                || SearchResultFormatter.MODE_LINES.equals(outputMode),
             BslModuleUtils::readFileLines, XmlEntityDecoder::decode);
         try
         {
@@ -198,7 +200,7 @@ public class SearchInDcsTool implements IMcpTool
     /**
      * @param outputMode the raw argument
      * @return the lower-cased mode ({@code full} when absent), or {@code null} when it is not one
-     *     of the three
+     *     of the four
      */
     static String normalizeOutputMode(String outputMode)
     {
@@ -207,8 +209,8 @@ public class SearchInDcsTool implements IMcpTool
             return SearchResultFormatter.MODE_FULL;
         }
         String mode = outputMode.toLowerCase(Locale.ROOT);
-        if (SearchResultFormatter.MODE_FULL.equals(mode) || SearchResultFormatter.MODE_COUNT.equals(mode)
-            || SearchResultFormatter.MODE_FILES.equals(mode))
+        if (SearchResultFormatter.MODE_FULL.equals(mode) || SearchResultFormatter.MODE_LINES.equals(mode)
+            || SearchResultFormatter.MODE_COUNT.equals(mode) || SearchResultFormatter.MODE_FILES.equals(mode))
         {
             return mode;
         }

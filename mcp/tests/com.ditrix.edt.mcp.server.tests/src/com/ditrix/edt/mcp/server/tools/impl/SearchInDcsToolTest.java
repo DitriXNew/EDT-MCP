@@ -132,7 +132,7 @@ public class SearchInDcsToolTest
         {
             modes.add(element.getAsString());
         }
-        assertEquals(new TreeSet<>(Set.of("full", "count", "files")), modes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(new TreeSet<>(Set.of("full", "lines", "count", "files")), modes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     @Test
@@ -156,7 +156,13 @@ public class SearchInDcsToolTest
     public void testAnUnknownOutputModeIsRejected()
     {
         String result = new SearchInDcsTool().execute(params("P", "x", "outputMode", "Sideways")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        assertTrue(result, result.contains("outputMode must be 'full', 'count', or 'files'")); //$NON-NLS-1$
+        assertTrue(result, result.contains("outputMode must be 'full', 'lines', 'count', or 'files'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLinesModeNormalisesLikeTheOtherModes()
+    {
+        assertEquals("lines", SearchInDcsTool.normalizeOutputMode("Lines")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -253,6 +259,36 @@ public class SearchInDcsToolTest
             + MarkdownUtils.tableRow(ANALYTICS, "CommonTemplate.Analytics", "1") //$NON-NLS-1$ //$NON-NLS-2$
             + MarkdownUtils.tableRow(ODD, "-", "1") //$NON-NLS-1$ //$NON-NLS-2$
             + MarkdownUtils.tableRow(STOCK, "Report.Stock.Template.Main", "1"), result); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLinesModePrintsTheTemplateAfterThePathAndTheSourceLine() throws CoreException
+    {
+        project();
+        // contextLines is ignored in this mode; the XML-encoded entity stays as written on disk.
+        fixture.file("src/Reports/Amp/Templates/T/Template.dcs", "<a/>\n<q>&amp;" + MARK + " &gt; 0</q>\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String result = search("&" + MARK + " > 0", "outputMode", "lines", "contextLines", "5"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+        assertEquals("## Search Lines for \"&" + MARK + " > 0\"\n\n**Total:** 1 matches in 1 files\n\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "```text\n" //$NON-NLS-1$
+            + "Reports/Amp/Templates/T/Template.dcs [Template: Report.Amp.Template.T]:2: <q>&amp;" + MARK //$NON-NLS-1$
+            + " &gt; 0</q>\n```\n", result); //$NON-NLS-1$
+
+        String all = search(MARK, "outputMode", "lines"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a file of an unrecognised layout prints its path only: " + all, //$NON-NLS-1$
+            all.contains("\n" + ODD + ":1: " + MARK + "\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(all, all.contains("\n" + ANALYTICS + " [Template: CommonTemplate.Analytics]:1: <a>" + MARK + "</a>\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testLinesModeOnAnIncompleteEmptyScanFailsClosed() throws CoreException
+    {
+        project();
+        fixture.deleteOnDiskOnly("src/" + ANALYTICS); //$NON-NLS-1$
+        String result = search("absent-text", "outputMode", "lines"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(result, result.contains("**Warning:** 1 file(s) could not be read (check EDT Error Log)\n")); //$NON-NLS-1$
+        assertTrue(result, result.contains("the scan is INCOMPLETE (1 file(s) could not be read)")); //$NON-NLS-1$
+        assertFalse(result, result.contains("No matches found.")); //$NON-NLS-1$
     }
 
     @Test

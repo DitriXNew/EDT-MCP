@@ -153,6 +153,31 @@ public class ResourceTextSearchTest
     }
 
     @Test
+    public void testMatchExposesTheMatchedLineText() throws CoreException
+    {
+        // A tab, a "<number>: " look-alike and a colon in the text: the line is kept as read,
+        // never cut back out of the numbered context.
+        fixture.file("src/CommonModules/Gamma/Module.bsl", "a\n\t7: x: NEEDLE ok \nb\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        ResourceTextSearch search = scan(literal("needle", false), ".bsl", "Gamma", null, 100, 1, true, null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        ResourceTextSearch.Match match = search.getMatchesByFile().get("CommonModules/Gamma/Module.bsl").get(0); //$NON-NLS-1$
+        assertEquals(2, match.getLineNumber());
+        assertEquals("\t7: x: NEEDLE ok ", match.getLineText()); //$NON-NLS-1$
+        assertEquals(Arrays.asList("1: a", "2: \t7: x: NEEDLE ok ", "3: b"), match.getContextLines()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTheMatchedLineTextIsTheSourceLineNotTheMatchingTransform() throws CoreException
+    {
+        ResourceTextSearch search = new ResourceTextSearch(literal("SELECT NEEDLE", false), ".dcs", "Stock", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            100, 0, true, BslModuleUtils::readFileLines, line -> line.replace("<query>", "")); //$NON-NLS-1$ //$NON-NLS-2$
+        fixture.project().findMember("src").accept(search); //$NON-NLS-1$
+
+        ResourceTextSearch.Match match = search.getMatchesByFile().get("Reports/Stock/Templates/Main/Template.dcs").get(0); //$NON-NLS-1$
+        assertEquals("<query>SELECT NEEDLE</query>", match.getLineText()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheLimitCapsDetailsButNeverTheCounts() throws CoreException
     {
         ResourceTextSearch search = scan(literal("needle", false), ".dcs", null, null, 1, 0, true, null); //$NON-NLS-1$ //$NON-NLS-2$
