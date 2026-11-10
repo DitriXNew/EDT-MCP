@@ -3343,11 +3343,43 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary').",
+    "description": "See validation problem counts grouped by project, severity, check, module or object. Parameters and examples: get_tool_guide('get_problem_summary').",
     "inputSchema": {
       "properties": {
+        "checkId": {
+          "type": "string"
+        },
+        "groupBy": {
+          "enum": [
+            "check",
+            "module",
+            "object"
+          ],
+          "type": "string"
+        },
+        "modulePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "projectName": {
           "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "ERRORS",
+            "BLOCKER",
+            "CRITICAL",
+            "MAJOR",
+            "MINOR",
+            "TRIVIAL",
+            "NONE"
+          ],
+          "type": "string"
+        },
+        "top": {
+          "type": "integer"
         }
       },
       "required": [],
@@ -3427,6 +3459,13 @@
         },
         "limit": {
           "type": "integer"
+        },
+        "modulePaths": {
+          "description": "Exact module paths as shown in the Module path column, e.g. 'CommonModules/X/Module.bsl'; AND-ed with the other filters.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "objectFqns": {
           "description": "EXACT model addresses; mutually exclusive with objects. A MEMBER address (Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - EDT indexes the marker there - so the result can carry problems from elsewhere in that object. Returns objectsNotFound / objectsUnsupported.",
@@ -4920,11 +4959,18 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source').",
+    "description": "Inspect the source of one or more BSL procedures or functions. Parameters and examples: get_tool_guide('read_method_source').",
     "inputSchema": {
       "properties": {
         "methodName": {
           "type": "string"
+        },
+        "methodNames": {
+          "description": "Several procedure/function names read in one call (up to 50); use instead of methodName. One of the two is required.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "modulePath": {
           "description": "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl'",
@@ -4936,8 +4982,7 @@
       },
       "required": [
         "projectName",
-        "modulePath",
-        "methodName"
+        "modulePath"
       ],
       "type": "object"
     },
