@@ -89,6 +89,18 @@ public final class BslModuleUtils
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
+     * The BSL export modifier in both dialects, as a regex alternation to embed in a
+     * case-insensitive pattern: one spelling for every rule that reads the modifier.
+     */
+    public static final String EXPORT_KEYWORD_ALTERNATION =
+        "\u042D\u043A\u0441\u043F\u043E\u0440\u0442|Export"; //$NON-NLS-1$
+
+    /** The export modifier as the first token of a text, not the prefix of a longer identifier. */
+    private static final Pattern LEADING_EXPORT_MODIFIER_PATTERN = Pattern.compile(
+        "^\\s*(?:" + EXPORT_KEYWORD_ALTERNATION + ")(?![\\p{L}\\p{N}_])", //$NON-NLS-1$ //$NON-NLS-2$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
      * A method declaration this line-based scanner cannot ADDRESS: the keyword and a name with
      * the opening parenthesis on a later line.
      * <p>
@@ -698,6 +710,74 @@ public final class BslModuleUtils
                 startMatcher.group(1), isFunction, complete));
         }
         return spans;
+    }
+
+    /**
+     * Whether the declaration on {@code declarationLine} carries the export modifier.
+     * <p>
+     * The modifier follows the parameter list, so the list is walked to its closing
+     * parenthesis - by depth, and across lines, because a wrapped signature is ordinary
+     * formatting. The first token after it decides; when the rest of that line is empty the
+     * token is read from the next non-blank line, since the newline is hidden trivia
+     * ({@code Procedure P()} followed by {@code Export} on its own line is exported). The walk
+     * stops at {@code lastLine}, the method's own end, so a body can never lend its words.
+     * </p>
+     * <p>
+     * Reads MASKED lines ({@link BslSyntaxChecker#maskLiteralsAndComments}): a parenthesis or the
+     * word inside a default value or a trailing comment is not code. The caller masks once per
+     * module, however many declarations it asks about.
+     * </p>
+     *
+     * @param maskedLines the module lines with literals and comments blanked
+     * @param declarationLine 0-based line of the Procedure/Function keyword
+     * @param lastLine 0-based last line the walk may read (the method's end)
+     * @return whether the declaration is exported; {@code false} when the line is no declaration
+     *     or its parameter list does not close by {@code lastLine}
+     */
+    public static boolean isExportDeclaration(List<String> maskedLines, int declarationLine, int lastLine)
+    {
+        if (maskedLines == null || declarationLine < 0 || declarationLine >= maskedLines.size())
+        {
+            return false;
+        }
+        Matcher opener = METHOD_START_PATTERN.matcher(maskedLines.get(declarationLine));
+        if (!opener.find())
+        {
+            return false;
+        }
+        int last = Math.min(lastLine, maskedLines.size() - 1);
+        int depth = 1;
+        int from = opener.start(2);
+        for (int line = declarationLine; line <= last; line++, from = 0)
+        {
+            String text = maskedLines.get(line);
+            for (int i = from; i < text.length(); i++)
+            {
+                char ch = text.charAt(i);
+                if (ch == '(')
+                {
+                    depth++;
+                }
+                else if (ch == ')' && --depth == 0)
+                {
+                    return startsWithExportModifier(maskedLines, line, i + 1, last);
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Whether the first token at or after {@code (line, from)}, within {@code last}, is Export. */
+    private static boolean startsWithExportModifier(List<String> maskedLines, int line, int from, int last)
+    {
+        int at = line;
+        String rest = maskedLines.get(at).substring(from);
+        while (rest.isBlank() && at < last)
+        {
+            at++;
+            rest = maskedLines.get(at);
+        }
+        return LEADING_EXPORT_MODIFIER_PATTERN.matcher(rest).find();
     }
 
     /**

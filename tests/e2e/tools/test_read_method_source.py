@@ -432,7 +432,8 @@ def test_method_names_partial_miss_lists_not_found_and_returns_found():
     })
     assert_ok(r, "partial miss is a success")
     assert_contains(r.text, "methodsFound: 1", "one method found")
-    assert_contains(r.text, "methodsNotFound: [%s]" % missing, "the missing name is reported")
+    assert_contains(r.text, 'methodsNotFound: ["%s"]' % missing,
+                    "the missing name is reported as a double-quoted YAML string")
     assert_contains(r.text, "### Test", "the found method still gets its section")
     assert_contains(r.text, "Результат = Add(1, 2);", "Test's real body")
     assert_not_contains(r.text, "Available methods", "a partial miss is not the not-found listing")

@@ -7,13 +7,10 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -31,6 +28,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -241,8 +239,12 @@ public class ReadMethodSourceTool implements IMcpTool
 
     /**
      * The names to read: {@code methodName} (when given) followed by {@code methodNames}, in
-     * request order, with case-insensitive duplicates dropped (method lookup is
-     * case-insensitive, so a duplicate would only render the same method twice).
+     * request order, with duplicates dropped by the lookup's own rule: a name is a duplicate
+     * when it {@link String#equalsIgnoreCase equalsIgnoreCase} a name already kept - the very
+     * comparison {@link BslModuleUtils#findMethod} and the text scan use - so it would only
+     * render the same method twice. (Lower-casing is NOT that rule: a capital I with a dot
+     * above and a plain i are equal ignoring case yet lower-case differently.) At most
+     * {@link #MAX_METHOD_NAMES} names, so the quadratic check is cheap.
      *
      * @param methodName the single name (may be {@code null} or blank)
      * @param listed the listed names
@@ -251,19 +253,31 @@ public class ReadMethodSourceTool implements IMcpTool
     static List<String> requestedNames(String methodName, List<String> listed)
     {
         List<String> names = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        if (methodName != null && !methodName.isBlank() && seen.add(methodName.toLowerCase(Locale.ROOT)))
+        if (methodName != null && !methodName.isBlank())
         {
             names.add(methodName);
         }
         for (String name : listed)
         {
-            if (seen.add(name.toLowerCase(Locale.ROOT)))
+            if (!containsIgnoringCase(names, name))
             {
                 names.add(name);
             }
         }
         return names;
+    }
+
+    /** Whether {@code kept} holds a name {@code name} equals ignoring case (the lookup's rule). */
+    private static boolean containsIgnoringCase(List<String> kept, String name)
+    {
+        for (String each : kept)
+        {
+            if (each.equalsIgnoreCase(name))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -388,8 +402,10 @@ public class ReadMethodSourceTool implements IMcpTool
 
             List<String> allLines = access.readLines(file);
 
-            // Locate every method via ONE pass of the shared text-scan fallback.
+            // Locate every method via ONE pass of the shared text-scan fallback; mask the module
+            // once for the export reads below, however many names are requested.
             List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(allLines);
+            List<String> masked = BslSyntaxChecker.maskLiteralsAndComments(allLines);
             List<LocatedMethod> located = new ArrayList<>();
             List<String> missing = new ArrayList<>();
             for (String name : names)
@@ -403,7 +419,8 @@ public class ReadMethodSourceTool implements IMcpTool
                 // The single-name answer echoes the requested spelling (historical shape);
                 // the sections name the method as declared.
                 located.add(new LocatedMethod(multi ? span.name : name, span.isFunction,
-                    isExportViaText(allLines, span.startLine, span.endLine), span.startLine + 1,
+                    BslModuleUtils.isExportDeclaration(masked, span.declarationLine, span.endLine),
+                    span.startLine + 1,
                     span.endLine + 1, BslModuleUtils.findRegionForLine(allLines, span.startLine + 1), null));
             }
             if (located.isEmpty())
@@ -551,27 +568,6 @@ public class ReadMethodSourceTool implements IMcpTool
             }
         }
         return null;
-    }
-
-    /** Whether the declaration inside lines {@code start..end} (0-based) carries Export. */
-    private static boolean isExportViaText(List<String> allLines, int start, int end)
-    {
-        for (int i = start; i <= end; i++)
-        {
-            Matcher startMatcher = BslModuleUtils.METHOD_START_PATTERN.matcher(allLines.get(i));
-            if (startMatcher.find())
-            {
-                String afterMethod = allLines.get(i).substring(startMatcher.end());
-                int closeParen = afterMethod.indexOf(')');
-                if (closeParen >= 0)
-                {
-                    String afterParen = afterMethod.substring(closeParen + 1);
-                    return afterParen.matches("(?iu)\\s*(?:Экспорт|Export)\\s*"); //$NON-NLS-1$
-                }
-                return false;
-            }
-        }
-        return false;
     }
 
     /**

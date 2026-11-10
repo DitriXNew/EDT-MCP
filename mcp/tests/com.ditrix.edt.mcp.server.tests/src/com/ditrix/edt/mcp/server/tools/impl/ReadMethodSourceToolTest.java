@@ -444,15 +444,55 @@ public class ReadMethodSourceToolTest
 
     /**
      * The answer for methodNames [Test, Add, Nope]: one header, sections in request order.
-     * No "export" token: the text scan has never detected Export on a one-line declaration
-     * (METHOD_START_PATTERN's trailing group eats the line before the ')' search), and the
-     * EMF fixture of the parity test is built non-exported to match.
+     * Both declarations carry Export / its Russian spelling, and BOTH paths say so: the text
+     * scan reads the modifier after the parameter list, the EMF path reads Method.isExport().
      */
     private static final String MULTI_TEST_ADD_NOPE = "---\n" //$NON-NLS-1$
         + "projectName: P\nmodule: CommonModules/Calc/Module.bsl\ncontentHash: h1\n" //$NON-NLS-1$
-        + "totalLines: 10\nmethodsFound: 2\nmethodsNotFound: [Nope]\n---\n" //$NON-NLS-1$
-        + "### Test\nProcedure · lines 8-10\n" + TEST_FENCE //$NON-NLS-1$
-        + "\n### Add\nFunction · lines 2-5 · region Public\n" + ADD_FENCE; //$NON-NLS-1$
+        + "totalLines: 10\nmethodsFound: 2\nmethodsNotFound: [\"Nope\"]\n---\n" //$NON-NLS-1$
+        + "### Test\nProcedure · export · lines 8-10\n" + TEST_FENCE //$NON-NLS-1$
+        + "\n### Add\nFunction · export · lines 2-5 · region Public\n" + ADD_FENCE; //$NON-NLS-1$
+
+    /** {@link #LINES} with the Export modifiers removed: the non-exported twin of the module. */
+    private static final List<String> LINES_NOT_EXPORTED = List.of(
+        "#Region Public", //$NON-NLS-1$
+        "// Adds two numbers.", //$NON-NLS-1$
+        "Function Add(A, B)", //$NON-NLS-1$
+        "\tReturn A + B;", //$NON-NLS-1$
+        "EndFunction", //$NON-NLS-1$
+        "#EndRegion", //$NON-NLS-1$
+        "", //$NON-NLS-1$
+        "Процедура Test()", //$NON-NLS-1$
+        "\tResult = Add(1, 2);", //$NON-NLS-1$
+        RU_END_PROCEDURE);
+
+    /**
+     * Declarations the text scan must classify: exported ones in both dialects and cases, with
+     * a string or comment in the way, a wrapped parameter list, the modifier on the next line;
+     * non-exported ones whose comment, default value, body or name merely mention the word.
+     */
+    private static final List<String> EXPORT_SHAPES = List.of(
+        "Function Exp1() Export", //$NON-NLS-1$
+        "EndFunction", //$NON-NLS-1$
+        "Procedure Exp2() экспорт", //$NON-NLS-1$
+        "EndProcedure", //$NON-NLS-1$
+        "Асинх Функция Exp3(Знач А = \")\") Экспорт // note", //$NON-NLS-1$
+        "КонецФункции", //$NON-NLS-1$
+        "Function Wrapped(A,", //$NON-NLS-1$
+        "\tB = 1) EXPORT", //$NON-NLS-1$
+        "EndFunction", //$NON-NLS-1$
+        "Procedure NextLine() // comment", //$NON-NLS-1$
+        "\tExport", //$NON-NLS-1$
+        "EndProcedure", //$NON-NLS-1$
+        "Function NoExp1() // Export", //$NON-NLS-1$
+        "EndFunction", //$NON-NLS-1$
+        "Procedure NoExp2(P = \"Export\")", //$NON-NLS-1$
+        "EndProcedure", //$NON-NLS-1$
+        "Процедура NoExp3()", //$NON-NLS-1$
+        "\tExported = 1;", //$NON-NLS-1$
+        "КонецПроцедуры", //$NON-NLS-1$
+        "Function ExportFlag()", //$NON-NLS-1$
+        "EndFunction"); //$NON-NLS-1$
 
     /** Counts every read of the module, so a per-name re-read or re-hash is visible. */
     private static final class CountingAccess implements ReadMethodSourceTool.ModuleAccess
@@ -460,6 +500,7 @@ public class ReadMethodSourceToolTest
         final IFile file = mock(IFile.class);
         final Map<Method, int[]> spans = new HashMap<>();
         final Map<Method, String> footers = new HashMap<>();
+        List<String> lines = LINES;
         Module module;
         int loads;
         int resolves;
@@ -489,7 +530,7 @@ public class ReadMethodSourceToolTest
         public List<String> readLines(IFile f)
         {
             reads++;
-            return LINES;
+            return lines;
         }
 
         @Override
@@ -575,9 +616,101 @@ public class ReadMethodSourceToolTest
     @Test
     public void testEmfPathRendersTheSameSectionsAsTheTextPath()
     {
-        String emf = new ReadMethodSourceTool(emfAccess(false)).readViaEmf(null, PROJECT, PATH,
+        String emf = new ReadMethodSourceTool(emfAccess(true)).readViaEmf(null, PROJECT, PATH,
             List.of("test", "ADD", "Nope"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(MULTI_TEST_ADD_NOPE, emf);
+    }
+
+    @Test
+    public void testBothPathsAgreeOnANonExportedModule()
+    {
+        CountingAccess text = new CountingAccess();
+        text.lines = LINES_NOT_EXPORTED;
+        CountingAccess emf = emfAccess(false);
+        emf.lines = LINES_NOT_EXPORTED;
+        List<String> names = List.of("Test", "Add"); //$NON-NLS-1$ //$NON-NLS-2$
+        String viaText = new ReadMethodSourceTool(text).readViaText(null, PROJECT, PATH, names, true);
+        assertEquals(viaText, new ReadMethodSourceTool(emf).readViaEmf(null, PROJECT, PATH, names, true));
+        assertTrue(viaText, viaText.contains("### Test\nProcedure · lines 8-10\n")); //$NON-NLS-1$
+        assertTrue(viaText, viaText.contains("### Add\nFunction · lines 2-5 · region Public\n")); //$NON-NLS-1$
+        // The single-name answer of both paths agrees too.
+        assertEquals(new ReadMethodSourceTool(emf).readViaEmf(null, PROJECT, PATH, List.of("Add"), false), //$NON-NLS-1$
+            new ReadMethodSourceTool(text).readViaText(null, PROJECT, PATH, List.of("Add"), false)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBothPathsAgreeOnTheSingleNameAnswerOfAnExportedMethod()
+    {
+        CountingAccess emf = emfAccess(true);
+        String viaEmf = new ReadMethodSourceTool(emf).readViaEmf(null, PROJECT, PATH, List.of("Test"), false); //$NON-NLS-1$
+        String viaText = new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
+            List.of("Test"), false); //$NON-NLS-1$
+        assertEquals(viaEmf, viaText);
+        assertTrue(viaText, viaText.contains("\nexport: true\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextPathReadsTheExportModifierOfEveryDeclarationShape()
+    {
+        CountingAccess access = new CountingAccess();
+        access.lines = EXPORT_SHAPES;
+        String result = new ReadMethodSourceTool(access).readViaText(null, PROJECT, PATH,
+            List.of("Exp1", "Exp2", "Exp3", "Wrapped", "NextLine", "NoExp1", "NoExp2", "NoExp3", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
+                "ExportFlag"), true); //$NON-NLS-1$
+        String[] expected = {
+            "### Exp1\nFunction · export · lines 1-2\n", //$NON-NLS-1$
+            "### Exp2\nProcedure · export · lines 3-4\n", //$NON-NLS-1$
+            "### Exp3\nFunction · export · lines 5-6\n", //$NON-NLS-1$
+            "### Wrapped\nFunction · export · lines 7-9\n", //$NON-NLS-1$
+            "### NextLine\nProcedure · export · lines 10-12\n", //$NON-NLS-1$
+            "### NoExp1\nFunction · lines 13-14\n", //$NON-NLS-1$
+            "### NoExp2\nProcedure · lines 15-16\n", //$NON-NLS-1$
+            "### NoExp3\nProcedure · lines 17-19\n", //$NON-NLS-1$
+            "### ExportFlag\nFunction · lines 20-21\n" }; //$NON-NLS-1$
+        for (String section : expected)
+        {
+            assertTrue(section + " in\n" + result, result.contains(section)); //$NON-NLS-1$
+        }
+        assertTrue(result, result.contains("methodsFound: 9\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextPathSingleNameReportsExportInBothDialects()
+    {
+        CountingAccess access = new CountingAccess();
+        access.lines = EXPORT_SHAPES;
+        for (String name : List.of("Exp1", "Exp2", "Exp3", "Wrapped", "NextLine")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            String result = new ReadMethodSourceTool(access).readViaText(null, PROJECT, PATH, List.of(name), false);
+            assertTrue(name + " -> " + result, result.contains("\nexport: true\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (String name : List.of("NoExp1", "NoExp2", "NoExp3", "ExportFlag")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            String result = new ReadMethodSourceTool(access).readViaText(null, PROJECT, PATH, List.of(name), false);
+            assertTrue(name + " -> " + result, result.contains("\nexport: false\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testDedupeCallsEqualExactlyWhatTheLookupCallsEqual()
+    {
+        // Capital I with a dot above: equalsIgnoreCase (the lookup's rule) calls it equal to a
+        // plain 'i', while toLowerCase(Locale.ROOT) turns it into "i" + a combining dot.
+        String dotted = "\u0130sim"; //$NON-NLS-1$
+        assertTrue("the lookup's own rule calls them one name", dotted.equalsIgnoreCase("isim")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of(dotted), ReadMethodSourceTool.requestedNames(null, List.of(dotted, "isim"))); //$NON-NLS-1$
+        assertEquals(List.of("isim"), ReadMethodSourceTool.requestedNames("isim", List.of(dotted))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNamesTheLookupCallsEqualRenderOneSection()
+    {
+        CountingAccess access = new CountingAccess();
+        access.lines = List.of("Procedure isim()", "EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new ReadMethodSourceTool(access).readViaText(null, PROJECT, PATH,
+            ReadMethodSourceTool.requestedNames(null, List.of("\u0130sim", "isim")), true); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(result, 1, count(result, "### isim")); //$NON-NLS-1$
+        assertTrue(result, result.contains("methodsFound: 1\n")); //$NON-NLS-1$
     }
 
     @Test
@@ -619,7 +752,7 @@ public class ReadMethodSourceToolTest
     {
         String result = new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
             List.of("Nope", "Add", "Gone"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertTrue(result, result.contains("methodsFound: 1\nmethodsNotFound: [Nope, Gone]\n---\n### Add\n")); //$NON-NLS-1$
+        assertTrue(result, result.contains("methodsFound: 1\nmethodsNotFound: [\"Nope\", \"Gone\"]\n---\n### Add\n")); //$NON-NLS-1$
         assertTrue(result, result.endsWith(ADD_FENCE));
         assertFalse("a partial miss is not the all-missing listing", result.contains("Available methods")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -647,14 +780,13 @@ public class ReadMethodSourceToolTest
     // ==================== methodName alone: the historical answer, byte for byte ====================
 
     @Test
-    public void testLegacySingleNameOutputIsUnchanged()
+    public void testLegacySingleNameOutputIsUnchangedButForTheExportFlag()
     {
         String expected = "---\nprojectName: P\nmodule: CommonModules/Calc/Module.bsl\ncontentHash: h1\n" //$NON-NLS-1$
-            + "method: add\ntype: Function\nexport: false\nstartLine: 2\nendLine: 5\ntotalLines: 10\n" //$NON-NLS-1$
+            + "method: add\ntype: Function\nexport: true\nstartLine: 2\nendLine: 5\ntotalLines: 10\n" //$NON-NLS-1$
             + "region: Public\n---\n" + ADD_FENCE; //$NON-NLS-1$
-        // The text path echoes the requested spelling, as it always did - and, as it always
-        // did, reports export:false for a one-line exported declaration (known text-scan gap,
-        // kept byte for byte here; see the MULTI_TEST_ADD_NOPE note).
+        // The text path echoes the requested spelling, as it always did. The one change: the
+        // export flag is now read (it used to be false for every one-line declaration).
         assertEquals(expected, new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
             List.of("add"), false)); //$NON-NLS-1$
     }

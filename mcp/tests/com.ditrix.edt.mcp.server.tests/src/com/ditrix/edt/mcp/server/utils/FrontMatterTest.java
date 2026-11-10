@@ -34,20 +34,44 @@ public class FrontMatterTest
     // ========== putList ==========
 
     @Test
-    public void testPutListRendersAFlowSequenceWithEachElementEscaped()
+    public void testPutListRendersAFlowSequenceOfDoubleQuotedElements()
     {
         String result = FrontMatter.create()
             .putList("names", java.util.List.of("Add", "a, b", "true")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .build();
-        // A comma inside an element must not split it; a reserved word stays a string.
-        assertEquals("---\nnames: [Add, \"a, b\", \"true\"]\n---\n", result); //$NON-NLS-1$
+        // Every element is a double-quoted scalar: a comma cannot split it, no word changes type.
+        assertEquals("---\nnames: [\"Add\", \"a, b\", \"true\"]\n---\n", result); //$NON-NLS-1$
     }
 
     @Test
     public void testPutListOfOneElement()
     {
-        assertEquals("---\nnames: [Nope]\n---\n", //$NON-NLS-1$
+        assertEquals("---\nnames: [\"Nope\"]\n---\n", //$NON-NLS-1$
             FrontMatter.create().putList("names", java.util.List.of("Nope")).build()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPutListQuotesAYamlNullAndEscapesBackslashQuoteAndControls()
+    {
+        assertEquals("---\nnames: [\"~\", \"a\\\\b\", \"\\\"q\\\"\", \"t\\tn\\nr\\r\", \"\\u0001\\u007f\"]\n---\n", //$NON-NLS-1$
+            FrontMatter.create().putList("names", //$NON-NLS-1$
+                java.util.List.of("~", "a\\b", "\"q\"", "t\tn\nr\r", "\u0001\u007f")).build()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+    }
+
+    @Test
+    public void testPutListElementsRoundTripThroughAYamlParserAsStrings()
+    {
+        java.util.List<String> names = java.util.List.of("~", "null", "Null", "true", "false", "yes", "1", "-1", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
+            "1.5e3", "0x1F", "a,b", "[x]", "{y}", "#c", "\"q\"", "'s'", "back\\slash", "-x", "?x", ":x", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$ //$NON-NLS-11$ //$NON-NLS-12$
+            "x: y", "&a", "*a", "!t", "|", ">", "%p", "@a", "`b`", " pad ", "", "tab\there", "nl\nx", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$ //$NON-NLS-11$ //$NON-NLS-12$ //$NON-NLS-13$
+            "\u0001ctl", "del\u007f", "nel\u0085x", "ls\u2028x", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "\u041F\u0440\u043E\u0432\u0435\u0434\u0435\u043D\u0438\u0435"); //$NON-NLS-1$
+        String yaml = FrontMatter.create().putList("names", names).put("after", "tail").build(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String body = yaml.substring("---\n".length(), yaml.length() - "---\n".length()); //$NON-NLS-1$ //$NON-NLS-2$
+        java.util.Map<?, ?> loaded = (java.util.Map<?, ?>) new org.yaml.snakeyaml.Yaml().load(body);
+        assertEquals(names, loaded.get("names")); //$NON-NLS-1$
+        // The sequence closed where it should: the next key still parses as its own field.
+        assertEquals("tail", loaded.get("after")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ========== put (String) ==========

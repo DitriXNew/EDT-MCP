@@ -119,9 +119,11 @@ public final class FrontMatter
     }
 
     /**
-     * Adds a list of strings, rendered as a YAML flow sequence ({@code [a, b]}). Each element
-     * is escaped like a string field, so a comma or bracket inside an element cannot split or
-     * close the sequence.
+     * Adds a list of strings, rendered as a YAML flow sequence of double-quoted scalars
+     * ({@code ["a", "b"]}). Every element is quoted, whatever it looks like: a plain scalar
+     * inside a flow sequence can be read as another type ({@code ~}, {@code null}, {@code true},
+     * {@code 1}) or end the sequence early ({@code ,}, {@code ]}), and an element here is
+     * caller-supplied text such as a method name that was not found.
      *
      * @param key field name (must not be {@code null})
      * @param values the elements, in order (must not be {@code null})
@@ -154,10 +156,77 @@ public final class FrontMatter
                 {
                     sb.append(", "); //$NON-NLS-1$
                 }
-                sb.append(escapeYamlValue(values.get(i)));
+                sb.append(doubleQuoted(values.get(i)));
             }
             return sb.append(']').toString();
         }
+    }
+
+    /**
+     * The value as a YAML double-quoted scalar, which is also a valid JSON string literal:
+     * {@code \} and {@code "} are escaped, and so is every character YAML does not allow
+     * printed raw (C0 controls, DEL, C1 controls, unpaired surrogates, U+FFFE/U+FFFF) and the
+     * line and paragraph separators - {@code \n}, {@code \r}, {@code \t} by name, the rest as a
+     * four-hex-digit backslash-u escape.
+     *
+     * @param value the element (a {@code null} renders as an empty string)
+     * @return the quoted scalar
+     */
+    static String doubleQuoted(String value)
+    {
+        String text = value == null ? "" : value; //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder(text.length() + 2).append('"');
+        for (int i = 0; i < text.length(); i++)
+        {
+            char ch = text.charAt(i);
+            switch (ch)
+            {
+                case '\\':
+                    sb.append("\\\\"); //$NON-NLS-1$
+                    break;
+                case '"':
+                    sb.append("\\\""); //$NON-NLS-1$
+                    break;
+                case '\n':
+                    sb.append("\\n"); //$NON-NLS-1$
+                    break;
+                case '\r':
+                    sb.append("\\r"); //$NON-NLS-1$
+                    break;
+                case '\t':
+                    sb.append("\\t"); //$NON-NLS-1$
+                    break;
+                default:
+                    if (mustEscape(text, i))
+                    {
+                        sb.append(String.format("\\u%04x", (int) ch)); //$NON-NLS-1$
+                    }
+                    else
+                    {
+                        sb.append(ch);
+                    }
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    /** Whether the char at {@code i} may not appear raw inside a YAML double-quoted scalar. */
+    private static boolean mustEscape(String text, int i)
+    {
+        char ch = text.charAt(i);
+        if (ch < 0x20 || (ch >= 0x7F && ch <= 0x9F) || ch == 0x2028 || ch == 0x2029 || ch >= 0xFFFE)
+        {
+            return true;
+        }
+        if (Character.isHighSurrogate(ch))
+        {
+            return i + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(i + 1));
+        }
+        if (Character.isLowSurrogate(ch))
+        {
+            return i == 0 || !Character.isHighSurrogate(text.charAt(i - 1));
+        }
+        return false;
     }
 
     /**

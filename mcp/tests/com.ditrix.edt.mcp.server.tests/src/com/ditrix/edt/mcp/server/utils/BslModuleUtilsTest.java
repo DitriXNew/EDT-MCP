@@ -1332,4 +1332,69 @@ public class BslModuleUtilsTest
         // load answers null instead of fabricating <project>/src/<absolute path>.
         assertNull(BslModuleUtils.loadModule((IProject) null, "C:\\nonexistent\\path\\Module.bsl")); //$NON-NLS-1$
     }
+
+    // ========== isExportDeclaration ==========
+
+    /** Whether line 0 of {@code lines} declares an exported method, reading up to {@code last}. */
+    private static boolean exported(int last, String... lines)
+    {
+        return BslModuleUtils.isExportDeclaration(BslSyntaxChecker.maskLiteralsAndComments(List.of(lines)), 0,
+            last);
+    }
+
+    @Test
+    public void testExportModifierIsReadInBothDialectsAndAnyCase()
+    {
+        assertTrue(exported(1, "Function Add(A, B) Export", "EndFunction")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(exported(1, "procedure Run() EXPORT", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Procedure Test() Export / Async Function Get() export, in the Russian spelling.
+        assertTrue(exported(1, "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 Test() " //$NON-NLS-1$
+            + "\u042D\u043A\u0441\u043F\u043E\u0440\u0442", "End")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(exported(1, "\u0410\u0441\u0438\u043D\u0445 \u0424\u0443\u043D\u043A\u0446\u0438\u044F " //$NON-NLS-1$
+            + "Get() \u044D\u043A\u0441\u043F\u043E\u0440\u0442 // note", "End")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testExportModifierAfterAWrappedListOrOnTheNextLineIsRead()
+    {
+        assertTrue(exported(2, "Function Wrapped(A,", "    B = 1) Export", "EndFunction")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(exported(2, "Procedure Next() // comment", "    Export", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTheWordOutsideTheModifierPositionIsNotExport()
+    {
+        assertFalse("comment", exported(1, "Function F() // Export", "EndFunction")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("default value", exported(1, "Procedure P(Mode = \"Export\")", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("parenthesis in a string", //$NON-NLS-1$
+            exported(1, "Procedure P(Mode = \")\") ExportX", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("body", exported(2, "Procedure P()", "    Exported = 1;", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("name", exported(1, "Function ExportFlag()", "EndFunction")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("parenthesis in a string before a real modifier", //$NON-NLS-1$
+            exported(1, "Procedure P(Mode = \")(\") Export", "EndProcedure")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheWalkStopsAtTheGivenLastLine()
+    {
+        assertFalse("the modifier past lastLine is not read", exported(0, "Procedure P()", "Export")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(exported(1, "Procedure P()", "Export")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an unclosed list is not exported", exported(1, "Procedure P(A,", "Export")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testANonDeclarationLineOrAnOutOfRangeIndexIsNotExport()
+    {
+        assertFalse(exported(1, "Result = Export;", "x")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(BslModuleUtils.isExportDeclaration(List.of("Procedure P() Export"), 5, 5)); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.isExportDeclaration(null, 0, 0));
+    }
+
+    @Test
+    public void testMethodReferenceValidatorReadsTheSameSpelling()
+    {
+        // The validator's pattern is built on the shared alternation; the Russian spelling counts.
+        assertTrue(BslModuleUtils.EXPORT_KEYWORD_ALTERNATION.startsWith(
+            "\u042D\u043A\u0441\u043F\u043E\u0440\u0442|")); //$NON-NLS-1$
+    }
 }
