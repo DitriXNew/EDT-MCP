@@ -31,6 +31,25 @@ public class FrontMatterTest
         assertEquals("---\n---\n", result); //$NON-NLS-1$
     }
 
+    // ========== putList ==========
+
+    @Test
+    public void testPutListRendersAFlowSequenceWithEachElementEscaped()
+    {
+        String result = FrontMatter.create()
+            .putList("names", java.util.List.of("Add", "a, b", "true")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .build();
+        // A comma inside an element must not split it; a reserved word stays a string.
+        assertEquals("---\nnames: [Add, \"a, b\", \"true\"]\n---\n", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPutListOfOneElement()
+    {
+        assertEquals("---\nnames: [Nope]\n---\n", //$NON-NLS-1$
+            FrontMatter.create().putList("names", java.util.List.of("Nope")).build()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ========== put (String) ==========
 
     @Test

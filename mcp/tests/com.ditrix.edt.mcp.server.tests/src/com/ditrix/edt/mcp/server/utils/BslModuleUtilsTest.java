@@ -860,6 +860,25 @@ public class BslModuleUtilsTest
         assertFalse(r.contains("\n- ")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSingleNameNotFoundTextIsByteIdenticalToTheHistoricalShape()
+    {
+        // read_method_source / go_to_definition clients match this text: pin it whole.
+        assertEquals("Error: Method 'Foo' not found in CommonModules/X/Module.bsl\n\n" //$NON-NLS-1$
+            + "**Available methods** (2):\n\n- Alpha\n- Beta\n", //$NON-NLS-1$
+            BslModuleUtils.buildTextMethodNotFoundResponse(
+                "Foo", "CommonModules/X/Module.bsl", List.of("Alpha", "Beta"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testSeveralNamesNotFoundAreAllNamedInRequestOrder()
+    {
+        assertEquals("Error: Methods 'Zed', 'Foo' not found in CommonModules/X/Module.bsl\n\n" //$NON-NLS-1$
+            + "**Available methods** (1):\n\n- Alpha\n", //$NON-NLS-1$
+            BslModuleUtils.buildMethodsNotFoundResponse(List.of("Zed", "Foo"), //$NON-NLS-1$ //$NON-NLS-2$
+                "CommonModules/X/Module.bsl", List.of("Alpha"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ========== resolveModuleFile source-folder resolution (A27) ==========
     //
     // "src" is the EDT convention (and EDT's own SRC_FOLDER_NAME), so it is tried

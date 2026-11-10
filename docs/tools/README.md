@@ -62,7 +62,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_symbol_info`](get_symbol_info.md) | Inspect the type and documentation of a BSL symbol at its source location. Parameters and examples: get_tool_guide('get_symbol_info'). |
 | [`go_to_definition`](go_to_definition.md) | Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition'). |
 | [`open_editor`](open_editor.md) | Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examp… |
-| [`read_method_source`](read_method_source.md) | Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source'). |
+| [`read_method_source`](read_method_source.md) | Inspect the source of one or more BSL procedures or functions. Parameters and examples: get_tool_guide('read_method_source'). |
 | [`validate_query`](validate_query.md) | Check a 1C query or stored BSL query literals for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query'). |
 | [`write_module_source`](write_module_source.md) | Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source'). |
 

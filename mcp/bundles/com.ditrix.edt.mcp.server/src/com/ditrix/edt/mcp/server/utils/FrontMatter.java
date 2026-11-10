@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -118,6 +119,48 @@ public final class FrontMatter
     }
 
     /**
+     * Adds a list of strings, rendered as a YAML flow sequence ({@code [a, b]}). Each element
+     * is escaped like a string field, so a comma or bracket inside an element cannot split or
+     * close the sequence.
+     *
+     * @param key field name (must not be {@code null})
+     * @param values the elements, in order (must not be {@code null})
+     * @return this builder for chaining
+     */
+    public FrontMatter putList(String key, List<String> values)
+    {
+        validateKey(key);
+        fields.put(key, new FlowSequence(values));
+        return this;
+    }
+
+    /** A list value; {@link #toString()} is its YAML flow-sequence form. */
+    private static final class FlowSequence
+    {
+        private final List<String> values;
+
+        FlowSequence(List<String> values)
+        {
+            this.values = List.copyOf(values);
+        }
+
+        @Override
+        public String toString()
+        {
+            StringBuilder sb = new StringBuilder("["); //$NON-NLS-1$
+            for (int i = 0; i < values.size(); i++)
+            {
+                if (i > 0)
+                {
+                    sb.append(", "); //$NON-NLS-1$
+                }
+                sb.append(escapeYamlValue(values.get(i)));
+            }
+            return sb.append(']').toString();
+        }
+    }
+
+    /**
      * Renders the YAML frontmatter block.
      *
      * @return formatted frontmatter string ending with {@code ---\n}
@@ -171,7 +214,8 @@ public final class FrontMatter
         {
             return ""; //$NON-NLS-1$
         }
-        if (value instanceof Boolean || value instanceof Integer || value instanceof Long)
+        if (value instanceof Boolean || value instanceof Integer || value instanceof Long
+            || value instanceof FlowSequence)
         {
             return value.toString();
         }

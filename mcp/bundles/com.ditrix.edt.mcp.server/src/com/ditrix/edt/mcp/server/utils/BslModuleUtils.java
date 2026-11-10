@@ -1435,14 +1435,57 @@ public final class BslModuleUtils
     public static String buildTextMethodNotFoundResponse(String methodName, String modulePath,
         List<String> allMethodNames)
     {
+        return buildMethodsNotFoundResponse(List.of(methodName), modulePath, allMethodNames);
+    }
+
+    /**
+     * Builds the standard "method not found" listing for one or several requested names: the
+     * single shape every method-addressed read tool returns when none of the requested methods
+     * exists. One requested name gives exactly the singular {@code Error: Method 'X' not found}
+     * text; several give {@code Error: Methods 'A', 'B' not found}. The available-methods list
+     * follows in both cases.
+     *
+     * @param requestedNames the names that were not found, in request order (non-empty)
+     * @param modulePath     the module path (for the message)
+     * @param allMethodNames the methods that exist in the module
+     * @return the markdown error string
+     */
+    public static String buildMethodsNotFoundResponse(List<String> requestedNames, String modulePath,
+        List<String> allMethodNames)
+    {
         StringBuilder sb = new StringBuilder();
-        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(requestedNames.size() == 1 ? "Error: Method " : "Error: Methods "); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < requestedNames.size(); i++)
+        {
+            if (i > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append('\'').append(requestedNames.get(i)).append('\'');
+        }
+        sb.append(" not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("**Available methods** (").append(allMethodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         for (String name : allMethodNames)
         {
             sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return sb.toString();
+    }
+
+    /**
+     * Names of every method of a BSL module, in model order.
+     *
+     * @param module the BSL module
+     * @return the method names (never {@code null})
+     */
+    public static List<String> methodNames(Module module)
+    {
+        List<String> names = new ArrayList<>();
+        for (Method m : module.allMethods())
+        {
+            names.add(m.getName());
+        }
+        return names;
     }
 
     /**
@@ -1694,22 +1737,7 @@ public final class BslModuleUtils
      */
     public static String buildMethodNotFoundResponse(Module module, String modulePath, String methodName)
     {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Error: Method '").append(methodName).append("' not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-        List<String> methodNames = new ArrayList<>();
-        for (Method m : module.allMethods())
-        {
-            methodNames.add(m.getName());
-        }
-
-        sb.append("**Available methods** (").append(methodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        for (String name : methodNames)
-        {
-            sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        return sb.toString();
+        return buildMethodsNotFoundResponse(List.of(methodName), modulePath, methodNames(module));
     }
 
     /**

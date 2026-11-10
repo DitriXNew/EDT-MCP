@@ -147,6 +147,9 @@ public final class InputSchemaCompactor
         // module path and no methodName, which the tool rejects before looking anything up.
         keep.put("get_method_call_hierarchy", //$NON-NLS-1$
             asSet("direction", "methodName")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Neither methodName nor methodNames is 'required', yet one of them must be passed -
+        // a conditional the schema states nowhere - and the 50-name cap is refused, not clamped.
+        keep.put("read_method_source", asSet("methodNames")); //$NON-NLS-1$ //$NON-NLS-2$
         // A scope limit that makes the tool inapplicable: FILE infobases only.
         // user carries a CROSS-FIELD rule as well as the credential fact: for a standalone
         // server the credentials are accepted only with mode='register' and rejected for a
