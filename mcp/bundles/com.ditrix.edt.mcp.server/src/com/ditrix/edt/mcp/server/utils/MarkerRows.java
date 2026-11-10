@@ -110,6 +110,32 @@ public final class MarkerRows
         IFixRepository fixRepository, int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
         Supplier<R> newRow)
     {
+        return buildIfMatches(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
+            fixRepository, unresolvedShown, unresolvedFilteredOut, exactScope, true, newRow);
+    }
+
+    /**
+     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, Set, ICheckRepository, IFixRepository,
+     * int[], int[], boolean, Supplier)}, with an explicit choice whether the object presentation is read.
+     * With {@code resolvePresentation == false} {@link Marker#getObjectPresentation()} - the one model read of
+     * a row - is never called: the row's {@code objectPresentation} stays {@code null} and neither unresolved
+     * counter moves, so a caller that never shows the location needs no BM read boundary for it. The objects
+     * filter compares against the presentation, so it cannot be combined with skipping it.
+     *
+     * @param resolvePresentation whether to read the object presentation
+     * @throws IllegalArgumentException when {@code resolvePresentation} is {@code false} and {@code objects}
+     *     is not empty
+     */
+    public static <R extends Row> R buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        IFixRepository fixRepository, int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
+        boolean resolvePresentation, Supplier<R> newRow)
+    {
+        if (!resolvePresentation && objects != null && !objects.isEmpty())
+        {
+            throw new IllegalArgumentException("The objects filter needs the object presentation"); //$NON-NLS-1$
+        }
+
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
         {
@@ -155,15 +181,23 @@ public final class MarkerRows
         // Failure handling differs by context (see below), so we only record the outcome here.
         String objectPresentation = null;
         boolean presentationResolved;
-        try
+        if (!resolvePresentation)
         {
-            String p = marker.getObjectPresentation();
-            objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+            // Not asked for: no model read, no placeholder, no unresolved count (objectPresentation stays null).
             presentationResolved = true;
         }
-        catch (Exception e)
+        else
         {
-            presentationResolved = false;
+            try
+            {
+                String p = marker.getObjectPresentation();
+                objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+                presentationResolved = true;
+            }
+            catch (Exception e)
+            {
+                presentationResolved = false;
+            }
         }
 
         // Objects filter (FQN matching against the resolved object presentation)
@@ -443,6 +477,37 @@ public final class MarkerRows
             path = path.substring(sourcePrefix.length());
         }
         return path.isEmpty() ? null : path;
+    }
+
+    /**
+     * The refusal for {@code modulePaths} entries that are not blank but normalise to nothing
+     * ({@code "src/"}, {@code "/"}, {@code "\\"}): such an entry names no module, and dropping it silently
+     * would turn a list made only of them into "no filter" - the whole project instead of the asked scope.
+     * Blank entries are not reported: they stay ignored, as an empty array means no filter.
+     *
+     * @param modulePaths the caller's raw entries, may be {@code null}
+     * @return the error text naming each such entry and the expected form, or {@code null} when there is none
+     */
+    public static String unusableModulePathsError(Collection<String> modulePaths)
+    {
+        List<String> unusable = new ArrayList<>();
+        if (modulePaths != null)
+        {
+            for (String path : modulePaths)
+            {
+                if (path != null && !path.trim().isEmpty() && normalizeModulePath(path) == null)
+                {
+                    unusable.add("'" + path + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        if (unusable.isEmpty())
+        {
+            return null;
+        }
+        return "modulePaths entries name no module: " + String.join(", ", unusable) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Give a module path under the source folder, e.g. 'CommonModules/X/Module.bsl' (copy it from " //$NON-NLS-1$
+            + "the Module path column of get_project_errors), or omit modulePaths for every module."; //$NON-NLS-1$
     }
 
     /**

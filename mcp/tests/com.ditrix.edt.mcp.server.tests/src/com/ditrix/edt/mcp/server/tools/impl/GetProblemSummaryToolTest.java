@@ -9,8 +9,12 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -25,6 +29,10 @@ import java.util.Map;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -355,7 +363,7 @@ public class GetProblemSummaryToolTest
         markers.put(project, Arrays.asList(marker(project, MarkerSeverity.MAJOR, "SU1"), //$NON-NLS-1$
             marker(project, MarkerSeverity.MINOR, "SU2"), marker(project, MarkerSeverity.MAJOR, "SU3"))); //$NON-NLS-1$ //$NON-NLS-2$
         List<SummaryRow> rows = GetProblemSummaryTool.collectRows(markers, null, MarkerSeverity.MAJOR, null,
-            Collections.<String> emptySet(), null, null);
+            Collections.<String> emptySet(), null, null, false);
         assertEquals(2, rows.size());
         String md = GetProblemSummaryTool.renderTotals(rows, "Severity filter: MAJOR"); //$NON-NLS-1$
         assertTrue(md, md.startsWith("## Problem Summary\n\nSeverity filter: MAJOR\n\n### Overall Totals")); //$NON-NLS-1$
@@ -369,17 +377,126 @@ public class GetProblemSummaryToolTest
     public void testCollectRowsKeepsTheSeverityAndFlagsAnUnresolvedPresentation()
     {
         IProject project = project("P"); //$NON-NLS-1$
+        boolean[] inReadTransaction = {false};
+        IBmModelManager manager = managerWithReadModel(project, inReadTransaction);
+        Marker resolved = marker(project, MarkerSeverity.BLOCKER, "SU1"); //$NON-NLS-1$
+        when(resolved.getObjectPresentation()).thenAnswer(inv -> {
+            assertTrue("the presentation is read inside the BM read transaction", inReadTransaction[0]); //$NON-NLS-1$
+            return "Catalog.X"; //$NON-NLS-1$
+        });
         Marker broken = marker(project, null, "SU9"); //$NON-NLS-1$
         when(broken.getObjectPresentation()).thenThrow(new RuntimeException("stale")); //$NON-NLS-1$
         Map<IProject, List<Marker>> markers = new LinkedHashMap<>();
-        markers.put(project, Arrays.asList(marker(project, MarkerSeverity.BLOCKER, "SU1"), broken)); //$NON-NLS-1$
-        List<SummaryRow> rows = GetProblemSummaryTool.collectRows(markers, null, null, null,
-            Collections.<String> emptySet(), null, null);
+        markers.put(project, Arrays.asList(resolved, broken));
+        List<SummaryRow> rows = GetProblemSummaryTool.collectRows(markers, manager, null, null,
+            Collections.<String> emptySet(), null, null, true);
         assertEquals(MarkerSeverity.BLOCKER, rows.get(0).severity);
         assertFalse(rows.get(0).presentationUnresolved);
+        assertEquals("Catalog.X", rows.get(0).objectPresentation); //$NON-NLS-1$
         assertEquals("a missing severity counts as NONE, as on the legacy path", //$NON-NLS-1$
             MarkerSeverity.NONE, rows.get(1).severity);
         assertTrue(rows.get(1).presentationUnresolved);
+        verify(resolved).getObjectPresentation();
+    }
+
+    @Test
+    public void testCheckModuleAndTotalsNeverReadTheObjectPresentation()
+    {
+        // Only the object grouping shows the location; the check/module tables and the filtered totals must
+        // not read it - with a BM model or without one (no model means no read boundary at all).
+        IProject project = project("P"); //$NON-NLS-1$
+        Marker marker = marker(project, MarkerSeverity.MAJOR, "SU1"); //$NON-NLS-1$
+        Map<IProject, List<Marker>> markers = new LinkedHashMap<>();
+        markers.put(project, Collections.singletonList(marker));
+        IBmModelManager withModel = managerWithReadModel(project, new boolean[1]);
+        for (IBmModelManager manager : Arrays.asList(withModel, null))
+        {
+            List<SummaryRow> rows = GetProblemSummaryTool.collectRows(markers, manager, null, null,
+                Collections.<String> emptySet(), null, null, false);
+            assertEquals(1, rows.size());
+            assertNull(rows.get(0).objectPresentation);
+            assertFalse("not asked for, so not unresolved", rows.get(0).presentationUnresolved); //$NON-NLS-1$
+        }
+        verify(marker, never()).getObjectPresentation();
+    }
+
+    @Test
+    public void testObjectGroupingWithoutABmModelIsUnresolvedWithoutReadingThePresentation()
+    {
+        IProject project = project("P"); //$NON-NLS-1$
+        Marker first = marker(project, MarkerSeverity.MAJOR, "SU1"); //$NON-NLS-1$
+        Marker second = marker(project, MarkerSeverity.MINOR, "SU2"); //$NON-NLS-1$
+        Map<IProject, List<Marker>> markers = new LinkedHashMap<>();
+        markers.put(project, Arrays.asList(first, second));
+        IBmModelManager noModel = mock(IBmModelManager.class);
+        for (IBmModelManager manager : Arrays.asList(noModel, null))
+        {
+            List<SummaryRow> rows = GetProblemSummaryTool.collectRows(markers, manager, null, null,
+                Collections.<String> emptySet(), null, null, true);
+            assertEquals(2, rows.size());
+            for (SummaryRow row : rows)
+            {
+                assertTrue(row.presentationUnresolved);
+                assertEquals("<unresolved: P>", row.objectPresentation); //$NON-NLS-1$
+            }
+            String md = GetProblemSummaryTool.renderGroups(rows, GroupBy.OBJECT, 25, ""); //$NON-NLS-1$
+            assertTrue(md, md.contains("| <unresolved> | 2 |")); //$NON-NLS-1$
+        }
+        verify(first, never()).getObjectPresentation();
+        verify(second, never()).getObjectPresentation();
+    }
+
+    @Test
+    public void testRussianAndEnglishConfigurationRootFormOneGroup()
+    {
+        String rootRu = "Конфигурация"; //$NON-NLS-1$
+        List<SummaryRow> rows = new ArrayList<>();
+        rows.addAll(rows(2, "x", MarkerSeverity.MAJOR, null, rootRu)); //$NON-NLS-1$
+        rows.addAll(rows(1, "y", MarkerSeverity.MAJOR, null, "Configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Configuration", GetProblemSummaryTool.objectKey(rows.get(0))); //$NON-NLS-1$
+        String md = GetProblemSummaryTool.renderGroups(rows, GroupBy.OBJECT, 25, ""); //$NON-NLS-1$
+        assertTrue(md, md.contains("| Configuration | 3 | x, y |")); //$NON-NLS-1$
+        assertTrue(md, md.contains("**Total:** 3 problems in 1 groups")); //$NON-NLS-1$
+        assertFalse(md, md.contains(rootRu));
+    }
+
+    @Test
+    public void testModulePathsEntryThatNormalisesToNothingIsRefusedNotWidened()
+    {
+        // An all-"src/" list used to normalise to nothing and fall back to the whole-project report.
+        for (String entry : Arrays.asList("src/", "/", "\\", "src\\")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            JsonArray array = new JsonArray();
+            array.add(entry);
+            JsonObject json = JsonParser.parseString(new GetProblemSummaryTool().execute(
+                params("modulePaths", array.toString()))).getAsJsonObject(); //$NON-NLS-1$
+            assertFalse(entry + ": " + json, json.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = json.get("error").getAsString(); //$NON-NLS-1$
+            assertTrue(entry + " must be named: " + error, error.contains("'" + entry + "'")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertTrue(error, error.contains("CommonModules/X/Module.bsl")); //$NON-NLS-1$
+        }
+        // Blank entries and an empty array keep their meaning: no filter, the legacy report.
+        assertFalse(GetProblemSummaryTool.hasAggregationArguments(params("modulePaths", "[\"\", \" \"]"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static IBmModelManager managerWithReadModel(IProject project, boolean[] inReadTransaction)
+    {
+        IBmModel model = mock(IBmModel.class);
+        when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            inReadTransaction[0] = true;
+            try
+            {
+                return task.execute(mock(IBmTransaction.class), null);
+            }
+            finally
+            {
+                inReadTransaction[0] = false;
+            }
+        });
+        IBmModelManager manager = mock(IBmModelManager.class);
+        when(manager.getModel(project)).thenReturn(model);
+        return manager;
     }
 
     @Test

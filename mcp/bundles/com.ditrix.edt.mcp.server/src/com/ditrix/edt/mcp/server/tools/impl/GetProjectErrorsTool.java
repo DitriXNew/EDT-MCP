@@ -213,6 +213,14 @@ public class GetProjectErrorsTool implements IMcpTool
                 + String.join(", ", SEVERITY_VALUES)).toJson(); //$NON-NLS-1$
         }
 
+        // A non-blank modulePaths entry that normalises to nothing would silently widen the scope.
+        String unusablePaths = MarkerRows.unusableModulePathsError(
+            JsonUtils.extractArrayArgument(params, PARAM_MODULE_PATHS));
+        if (unusablePaths != null)
+        {
+            return ToolResult.error(unusablePaths).toJson();
+        }
+
         // Refuse only the transient BUILDING state (buildingErrorOrNull skips a
         // null/empty name itself); a missing/closed project falls through to the
         // value-naming "Project not found: <name>" in getProjectErrors instead of a

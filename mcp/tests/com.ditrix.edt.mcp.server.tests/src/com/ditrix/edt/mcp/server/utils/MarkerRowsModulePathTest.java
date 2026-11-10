@@ -98,6 +98,53 @@ public class MarkerRowsModulePathTest
     }
 
     @Test
+    public void testRowBuilderWithoutPresentationNeverReadsItAndCountsNothing()
+    {
+        Marker mine = marker(MODULE_A);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+        MarkerRows.Row row = MarkerRows.buildIfMatches(mine, null, null, Collections.<String> emptySet(),
+            Collections.<String> emptySet(), null, null, shown, filteredOut, false, false, MarkerRows.Row::new);
+        assertNotNull(row);
+        assertNull(row.objectPresentation);
+        assertEquals(MODULE_A, row.modulePath);
+        assertEquals(0, shown[0]);
+        assertEquals(0, filteredOut[0]);
+        verify(mine, never()).getObjectPresentation();
+    }
+
+    @Test
+    public void testRowBuilderDefaultOverloadStillReadsThePresentation()
+    {
+        // get_project_errors' overloads keep reading the presentation exactly as before.
+        Marker mine = marker(MODULE_A);
+        MarkerRows.Row row = MarkerRows.buildIfMatches(mine, null, null, Collections.<String> emptySet(),
+            Collections.<String> emptySet(), null, null, new int[1], new int[1], false, MarkerRows.Row::new);
+        assertEquals("CommonModule.A.Module", row.objectPresentation); //$NON-NLS-1$
+        verify(mine).getObjectPresentation();
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testRowBuilderRefusesAnObjectsFilterWithoutThePresentation()
+    {
+        MarkerRows.buildIfMatches(marker(MODULE_A), null, null, Collections.singleton("catalog.x"), //$NON-NLS-1$
+            Collections.<String> emptySet(), null, null, new int[1], new int[1], false, false, MarkerRows.Row::new);
+    }
+
+    @Test
+    public void testUnusableModulePathsAreNamedAndBlanksAreNot()
+    {
+        String error = MarkerRows.unusableModulePathsError(Arrays.asList("src/", " ", MODULE_A, "/", "\\", "src\\")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertNotNull(error);
+        assertTrue(error, error.contains("'src/', '/', '\\', 'src\\'")); //$NON-NLS-1$
+        assertFalse("a usable entry is not named: " + error, error.contains("'" + MODULE_A + "'")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(error, error.contains("CommonModules/X/Module.bsl")); //$NON-NLS-1$
+        assertNull(MarkerRows.unusableModulePathsError(Arrays.asList("", "  ", MODULE_A))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MarkerRows.unusableModulePathsError(Collections.<String> emptyList()));
+        assertNull(MarkerRows.unusableModulePathsError(null));
+    }
+
+    @Test
     public void testGroupMarkersByProjectHonoursTheNameFilterAndSkipsDeletedProjects()
     {
         IProject alive = project("Alive", true); //$NON-NLS-1$

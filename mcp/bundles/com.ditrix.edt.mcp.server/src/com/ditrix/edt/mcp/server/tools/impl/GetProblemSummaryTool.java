@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MarkerRows;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -159,6 +160,13 @@ public class GetProblemSummaryTool implements IMcpTool
             return ToolResult.error("Invalid severity: '" + severity + "'. Must be one of: " //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", GetProjectErrorsTool.SEVERITY_VALUES)).toJson(); //$NON-NLS-1$
         }
+        // A non-blank entry that normalises to nothing would silently widen the scope to every module.
+        String unusablePaths = MarkerRows.unusableModulePathsError(
+            JsonUtils.extractArrayArgument(params, PARAM_MODULE_PATHS));
+        if (unusablePaths != null)
+        {
+            return ToolResult.error(unusablePaths).toJson();
+        }
         GroupBy groupBy = groupByValue != null ? GroupBy.of(groupByValue) : null;
         if (groupByValue != null && groupBy == null)
         {
@@ -251,7 +259,7 @@ public class GetProblemSummaryTool implements IMcpTool
             List<SummaryRow> rows = collectRows(MarkerRows.groupMarkersByProject(markerManager, projectName),
                 Activator.getDefault().getBmModelManager(), severityFilter, checkId,
                 MarkerRows.modulePathKeys(modulePaths), Activator.getDefault().getCheckRepository(),
-                Activator.getDefault().getFixRepository());
+                Activator.getDefault().getFixRepository(), groupBy == GroupBy.OBJECT);
 
             String filters = filterLine(projectName, severity, checkId, modulePaths);
             StringBuilder md = new StringBuilder(groupBy == null ? renderTotals(rows, filters)
@@ -273,8 +281,10 @@ public class GetProblemSummaryTool implements IMcpTool
     /**
      * Builds the rows of every marker that passes the filters, project by project, inside that
      * project's BM read boundary (the object presentation resolves lazily against BM - hard rule:
-     * model access only inside a read transaction). A project without a BM model is read best-effort,
-     * as {@code get_project_errors} does.
+     * model access only inside a read transaction). The presentation is read only when
+     * {@code resolvePresentation} asks for it (only the object grouping shows it). A project without a BM
+     * model never reads it: with {@code resolvePresentation} its rows get the unresolved placeholder and
+     * are flagged unresolved.
      *
      * @param markersByProject the markers grouped by project, in processing order
      * @param bmModelManager the BM model manager, may be {@code null}
@@ -283,49 +293,69 @@ public class GetProblemSummaryTool implements IMcpTool
      * @param modulePathKeys the module-path keys ({@link MarkerRows#modulePathKeys}); empty keeps all
      * @param checkRepository resolves the symbolic check id, may be {@code null}
      * @param fixRepository answers whether a check has a registered fix, may be {@code null}
+     * @param resolvePresentation whether the rows need the object presentation ({@code groupBy=object})
      * @return the matching rows (never {@code null})
      */
     static List<SummaryRow> collectRows(Map<IProject, List<Marker>> markersByProject, IBmModelManager bmModelManager,
         MarkerSeverity severityFilter, String checkId, Set<String> modulePathKeys, ICheckRepository checkRepository,
-        IFixRepository fixRepository)
+        IFixRepository fixRepository, boolean resolvePresentation)
     {
         List<SummaryRow> rows = new ArrayList<>();
-        Set<String> noObjects = Collections.emptySet();
         for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
         {
             List<Marker> projectMarkers = entry.getValue();
-            Runnable collector = () -> {
-                int[] unresolvedShown = {0};
-                int[] unresolvedFilteredOut = {0};
-                for (Marker marker : projectMarkers)
-                {
-                    int unresolvedBefore = unresolvedShown[0];
-                    SummaryRow row = MarkerRows.buildIfMatches(marker, severityFilter, checkId, noObjects,
-                        modulePathKeys, checkRepository, fixRepository, unresolvedShown, unresolvedFilteredOut,
-                        false, SummaryRow::new);
-                    if (row != null)
-                    {
-                        MarkerSeverity severity = marker.getSeverity();
-                        row.severity = severity != null ? severity : MarkerSeverity.NONE;
-                        row.presentationUnresolved = unresolvedShown[0] > unresolvedBefore;
-                        rows.add(row);
-                    }
-                }
-            };
             IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
             if (bmModel != null)
             {
                 BmTransactions.<Void> read(bmModel, "SummarizeProjectProblems", (tx, pm) -> { //$NON-NLS-1$
-                    collector.run();
+                    collectProjectRows(projectMarkers, severityFilter, checkId, modulePathKeys, checkRepository,
+                        fixRepository, resolvePresentation, false, rows);
                     return null;
                 });
             }
             else
             {
-                collector.run();
+                // No BM model: the presentation is a model read, so it is never attempted outside a read
+                // boundary. Rows that need it get the unresolved placeholder and form the <unresolved> group.
+                collectProjectRows(projectMarkers, severityFilter, checkId, modulePathKeys, checkRepository,
+                    fixRepository, false, resolvePresentation, rows);
             }
         }
         return rows;
+    }
+
+    /**
+     * Adds the rows of one project's markers that pass the filters. With {@code resolvePresentation} the
+     * object presentation is read (call inside the project's BM read boundary); without it the presentation
+     * is never read and the row's {@code objectPresentation} stays {@code null} - or, with
+     * {@code markUnresolved}, becomes the unresolved placeholder and the row is flagged unresolved.
+     */
+    private static void collectProjectRows(List<Marker> projectMarkers, MarkerSeverity severityFilter,
+        String checkId, Set<String> modulePathKeys, ICheckRepository checkRepository, IFixRepository fixRepository,
+        boolean resolvePresentation, boolean markUnresolved, List<SummaryRow> rows)
+    {
+        Set<String> noObjects = Collections.emptySet();
+        int[] unresolvedShown = {0};
+        int[] unresolvedFilteredOut = {0};
+        for (Marker marker : projectMarkers)
+        {
+            int unresolvedBefore = unresolvedShown[0];
+            SummaryRow row = MarkerRows.buildIfMatches(marker, severityFilter, checkId, noObjects, modulePathKeys,
+                checkRepository, fixRepository, unresolvedShown, unresolvedFilteredOut, false, resolvePresentation,
+                SummaryRow::new);
+            if (row != null)
+            {
+                MarkerSeverity severity = marker.getSeverity();
+                row.severity = severity != null ? severity : MarkerSeverity.NONE;
+                row.presentationUnresolved = unresolvedShown[0] > unresolvedBefore;
+                if (markUnresolved)
+                {
+                    row.objectPresentation = MarkerRows.unresolvedPlaceholder(marker);
+                    row.presentationUnresolved = true;
+                }
+                rows.add(row);
+            }
+        }
     }
 
     /**
@@ -507,8 +537,10 @@ public class GetProblemSummaryTool implements IMcpTool
      * The top object of a row's location, in canonical English: the first two segments of the presentation
      * ({@code Справочник.X.Форма.Y.Форма} and {@code Catalog.X.Form.Y.Form} both give {@code Catalog.X}), so a
      * key is stable across a ru/en EDT UI and can be fed back to get_project_errors' {@code objects}. Only the
-     * structural TYPE token is translated - the programmatic Name is kept verbatim. A one-segment presentation
-     * ({@code Configuration}) stays as it is; an unresolved location forms one {@link #UNRESOLVED_KEY} group.
+     * structural TYPE token is translated - the programmatic Name is kept verbatim. The configuration root's
+     * token, English or Russian ({@link ConfigurationRoot#isToken}), becomes {@link ConfigurationRoot#FQN}, so
+     * a ru and an en root presentation form one {@code Configuration} group; an unresolved location forms one
+     * {@link #UNRESOLVED_KEY} group.
      */
     static String objectKey(SummaryRow row)
     {
@@ -522,7 +554,8 @@ public class GetProblemSummaryTool implements IMcpTool
             return NO_KEY;
         }
         String[] segments = presentation.trim().split("\\.", -1); //$NON-NLS-1$
-        String top = segments.length >= 2 ? segments[0] + "." + segments[1] : segments[0]; //$NON-NLS-1$
+        String type = ConfigurationRoot.isToken(segments[0]) ? ConfigurationRoot.FQN : segments[0];
+        String top = segments.length >= 2 ? type + "." + segments[1] : type; //$NON-NLS-1$
         return MetadataTypeUtils.toCanonicalEnglishFqn(top);
     }
 

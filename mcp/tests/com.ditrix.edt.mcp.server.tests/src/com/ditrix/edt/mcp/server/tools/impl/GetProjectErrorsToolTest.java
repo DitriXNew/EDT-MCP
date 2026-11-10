@@ -950,6 +950,58 @@ public class GetProjectErrorsToolTest
         assertFalse(none.toString(), none.toString().contains("Module paths")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testModulePathsEntryThatNormalisesToNothingIsRefusedNotDropped()
+    {
+        // "src/" and "/" name no module; dropping them silently turned the call into "no filter" (every
+        // module). The refusal names the value and the expected form. Validation runs before any
+        // project/BM access, so this is headless-safe.
+        for (String entry : Arrays.asList("src/", "/", "\\", "src\\")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            JsonArray array = new JsonArray();
+            array.add(entry);
+            Map<String, String> params = new HashMap<>();
+            params.put(GetProjectErrorsTool.PARAM_MODULE_PATHS, array.toString());
+            String error = refusalOf(new GetProjectErrorsTool().execute(params));
+            assertTrue(entry + " must be named: " + error, error.contains("'" + entry + "'")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertTrue("the expected form is named: " + error, //$NON-NLS-1$
+                error.contains("CommonModules/X/Module.bsl")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testModulePathsRefusalNamesOnlyTheUnusableEntry()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put(GetProjectErrorsTool.PARAM_MODULE_PATHS, "[\"" + MODULE_A + "\", \"src/\"]"); //$NON-NLS-1$ //$NON-NLS-2$
+        String error = refusalOf(new GetProjectErrorsTool().execute(params));
+        assertTrue(error, error.contains("'src/'")); //$NON-NLS-1$
+        assertFalse("a usable entry is not reported: " + error, error.contains("'" + MODULE_A + "'")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testBlankModulePathsEntriesStayIgnored()
+    {
+        // Blank entries and an empty array keep their meaning: ignored / no module filter.
+        Map<String, String> blank = new HashMap<>();
+        blank.put(GetProjectErrorsTool.PARAM_MODULE_PATHS, "[\"\", \"  \"]"); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.modulePathsOf(blank).isEmpty());
+        assertNull(com.ditrix.edt.mcp.server.utils.MarkerRows.unusableModulePathsError(
+            com.ditrix.edt.mcp.server.protocol.JsonUtils.extractArrayArgument(blank,
+                GetProjectErrorsTool.PARAM_MODULE_PATHS)));
+        Map<String, String> empty = new HashMap<>();
+        empty.put(GetProjectErrorsTool.PARAM_MODULE_PATHS, "[]"); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.modulePathsOf(empty).isEmpty());
+    }
+
+    /** The error text of a refusal; fails when the result is not a refusal. */
+    private static String refusalOf(String result)
+    {
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse("expected a refusal: " + result, json.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        return json.get("error").getAsString(); //$NON-NLS-1$
+    }
+
     private static final String MODULE_A = "CommonModules/A/Module.bsl"; //$NON-NLS-1$
     private static final String MODULE_B = "CommonModules/B/Module.bsl"; //$NON-NLS-1$
 
