@@ -49,7 +49,7 @@ public class DcsTypedValueReproducibilityTest
                     Value declared = parameter.defValue();
                     String kind = declared == null ? "null" : declared.eClass().getName();
                     kinds.add(kind);
-                    if (Set.of("UsedDatabaseCopiesValue", "LineValue", "ChartTrendlinesValue").contains(kind))
+                    if (Set.of("UsedDatabaseCopiesValue", "ChartTrendlinesValue").contains(kind))
                     {
                         // Real catalogue defaults that value() cannot construct.
                         // Verify refusal for every untyped emitter instead of inventing a new wire kind.
@@ -157,6 +157,7 @@ public class DcsTypedValueReproducibilityTest
 
     private static JsonElement raw(Value declared)
     {
+        if (declared instanceof com._1c.g5.v8.dt.mcore.LineValue) return DcsSettingsWriter.valueSpec(declared);
         if (declared instanceof LocalString) return json("{\"en\":\"Catalogue text\"}");
         if (declared instanceof EnumValue)
         {

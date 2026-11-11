@@ -106,6 +106,9 @@ import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
+import com._1c.g5.v8.dt.mcore.Line;
+import com._1c.g5.v8.dt.mcore.LineValue;
+import com._1c.g5.v8.dt.metadata.common.SpreadsheetDocumentCellLineType;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NullValue;
 import com._1c.g5.v8.dt.mcore.NumberValue;
@@ -727,16 +730,63 @@ public final class DcsSettingsWriter
             }
             working = DcsFactory.eINSTANCE.createDataCompositionSettings();
         }
-        String error = path.isEmpty() ? applySettingsBody(working, body, action, languages, version, "body") //$NON-NLS-1$
-            : applySettingsPath(working, path, body, action, type, languages, version);
+        JsonObject mutation = body;
+        Integer insertPosition = null;
+        int previousSize = 0;
+        if (body.has("insertPosition"))
+        {
+            JsonElement raw = body.get("insertPosition");
+            insertPosition = raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isNumber()
+                ? JsonUtils.parseIntegralInt(raw.toString()) : null;
+            if (!ACTION_UPSERT.equals(action) || insertPosition == null)
+                return SettingsResult.failure("Invalid insertPosition '" + raw
+                    + "'. Use a whole 1-based number with upsert on an ordered collection.");
+            EList<?> existing = insertionItems(working, path);
+            if (!isInsertionPath(path) || existing == null && resolveSettingsNode(working, path) != null)
+                return SettingsResult.failure("insertPosition cannot target '" + String.join("/", path)
+                    + "'. Address a filter, selection, order, conditionalAppearance or items collection; omit it for an existing item.");
+            previousSize = existing == null ? 0 : existing.size();
+            try { MetadataOrdering.validateInsertPosition(insertPosition, previousSize); }
+            catch (IllegalArgumentException e) { return SettingsResult.failure(e.getMessage()); }
+            mutation = body.deepCopy();
+            mutation.remove("insertPosition");
+        }
+        String error = path.isEmpty() ? applySettingsBody(working, mutation, action, languages, version, "body") //$NON-NLS-1$
+            : applySettingsPath(working, path, mutation, action, type, languages, version);
         if (error != null)
         {
             return SettingsResult.failure(error);
+        }
+        if (insertPosition != null)
+        {
+            EList<?> items = insertionItems(working, path);
+            if (items == null || items.size() <= previousSize)
+                return SettingsResult.failure("insertPosition '" + insertPosition
+                    + "' needs new items. Pass items to append at the addressed collection, or omit insertPosition.");
+            int added = items.size() - previousSize;
+            for (int i = 0; i < added; i++) items.move(insertPosition - 1 + i, previousSize + i);
         }
         String referenceError = omittedUserFieldReferenceError(current, working,
             settingsRootAddress);
         return referenceError == null ? SettingsResult.success(working, true)
             : SettingsResult.failure(referenceError);
+    }
+
+    private static boolean isInsertionPath(List<String> path)
+    {
+        if (path.isEmpty()) return false;
+        return Set.of("filter", "selection", "order", "conditionalAppearance", KEY_ITEMS)
+            .contains(path.get(path.size() - 1));
+    }
+
+    private static EList<?> insertionItems(DataCompositionSettings settings, List<String> path)
+    {
+        if (path.isEmpty()) return null;
+        EObject owner = resolveSettingsNode(settings, path.subList(0, path.size() - 1));
+        Object target = owner == null ? null : feature(owner, path.get(path.size() - 1));
+        if (target instanceof EList<?>) return (EList<?>)target;
+        Object items = target instanceof EObject ? feature((EObject)target, KEY_ITEMS) : null;
+        return items instanceof EList<?> ? (EList<?>)items : null;
     }
 
     /**
@@ -3661,33 +3711,149 @@ public final class DcsSettingsWriter
             result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
                 .createDataCompositionAppearance();
         }
+        if (body.has(KEY_ITEMS))
+        {
+            String members = JsonUtils.unknownMemberError(body, path, KEY_ITEMS);
+            if (members != null) return AppearanceResult.failure(members);
+            JsonArray items = array(body, KEY_ITEMS, path);
+            if (items == null) return AppearanceResult.failure(parseScratch().arrayError);
+            for (int i = 0; i < items.size(); i++)
+            {
+                JsonObject supplied = arrayObject(items, i, path + ".items");
+                if (supplied == null) return AppearanceResult.failure(parseScratch().arrayObjectError);
+                DataCompositionParameterValue item = newAppearanceItem(supplied);
+                String error = applyAppearanceItem(item, supplied, languages, available, version,
+                    path + ".items[" + i + "]");
+                if (error != null) return AppearanceResult.failure(error);
+                DcsAvailableParameter declared = findAppearanceParameter(available, item.getParameter().getValue());
+                putAppearanceItem(result.getItems(), item, declared, available);
+            }
+            return AppearanceResult.success(result);
+        }
         for (String key : body.keySet())
         {
-            DcsAvailableParameter parameter = available.findItem(key);
+            DcsAvailableParameter parameter = findAppearanceParameter(available, key);
             if (parameter == null)
             {
                 return AppearanceResult.failure("Unknown appearance key '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
                     + path + "'. Use one of the typed keys for platform " + version + ": " //$NON-NLS-1$ //$NON-NLS-2$
                     + parameterKeys(available) + ". Remove '" + key + "' or correct its spelling."); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            AppearanceParameterSpec spec = appearanceParameterSpec(body.get(key),
+            JsonElement raw = body.get(key);
+            JsonArray nested = null;
+            if (raw.isJsonObject() && raw.getAsJsonObject().has("nestedParameterValues"))
+            {
+                JsonObject wrapper = raw.getAsJsonObject().deepCopy();
+                nested = array(wrapper, "nestedParameterValues", path + "." + key);
+                if (nested == null) return AppearanceResult.failure(parseScratch().arrayError);
+                wrapper.remove("nestedParameterValues");
+                raw = wrapper;
+            }
+            AppearanceParameterSpec spec = appearanceParameterSpec(raw,
                 path + "." + key); //$NON-NLS-1$
             if (spec.error != null) return AppearanceResult.failure(spec.error);
             ValueResult mapped = typedParameterValue(spec.value, parameter.defValue(), languages,
                 path + "." + key); //$NON-NLS-1$
             if (mapped.error != null) return AppearanceResult.failure(mapped.error);
-            DataCompositionParameterValue item =
-                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
-                    .createDataCompositionParameterValue();
+            DataCompositionParameterValue item = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionParameterValue();
             item.setUse(spec.use);
             DataCompositionParameter name =
                 com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
             name.setValue(parameterName(parameter, languages));
             item.setParameter(name);
             item.getValues().add(mapped.value);
+            if (nested != null)
+            {
+                String error = applyNestedAppearance(item, nested, languages, parameter.getSubParameters(),
+                    version, path + "." + key + ".nestedParameterValues");
+                if (error != null) return AppearanceResult.failure(error);
+            }
             putAppearanceParameter(result, item, parameter, available);
         }
         return AppearanceResult.success(result);
+    }
+
+    /** EDT stores full data paths even in the nested collection; both aliases come from its catalogue. */
+    static DcsAvailableParameter findAppearanceParameter(DcsAvailableParameterCollection available, String key)
+    {
+        if (key == null) return null;
+        DcsAvailableParameter direct = available.findItem(key);
+        if (direct != null) return direct;
+        for (int i = 0; i < available.itemsCount(); i++)
+        {
+            DcsAvailableParameter found = findAppearanceParameter(available.getItemAt(i).getSubParameters(), key);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static DataCompositionParameterValue newAppearanceItem(JsonObject body)
+    {
+        return body.has(KEY_VIEW_MODE) || body.has(KEY_USER_SETTING_ID) || body.has(KEY_USER_SETTING_PRESENTATION)
+            ? DcsFactory.eINSTANCE.createSettingsParameterValue()
+            : com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameterValue();
+    }
+
+    private static String applyAppearanceItem(DataCompositionParameterValue item, JsonObject body,
+        DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available,
+        Version version, String path)
+    {
+        JsonObject scalar = body.deepCopy();
+        JsonArray nested = null;
+        if (scalar.has("nestedParameterValues"))
+        {
+            nested = array(scalar, "nestedParameterValues", path);
+            if (nested == null) return parseScratch().arrayError;
+            scalar.remove("nestedParameterValues");
+        }
+        ValueResult parameter = value(scalar.get("parameter"), path + ".parameter");
+        if (parameter.error != null) return parameter.error;
+        if (!(parameter.value instanceof DataCompositionParameter))
+            return "Appearance parameter at '" + path + "' needs kind='parameter'; copy its name from options.";
+        String name = ((DataCompositionParameter)parameter.value).getValue();
+        DcsAvailableParameter declared = findAppearanceParameter(available, name);
+        if (declared == null) return "Unknown appearance key '" + name + "' at '" + path
+            + "'. Copy a parameter name from dcs action='options'.";
+        if (!scalar.has("value") && !scalar.has(KEY_VALUES) && (nested == null || nested.isEmpty()))
+            return "Appearance key '" + name + "' needs a value or nestedParameterValues. Pass a typed value or nested items.";
+        if (scalar.has(KEY_VALUES))
+        {
+            JsonArray values = array(scalar, KEY_VALUES, path);
+            if (values == null) return parseScratch().arrayError;
+            if (scalar.has("value") || values.size() != 1)
+                return "Appearance key '" + name + "' needs exactly one value. Use value or a one-element values array.";
+            scalar.add("value", values.get(0));
+            scalar.remove(KEY_VALUES);
+        }
+        SettingsParameterValue parsed = item instanceof SettingsParameterValue ? (SettingsParameterValue)item
+            : DcsFactory.eINSTANCE.createSettingsParameterValue();
+        String error = applyParameterItem(parsed, scalar, languages, available, version, path, true);
+        if (error != null) return error;
+        if (parsed != item)
+        {
+            item.setParameter(parsed.getParameter());
+            item.setUse(parsed.isUse());
+            item.getValues().addAll(new ArrayList<>(parsed.getValues()));
+        }
+        return nested == null ? null : applyNestedAppearance(item, nested, languages,
+            declared.getSubParameters(), version, path + ".nestedParameterValues");
+    }
+
+    private static String applyNestedAppearance(DataCompositionParameterValue owner, JsonArray nested,
+        DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available,
+        Version version, String path)
+    {
+        for (int i = 0; i < nested.size(); i++)
+        {
+            JsonObject body = arrayObject(nested, i, path);
+            if (body == null) return parseScratch().arrayObjectError;
+            DataCompositionParameterValue child = newAppearanceItem(body);
+            String error = applyAppearanceItem(child, body, languages, available, version, path + "[" + i + "]");
+            if (error != null) return error;
+            owner.getNestedParameterValues().add(child);
+        }
+        return null;
     }
 
     /** Extracts the optional per-parameter use flag without passing it to the typed value builder. */
@@ -3717,18 +3883,118 @@ public final class DcsSettingsWriter
         DataCompositionParameterValue replacement, DcsAvailableParameter declared,
         DcsAvailableParameterCollection available)
     {
-        for (int i = 0; i < appearance.getItems().size(); i++)
+        putAppearanceParameter(appearance.getItems(), replacement, declared, available);
+    }
+
+    private static void putAppearanceParameter(List<DataCompositionParameterValue> items,
+        DataCompositionParameterValue replacement, DcsAvailableParameter declared,
+        DcsAvailableParameterCollection available)
+    {
+        for (int i = 0; i < available.itemsCount(); i++)
         {
-            DataCompositionParameterValue existing = appearance.getItems().get(i);
+            DcsAvailableParameter parent = available.getItemAt(i);
+            if (parent == declared || findAppearanceParameter(parent.getSubParameters(), declared.key(0)) == null)
+                continue;
+            DataCompositionParameterValue holder = null;
+            for (DataCompositionParameterValue candidate : items)
+                if (candidate.getParameter() != null
+                    && available.findItem(candidate.getParameter().getValue()) == parent) holder = candidate;
+            if (holder == null)
+            {
+                holder = DcsFactory.eINSTANCE.createSettingsParameterValue();
+                DataCompositionParameter name = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
+                String replacementName = replacement.getParameter().getValue();
+                int dot = replacementName.lastIndexOf('.');
+                name.setValue(dot > 0 ? replacementName.substring(0, dot) : parent.key(0));
+                holder.setParameter(name);
+                holder.setUse(false);
+                items.add(holder);
+            }
+            putAppearanceParameter(holder.getNestedParameterValues(), replacement, declared, parent.getSubParameters());
+            return;
+        }
+        putAppearanceItem(items, replacement, declared, available);
+    }
+
+    private static void putAppearanceItem(List<DataCompositionParameterValue> items,
+        DataCompositionParameterValue replacement, DcsAvailableParameter declared,
+        DcsAvailableParameterCollection available)
+    {
+        for (int i = 0; i < items.size(); i++)
+        {
+            DataCompositionParameterValue existing = items.get(i);
             String existingName = existing.getParameter() == null
                 ? null : existing.getParameter().getValue();
-            if (existingName != null && available.findItem(existingName) == declared)
+            if (existingName != null && findAppearanceParameter(available, existingName) == declared)
             {
-                appearance.getItems().set(i, replacement);
+                items.set(i, replacement);
                 return;
             }
         }
-        appearance.getItems().add(replacement);
+        items.add(replacement);
+    }
+
+    /** Inverse bodies use the same ValueSpec projection as the losslessness guard. */
+    static JsonElement valueSpec(Value value)
+    {
+        return untypedProjection(value).body();
+    }
+
+    static JsonObject appearanceBody(DataCompositionAppearance appearance)
+    {
+        JsonArray items = new JsonArray();
+        for (DataCompositionParameterValue item : appearance.getItems())
+        {
+            JsonObject body = appearanceItemBody(item);
+            if (body == null) return null;
+            items.add(body);
+        }
+        JsonObject body = new JsonObject();
+        body.add(KEY_ITEMS, items);
+        return body;
+    }
+
+    private static JsonObject appearanceItemBody(DataCompositionParameterValue item)
+    {
+        if (item.getParameter() == null) return null;
+        JsonObject body = new JsonObject();
+        body.add("parameter", valueSpec(item.getParameter()));
+        body.addProperty(KEY_USE, item.isUse());
+        if (!item.getValues().isEmpty())
+        {
+            JsonArray values = new JsonArray();
+            for (Value value : item.getValues())
+            {
+                List<JsonElement> forms = typedBodies(value);
+                if (forms.isEmpty()) return null;
+                values.add(forms.get(0));
+            }
+            body.add(KEY_VALUES, values);
+        }
+        if (item instanceof SettingsParameterValue)
+        {
+            SettingsParameterValue settings = (SettingsParameterValue)item;
+            body.addProperty(KEY_VIEW_MODE, settings.getViewMode().getLiteral());
+            if (settings.getUserSettingID() != null) body.addProperty(KEY_USER_SETTING_ID, settings.getUserSettingID());
+            Presentation presentation = settings.getUserSettingPresentation();
+            if (presentation != null)
+            {
+                if (presentation.getLocalValue() == null) return null;
+                body.add(KEY_USER_SETTING_PRESENTATION, typedBodies(presentation.getLocalValue()).get(0));
+            }
+        }
+        if (!item.getNestedParameterValues().isEmpty())
+        {
+            JsonArray nested = new JsonArray();
+            for (DataCompositionParameterValue child : item.getNestedParameterValues())
+            {
+                JsonObject value = appearanceItemBody(child);
+                if (value == null) return null;
+                nested.add(value);
+            }
+            body.add("nestedParameterValues", nested);
+        }
+        return body;
     }
 
     /**
@@ -3747,6 +4013,15 @@ public final class DcsSettingsWriter
     private static ValueResult typedParameterValue(JsonElement raw, Value expected,
         DcsPresentationParser.LanguageContext languages, String path)
     {
+        if (expected instanceof LineValue)
+        {
+            if (raw == null || !raw.isJsonObject() || !"line".equals(DcsWriter.stringMember(raw.getAsJsonObject(), KEY_KIND)))
+                return ValueResult.failure("Line parameter at '" + path
+                    + "' needs {kind:'line',value:{width:2,style:'Solid'}}. Use the line ValueSpec.");
+            String unknown = JsonUtils.unknownMemberError(raw.getAsJsonObject(), path, KEY_KIND, "value");
+            return unknown == null ? lineValue(raw.getAsJsonObject().get("value"), (LineValue)expected, path)
+                : ValueResult.failure(unknown);
+        }
         if (expected instanceof LocalString)
         {
             if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().has(KEY_KIND)
@@ -4167,7 +4442,22 @@ public final class DcsSettingsWriter
     {
         String kind;
         JsonElement payload;
-        if (stored instanceof StandardPeriodValue)
+        if (stored instanceof LineValue)
+        {
+            Line line = ((LineValue)stored).getValue();
+            if (line == null || !(line.getStyle() instanceof EnumValue)
+                || ((EnumValue)line.getStyle()).getValue() == null)
+                return UntypedProjection.refused("the LineValue needs a line with an enum style; use update to repair it");
+            Enumerator style = ((EnumValue)line.getStyle()).getValue();
+            JsonObject object = new JsonObject();
+            object.addProperty("width", line.getWidth());
+            object.addProperty("gap", line.isGap());
+            object.addProperty("style", style.getLiteral());
+            object.addProperty("styleType", style.getClass().getSimpleName());
+            kind = "line";
+            payload = object;
+        }
+        else if (stored instanceof StandardPeriodValue)
         {
             StandardPeriod period = ((StandardPeriodValue)stored).getValue();
             if (period == null)
@@ -5017,6 +5307,13 @@ public final class DcsSettingsWriter
         DcsPresentationParser.LanguageContext languages,
         DcsAvailableParameterCollection available, Version version, String path)
     {
+        return applyParameterItem(item, body, languages, available, version, path, false);
+    }
+
+    private static String applyParameterItem(SettingsParameterValue item, JsonObject body,
+        DcsPresentationParser.LanguageContext languages,
+        DcsAvailableParameterCollection available, Version version, String path, boolean appearance)
+    {
         String members = JsonUtils.unknownMemberError(body, path, "parameter", "value", KEY_VALUES, KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION);
         if (members != null)
@@ -5045,7 +5342,7 @@ public final class DcsSettingsWriter
             if (available != null)
             {
                 String name = ((DataCompositionParameter)parameter.value).getValue();
-                declared = available.findItem(name);
+                declared = appearance ? findAppearanceParameter(available, name) : available.findItem(name);
                 if (declared == null)
                 {
                     return unknownOutputParameter(name, available, version,
@@ -5064,7 +5361,7 @@ public final class DcsSettingsWriter
                 return "Output parameter value at '" + path //$NON-NLS-1$
                     + ".value' needs a declared 'parameter'. Pass a typed parameter name."; //$NON-NLS-1$
             }
-            declared = available.findItem(name);
+            declared = appearance ? findAppearanceParameter(available, name) : available.findItem(name);
             if (declared == null)
             {
                 return unknownOutputParameter(name, available, version,
@@ -5595,6 +5892,8 @@ public final class DcsSettingsWriter
                     return ValueResult.success(ScalarValueCodec.parse(object, path));
                 case KIND_STANDARD_PERIOD:
                     return standardPeriodValue(raw, path);
+                case "line":
+                    return lineValue(raw, null, path);
                 case KIND_STANDARD_BEGINNING_DATE:
                     return standardBeginningDateValue(raw, path);
                 case KIND_VALUE_LIST:
@@ -5602,7 +5901,7 @@ public final class DcsSettingsWriter
                 default:
                     return ValueResult.failure("ValueSpec kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
                         + "' is invalid. Use one of: field, parameter, expression, string, number, " //$NON-NLS-1$
-                        + "boolean, date, null, standardPeriod, standardBeginningDate, valueList."); //$NON-NLS-1$
+                        + "boolean, date, null, standardPeriod, standardBeginningDate, valueList, line."); //$NON-NLS-1$
             }
         }
         catch (IllegalArgumentException e)
@@ -5611,11 +5910,60 @@ public final class DcsSettingsWriter
         }
     }
 
-    /**
-     * {@code {kind:'standardPeriod', value:{variant?, startDate?, endDate?}}}: the platform's
-     * StandardPeriod as EDT stores it - a variant (Custom when omitted, the model default) and the
-     * optional custom start and end dates, each a platform date literal.
-     */
+    /** Native LineValue with the style's platform enum family retained for XML round trips. */
+    private static ValueResult lineValue(JsonElement raw, LineValue expected, String path)
+    {
+        if (raw == null || !raw.isJsonObject())
+            return ValueResult.failure("Line value '" + raw + "' at '" + path
+                + "' needs {width:2,style:'Solid'}. Pass a line object.");
+        JsonObject body = raw.getAsJsonObject();
+        String unknown = JsonUtils.unknownMemberError(body, path + ".value", "width", "style", "gap", "styleType");
+        if (unknown != null) return ValueResult.failure(unknown);
+        JsonElement width = body.get("width");
+        Integer parsed = width != null && width.isJsonPrimitive() && width.getAsJsonPrimitive().isNumber()
+            ? JsonUtils.parseIntegralInt(width.toString()) : null;
+        if (parsed == null || parsed < 0)
+            return ValueResult.failure("Line width '" + width + "' at '" + path
+                + "' is invalid. Pass a non-negative whole number.");
+        Enumerator sample = SpreadsheetDocumentCellLineType.SOLID;
+        if (expected != null && expected.getValue() != null && expected.getValue().getStyle() instanceof EnumValue)
+            sample = ((EnumValue)expected.getValue().getStyle()).getValue();
+        String styleType = optionalString(body, "styleType", path);
+        if (parseScratch().stringError != null) return ValueResult.failure(parseScratch().stringError);
+        if (styleType != null)
+        {
+            if (expected != null && !sample.getClass().getSimpleName().equals(styleType))
+                return ValueResult.failure("Line styleType '" + styleType + "' at '" + path
+                    + "' must be " + sample.getClass().getSimpleName() + ". Use the parameter's style type.");
+            if ("ChartLineType".equals(styleType)) sample = com._1c.g5.v8.dt.metadata.common.ChartLineType.SOLID;
+            else if ("SpreadsheetDocumentDrawingLineType".equals(styleType))
+                sample = com._1c.g5.v8.dt.metadata.common.SpreadsheetDocumentDrawingLineType.SOLID;
+            else if ("GeographicalSchemeLineType".equals(styleType))
+                sample = com._1c.g5.v8.dt.metadata.common.GeographicalSchemeLineType.SOLID;
+            else if (!"SpreadsheetDocumentCellLineType".equals(styleType))
+                return ValueResult.failure("Unknown line styleType '" + styleType
+                    + "'. Use SpreadsheetDocumentCellLineType, ChartLineType, SpreadsheetDocumentDrawingLineType or GeographicalSchemeLineType.");
+        }
+        String literal = requiredString(body, "style", path);
+        if (parseScratch().stringError != null) return ValueResult.failure(parseScratch().stringError);
+        Enumerator selected = findEnumerator(sample, literal);
+        if (selected == null)
+            return ValueResult.failure("Line style '" + literal + "' at '" + path
+                + "' is invalid. Use one of: " + enumeratorValues(sample) + ".");
+        Boolean gap = body.has("gap") ? bool(body, "gap", path) : Boolean.FALSE;
+        if (gap == null) return ValueResult.failure(parseScratch().booleanError);
+        Line line = McoreFactory.eINSTANCE.createLine();
+        line.setWidth(parsed);
+        line.setGap(gap);
+        EnumValue style = McoreFactory.eINSTANCE.createEnumValue();
+        style.setValue(selected);
+        line.setStyle(style);
+        LineValue result = McoreFactory.eINSTANCE.createLineValue();
+        result.setValue(line);
+        return ValueResult.success(result);
+    }
+
+    /** StandardPeriod holds the variant (Custom by default) and optional platform date bounds. */
     private static ValueResult standardPeriodValue(JsonElement raw, String path)
     {
         String at = path + ".value"; //$NON-NLS-1$

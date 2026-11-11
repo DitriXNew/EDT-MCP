@@ -72,7 +72,7 @@ public final class TemplateContentSupport
     private static final String REPLACE = "replace"; //$NON-NLS-1$
     private static final String APPEND = "append"; //$NON-NLS-1$
     private static final Set<String> TEXT_KEYS = Set.of(TEXT, EXPECTED_HASH, EXPECTED_SOURCE, MODE, OLD_TEXT, OVERWRITE);
-    private static final String SUPPORTED = "TextDocument, SpreadsheetDocument"; //$NON-NLS-1$
+    private static final String SUPPORTED = "TextDocument, SpreadsheetDocument, DataCompositionSchema"; //$NON-NLS-1$
 
     private TemplateContentSupport()
     {
@@ -121,7 +121,8 @@ public final class TemplateContentSupport
     /** An actionable refusal for a new unsupported content type, or null. */
     public static String unsupportedTypeError(TemplateType type, String supplied)
     {
-        if (type == TemplateType.TEXT_DOCUMENT || type == TemplateType.SPREADSHEET_DOCUMENT)
+        if (type == TemplateType.TEXT_DOCUMENT || type == TemplateType.SPREADSHEET_DOCUMENT
+            || type == TemplateType.DATA_COMPOSITION_SCHEMA)
         {
             return null;
         }
@@ -130,18 +131,11 @@ public final class TemplateContentSupport
     }
 
     /**
-     * An actionable refusal for a retype target, or null. A DataCompositionSchema is accepted here (but
-     * not at creation): retyping creates and attaches the empty schema for immediate export.
+     * An actionable refusal for a retype target, or null. Creation and retyping share the vocabulary.
      */
     public static String unsupportedRetypeError(TemplateType type, String supplied)
     {
-        if (type == TemplateType.DATA_COMPOSITION_SCHEMA || type == TemplateType.TEXT_DOCUMENT
-            || type == TemplateType.SPREADSHEET_DOCUMENT)
-        {
-            return null;
-        }
-        return ToolResult.error("Unsupported templateType '" + supplied + "'. Supported: " + SUPPORTED //$NON-NLS-1$ //$NON-NLS-2$
-            + ", DataCompositionSchema (an empty template only; author it with the dcs tool).").toJson(); //$NON-NLS-1$
+        return unsupportedTypeError(type, supplied);
     }
 
     /** Reproduce the type's new-wizard content; the supplied file is EDT's external-property path. */
@@ -154,6 +148,13 @@ public final class TemplateContentSupport
             throw Refusals.argument(refusal);
         }
         template.setTemplateType(type);
+        if (type == TemplateType.DATA_COMPOSITION_SCHEMA)
+        {
+            DcsSchemaContent.ResolveResult content =
+                DcsSchemaContent.resolveTemplateContent(tx, template, names, template.getName());
+            if (!content.isSuccess()) throw Refusals.state(content.error());
+            return content.contentFqn();
+        }
         if (type == TemplateType.TEXT_DOCUMENT)
         {
             if (file == null)
@@ -203,14 +204,6 @@ public final class TemplateContentSupport
         }
         requireEmpty(template, textFile, project);
         detachContent(template, tx);
-        if (type == TemplateType.DATA_COMPOSITION_SCHEMA)
-        {
-            template.setTemplateType(type);
-            DcsSchemaContent.ResolveResult content =
-                DcsSchemaContent.resolveTemplateContent(tx, template, names, template.getName());
-            if (!content.isSuccess()) throw Refusals.state(content.error());
-            return content.contentFqn();
-        }
         return initialize(template, type, tx, project, names, textFile);
     }
 

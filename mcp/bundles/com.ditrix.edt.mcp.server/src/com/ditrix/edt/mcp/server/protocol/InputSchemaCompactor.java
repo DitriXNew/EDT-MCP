@@ -169,7 +169,8 @@ public final class InputSchemaCompactor
         // The enum cannot express either fact: md is the default, and xml is legal only for
         // action=get + type=schema + a bare root. Without this one clause a schema-valid
         // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.
-        keep.put("dcs", asSet("format")); //$NON-NLS-1$ //$NON-NLS-2$
+        // body models insertPosition only; retain its action requirements and 1-based insertion contract.
+        keep.put("dcs", asSet("format", "body")); //$NON-NLS-1$ //$NON-NLS-2$
         // Cross-field requirements are absent from the shape: replace needs both arrays,
         // even when empty, and a Condition source requires an explicit branch.
         keep.put("business_process_route_map", asSet("action", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
