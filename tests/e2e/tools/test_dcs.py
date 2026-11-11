@@ -67,7 +67,7 @@ def test_standard_period_parameter_type_defaults_and_variant_values_665():
     for suffix, kind in [("En", "StandardPeriod"), ("Ru", "СтандартныйПериод")]:
         parameter = "Period" + suffix
         assert_ok(_write(root, "upsert", "parameter", {
-            "name": parameter, "valueType": {"kind": kind}, "values": [period],
+            "name": parameter, "valueType": {"types": [{"kind": kind}]}, "values": [period],
         }), "create StandardPeriod parameter " + kind)
         disk = read_disk(path)
         assert "StandardPeriod" in disk and "ThisYear" in disk, disk
@@ -92,7 +92,7 @@ def test_standard_period_parameter_type_defaults_and_variant_values_665():
     assert_ok(read, "read variant period")
     assert_contains(read.text, "2026-12-31T23:59:59", "variant period end date")
     before = tree_snapshot()
-    refused = _write(root, "upsert", "parameter", {"name": "BadPeriod", "valueType": {"kind": "StandardPeriod"},
+    refused = _write(root, "upsert", "parameter", {"name": "BadPeriod", "valueType": {"types": [{"kind": "StandardPeriod"}]},
                      "values": [{"kind": "standardPeriod", "value": {"variant": "BadVariant665"}}]})
     assert_error_quality(assert_error(refused), names=["BadVariant665"], suggests=["Use"])
     assert_tree_unchanged(before, "invalid period must not mutate")

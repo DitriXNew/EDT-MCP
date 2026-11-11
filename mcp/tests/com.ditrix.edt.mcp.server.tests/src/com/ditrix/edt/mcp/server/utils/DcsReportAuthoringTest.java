@@ -50,8 +50,8 @@ public class DcsReportAuthoringTest
         {
             DataCompositionSchema schema = DcsStoredXmlTestSupport.schema();
             String value = "{\"kind\":\"standardPeriod\",\"value\":{\"variant\":\"ThisYear\"}}";
-            var applied = DcsWriter.apply(schema, json("{\"parameters\":[{\"name\":\"Period\",\"valueType\":{\"kind\":\""
-                + kind + "\"},\"values\":[" + value + "]}]}"), spec -> {
+            var applied = DcsWriter.apply(schema, json("{\"parameters\":[{\"name\":\"Period\",\"valueType\":{\"types\":[{\"kind\":\""
+                + kind + "\"}]},\"values\":[" + value + "]}]}"), spec -> {
                     var td = McoreFactory.eINSTANCE.createTypeDescription();
                     var type = McoreFactory.eINSTANCE.createType();
                     type.setName("StandardPeriod");

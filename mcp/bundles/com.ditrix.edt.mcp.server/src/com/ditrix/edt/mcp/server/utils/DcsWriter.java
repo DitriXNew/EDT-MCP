@@ -44,6 +44,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -881,6 +882,19 @@ public final class DcsWriter
         }
     }
 
+    /** A resolved platform type is a proxy whose URI carries no name; EDT's resolver names it. */
+    private static boolean isStandardPeriod(TypeItem type)
+    {
+        try
+        {
+            return "StandardPeriod".equals(McoreUtil.getTypeName(type)); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            return false;
+        }
+    }
+
     private static Set<String> declaredTypeNames(TypeDescription declared)
     {
         Set<String> result = new HashSet<>();
@@ -892,7 +906,7 @@ public final class DcsWriter
                 : name == null ? "" : name.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
             result.add(normalized);
             if (normalized.endsWith("/standardperiod") || normalized.endsWith("#standardperiod")
-                || normalized.equals("стандартныйпериод")) result.add("standardperiod");
+                || normalized.equals("стандартныйпериод") || isStandardPeriod(type)) result.add("standardperiod");
             if (normalized.contains("string")) result.add("string"); //$NON-NLS-1$ //$NON-NLS-2$
             if (normalized.contains("number") || normalized.contains("decimal")) result.add("number"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             if (normalized.contains("boolean")) result.add("boolean"); //$NON-NLS-1$ //$NON-NLS-2$

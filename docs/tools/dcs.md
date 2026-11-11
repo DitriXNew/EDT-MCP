@@ -295,7 +295,7 @@ before the first mutation, then committed in one BM write transaction and force-
 The body shapes below define the current authoring contract. Optional members are
 marked with `?`; omitted members have the action semantics from the table above.
 
-Schema parameter `valueType:{kind:"StandardPeriod"}` (or `СтандартныйПериод`) accepts `standardPeriod` values in `values` and variant `dataParameters`.
+Schema parameter `valueType:{types:[{kind:"StandardPeriod"}]}` (or `СтандартныйПериод`) accepts `standardPeriod` values in `values` and variant `dataParameters`.
 
 Shared localized text and value shapes:
 
