@@ -443,6 +443,11 @@ public final class RoleRightsWriter
         for (JsonObject entry : rights)
         {
             String objectFqn = str(entry.get(KEY_OBJECT));
+            String malformed = malformedChain(objectFqn);
+            if (malformed != null)
+            {
+                throw new RoleWriteException(ToolResult.error(malformed).toJson());
+            }
             MdObject targetMd = resolveObject(config, objectFqn);
             if (targetMd == null)
             {
@@ -1157,7 +1162,13 @@ public final class RoleRightsWriter
 
     // ---- resolution (bilingual) ---------------------------------------------------------------
 
-    /** Resolves an object FQN (bilingual type token) to its metadata top object, or null. */
+    /**
+     * Resolves an object FQN (bilingual type tokens) to the metadata object a right is granted on, or
+     * null. A nested subsystem ({@code Subsystem.<Parent>.Subsystem.<Child>}) is a separate top object
+     * its parent only refers to, so it goes by its chain through the shared subsystem descent (issue
+     * #897); every other address through the containment grammar. Both are exact, as before: no yo
+     * retry.
+     */
     static MdObject resolveObject(Configuration config, String fqn)
     {
         if (fqn == null || fqn.isEmpty())
@@ -1165,8 +1176,31 @@ public final class RoleRightsWriter
             return null;
         }
         String norm = MetadataTypeUtils.normalizeFqn(fqn);
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, norm);
+        MetadataNodeResolver.MetadataNode node = SubsystemUtils.nestedChain(norm) != null
+            ? MetadataNodeResolver.resolveNestedSubsystem(MetadataScope.ofConfiguration(config), norm, false).node
+            : MetadataNodeResolver.resolveExisting(config, norm);
         return node != null ? node.object : null;
+    }
+
+    /**
+     * The refusal of a nested-subsystem {@code rights[].object} with an empty or padded segment, or
+     * {@code null} for any other address: a right is WRITTEN on the object, so an address that reads
+     * differently from a well-formed one is refused, as create / modify / delete refuse it, rather than
+     * granted on the subsystem its trimmed reading names.
+     */
+    static String malformedChain(String fqn)
+    {
+        if (fqn == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String norm = MetadataTypeUtils.normalizeFqn(fqn);
+        if (SubsystemUtils.nestedChain(norm) == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String malformed = SubsystemUtils.malformedSegmentError(fqn);
+        return malformed == null ? null : "Invalid right entry object: " + malformed + " Nothing was changed."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -1417,8 +1451,15 @@ public final class RoleRightsWriter
 
     // ---- error builders (actionable) ----------------------------------------------------------
 
-    private static String objectNotFound(Configuration config, String fqn)
+    static String objectNotFound(Configuration config, String fqn)
     {
+        if (fqn != null && SubsystemUtils.nestedChain(MetadataTypeUtils.normalizeFqn(fqn)) != null)
+        {
+            // A missed chain level: the "Did you mean" of the leading Type.Name pair would offer the
+            // top-level PARENT, a different subsystem than the one asked for (issue #897).
+            return ToolResult.error("Object not found for right entry: '" + fqn + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                + SubsystemUtils.addressingHint() + ".").toJson(); //$NON-NLS-1$
+        }
         List<String> similar = similarObjects(config, fqn);
         String suggestion = similar.isEmpty() ? "" //$NON-NLS-1$
             : " Did you mean: " + String.join(", ", similar) + "?"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

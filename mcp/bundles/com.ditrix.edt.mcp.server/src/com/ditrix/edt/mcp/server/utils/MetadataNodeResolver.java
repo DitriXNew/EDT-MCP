@@ -22,6 +22,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 
 /**
  * Resolves a 1C "full name" FQN to a metadata node anywhere in the mdclass tree,
@@ -663,6 +664,65 @@ public final class MetadataNodeResolver
             }
         }
         return new ResolvedNode(null, fqn, false);
+    }
+
+    /**
+     * Resolves a NESTED subsystem chain ({@code Subsystem.<Parent>.Subsystem.<Child>}, any depth, the
+     * type tokens English or Russian at every level) to a node, for the write paths that take a node
+     * rather than an object (issue #897): {@code modify_metadata}'s generic {@code properties}.
+     *
+     * <p>A nested subsystem is a separate BM TOP object its parent only REFERS to
+     * ({@code Subsystem.subsystems} is not a containment), so {@link #resolveExisting} - the containment
+     * grammar - has no step to it and must not get one (see {@link #resolveAddress}). The chain goes
+     * through the one shared descent ({@link SubsystemUtils#resolveInScope}) instead, and the node says
+     * what the object IS: a top object ({@link MetadataNode#topLevel}), registered by its parent's
+     * {@code subsystems} list.</p>
+     *
+     * <p>The address the result carries is the subsystem's canonical chain - every token English,
+     * every level by its stored Name - when the subsystem's own parent links spell the address
+     * ({@link SubsystemUtils.Lineage#spells}); otherwise the address as given. With {@code yoFallback}
+     * a chain the exact descent misses is retried once with yo normalized to ye over the whole
+     * address, exactly like {@link #resolveExistingWithYoFallback} retries a top object's FQN.</p>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized address (may be {@code null})
+     * @param yoFallback whether a missed chain is retried with yo normalized to ye
+     * @return the result; its {@code node} is {@code null} when the address is not a nested chain or
+     *     names no subsystem in this root - never {@code null} itself
+     */
+    public static ResolvedNode resolveNestedSubsystem(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        ResolvedNode exact = nestedSubsystemNode(scope, fqn, false);
+        if (exact.node != null || !yoFallback)
+        {
+            return exact;
+        }
+        String retry = yoRetryFqn(fqn);
+        if (retry != null)
+        {
+            ResolvedNode normalized = nestedSubsystemNode(scope, retry, true);
+            if (normalized.node != null)
+            {
+                return normalized;
+            }
+        }
+        return exact;
+    }
+
+    /** One descent of {@link #resolveNestedSubsystem}, with no retry. */
+    private static ResolvedNode nestedSubsystemNode(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        String[] chain = SubsystemUtils.nestedChain(fqn);
+        Subsystem leaf = chain == null ? null : SubsystemUtils.resolveInScope(scope, chain);
+        if (leaf == null)
+        {
+            return new ResolvedNode(null, fqn, false);
+        }
+        Subsystem parent = SubsystemUtils.resolveByPath(scope.configuration(), chain, chain.length - 1);
+        SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(leaf);
+        String address = lineage.spells(chain) ? lineage.chainFqn() : fqn;
+        return new ResolvedNode(new MetadataNode(leaf, parent, MdClassPackage.Literals.SUBSYSTEM__SUBSYSTEMS, true),
+            address, yoFallback);
     }
 
     /**
