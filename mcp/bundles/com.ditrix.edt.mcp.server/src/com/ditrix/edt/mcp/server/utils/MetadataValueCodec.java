@@ -6,6 +6,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -202,6 +203,13 @@ public final class MetadataValueCodec
     /** Returns the write grammar; an unsupported stored kind fails visibly rather than losing data. */
     public static JsonObject render(Value value)
     {
+        return render(value, UnaryOperator.identity());
+    }
+
+    /** Unwraps designer-specific containers at every level without copying model references. */
+    public static JsonObject render(Value value, UnaryOperator<Value> unwrap)
+    {
+        value = unwrap.apply(value);
         JsonObject result = new JsonObject();
         if (value instanceof ReferenceValue ref)
         {
@@ -219,7 +227,7 @@ public final class MetadataValueCodec
         {
             result.addProperty("kind", "fixedArray");
             JsonArray values = new JsonArray();
-            for (Value item : array.getValues()) values.add(render(item));
+            for (Value item : array.getValues()) values.add(render(item, unwrap));
             result.add("values", values);
         }
         else if (value instanceof StringValue string)

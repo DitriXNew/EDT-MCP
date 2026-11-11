@@ -109,6 +109,7 @@ import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataMemberValues;
+import com.ditrix.edt.mcp.server.utils.FormChoiceParameters;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
@@ -543,6 +544,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // resolve subsystems and XDTO packages through the Configuration - the BASE one for a
         // linked external-objects project (issue #309).
         String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
+        // A malformed subsystem chain is refused before the context (and its vendor-support lookup) is
+        // resolved, for every payload - content as much as properties (issue #897).
+        String malformedChain = malformedChainRefusal(normFqn);
+        if (malformedChain != null)
+        {
+            return malformedChain;
+        }
         ProjectContext ctx = resolveProjectAndScope(args.projectName, normFqn);
         if (ctx.hasError())
         {
@@ -1773,7 +1781,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * JSON {@link #error} when the node was not found. Exactly one of {@code node} / {@code error}
      * is non-null.
      */
-    private static final class ResolvedTarget
+    static final class ResolvedTarget
     {
         /** A ready {@link ToolResult#error} JSON when the node was not found, else {@code null}. */
         final String error;
@@ -1807,14 +1815,44 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * use downstream, or a ready JSON {@link ResolvedTarget#error} when the node does not exist.
      * Extracted verbatim from {@link #executeOnUiThread}.
      */
-    private static ResolvedTarget resolveModifyTarget(MetadataScope scope, String fqn, String normFqn)
+    /** Ends a refusal that is decided before anything is written. */
+    private static final String NOTHING_CHANGED = " Nothing was changed."; //$NON-NLS-1$
+
+    /**
+     * The shared refusal of a malformed subsystem chain request ({@link SubsystemUtils#malformedChainError}),
+     * as this tool words it, or {@code null}. Asked before the project context is resolved, so the
+     * tolerant vendor-support lookup never runs on the trimmed reading of such an address, and again
+     * by {@link #resolveModifyTarget}. Package-visible for tests.
+     */
+    static String malformedChainRefusal(String normFqn)
     {
-        MetadataNodeResolver.ResolvedNode resolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
+        String malformed = SubsystemUtils.malformedChainError(normFqn);
+        return malformed == null ? null : ToolResult.error(malformed + NOTHING_CHANGED).toJson();
+    }
+
+    static ResolvedTarget resolveModifyTarget(MetadataScope scope, String fqn, String normFqn)
+    {
+        // A NESTED subsystem is a separate top object its parent only refers to, so the containment
+        // grammar below has no step to it (issue #897): it is resolved by its chain, through the same
+        // shared descent create / delete / get_metadata_details use, and refused by the subsystem texts.
+        // A subsystem chain request that is no well-formed chain is refused by the shared rule, never
+        // resolved by its trimmed reading or answered by the generic "not found".
+        String malformed = malformedChainRefusal(normFqn);
+        if (malformed != null)
+        {
+            return ResolvedTarget.notFound(malformed);
+        }
+        boolean nested = SubsystemUtils.nestedChain(normFqn) != null;
+        MetadataNodeResolver.ResolvedNode resolved = nested
+            ? MetadataNodeResolver.resolveNestedSubsystem(scope, normFqn, true)
+            : MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
-            return ResolvedTarget.notFound(ToolResult.error(nodeNotFoundMessage(scope, fqn, normFqn)).toJson());
+            return ResolvedTarget.notFound(ToolResult.error(nested
+                ? SubsystemUtils.notFoundMessage(fqn) + MetadataNodeResolver.yoNotFoundHint(normFqn)
+                    + scope.addressingHint(normFqn)
+                : nodeNotFoundMessage(scope, fqn, normFqn)).toJson());
         }
         if (resolved.yoFallback)
         {
@@ -1823,7 +1861,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + resolved.fqn + "'"); //$NON-NLS-1$
             normFqn = resolved.fqn;
         }
-        return ResolvedTarget.of(node, normFqn);
+        // A nested subsystem goes on under its canonical chain, whatever language the tokens were
+        // typed in: the reply and the routing downstream name it the way EDT and list_subsystems do.
+        return ResolvedTarget.of(node, nested ? resolved.fqn : normFqn);
     }
 
     /**
@@ -2651,10 +2691,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         });
     }
 
-    private static MetadataNodeResolver.MetadataNode resolveGenericWriteNode(MetadataScope scope, String fqn)
+    static MetadataNodeResolver.MetadataNode resolveGenericWriteNode(MetadataScope scope, String fqn)
     {
         var root = ConfigurationRoot.resolve(scope, fqn);
-        return root == null ? MetadataNodeResolver.resolveExisting(scope, fqn) : root.node;
+        if (root != null)
+        {
+            return root.node;
+        }
+        // The address resolveModifyTarget handed on: a nested subsystem's canonical chain (issue #897).
+        return SubsystemUtils.nestedChain(fqn) != null
+            ? MetadataNodeResolver.resolveNestedSubsystem(scope, fqn, false).node
+            : MetadataNodeResolver.resolveExisting(scope, fqn);
     }
 
     private java.util.function.Supplier<String> prepareGenericPropertyChanges(ProjectContext ctx, String projectName, String normFqn,
@@ -5519,6 +5566,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private HolderChange prepareFormMemberChange(MetadataScope scope, Version version, EObject member,
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
+        String property = asString(prop.get("name"));
+        if (FormChoiceParameters.isProperty(property))
+        {
+            try
+            {
+                FormChoiceParameters.requireInputField(member, property);
+            }
+            catch (IllegalArgumentException e)
+            {
+                throw new FormValidationException(ToolResult.error(e.getMessage()).toJson());
+            }
+        }
         if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
         {
             JsonElement value = prop.get(KEY_VALUE);
@@ -6755,6 +6814,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
+            case FORM_CHOICE_VALUES:
+                try
+                {
+                    FormChoiceParameters.Plan values = FormChoiceParameters.prepare(ctx.scope, target,
+                        info.feature.getName(), prop.get(KEY_VALUE));
+                    out.add(PreparedChange.formChoiceValues(info.feature, values));
+                    return null;
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return ToolResult.error(e.getMessage()).toJson();
+                }
             case MEMBER_VALUES:
                 try
                 {
@@ -8181,7 +8252,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             /** A Field/Table dataPath validated by the same planner as creation (#728). */
             FORM_DATA_PATH,
             /** A field list (issue #740); the value is the list of field ids. */
-            FIELD_LIST, EXCLUDED_COMMANDS, MEMBER_VALUES
+            FIELD_LIST, EXCLUDED_COMMANDS, MEMBER_VALUES, FORM_CHOICE_VALUES
         }
 
         /**
@@ -8230,6 +8301,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange memberValues(EStructuralFeature feature, MetadataMemberValues.Plan value)
         {
             return new PreparedChange(feature, Kind.MEMBER_VALUES, value, null, null, null, null, false);
+        }
+
+        static PreparedChange formChoiceValues(EStructuralFeature feature, FormChoiceParameters.Plan value)
+        {
+            return new PreparedChange(feature, Kind.FORM_CHOICE_VALUES, value, null, null, null, null, false);
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
@@ -8649,6 +8725,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     return TypeChangeDefaults.Reset.NONE;
                 case MEMBER_VALUES:
                     ((MetadataMemberValues.Plan)scalarValue).apply(target, feature, tx);
+                    return TypeChangeDefaults.Reset.NONE;
+                case FORM_CHOICE_VALUES:
+                    ((FormChoiceParameters.Plan)scalarValue).apply(target, tx);
                     return TypeChangeDefaults.Reset.NONE;
                 case FIELD_LIST:
                 {

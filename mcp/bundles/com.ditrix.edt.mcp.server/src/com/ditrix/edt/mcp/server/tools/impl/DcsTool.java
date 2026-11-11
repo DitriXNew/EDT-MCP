@@ -138,8 +138,10 @@ public class DcsTool implements IMcpTool
                 + "replace resets omitted members, and remove deletes one node.", //$NON-NLS-1$
                 true, ACTIONS)
             .enumProperty(KEY_TYPE, "Target kind; body shapes are in get_tool_guide('dcs').", true, TYPES) //$NON-NLS-1$
-            .objectProperty(KEY_BODY, "Mutation body; forbidden for get/options/remove and " //$NON-NLS-1$
-                + "required by the other mutations.") //$NON-NLS-1$
+            .property(KEY_BODY, "Mutation body; forbidden for get/options/remove and " //$NON-NLS-1$
+                + "required by the other mutations. insertPosition: 1-based new-item position for upsert "
+                + "into an ordered settings collection.", Map.of("type", "object", "properties",
+                    Map.of("insertPosition", Map.of("type", "integer", "minimum", 1))))
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
             .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for localized " //$NON-NLS-1$
                 + "values and presentations; parameter names always use the configuration's default " //$NON-NLS-1$
@@ -438,12 +440,15 @@ public class DcsTool implements IMcpTool
                 + "'. Pass one object matching type='" + JsonUtils.extractStringArgument(params, KEY_TYPE) //$NON-NLS-1$
                 + "' from get_tool_guide('dcs').").toJson(); //$NON-NLS-1$
         }
+        boolean positionalInsert = hasBody && JsonParser.parseString(body).getAsJsonObject().has("insertPosition");
         boolean hashRequired = ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action)
-            || address.isIndexAddressed();
+            || address.isIndexAddressed() || positionalInsert;
         if (hashRequired && !hasHash)
         {
             return ToolResult.error("expectedHash is required for action='" + action //$NON-NLS-1$
-                + "' at '" + address + "'. Re-run dcs action='get' and pass its current hash.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                + "' at '" + address + "'. "
+                + (positionalInsert ? "body.insertPosition depends on the observed collection order. " : "")
+                + "Re-run dcs action='get' and pass its current hash.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
     }

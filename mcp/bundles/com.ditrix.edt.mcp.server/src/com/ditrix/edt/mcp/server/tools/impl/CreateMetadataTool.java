@@ -224,7 +224,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
                 + "property names are rejected (set them via modify_metadata). Templates also accept " //$NON-NLS-1$
-                + "'templateType': TextDocument or SpreadsheetDocument (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
+                + "'templateType': TextDocument, SpreadsheetDocument or DataCompositionSchema (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
                 + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
                 + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
                 + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$

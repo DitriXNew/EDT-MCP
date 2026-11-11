@@ -79,6 +79,27 @@ _KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_dcs_templates_export_empty_content_in_both_languages_665():
+    owner = "Report.E2ECreateDcs665"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}), "seed report owner")
+    for fqn, path, spelling in [
+        ("CommonTemplate.E2EDcsCreated665", "src/CommonTemplates/E2EDcsCreated665/Template.dcs", "DataCompositionSchema"),
+        (owner + ".Template.Schema665", "src/Reports/E2ECreateDcs665/Templates/Schema665/Template.dcs", "СхемаКомпоновкиДанных"),
+    ]:
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
+                       "properties": [{"name": "templateType", "value": spelling}]})
+        assert_ok(created, "create DCS template " + spelling)
+        # The creating call submits this export: assert immediately, before another MCP call.
+        disk = read_disk(path)
+        document = ET.fromstring(disk)
+        assert document.tag.rsplit("}", 1)[-1] == "DataCompositionSchema", disk
+        assert not any(element.tag.rsplit("}", 1)[-1] == "dataSet" for element in document.iter()), disk
+        read = call("dcs", {"projectName": PROJECT, "fqn": fqn, "action": "get", "type": "schema", "format": "xml"})
+        assert_ok(read, "open newly created empty schema")
+        assert read.structured and "DataCompositionSchema" in read.structured["xml"], read.structured
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_insert_position_indexes_configuration_and_member_mdo_order():
     config_path = "src/Configuration/Configuration.mdo"
     baseline = ET.fromstring(read_disk(config_path))

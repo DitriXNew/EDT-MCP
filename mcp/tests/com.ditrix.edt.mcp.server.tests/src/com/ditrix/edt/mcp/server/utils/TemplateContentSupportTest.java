@@ -701,7 +701,7 @@ public class TemplateContentSupportTest
         assertSame(TemplateType.SPREADSHEET_DOCUMENT, template.getTemplateType());
         assertSame(before, template.getTemplate());
         assertNull(TemplateContentSupport.unsupportedRetypeError(TemplateType.DATA_COMPOSITION_SCHEMA, "x"));
-        assertNotNull(TemplateContentSupport.unsupportedTypeError(TemplateType.DATA_COMPOSITION_SCHEMA, "x"));
+        assertNull(TemplateContentSupport.unsupportedTypeError(TemplateType.DATA_COMPOSITION_SCHEMA, "x"));
     }
 
     @Test public void testSameTypeWithContentIsNoOp() throws Exception

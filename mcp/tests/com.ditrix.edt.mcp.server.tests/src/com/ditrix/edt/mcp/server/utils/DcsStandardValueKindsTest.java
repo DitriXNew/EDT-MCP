@@ -137,7 +137,7 @@ public class DcsStandardValueKindsTest
             "needs a non-empty string");
         assertError("{\"kind\":\"list\",\"value\":[]}",
             "Use one of: field, parameter, expression, string, number, boolean, date, null, standardPeriod, "
-                + "standardBeginningDate, valueList.");
+                + "standardBeginningDate, valueList, line.");
     }
 
     @Test

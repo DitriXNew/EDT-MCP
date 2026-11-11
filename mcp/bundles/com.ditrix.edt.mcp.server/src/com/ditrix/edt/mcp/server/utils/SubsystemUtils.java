@@ -220,6 +220,63 @@ public final class SubsystemUtils
     }
 
     /**
+     * Whether {@code fqn} is addressed AS a subsystem chain: a subsystem type token (either language)
+     * followed by more than its one name - whether or not the rest parses as a chain. This is the gate a
+     * write classifies an address by, deliberately independent of {@link #nestedChain}: an address
+     * that goes on past {@code Subsystem.<Name>} but is not a whole chain ({@code Subsystem.A..Subsystem.B},
+     * {@code Subsystem.A.Catalog.B}, {@code Subsystem.A.Subsystem}, a stray trailing '.') still asks for
+     * a subsystem below {@code A}, and must be refused by naming what is wrong with it
+     * ({@link #malformedChainError}) rather than reach a generic "not found" - or, through a tolerant
+     * lookup, act on {@code A} itself.
+     *
+     * <p>Below a subsystem nothing but a nested subsystem has an address, with one exception: its
+     * command interface ({@code Subsystem.<Name>(.Subsystem.<Name>)*.CommandInterface}, see
+     * {@link CommandInterfaceAddress}), which is therefore not a chain request.</p>
+     *
+     * @param fqn the requested address (may be {@code null})
+     * @return {@code true} for an address that asks for a subsystem below a top-level one
+     */
+    public static boolean isChainRequest(String fqn)
+    {
+        if (fqn == null)
+        {
+            return false;
+        }
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        return segments.length > 2 && isSubsystemTypeToken(segments[0]) && CommandInterfaceAddress.parse(fqn) == null;
+    }
+
+    /**
+     * The refusal of a subsystem chain request ({@link #isChainRequest}) that is not a well-formed chain,
+     * or {@code null} for a well-formed chain and for any address that is not a chain request. One rule
+     * for every write that takes a chain: an empty or padded segment is refused by
+     * {@link #malformedSegmentError}; any other request that does not parse as a whole chain - a foreign
+     * kind token at a level, a level without its name - is refused as not a subsystem address.
+     *
+     * @param fqn the requested address (may be {@code null})
+     * @return the refusal message naming what is wrong, or {@code null}
+     */
+    public static String malformedChainError(String fqn)
+    {
+        if (!isChainRequest(fqn))
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String segment = malformedSegmentError(fqn);
+        if (segment != null)
+        {
+            return segment;
+        }
+        if (nestedChain(fqn) != null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        return "The address '" + fqn + "' is not a subsystem address: below a subsystem only a nested " //$NON-NLS-1$ //$NON-NLS-2$
+            + "subsystem has an address, and every level carries its own type token and name. " //$NON-NLS-1$
+            + addressingHint() + "."; //$NON-NLS-1$
+    }
+
+    /**
      * Resolves the subsystem addressed by the FIRST {@code depth} names of a parsed chain.
      *
      * <p>The PREFIX overload exists so a caller that has to address the PARENT of a chain - a

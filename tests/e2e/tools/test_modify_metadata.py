@@ -5031,3 +5031,95 @@ def test_constant_choice_link_uses_native_address888():
     assert_ok(details)
     assert _member_value888(details.text, "choiceParameterLinks") == [
         {"name": "Free888", "field": "Constant.E888Source", "changeMode": "DontChange"}]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_input_choice_parameters_links_round_trip_and_clear888():
+    # The catalog form's existing Attribute input is string-typed in this fixture.
+    # Give its metadata source a reference type before authoring the input-field lists.
+    _write_member888([{"name": "type", "value": {"types": [{"kind": "CatalogRef", "ref": "Catalog"}]}}])
+    metadata = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    attribute = next(a for a in metadata.findall("attributes") if a.findtext("name") == "Attribute")
+    assert attribute.findtext("type/types") == "CatalogRef.Catalog"
+    wait_for_project_ready()
+
+    field_fqn = "Catalog.Catalog.Form.ItemForm.Field.Attribute"
+    form_file = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    xsi_type = "{http://www.w3.org/2001/XMLSchema-instance}type"
+    ref = {"kind": "ref", "ref": "Catalog.Catalog.EmptyRef"}
+    parameters = [{"name": "FormParameter888", "value": {"kind": "string", "value": "Текст888"}},
+                  {"name": "Отбор.Массив888", "value": {"kind": "fixedArray", "values": [ref, ref]}}]
+    links = [{"name": "Filter.Free888", "dataPath": "Object.Description", "changeMode": "DontChange"}]
+
+    # The form attribute keeps its programmatic Name (Object); only the standard field is Russian.
+    _write_member888([{"name": "choiceParameters", "value": parameters},
+                      {"name": "choiceParameterLinks", "value": [dict(links[0], dataPath="Object.Наименование")]}],
+                     fqn=field_fqn)
+    # Inspect the submitted export immediately, before any further MCP call.
+    root = ET.fromstring(read_disk(form_file))
+    field = next(item for item in root.iter("items") if item.findtext("name") == "Attribute")
+    assert field.findtext("type") == "InputField"
+    ext = field.find("extInfo")
+    assert ext.attrib[xsi_type] == "form:InputFieldExtInfo"
+    stored = ext.findall("choiceParameters")
+    assert len(stored) == 2
+    assert stored[0].findtext("name") == "FormParameter888"
+    assert stored[0].find("value").attrib[xsi_type] == "form:FormChoiceListDesTimeValue"
+    assert stored[0].find("value/value").attrib[xsi_type] == "core:StringValue"
+    assert stored[0].findtext("value/value/value") == "Текст888"
+    assert stored[1].findtext("name") == "Отбор.Массив888"
+    assert stored[1].find("value").attrib[xsi_type] == "form:FormChoiceListDesTimeValue"
+    array = stored[1].find("value/value")
+    assert array.attrib[xsi_type] == "core:FixedArrayValue"
+    assert len(array.findall("values")) == 2
+    for item in array.findall("values"):
+        assert item.attrib[xsi_type] == "form:FormChoiceListDesTimeValue"
+        assert item.find("value").attrib[xsi_type] == "core:ReferenceValue"
+        assert item.findtext("value/value") == ref["ref"]
+    link = ext.find("choiceParameterLinks")
+    assert link.findtext("name") == links[0]["name"]
+    assert link.find("datapath").attrib[xsi_type] == "form:DataPath"
+    assert link.findtext("datapath/segments") == "Object.Description"
+    assert link.findtext("changeMode") == "DontChange"
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [field_fqn], "assignable": True})
+    assert_ok(details)
+    current_parameters = _member_value888(details.text, "choiceParameters")
+    current_links = _member_value888(details.text, "choiceParameterLinks")
+    assert current_parameters == parameters
+    assert current_links == links
+    # Feed back Current, including the canonical English form data path.
+    _write_member888([{"name": "choiceParameters", "value": current_parameters},
+                      {"name": "choiceParameterLinks", "value": current_links}], fqn=field_fqn)
+    root = ET.fromstring(read_disk(form_file))
+    field = next(item for item in root.iter("items") if item.findtext("name") == "Attribute")
+    assert len(field.findall("extInfo/choiceParameters")) == 2
+    assert len(field.findall("extInfo/choiceParameterLinks")) == 1
+    assert field.findtext("extInfo/choiceParameterLinks/datapath/segments") == "Object.Description"
+    _write_member888([{"name": "choiceParameters", "value": []}, {"name": "choiceParameterLinks", "value": []}],
+                     fqn=field_fqn)
+    root = ET.fromstring(read_disk(form_file))
+    field = next(item for item in root.iter("items") if item.findtext("name") == "Attribute")
+    assert field.findall("extInfo/choiceParameters") == []
+    assert field.findall("extInfo/choiceParameterLinks") == []
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [field_fqn], "assignable": True})
+    assert_ok(details)
+    assert _member_value888(details.text, "choiceParameters") == []
+    assert _member_value888(details.text, "choiceParameterLinks") == []
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_input_choice_lists_refuse_bad_paths_values_and_non_input888():
+    field_fqn = "Catalog.Catalog.Form.ItemForm.Field.Attribute"
+    for fqn, property_name, value, names, suggests in (
+        (field_fqn, "choiceParameterLinks", [{"name": "Free888", "dataPath": "Object.Missing888", "changeMode": "Clear"}],
+         ["Object.Missing888"], ["Object.Description"]),
+        (field_fqn, "choiceParameters", [{"name": "Free888", "value": {"kind": "boolean", "value": "bad888"}}],
+         ["bad888", "choiceParameters"], ["true or false"]),
+        ("Catalog.Catalog.Form.ItemForm.Decoration.Decoration1", "choiceParameters", [],
+         ["choiceParameters", "Decoration1"], ["InputField", "get_metadata_details"]),
+    ):
+        result = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                      "properties": [{"name": property_name, "value": value}]})
+        assert_error_quality(assert_error(result), names=names, suggests=suggests)
+        assert_no_diff("refused form choice lists must change neither the form nor its metadata")

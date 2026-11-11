@@ -184,7 +184,9 @@ public final class MetadataPropertyIntrospector
         /** A form source's standard command names; the whole exclusion set is replaced. */
         EXCLUDED_COMMANDS,
         /** A metadata member fill value or whole choice-parameter/link list (ValueSpec grammar). */
-        MEMBER_VALUES
+        MEMBER_VALUES,
+        /** An input field's wrapped ValueSpecs or form data-path links. */
+        FORM_CHOICE_VALUES
     }
 
     /** One collection element's display name and complete comparison identity. */
@@ -734,6 +736,7 @@ public final class MetadataPropertyIntrospector
     private static ValueKind classifyReference(EReference ref)
     {
         if (MetadataMemberValues.isFeature(ref)) return ValueKind.MEMBER_VALUES;
+        if (FormChoiceParameters.isFeature(ref)) return ValueKind.FORM_CHOICE_VALUES;
 
         // The synonym (and other localized strings) is a containment map-entry reference reached
         // via getSynonym(); the remaining containment exceptions are explicit small value types.
@@ -952,6 +955,12 @@ public final class MetadataPropertyIntrospector
     /** The schema "allowed values" column: enum literals for enum kinds, reference target otherwise. */
     private static List<String> allowedValuesFor(EStructuralFeature feature, ValueKind kind)
     {
+        if (kind == ValueKind.FORM_CHOICE_VALUES)
+        {
+            return "choiceParameters".equals(feature.getName())
+                ? List.of("[{name,value:ValueSpec}]; fixedArray: {kind:'fixedArray',values:[ValueSpec]}; [] clears")
+                : List.of("[{name,dataPath,changeMode:'Clear'|'DontChange'}]; [] clears");
+        }
         if (kind == ValueKind.MEMBER_VALUES)
         {
             return switch (feature.getName())
@@ -1111,6 +1120,8 @@ public final class MetadataPropertyIntrospector
                     return renderReferenceList(value);
                 case MEMBER_VALUES:
                     return Rendered.of(MetadataMemberValues.render(feature.getName(), value).toString());
+                case FORM_CHOICE_VALUES:
+                    return Rendered.of(FormChoiceParameters.render(value).toString());
                 case FIELD_LIST:
                     return renderFieldList(value);
                 case EXCLUDED_COMMANDS:

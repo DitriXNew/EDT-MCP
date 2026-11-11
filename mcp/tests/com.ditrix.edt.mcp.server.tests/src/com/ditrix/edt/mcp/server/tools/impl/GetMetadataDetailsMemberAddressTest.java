@@ -291,6 +291,27 @@ public class GetMetadataDetailsMemberAddressTest
     }
 
     @Test
+    public void testAStrayOrPaddedSegmentInAChainIsRefusedNotRenderedAsItsTrimmedReading()
+    {
+        // Issue #897, review round 2: the tolerant parse reads 'Subsystem.Sales.Subsystem.Orders.' as the
+        // clean chain, so details rendered Orders where modify, rights and delete refuse the address.
+        Subsystem parent = named(MdClassFactory.eINSTANCE.createSubsystem(), "Sales");
+        Subsystem child = named(MdClassFactory.eINSTANCE.createSubsystem(), "Orders");
+        parent.getSubsystems().add(child);
+        child.setParentSubsystem(parent);
+        config.getSubsystems().add(parent);
+        for (String[] bad : new String[][] { {"Subsystem.Sales.Subsystem.Orders.", "EMPTY segment"},
+            {"Subsystem.Sales.Subsystem. Orders ", "padded segment"}, {"Subsystem.Sales.", "EMPTY segment"} })
+        {
+            Rendered result = render(bad[0]);
+            assertFalse(result.body, result.body.contains("## Subsystem: "));
+            assertTrue(result.markdown(), result.reason().contains(bad[1]));
+        }
+        assertTrue(GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem.Sales.Subsystem.Orders."));
+        assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem.Sales.Subsystem.Orders"));
+    }
+
+    @Test
     public void testCommandInterfaceKeepsItsOwnReasonWithoutABmModel()
     {
         for (String fqn : new String[] { "Subsystem.Sales.CommandInterface",

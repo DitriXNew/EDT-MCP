@@ -44,6 +44,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -835,7 +836,7 @@ public final class DcsWriter
         if (expected == null)
             return ValueBuildResult.failure("Value at '" + path //$NON-NLS-1$
                 + "' cannot be mapped to the declared valueType. Supported declared default/available " //$NON-NLS-1$
-                + "types are String, Number, Boolean, Date, and Null/Undefined; change the ValueSpec " //$NON-NLS-1$
+                + "types are String, Number, Boolean, Date, StandardPeriod, and Null/Undefined; change the ValueSpec " //$NON-NLS-1$
                 + "or remove this member."); //$NON-NLS-1$
         DcsSettingsWriter.ValueResult value = DcsSettingsWriter.buildTypedParameterValue(raw,
             expected, languages, path);
@@ -876,7 +877,21 @@ public final class DcsWriter
             case "boolean": return McoreFactory.eINSTANCE.createBooleanValue(); //$NON-NLS-1$
             case "date": return McoreFactory.eINSTANCE.createDateValue(); //$NON-NLS-1$
             case "null": return McoreFactory.eINSTANCE.createNullValue(); //$NON-NLS-1$
+            case "standardperiod": return McoreFactory.eINSTANCE.createStandardPeriodValue(); //$NON-NLS-1$
             default: return null;
+        }
+    }
+
+    /** A resolved platform type is a proxy whose URI carries no name; EDT's resolver names it. */
+    private static boolean isStandardPeriod(TypeItem type)
+    {
+        try
+        {
+            return "StandardPeriod".equals(McoreUtil.getTypeName(type)); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            return false;
         }
     }
 
@@ -890,6 +905,8 @@ public final class DcsWriter
                 ? EcoreUtil.getURI(type).toString().toLowerCase(java.util.Locale.ROOT)
                 : name == null ? "" : name.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
             result.add(normalized);
+            if (normalized.endsWith("/standardperiod") || normalized.endsWith("#standardperiod")
+                || normalized.equals("стандартныйпериод") || isStandardPeriod(type)) result.add("standardperiod");
             if (normalized.contains("string")) result.add("string"); //$NON-NLS-1$ //$NON-NLS-2$
             if (normalized.contains("number") || normalized.contains("decimal")) result.add("number"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             if (normalized.contains("boolean")) result.add("boolean"); //$NON-NLS-1$ //$NON-NLS-2$

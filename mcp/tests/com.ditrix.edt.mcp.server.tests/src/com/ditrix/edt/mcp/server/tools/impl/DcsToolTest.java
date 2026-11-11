@@ -232,6 +232,10 @@ public class DcsToolTest
         assertEquals(new LinkedHashSet<>(Arrays.asList("md", "xml")), //$NON-NLS-1$ //$NON-NLS-2$
             strings(properties.getAsJsonObject("format").getAsJsonArray("enum"))); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("object", properties.getAsJsonObject("body").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject position = properties.getAsJsonObject("body").getAsJsonObject("properties")
+            .getAsJsonObject("insertPosition");
+        assertEquals("integer", position.get("type").getAsString());
+        assertEquals(1, position.get("minimum").getAsInt());
         assertEquals("integer", properties.getAsJsonObject("limit").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("offset").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The action prose must warn about the two destructive verbs, since their semantics are not
@@ -269,6 +273,17 @@ public class DcsToolTest
         String result = new DcsTool().execute(params);
         assertTrue(result.contains("expectedHash is required")); //$NON-NLS-1$
         assertTrue(result.contains("action='get'")); //$NON-NLS-1$
+    }
+
+    @Test public void testInsertPositionRequiresTheObservedCollectionHash()
+    {
+        String result = new DcsTool().execute(Map.of("projectName", "AnyProject",
+            "fqn", "Report.Sales#/defaultSettings/filter", "action", "upsert", "type", "filter",
+            "body", "{\"insertPosition\":1,\"items\":[{}]}"));
+        assertTrue(result, result.contains("expectedHash is required"));
+        assertTrue(result, result.contains("body.insertPosition"));
+        assertTrue(result, result.contains("action='get'"));
+        assertTrue(ToolResult.isErrorPayload(result));
     }
 
     @Test

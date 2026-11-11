@@ -22,6 +22,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 
 /**
  * Resolves a 1C "full name" FQN to a metadata node anywhere in the mdclass tree,
@@ -666,6 +667,101 @@ public final class MetadataNodeResolver
     }
 
     /**
+     * Resolves a NESTED subsystem chain ({@code Subsystem.<Parent>.Subsystem.<Child>}, any depth, the
+     * type tokens English or Russian at every level) to a node, for the write paths that take a node
+     * rather than an object (issue #897): {@code modify_metadata}'s generic {@code properties}.
+     *
+     * <p>A nested subsystem is a separate BM TOP object its parent only REFERS to
+     * ({@code Subsystem.subsystems} is not a containment), so {@link #resolveExisting} - the containment
+     * grammar - has no step to it and must not get one (see {@link #resolveAddress}). The chain goes
+     * through the one shared descent ({@link SubsystemUtils#resolveInScope}) instead, and the node says
+     * what the object IS: a top object ({@link MetadataNode#topLevel}), registered by its parent's
+     * {@code subsystems} list.</p>
+     *
+     * <p>The address the result carries is the subsystem's canonical chain - every token English,
+     * every level by its stored Name - when the subsystem's own parent links spell the address
+     * ({@link SubsystemUtils.Lineage#spells}); otherwise the address as given. With {@code yoFallback}
+     * a chain the exact descent misses is resolved again with the yo reading decided level by level
+     * (see {@link #resolveSubsystemChain}).</p>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized address (may be {@code null})
+     * @param yoFallback whether a missed chain is retried with yo normalized to ye
+     * @return the result; its {@code node} is {@code null} when the address is not a nested chain or
+     *     names no subsystem in this root - never {@code null} itself
+     */
+    public static ResolvedNode resolveNestedSubsystem(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        if (SubsystemUtils.nestedChain(fqn) == null)
+        {
+            return new ResolvedNode(null, fqn, false);
+        }
+        SubsystemHit hit = resolveSubsystemChain(scope, fqn, yoFallback);
+        if (hit == null)
+        {
+            return new ResolvedNode(null, fqn, false);
+        }
+        Subsystem parent = SubsystemUtils.resolveByPath(scope.configuration(), hit.chain, hit.chain.length - 1);
+        SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(hit.leaf);
+        String address = lineage.spells(hit.chain) ? lineage.chainFqn() : hit.address;
+        return new ResolvedNode(new MetadataNode(hit.leaf, parent, MdClassPackage.Literals.SUBSYSTEM__SUBSYSTEMS, true),
+            address, !hit.address.equals(fqn));
+    }
+
+    /** A subsystem a chain address resolved to, with the address and parsed chain that hit. */
+    private static final class SubsystemHit
+    {
+        final Subsystem leaf;
+        final String address;
+        final String[] chain;
+
+        SubsystemHit(Subsystem leaf, String address, String[] chain)
+        {
+            this.leaf = leaf;
+            this.address = address;
+            this.chain = chain;
+        }
+    }
+
+    /**
+     * The ONE rule a subsystem chain address resolves by, for {@link #resolveAddress} (and so the
+     * vendor-support guard) and {@link #resolveNestedSubsystem} (the write) alike, so the two judge and
+     * change the same subsystem (issue #897): the exact descent ({@link SubsystemUtils#resolveInScope});
+     * then, only with {@code yoFallback}, a descent that matches each level by its exact name first and
+     * by its yo-normalized (ye) twin second, accepted only when exactly one chain matches. Never one of
+     * the chain's parents.
+     *
+     * @return the hit, or {@code null} when the address is no chain or names no subsystem in this root
+     */
+    private static SubsystemHit resolveSubsystemChain(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
+        Subsystem leaf = chain == null ? null : SubsystemUtils.resolveInScope(scope, chain);
+        if (leaf != null)
+        {
+            return new SubsystemHit(leaf, fqn, chain);
+        }
+        if (chain == null || !yoFallback || scope == null || scope.isExternalObjects())
+        {
+            return null;
+        }
+        // The yo reading is decided PER LEVEL, never over the whole address: create_metadata stores each
+        // Name on its own (normalizeYo is a per-call choice), so a chain can hold a 'yo' parent above a
+        // 'ye' child. The shared per-level descent (SubsystemUtils.resolveStoredChain) tries, at each
+        // level, the exact name first and then its yo-normalized twin among the subsystems that really
+        // exist there. More than one matching chain is two different subsystems the address could mean:
+        // none is guessed.
+        List<String[]> stored = SubsystemUtils.resolveStoredChain(scope.configuration(), fqn);
+        if (stored.size() != 1)
+        {
+            return null;
+        }
+        String[] names = stored.get(0);
+        Subsystem viaYo = SubsystemUtils.resolveInScope(scope, names);
+        return viaYo == null ? null : new SubsystemHit(viaYo, SubsystemUtils.chainFqn(names, names.length), names);
+    }
+
+    /**
      * Resolves ONE address to the metadata object it names - a subsystem by its chain, a form, or any
      * node {@link #resolveExisting} knows. It is the one dispatch the vendor-support guard and
      * {@code adopt_metadata_object} resolve an address with, so the two cannot disagree about WHICH
@@ -686,8 +782,10 @@ public final class MetadataNodeResolver
      * <li>Any other address must have a valid arity ({@link #isValidArity}) and resolves through
      * {@link #resolveExisting(MetadataScope, String)} - or, with {@code yoFallback}, through
      * {@link #resolveExistingWithYoFallback(MetadataScope, String)}, which also finds a name
-     * {@code create_metadata} stored with ye when the address spells it with yo. The subsystem and
-     * form branches have no such retry.</li>
+     * {@code create_metadata} stored with ye when the address spells it with yo. The subsystem branch
+     * honours the same flag by the rule the {@code modify_metadata} write resolves a chain with
+     * ({@link #resolveSubsystemChain}), so the guard judges the very subsystem the write then changes
+     * (issue #897); the form branch has no retry.</li>
      * </ul>
      *
      * @param scope the resolution root (may be {@code null})
@@ -702,10 +800,10 @@ public final class MetadataNodeResolver
         {
             return null;
         }
-        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
-        if (chain != null)
+        if (SubsystemUtils.parseSubsystemPath(fqn) != null)
         {
-            return SubsystemUtils.resolveInScope(scope, chain);
+            SubsystemHit hit = resolveSubsystemChain(scope, fqn, yoFallback);
+            return hit == null ? null : hit.leaf;
         }
         String formPath = FormElementWriter.parseFormPath(fqn);
         if (formPath != null)

@@ -52,6 +52,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DcsPackage;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
+import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
@@ -491,7 +492,7 @@ public final class DcsReadProjection
             // The item guard reports missing/unresolvable identities and catalogue failures.
             if (parameter == null || parameter.getValue() == null || lookup.failure() != null)
                 return null;
-            DcsAvailableParameter declared = lookup.parameters().findItem(parameter.getValue());
+            DcsAvailableParameter declared = DcsSettingsWriter.findAppearanceParameter(lookup.parameters(), parameter.getValue());
             return declared != null && !seen.add(declared)
                 ? "duplicate resolved appearance parameter '" + declared.key(0) //$NON-NLS-1$
                     + "'; an appearance body can write it only once" : null; //$NON-NLS-1$
@@ -544,12 +545,13 @@ public final class DcsReadProjection
         Map.entry(com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
             .AVAILABLE_VALUE__VALUE, ValueSlot.REQUIRED_DECLARED),
         Map.entry(McorePackage.Literals.STRUCTURE_PROPERTY__VALUE, ValueSlot.REQUIRED_UNTYPED),
+        Map.entry(McorePackage.Literals.LINE__STYLE, ValueSlot.LINE_STYLE),
         Map.entry(McorePackage.Literals.TYPED_VALUE_LIST_ITEM__VALUE, ValueSlot.UNTYPED));
 
     enum ValueSlot
     {
         UNTYPED, FIELD, PERIOD_BOUND, DECLARED, PARAMETER, PRESENTATION, UNREGISTERED,
-        REQUIRED_UNTYPED, REQUIRED_DECLARED;
+        REQUIRED_UNTYPED, REQUIRED_DECLARED, LINE_STYLE;
 
         boolean requiresValue()
         {
@@ -567,6 +569,8 @@ public final class DcsReadProjection
     {
         return switch (valueSlot(stored.eContainmentFeature()))
         {
+            // The containing LineValue is checked as one value, including the enum's type and literal.
+            case LINE_STYLE -> null;
             case UNTYPED, REQUIRED_UNTYPED -> DcsSettingsWriter.untypedValueRefusal(stored);
             case FIELD -> DcsSettingsWriter.fieldValueRefusal(stored);
             case PERIOD_BOUND -> DcsSettingsWriter.periodBoundRefusal(stored);
@@ -596,7 +600,10 @@ public final class DcsReadProjection
     private static String parameterValueRefusal(DataCompositionParameterValue item,
         DcsWriterCatalogues catalogues)
     {
-        if (!item.getNestedParameterValues().isEmpty())
+        EObject appearanceRoot = item.eContainer();
+        while (appearanceRoot instanceof DataCompositionParameterValue) appearanceRoot = appearanceRoot.eContainer();
+        boolean appearance = appearanceRoot instanceof DataCompositionAppearance;
+        if (!item.getNestedParameterValues().isEmpty() && !appearance)
         {
             return "nested parameter values cannot be written"; //$NON-NLS-1$
         }
@@ -632,7 +639,7 @@ public final class DcsReadProjection
         // Like applyParameterValuesPath, a blank output item needs no typed definition.
         if (holder instanceof ParameterValues && !(holder instanceof DataCompositionAppearance)
             && item.getParameter() == null && values.isEmpty()) return null;
-        DcsWriterCatalogues.Lookup catalogue = holder instanceof DataCompositionAppearance
+        DcsWriterCatalogues.Lookup catalogue = appearance
             ? catalogues.appearanceCatalogue() : holder instanceof ParameterValues
                 ? catalogues.outputCatalogue((ParameterValues)holder) : null;
         if (catalogue == null || catalogue.failure() != null)
@@ -645,14 +652,24 @@ public final class DcsReadProjection
         {
             return "the item has no parameter name; the typed writer needs one"; //$NON-NLS-1$
         }
-        DcsAvailableParameter declared = catalogue.parameters().findItem(name);
+        DcsAvailableParameterCollection parameters = catalogue.parameters();
+        if (appearance && holder instanceof DataCompositionParameterValue)
+        {
+            DataCompositionParameter parent = ((DataCompositionParameterValue)holder).getParameter();
+            DcsAvailableParameter parentDefinition = parent == null ? null
+                : DcsSettingsWriter.findAppearanceParameter(parameters, parent.getValue());
+            if (parentDefinition == null) return "nested appearance parameter needs a declared parent; copy its name from options";
+            parameters = parentDefinition.getSubParameters();
+        }
+        DcsAvailableParameter declared = appearance
+            ? DcsSettingsWriter.findAppearanceParameter(parameters, name) : parameters.findItem(name);
         if (declared == null)
         {
             return "'" + name + "' is not in the platform catalogue for " + catalogues.version(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (values.size() > 1)
         {
-            if (holder instanceof DataCompositionAppearance)
+            if (appearance)
             {
                 return values.size() + " values; an appearance key writes one typed value"; //$NON-NLS-1$
             }
@@ -661,12 +678,11 @@ public final class DcsReadProjection
         }
         if (values.isEmpty())
         {
-            // An output-parameter body may omit 'value'; an appearance key always restates one.
-            return holder instanceof DataCompositionAppearance
-                ? "no value; an appearance body has no valueless form - each key writes exactly one typed value" //$NON-NLS-1$
-                : null;
+            // An appearance parent may carry only nested values; a leaf needs its own value.
+            return appearance && item.getNestedParameterValues().isEmpty()
+                ? "no value; an appearance body has no valueless form - pass a value or nestedParameterValues" : null;
         }
-        return eachValueRefusal(values, value -> holder instanceof DataCompositionAppearance
+        return eachValueRefusal(values, value -> appearance
             ? DcsSettingsWriter.typedValueRefusal(declared.defValue(),
                 value, catalogues.languages(), catalogues.namedColors())
             : DcsSettingsWriter.outputValueRefusal(declared,
@@ -1908,6 +1924,7 @@ public final class DcsReadProjection
         {
             appendChartReferences(result, (DataCompositionChart)object, node.address);
         }
+        appendWritableValue(result, object, node.address);
         return result.toString();
     }
 
@@ -2165,6 +2182,18 @@ public final class DcsReadProjection
                 .append('\n');
         }
         appendChildren(result, object, address, depth + 1, language);
+        appendWritableValue(result, object, address);
+    }
+
+    private static void appendWritableValue(StringBuilder result, EObject object, String address)
+    {
+        com.google.gson.JsonElement body = object instanceof DataCompositionAppearance
+            ? DcsSettingsWriter.appearanceBody((DataCompositionAppearance)object)
+            : object instanceof com._1c.g5.v8.dt.mcore.LineValue
+                || object instanceof com._1c.g5.v8.dt.mcore.StandardPeriodValue
+                    ? DcsSettingsWriter.valueSpec((Value)object) : null;
+        if (body != null) result.append("\nWritable value at `").append(address)
+            .append("`:\n\n```json\n").append(body).append("\n```\n");
     }
 
     private static void appendChildren(StringBuilder result, EObject object, String address,

@@ -57,9 +57,14 @@ public class CreateMetadataTextTemplateTest
             TemplateType.SPREADSHEET_DOCUMENT);
     }
 
-    @Test public void testCreateDataCompositionSchemaRefused() throws Exception
+    @Test public void testCreateDataCompositionSchemaEnglish() throws Exception
     {
-        assertRefused("DataCompositionSchema");
+        assertCreatedType("DataCompositionSchema", TemplateType.DATA_COMPOSITION_SCHEMA);
+    }
+
+    @Test public void testCreateDataCompositionSchemaRussian() throws Exception
+    {
+        assertCreatedType("СхемаКомпоновкиДанных", TemplateType.DATA_COMPOSITION_SCHEMA);
     }
 
     @Test public void testCreateBinaryDataRefused() throws Exception
