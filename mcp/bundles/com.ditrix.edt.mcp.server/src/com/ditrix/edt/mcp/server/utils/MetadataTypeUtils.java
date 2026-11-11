@@ -154,7 +154,7 @@ public final class MetadataTypeUtils
         STYLE_ITEM("StyleItem", "StyleItems", "styleItems", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0421\u0442\u0438\u043B\u044F"), // ЭлементСтиля //$NON-NLS-1$
 
-        PALETTE_COLOR("PaletteColor", "PaletteColors", "paletteColors", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        PALETTE_COLOR("PaletteColor", "PaletteColors", "paletteColors", "PaletteColors", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры //$NON-NLS-1$
             "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"), // ЦветаПалитры //$NON-NLS-1$
 

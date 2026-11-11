@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
@@ -1300,15 +1301,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        CompatibilityMode mode = config.getCompatibilityMode();
+        boolean extensionMode = usesExtensionCompatibilityMode(config);
+        CompatibilityMode mode = extensionMode
+            ? config.getConfigurationExtensionCompatibilityMode() : config.getCompatibilityMode();
         if (mode != null && mode.getValue() >= CompatibilityMode.VERSION8_51.getValue())
         {
             return null;
         }
-        return ToolResult.error("Cannot create PaletteColor with compatibility mode '" //$NON-NLS-1$
+        return ToolResult.error("Cannot create PaletteColor with " //$NON-NLS-1$
+            + (extensionMode ? "extension " : "") + "compatibility mode '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + (mode == null ? "unknown" : mode.getLiteral()) //$NON-NLS-1$
-            + "'. Set the configuration compatibility mode to 8.5.1 or later in EDT, then retry create_metadata.") //$NON-NLS-1$
+            + "'. Set the " + (extensionMode ? "extension" : "configuration") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " compatibility mode to 8.5.1 or later in EDT, then retry create_metadata.") //$NON-NLS-1$
             .toJson();
+    }
+
+    /** EDT's own rule: an extension root without its own compatibilityMode runs in the extension mode. */
+    static boolean usesExtensionCompatibilityMode(Configuration config)
+    {
+        return config.getObjectBelonging() == ObjectBelonging.ADOPTED
+            && !config.eIsSet(MdClassPackage.Literals.CONFIGURATION__COMPATIBILITY_MODE);
     }
 
     private java.util.function.Supplier<String> createTopLevel(TopLevelRequest req)

@@ -1760,4 +1760,42 @@ public class CreateMetadataToolTest
         }
     }
 
+    @Test
+    public void testPaletteColorOnAnExtensionIsGatedByTheExtensionMode()
+    {
+        var palette = com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.PALETTE_COLOR;
+        var config = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration();
+        config.setObjectBelonging(com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging.ADOPTED);
+        config.setConfigurationExtensionCompatibilityMode(
+            com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_327);
+        assertTrue(CreateMetadataTool.usesExtensionCompatibilityMode(config));
+        String error = CreateMetadataTool.paletteColorCompatibilityError(palette, config);
+        assertNotNull("an 8.3.27 extension cannot hold a palette color", error);
+        assertTrue(error, error.contains("extension compatibility mode '8.3.27'"));
+        assertTrue(error, error.contains("Set the extension compatibility mode to 8.5.1"));
+
+        config.setConfigurationExtensionCompatibilityMode(
+            com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_51);
+        assertNull(CreateMetadataTool.paletteColorCompatibilityError(palette, config));
+
+        // EDT's rule: an extension root with its OWN (non-default) compatibilityMode runs in that mode.
+        config.setCompatibilityMode(com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_327);
+        assertFalse(CreateMetadataTool.usesExtensionCompatibilityMode(config));
+        error = CreateMetadataTool.paletteColorCompatibilityError(palette, config);
+        assertNotNull("the root's own 8.3.27 mode wins over the 8.5.1 extension mode", error);
+        assertTrue(error, error.contains("Set the configuration compatibility mode to 8.5.1"));
+    }
+
+    @Test
+    public void testABaseConfigurationIgnoresItsExtensionCompatibilityMode()
+    {
+        var config = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration();
+        config.setCompatibilityMode(com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_51);
+        config.setConfigurationExtensionCompatibilityMode(
+            com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_327);
+        assertFalse(CreateMetadataTool.usesExtensionCompatibilityMode(config));
+        assertNull(CreateMetadataTool.paletteColorCompatibilityError(
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.PALETTE_COLOR, config));
+    }
+
 }

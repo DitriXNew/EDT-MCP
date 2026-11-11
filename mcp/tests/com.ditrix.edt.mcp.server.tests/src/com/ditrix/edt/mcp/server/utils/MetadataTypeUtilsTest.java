@@ -1464,6 +1464,9 @@ public class MetadataTypeUtilsTest
                 assertSame(token, item, MetadataTypeUtils.findObject(config, token, name.toLowerCase(Locale.ROOT)));
                 assertNull("A synonym is not a Name", MetadataTypeUtils.findObject(config, token, "Display accent"));
                 assertEquals("PaletteColor." + name, MetadataTypeUtils.normalizeFqn(token + "." + name));
+                assertEquals("PaletteColors", MetadataTypeUtils.getDirectoryName(token));
+                assertEquals("src/PaletteColors/" + name + "/" + name + ".mdo",
+                    MetadataPathResolver.resolveTopObjectMdoPath(token + "." + name));
             }
             assertSame(item, StyleValueBuilder.findPaletteColor(config, name.toLowerCase(Locale.ROOT)));
             assertNull(StyleValueBuilder.findPaletteColor(config, "Display accent"));
