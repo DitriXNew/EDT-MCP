@@ -33,11 +33,14 @@ create one) commits nothing and the test SKIPS cleanly instead of leaking model 
 creation is supported it exercises the nested / bilingual force-export target for real.
 """
 
+import os
+
 from harness import (
     call,
     assert_ok,
     assert_error,
     assert_error_quality,
+    assert_contains,
     assert_no_diff,
     assert_not_contains,
     assert_tree_unchanged,
@@ -49,6 +52,7 @@ from harness import (
     e2e_test,
     E2ESkip,
     PROJECT,
+    PROJECT_DIR,
 )
 
 
@@ -344,3 +348,119 @@ def test_subsystem_content_nested():
                        ctx="the object added via a Russian non-leading type token must land in the "
                            "CHILD's OWN .mdo (%s), proving the mixed-language nested FQN was "
                            "canonicalized for force-export: %r" % (child_mdo, add_ru.structured))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Happy — generic `properties` on a NESTED subsystem (#897): the flags land in the CHILD's OWN .mdo
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_subsystem_properties_on_a_nested_subsystem():
+    # #897: `content` on a nested chain worked, but `properties` on the same address answered "Node not
+    # found" - the generic path went through the containment grammar, which has no step to a nested
+    # subsystem (a separate top object its parent only refers to). Both flags are EMF booleans whose
+    # default is false: a fresh subsystem stores them as `true`, and setting them to false REMOVES the
+    # element from the child's own .mdo. The setup asserts both are present first, so the removal can
+    # only come from these calls. The second flag is addressed with Russian type tokens at both levels.
+    parent, child = "Subsystem", "E2ENestedProps"
+    child_fqn = "Subsystem.%s.Subsystem.%s" % (parent, child)
+    child_fqn_ru = "Подсистема.%s.Подсистема.%s" % (parent, child)
+    child_mdo = _nested_subsystem_mdo(parent, child)
+    command_flag = "<includeInCommandInterface>true</includeInCommandInterface>"
+    help_flag = "<includeHelpInContents>true</includeHelpInContents>"
+
+    _create_ok(child_fqn, "seed the nested subsystem")
+    poll_disk_contains(child_mdo, command_flag,
+                       ctx="setup: a fresh nested subsystem stores includeInCommandInterface=true")
+    poll_disk_contains(child_mdo, help_flag,
+                       ctx="setup: a fresh nested subsystem stores includeHelpInContents=true")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": child_fqn,
+        "properties": [{"name": "includeInCommandInterface", "value": False}],
+    })
+    assert_ok(r, "set includeInCommandInterface on the nested subsystem by its English chain")
+    assert r.structured is not None and r.structured.get("action") == "modified", \
+        "the properties write must report modified: %r" % (r.raw,)
+    assert r.structured.get("fqn") == child_fqn, \
+        "the reply names the nested subsystem by its canonical chain: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "the change must persist to the child's own .mdo: %r" % (r.structured,)
+    poll_disk_lacks(child_mdo, command_flag,
+                    ctx="includeInCommandInterface=false must land in the CHILD's own .mdo")
+    assert_contains(_disk_text(child_mdo), help_flag,
+                    "only the flag the call named may change")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": child_fqn_ru,
+        "properties": [{"name": "includeHelpInContents", "value": False}],
+    })
+    assert_ok(r, "set includeHelpInContents on the nested subsystem by its Russian chain")
+    assert (r.structured or {}).get("fqn") == child_fqn, \
+        "a Russian chain is reported in its canonical English form: %r" % (r.structured,)
+    poll_disk_lacks(child_mdo, help_flag,
+                    ctx="includeHelpInContents=false must land in the CHILD's own .mdo")
+    model = call("get_subsystem_content", {"projectName": PROJECT, "subsystemFqn": child_fqn})
+    assert_ok(model, "read the nested subsystem back from the model")
+    assert_contains(model.text, "Include In Command Interface | No",
+                    "the model must hold the flag the write set, not only the file")
+    assert_contains(model.text, "Include Help In Contents | No",
+                    "the model must hold the second flag too")
+    assert_contains(_disk_text(_subsystem_mdo(parent)), command_flag,
+                    "the PARENT keeps its own flags: the write named the child, not the subsystem "
+                    "the chain starts from")
+    assert_contains(_disk_text(_subsystem_mdo(parent)), help_flag,
+                    "the PARENT keeps its own flags")
+
+
+def _disk_text(rel):
+    """A project file as it is on disk right now (the path is relative to the project dir)."""
+    with open(os.path.join(PROJECT_DIR, *rel.split("/")), encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Negative — `properties` on a nested chain that names no subsystem
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write")
+def test_subsystem_properties_on_a_missing_chain_teaches_how_subsystems_are_addressed():
+    # #897: the same refusal content[] gives a missing chain (#708), not the generic "Node not found",
+    # which does not mention chains at all.
+    fqn = "Subsystem.Subsystem.Subsystem.E2ENoSuchNestedProps"
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "includeInCommandInterface", "value": False}],
+    })
+    e = assert_error(r, "properties on a nested chain that names no subsystem")
+    assert_error_quality(e, names=[fqn],
+                         suggests=["Subsystem not found", "'Subsystem.<Parent>.Subsystem.<Child>'",
+                                   "list_subsystems lists the existing ones"],
+                         ctx="the refusal names the address and teaches the chain")
+    assert_not_contains(e, "Node not found",
+                        "a nested chain is refused by the subsystem text, not the generic one")
+    assert_no_diff("a refused properties change must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write")
+def test_subsystem_malformed_chain_is_refused_by_the_shared_rule():
+    # #897 review: a request for a subsystem below a top-level one that is not a well-formed chain is
+    # refused by name for every payload - never answered by "Node not found", and never written on the
+    # subsystem its trimmed reading names (a stray '.' after a real chain).
+    cases = (
+        ("Subsystem.Subsystem..Subsystem.E2EX", {"properties": [{"name": "includeInCommandInterface",
+                                                                 "value": False}]}, "EMPTY segment"),
+        ("Subsystem.Subsystem.Catalog.Catalog", {"properties": [{"name": "includeInCommandInterface",
+                                                                 "value": False}]},
+         "is not a subsystem address"),
+        ("Subsystem.Subsystem.", {"content": [{"op": "add", "metadata": "Catalog.Catalog"}]}, "EMPTY segment"),
+    )
+    for fqn, payload, reason in cases:
+        args = {"projectName": PROJECT, "fqn": fqn}
+        args.update(payload)
+        r = call("modify_metadata", args)
+        e = assert_error(r, "a malformed subsystem chain " + fqn)
+        assert_error_quality(e, names=[fqn], suggests=[reason, "Nothing was changed"],
+                             ctx="the shared malformed-chain refusal names the address and the defect")
+        assert_not_contains(e, "Node not found", "not the generic refusal: " + fqn)
+    assert_no_diff("a refused malformed chain must not touch the project")

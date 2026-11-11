@@ -333,6 +333,69 @@ def test_role_rights_accepts_a_russian_right_name():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# #897 — a right on a NESTED subsystem, addressed by its chain
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_role_rights_on_a_nested_subsystem_store_its_whole_chain():
+    """`rights[].object` = `Subsystem.<Parent>.Subsystem.<Child>` grants the right on the CHILD.
+
+    Before #897 the writer resolved the object through the containment grammar, which has no step to
+    a nested subsystem, and refused with "Object not found ... Did you mean: <Parent>?". EDT itself
+    stores such a right under the WHOLE chain, every token English
+    (`<object><name>Subsystem.P.Subsystem.C</name><right><name>View</name>...`), so the disk
+    assertion pins that exact element - a right granted on the parent instead would carry
+    `<name>Subsystem.P</name>` and fail it. The object is addressed with Russian type tokens to prove
+    the chain is bilingual on the way in and canonical on the way out."""
+    parent, child = "Subsystem", "E2ERightsNested"
+    chain = "Subsystem.%s.Subsystem.%s" % (parent, child)
+    chain_ru = "Подсистема.%s." \
+               "Подсистема.%s" % (parent, child)
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": chain})
+    assert_ok(r, "seed the nested subsystem " + chain)
+    wait_for_project_ready()
+    name = "E2ERoleRightsNestedSub"
+    fqn = _seed_role(name)
+    assert_not_contains(_rights_file_text(name), child,
+                        "setup: the fresh rights resource must not already name the nested subsystem")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "rights": [{"object": chain_ru, "right": "View", "value": "set"}],
+    })
+    assert_ok(r, "grant View on the nested subsystem")
+    assert (r.structured or {}).get("persisted") is True, \
+        "the rights write must report persisted=true: %r" % (r.structured,)
+    poll_disk_contains(_rights_file(name), "<name>%s</name>" % chain,
+                       ctx="the right is stored under the nested subsystem's whole chain, as EDT "
+                           "stores it")
+    assert_disk_lacks(_rights_file(name), "<name>Subsystem.%s</name>" % parent,
+                      ctx="the right must not land on the parent subsystem")
+    assert (chain, "View", "allowed") in _matrix_rows(_details(fqn)), \
+        "the granted right must read back under the full chain as an 'allowed' matrix row"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_role_rights_on_a_missing_nested_chain_teach_the_chain():
+    """A chain that names no subsystem is refused with the subsystem addressing text, not the
+    "Did you mean: <Parent>" of the leading Type.Name pair, which offers a different subsystem."""
+    name = "E2ERoleRightsNestedMiss"
+    fqn = _seed_role(name)
+    missing = "Subsystem.Subsystem.Subsystem.E2ENoSuchNestedRights"
+    before = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "rights": [{"object": missing, "right": "View", "value": "set"}],
+    })
+    e = assert_error(r, "a right on a nested chain that names no subsystem")
+    assert_error_quality(e, names=[missing],
+                         suggests=["'Subsystem.<Parent>.Subsystem.<Child>'", "list_subsystems"],
+                         ctx="the refusal names the address and teaches the chain")
+    assert_not_contains(e, "Did you mean", "the parent is not a suggestion for a missing child")
+    assert_tree_unchanged(before, "a refused rights write must leave the seeded role unchanged")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Negative — a role payload cannot ride along with a generic properties change
 # ──────────────────────────────────────────────────────────────────────────────
 

@@ -1506,6 +1506,19 @@ def test_missing_nested_subsystem_explains_the_whole_chain():
     assert_no_diff("a missing nested-subsystem delete must write nothing")
 
 
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_malformed_subsystem_chain_is_refused_by_the_shared_rule():
+    # #897 review: the same rule modify_metadata refuses a malformed chain request with, whether or not
+    # the address parses as a chain - and the fixture subsystem it starts from survives.
+    for address, reason in (("Subsystem.Subsystem..Subsystem.E2EX", "EMPTY segment"),
+                            ("Subsystem.Subsystem.Catalog.Catalog", "is not a subsystem address")):
+        result = call("delete_metadata", {"projectName": PROJECT, "fqn": address, "confirm": True})
+        error = assert_error(result, "a malformed subsystem chain " + address)
+        assert_error_quality(error, names=[address], suggests=[reason, "Nothing was deleted"],
+                             ctx="the shared malformed-chain refusal")
+    assert_no_diff("a refused malformed chain must delete nothing")
+
+
 def _exercise_subsystem_parent_cascade(nested_parent):
     settle_or_fail("the subsystem tree delete")
     configuration_before = read_disk(_CONFIGURATION_MDO)
