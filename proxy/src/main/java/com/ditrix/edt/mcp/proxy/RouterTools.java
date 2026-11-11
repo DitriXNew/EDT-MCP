@@ -175,6 +175,11 @@ public final class RouterTools
         {
             JsonObject backend = new JsonObject();
             backend.addProperty("port", view.backend().getPort()); //$NON-NLS-1$
+            String authenticationError = view.backend().authenticationError();
+            if (authenticationError != null)
+            {
+                backend.addProperty("authenticationError", authenticationError);
+            }
             if (view.workspacePath() != null)
             {
                 backend.addProperty(WorkspaceRouting.WORKSPACE_PATH, view.workspacePath());

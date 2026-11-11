@@ -62,6 +62,7 @@ public final class ProxyServer
     private final ProxyConfig cfg;
     private final BackendRegistry registry;
     private final McpProxyHandler handler;
+    private final BearerAuthentication authentication;
 
     private HttpServer httpServer;
     private ThreadPoolExecutor executor;
@@ -88,6 +89,7 @@ public final class ProxyServer
         this.cfg = cfg;
         this.registry = registry;
         this.handler = handler;
+        this.authentication = new BearerAuthentication(cfg.credentials.clientToken());
     }
 
     /**
@@ -97,8 +99,8 @@ public final class ProxyServer
      * <p>Binds loopback only ({@link InetAddress#getLoopbackAddress()}) unless
      * {@code cfg.allowRemote} is set, in which case it binds {@code cfg.bindHost} instead -
      * mirroring the EDT-MCP plugin's own loopback-by-default policy (see
-     * {@code com.ditrix.edt.mcp.server.McpServer#start}). The proxy has no authentication in
-     * v1, so a remote bind is logged as a security warning.
+     * {@code com.ditrix.edt.mcp.server.McpServer#start}). A non-loopback bind without
+     * client authentication is refused before opening the listening socket.
      *
      * @throws UncheckedIOException when the port cannot be bound (e.g. already in use)
      * @throws IllegalStateException when the server is already started
@@ -112,6 +114,15 @@ public final class ProxyServer
         InetSocketAddress bindAddress = cfg.allowRemote
             ? new InetSocketAddress(cfg.bindHost, cfg.port)
             : new InetSocketAddress(InetAddress.getLoopbackAddress(), cfg.port);
+        if (bindAddress.isUnresolved())
+        {
+            throw new IllegalArgumentException("Cannot resolve proxy bind host: " + cfg.bindHost);
+        }
+        if (!bindAddress.getAddress().isLoopbackAddress() && cfg.credentials.clientToken() == null)
+        {
+            throw new IllegalArgumentException("Non-loopback binding requires client authentication. Set"
+                + " authToken, authTokenEnv or " + ProxyCredentials.ENV_AUTH_TOKEN + ".");
+        }
         try
         {
             httpServer = HttpServer.create(bindAddress, 0);
@@ -157,12 +168,10 @@ public final class ProxyServer
         LOG.info("Proxy HTTP server binding to " //$NON-NLS-1$
             + (cfg.allowRemote ? "remote (" + cfg.bindHost + ")" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " on port " + getPortUnsafe()); //$NON-NLS-1$
-        if (cfg.allowRemote)
+        if (!bindAddress.getAddress().isLoopbackAddress())
         {
-            LOG.warning("SECURITY: proxy is bound to " + cfg.bindHost //$NON-NLS-1$
-                + " with NO authentication. Any host that can reach this port can invoke every " //$NON-NLS-1$
-                + "routed tool on every discovered EDT backend, including arbitrary BSL. " //$NON-NLS-1$
-                + "Only expose this on a trusted network."); //$NON-NLS-1$
+            LOG.info("Proxy client authentication is enabled. HTTP does not encrypt bearer tokens;"
+                + " use a TLS reverse proxy or VPN for network traffic.");
         }
     }
 
@@ -254,6 +263,10 @@ public final class ProxyServer
         boolean accepted = false;
         try
         {
+            if (!authentication.authorize(exchange))
+            {
+                return;
+            }
             if (!HTTP_METHOD_POST.equals(exchange.getRequestMethod()))
             {
                 sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}"); //$NON-NLS-1$

@@ -421,6 +421,12 @@ public class ProxyRoutingIT
         return arguments;
     }
 
+    static void assertPort(int expected, JsonObject response)
+    {
+        assertFalse(response.toString(), isToolError(response));
+        assertEquals(expected, structuredContent(response).get("port").getAsInt());
+    }
+
     /**
      * Tells whether the response carries the plugin's ToolResult-error shape
      * ({@code result.isError == true}).
@@ -579,6 +585,7 @@ public class ProxyRoutingIT
         private final BackendRegistry registry;
         private final McpProxyHandler handler;
         private final ProxyServer server;
+        private final SessionManager sessions;
 
         /**
          * Builds the proxy bound to an ephemeral port, scanning exactly the given range.
@@ -595,15 +602,26 @@ public class ProxyRoutingIT
 
         ProxyFixture(int scanFrom, int scanTo, int refreshSeconds)
         {
-            config = ProxyConfig.parse(new String[] {
+            this(ProxyConfig.parse(new String[] {
                 "--port", "0", //$NON-NLS-1$ //$NON-NLS-2$
                 "--scan", scanFrom + "-" + scanTo, //$NON-NLS-1$ //$NON-NLS-2$
                 "--refresh", Integer.toString(refreshSeconds), //$NON-NLS-1$
                 "--timeout", "15" }, //$NON-NLS-1$ //$NON-NLS-2$
-                Map.of());
+                Map.of()));
+        }
+
+        ProxyFixture(ProxyConfig config)
+        {
+            this.config = config;
             registry = new BackendRegistry(config);
-            handler = new McpProxyHandler(config, registry, new SessionManager());
+            sessions = new SessionManager();
+            handler = new McpProxyHandler(config, registry, sessions);
             server = new ProxyServer(config, registry, handler);
+        }
+
+        int activeSessions()
+        {
+            return sessions.activeCount();
         }
 
         void startPeriodicRefresh(java.util.concurrent.ScheduledExecutorService scheduler)
@@ -663,6 +681,7 @@ public class ProxyRoutingIT
 
         private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         private final URI mcpUri;
+        private final String authToken;
         private String sessionId;
         private int nextRequestId = 1;
 
@@ -673,7 +692,13 @@ public class ProxyRoutingIT
          */
         McpTestClient(int proxyPort)
         {
+            this(proxyPort, null);
+        }
+
+        McpTestClient(int proxyPort, String authToken)
+        {
             mcpUri = URI.create("http://127.0.0.1:" + proxyPort + "/mcp"); //$NON-NLS-1$ //$NON-NLS-2$
+            this.authToken = authToken;
         }
 
         /**
@@ -797,6 +822,10 @@ public class ProxyRoutingIT
             if (sessionId != null)
             {
                 builder.header(SESSION_HEADER, sessionId);
+            }
+            if (authToken != null)
+            {
+                builder.header("Authorization", "Bearer " + authToken);
             }
             builder.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
             return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

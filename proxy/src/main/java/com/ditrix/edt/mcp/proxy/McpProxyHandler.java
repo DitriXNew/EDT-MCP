@@ -133,6 +133,7 @@ public final class McpProxyHandler implements HttpHandler
     private final BackendRegistry registry;
     private final SessionManager sessions;
     private final ProjectRouter router;
+    private final BearerAuthentication authentication;
 
     /** Event ID counter for the SSE frames this handler emits itself (mirrors the plugin). */
     private final AtomicLong eventIdCounter = new AtomicLong(0);
@@ -157,6 +158,7 @@ public final class McpProxyHandler implements HttpHandler
         this.registry = registry;
         this.sessions = sessions;
         this.router = new ProjectRouter(registry);
+        this.authentication = new BearerAuthentication(cfg.credentials.clientToken());
         RouterTools.configure(cfg);
     }
 
@@ -209,6 +211,10 @@ public final class McpProxyHandler implements HttpHandler
     {
         try
         {
+            if (!authentication.authorize(exchange))
+            {
+                return;
+            }
             // Admission control before any work: shed with a retryable 503 rather than let the
             // pool's queue fill, because a full queue is an executor rejection and the caller
             // sees a dropped connection instead of an answer.
@@ -458,6 +464,10 @@ public final class McpProxyHandler implements HttpHandler
             registry.cacheToolsListResponse(injected);
             sendMcpResponse(exchange, 200, rewriteId(injected, requestId), null);
         }
+        catch (Backend.AuthenticationException e)
+        {
+            sendMcpResponse(exchange, 200, buildJsonRpcError(-32002, e.getMessage(), requestId), null);
+        }
         catch (IOException e)
         {
             registry.refresh();
@@ -545,6 +555,13 @@ public final class McpProxyHandler implements HttpHandler
                 streamBackendResponse(exchange, response);
             }
         }
+        catch (Backend.AuthenticationException e)
+        {
+            String error = isToolCall
+                ? RouterTools.toolCallError(e.getMessage(), requestId, allowStructuredContent)
+                : buildJsonRpcError(-32002, e.getMessage(), requestId);
+            sendMcpResponse(exchange, 200, error, null);
+        }
         catch (Backend.WorkspaceMismatchException e)
         {
             registry.refresh();
@@ -623,6 +640,7 @@ public final class McpProxyHandler implements HttpHandler
             .filter(view -> workspacePath == null || workspacePath.equals(view.workspacePath()))
             .map(BackendRegistry.BackendView::backend).toList();
         List<String> responses = new ArrayList<>(live.size());
+        List<String> authenticationFailures = new ArrayList<>();
         boolean anyBackendFailed = false;
         for (Backend backend : live)
         {
@@ -635,6 +653,10 @@ public final class McpProxyHandler implements HttpHandler
                 JsonObject arguments = new JsonObject();
                 arguments.addProperty(ARG_FORMAT, FORMAT_JSON);
                 responses.add(backend.callToolBlocking(ProjectRouter.TOOL_LIST_PROJECTS, arguments, -1, workspacePath));
+            }
+            catch (Backend.AuthenticationException e)
+            {
+                authenticationFailures.add(e.getMessage());
             }
             catch (IOException e)
             {
@@ -650,6 +672,14 @@ public final class McpProxyHandler implements HttpHandler
         if (anyBackendFailed)
         {
             registry.refresh();
+        }
+        if (!authenticationFailures.isEmpty())
+        {
+            sendMcpResponse(exchange, 200, RouterTools.toolCallError(
+                "Cannot list all requested EDT projects: " + String.join(" ", authenticationFailures)
+                    + " Use router_status to inspect each backend or select an accessible workspacePath.",
+                requestId, allowStructuredContent), null);
+            return;
         }
         sendMcpResponse(exchange, 200,
             FanOut.mergeListProjects(responses, requestId, jsonFormat, allowStructuredContent), null);

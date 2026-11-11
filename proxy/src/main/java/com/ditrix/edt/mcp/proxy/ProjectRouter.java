@@ -158,6 +158,7 @@ public final class ProjectRouter
             + (workspace == null ? "" : " in workspacePath '" + workspace + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + ". Live backends: " + describeLiveBackends() //$NON-NLS-1$
             + describeUnsupportedBackends()
+            + describeAuthenticationFailures()
             + (workspace == null ? "" : ". Copy workspacePath exactly from list_projects or router_status; " //$NON-NLS-1$ //$NON-NLS-2$
                 + "update plugins that do not report workspacePath") //$NON-NLS-1$
             + ". If you just started EDT it may still be initializing - retry in ~30 s, or call router_refresh."); //$NON-NLS-1$
@@ -190,6 +191,20 @@ public final class ProjectRouter
                 .append(" answered with a project list that was CUT by the output size cap, so it") //$NON-NLS-1$
                 .append(" could not be parsed and their projects cannot be routed - that is a size") //$NON-NLS-1$
                 .append(" problem, not an old plugin"); //$NON-NLS-1$
+        }
+        return note.toString();
+    }
+
+    private String describeAuthenticationFailures()
+    {
+        StringBuilder note = new StringBuilder();
+        for (Backend backend : registry.live())
+        {
+            String error = backend.authenticationError();
+            if (error != null)
+            {
+                note.append(". ").append(error);
+            }
         }
         return note.toString();
     }

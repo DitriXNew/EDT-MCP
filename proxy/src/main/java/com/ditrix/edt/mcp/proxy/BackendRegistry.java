@@ -207,7 +207,7 @@ public final class BackendRegistry
                 break;
             }
             Backend backend = backendsByPort.computeIfAbsent(port,
-                p -> new Backend(p, client, cfg.backendTimeoutSeconds));
+                p -> new Backend(p, client, cfg.backendTimeoutSeconds, cfg.credentials.backendToken(p)));
             if (!backend.probeHealth())
             {
                 continue;

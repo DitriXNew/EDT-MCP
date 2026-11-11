@@ -57,6 +57,8 @@ public final class Backend
     private final int timeoutSeconds;
     private final URI mcpUri;
     private final URI healthUri;
+    private final String authToken;
+    private volatile int authenticationFailureStatus;
     private final AtomicLong requestId = new AtomicLong(0);
 
     /** Guarded by {@code this}: whether the lazy MCP handshake has been performed. */
@@ -74,11 +76,18 @@ public final class Backend
      */
     public Backend(int port, HttpClient client, int timeoutSeconds)
     {
+        this(port, client, timeoutSeconds, null);
+    }
+
+    /** The configured token belongs only to this local backend port. */
+    Backend(int port, HttpClient client, int timeoutSeconds, String authToken)
+    {
         this.port = port;
         this.client = client;
         this.timeoutSeconds = timeoutSeconds;
         this.mcpUri = URI.create("http://127.0.0.1:" + port + "/mcp"); //$NON-NLS-1$ //$NON-NLS-2$
         this.healthUri = URI.create("http://127.0.0.1:" + port + "/health"); //$NON-NLS-1$ //$NON-NLS-2$
+        this.authToken = authToken;
     }
 
     /**
@@ -165,6 +174,7 @@ public final class Backend
         HttpRequest initialize =
             newPostRequest(buildJsonRpcRequest("initialize", params), null, HANDSHAKE_TIMEOUT_SECONDS); //$NON-NLS-1$
         HttpResponse<String> response = client.send(initialize, HttpResponse.BodyHandlers.ofString());
+        checkAuthentication(response);
         if (response.statusCode() != 200)
         {
             throw new IOException("initialize against backend :" + port + " failed with HTTP " //$NON-NLS-1$ //$NON-NLS-2$
@@ -193,8 +203,8 @@ public final class Backend
         }
 
         String initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"; //$NON-NLS-1$
-        client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
-            HttpResponse.BodyHandlers.discarding());
+        checkAuthentication(client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
+            HttpResponse.BodyHandlers.discarding()));
 
         sessionId = issued;
         handshakeDone = true;
@@ -299,6 +309,7 @@ public final class Backend
             HttpResponse<InputStream> response = client.send(
                 newPostRequest(rawBody, session, requestTimeoutSeconds, accept),
                 HttpResponse.BodyHandlers.ofInputStream());
+            checkAuthentication(response);
             if (attempt == 0 && isStaleSession(response, session))
             {
                 closeQuietly(response.body());
@@ -332,6 +343,7 @@ public final class Backend
         HttpResponse<InputStream> response = client.send(newPostRequest(
             buildJsonRpcRequest("tools/call", params), session, HANDSHAKE_TIMEOUT_SECONDS), //$NON-NLS-1$
             HttpResponse.BodyHandlers.ofInputStream());
+        checkAuthentication(response);
         if (isStaleSession(response, session))
         {
             closeQuietly(response.body());
@@ -355,6 +367,47 @@ public final class Backend
         WorkspaceMismatchException(String message)
         {
             super(message);
+        }
+    }
+
+    /** No backend response body or token is included in authentication diagnostics. */
+    static final class AuthenticationException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        AuthenticationException(String message)
+        {
+            super(message);
+        }
+    }
+
+    String authenticationError()
+    {
+        int status = authenticationFailureStatus;
+        return status == 0 ? null : authenticationError(status);
+    }
+
+    private String authenticationError(int status)
+    {
+        return "EDT backend :" + port + " rejected authentication (HTTP " + status
+            + "). Check backend." + port + ".token or backend." + port
+            + ".tokenEnv and restart the proxy after changing credentials.";
+    }
+
+    private void checkAuthentication(HttpResponse<?> response) throws AuthenticationException
+    {
+        if (response.statusCode() == 401 || response.statusCode() == 403)
+        {
+            authenticationFailureStatus = response.statusCode();
+            if (response.body() instanceof InputStream body)
+            {
+                closeQuietly(body);
+            }
+            throw new AuthenticationException(authenticationError(response.statusCode()));
+        }
+        if (response.statusCode() >= 200 && response.statusCode() < 300)
+        {
+            authenticationFailureStatus = 0;
         }
     }
 
@@ -510,7 +563,7 @@ public final class Backend
         {
             builder.header(HEADER_SESSION_ID, session);
         }
-        return builder.build();
+        return BearerAuthentication.addHeader(builder, authToken).build();
     }
 
     private static void closeQuietly(InputStream in)

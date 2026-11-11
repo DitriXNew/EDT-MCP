@@ -54,7 +54,7 @@ subcommands existed):
 ```bash
 java -jar edt-mcp-proxy.jar serve                 # server on :8764, scan 8765-8774 (foreground)
 java -jar edt-mcp-proxy.jar serve --port 9000 --scan 8765-8780 --refresh 30 --timeout 300
-java -jar edt-mcp-proxy.jar serve --bind 0.0.0.0  # explicit remote bind (logs a SECURITY warning)
+java -jar edt-mcp-proxy.jar serve --bind 0.0.0.0  # requires configured client authentication
 java -jar edt-mcp-proxy.jar serve --config C:\edt\proxy.properties
 
 java -jar edt-mcp-proxy.jar status                # query a running proxy: live EDT backends,
@@ -66,13 +66,13 @@ java -jar edt-mcp-proxy.jar --help | --version
 
 - **`serve [options]`** — starts the proxy in the foreground (see [Configuration](#configuration)
   for every option). This is also the implicit behaviour of a bare invocation.
-- **`status [--port N]`** — a CLI *client*: probes the running proxy's `/health` and, when
+- **`status [--port N] [--config PATH]`** — a CLI *client*: probes the running proxy's `/health` and, when
   alive, its `router_status` tool (via a minimal MCP handshake), then prints a
   human-readable table of `port | projects`, followed by duplicate projects, the
   scan range and the last refresh time. Exits `0` when the proxy answered, `1` with an
   actionable message when it could not be reached (e.g. nothing is listening on that
   port yet).
-- **`stop [--port N]`** — asks the running proxy's admin endpoint (`POST
+- **`stop [--port N] [--config PATH]`** — asks the running proxy's admin endpoint (`POST
   /admin/shutdown`, loopback only — see [Security](#security)) to shut down gracefully.
   Exits `0` when accepted, `1` with an actionable message when the proxy could not be
   reached.
@@ -81,6 +81,11 @@ java -jar edt-mcp-proxy.jar --help | --version
   (read from the jar manifest's `Implementation-Version`, falling back to `dev` when
   absent, e.g. running from a development classpath).
 - An unrecognised subcommand prints the usage and exits `2`.
+
+`status` and `stop` resolve the port and proxy token from the same config file and
+environment as `serve`; `--port` overrides the configured port. They do not need the
+backend tokens or the environment variables containing those tokens. `status` closes
+its temporary MCP session after reading the result.
 
 ## Configuration
 
@@ -100,8 +105,7 @@ variable, or `config file <name>: <key>`).
 ### Config file
 
 A plain [`java.util.Properties`](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/Properties.html)
-file with the same five keys as the table above (`port`, `scan`, `refresh`, `timeout`,
-`bind`) — no new dependency, no new format to learn:
+file with the listener keys above and optional authentication keys:
 
 ```properties
 # edt-mcp-proxy.properties
@@ -110,6 +114,7 @@ scan=8765-8780
 refresh=30
 timeout=300
 bind=0.0.0.0
+authTokenEnv=PROXY_CLIENT_TOKEN
 ```
 
 Point `serve` at it explicitly with `--config <path>`, or drop a file named
@@ -119,6 +124,70 @@ file is entirely optional: if it is not there, the proxy just falls back to
 environment variables and defaults. An explicitly named file (`--config`) that
 cannot be found or read fails startup immediately, naming the path.
 
+### Client and backend tokens
+
+These are **independent credentials**:
+
+- `authToken` or `authTokenEnv`: the token clients present to the proxy. The latter
+  contains an environment variable **name**, not the token itself.
+- `backend.<port>.token` or `backend.<port>.tokenEnv`: the token the proxy presents
+  to the EDT instance on that local port. Each EDT can have a different token.
+  Omit the entry only for an EDT that does not require authentication.
+- `EDT_MCP_PROXY_AUTH_TOKEN`: an environment override for `authToken`/`authTokenEnv`.
+  It is also used by `status` and `stop`.
+
+Configure only one source per token. A configured empty token, missing environment
+variable, malformed bearer value, or invalid backend credential key fails startup;
+it never silently disables authentication. Tokens are ASCII bearer values without
+whitespace (up to 4096 characters). Use independently generated tokens with at least
+32 random bytes for the proxy and each EDT. There are no CLI options containing
+tokens, so they need not appear in process arguments or shell history.
+
+Example configuration for two authenticated EDT instances:
+
+```properties
+port=8764
+scan=8765-8774
+bind=0.0.0.0
+authTokenEnv=PROXY_CLIENT_TOKEN
+backend.8765.tokenEnv=EDT_FIRST_TOKEN
+backend.8766.tokenEnv=EDT_SECOND_TOKEN
+```
+
+Set those environment variables in the account/environment that starts the proxy,
+then run `java -jar edt-mcp-proxy.jar serve --config <path>`. Literal `authToken`
+and `backend.<port>.token` values in an access-restricted properties file are also
+supported. Keep that file outside source control and shared folders. The checked-in
+[example](edt-mcp-proxy.example.properties) contains variable names only.
+
+A LAN client connects to `http://<proxy-host>:8764/mcp` and includes this header on
+**every** request, including initialize, notifications and session deletion:
+
+```http
+Authorization: Bearer <proxy-token>
+```
+
+When migrating a client from a direct EDT connection on `:8765` to the proxy on
+`:8764`, change **both the URL and the client token**. Use `authToken` (or the value
+referenced by `authTokenEnv`), not `backend.8765.token`. A valid EDT token is not
+automatically a valid proxy token; presenting it to the proxy returns `401` when
+the configured credentials differ. Restart or reconnect the client after saving
+its settings so existing sessions use the new endpoint and header.
+
+All clients holding that token can access all discovered EDT tools. This is a shared
+credential, not per-client accounts or project ACLs. Backend tokens are never sent
+to clients. The client's Authorization header is never forwarded to an EDT; only
+that port's configured token is used for discovery, handshake, retries and calls.
+Unconfigured ports receive no token. `/health` probes receive no token either.
+
+Tokens are loaded once at startup. To rotate a token or change an EDT's port, update
+the configuration/environment and restart the proxy; update clients when rotating
+the proxy token. A token rejected by an EDT yields an explicit authentication error
+and `authenticationError` in that backend's `router_status` entry. `list_projects`
+fails rather than presenting a complete-looking partial list when a selected EDT
+rejects authentication. Other EDT instances remain directly routable through the
+proxy; select an accessible `workspacePath` to list only that workspace.
+
 ## Security
 
 **The proxy binds loopback (`127.0.0.1`) only by default**, mirroring the EDT-MCP plugin's own
@@ -127,15 +196,22 @@ arbitrary-BSL execution (`evaluate_expression`) and destructive operations, so i
 reachable from the network unless you explicitly opt in.
 
 Setting `--bind HOST` (or `EDT_MCP_PROXY_HOST`) - e.g. `--bind 0.0.0.0` to listen on all
-interfaces, or a specific interface address - opts into that exposure. Startup logs which mode
-is active (`loopback only` vs `remote (<host>)`), and a remote bind also logs a `SECURITY`
-warning.
+interfaces, or a specific interface address - opts into that exposure. A resolved
+non-loopback address **requires a proxy client token**; startup refuses to open the
+listener otherwise. Configuring any backend token also requires client authentication,
+even on loopback, so protected EDT tools cannot be exposed through an unauthenticated
+local proxy. A token-free loopback proxy remains compatible with token-free EDTs.
 
-> **⚠️ The proxy has no authentication in v1.** Unlike the plugin (which refuses to start when
-> `allowRemote` is on with no auth token), a remotely-bound proxy accepts every MCP request
-> from any host that can reach the port - including `tools/call` routed to arbitrary BSL on
-> every EDT backend it discovers. Loopback is the security boundary; only bind beyond it on a
-> trusted, isolated network (e.g. behind your own reverse proxy that adds authentication).
+Authentication is checked before reading a request body or looking up its session,
+on every `/mcp` method. Missing, wrong or duplicate Authorization headers return
+`401` with a Bearer challenge. Token digests are compared in constant time. The
+public `/health` endpoint reports only liveness, the proxy role and backend count.
+
+**Bearer authentication does not encrypt HTTP.** For network traffic, use a TLS
+reverse proxy or VPN, restrict the firewall to intended clients, and keep EDT ports
+bound to loopback. When using a TLS reverse proxy, forward Authorization unchanged
+and restrict the direct HTTP listener to that reverse proxy. Native TLS and OAuth
+are not provided by this module.
 
 Two further limits guard against resource exhaustion regardless of the bind address:
 
@@ -147,6 +223,7 @@ Two further limits guard against resource exhaustion regardless of the bind addr
 - **Admin endpoint stays loopback-only, always** - `POST /admin/shutdown` (the `stop`
   subcommand's target) is accepted only when the caller's remote address is loopback,
   checked on the actual TCP peer address of every request - **regardless of `--bind`**.
+  It also requires the proxy token when one is configured.
   Even a proxy bound to `0.0.0.0` cannot be remotely shut down; any other HTTP method or a
   non-loopback caller gets `405`/`403`.
 
@@ -234,9 +311,9 @@ Two extra tools are injected into `tools/list` (both take no parameters):
 | Endpoint               | Behaviour                                                            |
 |------------------------|-----------------------------------------------------------------------------|
 | `GET /health`          | `200` with `{"status":"ok","role":"proxy","backends":<live count>}`  |
-| `POST /mcp`            | MCP Streamable HTTP, same wire contract as the plugin (SSE `data:` frames, `Mcp-Session-Id` header) |
-| `DELETE /mcp`          | Closes the client's session **on the proxy**; backend sessions are untouched  |
-| `POST /admin/shutdown` | Loopback callers only (regardless of `--bind`, see [Security](#security)): `200 {"status":"stopping"}` then the proxy stops gracefully; non-loopback callers get `403`; any other HTTP method gets `405`. This is the `stop` subcommand's target. |
+| `POST /mcp`            | Requires the proxy token when configured; MCP Streamable HTTP with SSE `data:` frames and `Mcp-Session-Id` |
+| `DELETE /mcp`          | Requires the same authentication as POST; closes the client's session **on the proxy**; backend sessions are untouched |
+| `POST /admin/shutdown` | Requires the proxy token when configured and loopback callers only, regardless of `--bind`: `200 {"status":"stopping"}` then graceful shutdown; authenticated non-loopback callers get `403`; other authenticated HTTP methods get `405`. This is the `stop` subcommand's target. |
 
 ## Zero-backend behaviour
 

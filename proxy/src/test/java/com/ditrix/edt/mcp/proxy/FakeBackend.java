@@ -81,6 +81,30 @@ public final class FakeBackend
 
     /** Whether initialize answers a JSON-RPC error instead of a result - see {@link #setRefusesInitialize}. */
     private volatile boolean refusesInitialize;
+    private volatile String authToken;
+    private volatile String lastAuthorization;
+    private volatile int authFailureStatus = 401;
+    private final AtomicInteger rejectedAuthCount = new AtomicInteger();
+
+    void setAuthToken(String token)
+    {
+        authToken = token;
+    }
+
+    void setAuthFailureStatus(int status)
+    {
+        authFailureStatus = status;
+    }
+
+    String lastAuthorization()
+    {
+        return lastAuthorization;
+    }
+
+    int rejectedAuthCount()
+    {
+        return rejectedAuthCount.get();
+    }
 
     /**
      * Creates a fake backend on an OS-chosen free port (port 0).
@@ -260,6 +284,13 @@ public final class FakeBackend
     {
         try
         {
+            lastAuthorization = exchange.getRequestHeaders().getFirst("Authorization");
+            if (authToken != null && !("Bearer " + authToken).equals(lastAuthorization))
+            {
+                rejectedAuthCount.incrementAndGet();
+                sendPlain(exchange, authFailureStatus, "application/json", "{\"error\":\"Unauthorized\"}");
+                return;
+            }
             if (!"POST".equals(exchange.getRequestMethod()))
             {
                 sendPlain(exchange, 405, "text/plain", "method not allowed");
