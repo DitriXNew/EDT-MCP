@@ -57,6 +57,45 @@ public class DcsToolTemplateAddressTest
     }
 
     @Test
+    public void testOnlySchemaRootsAreGuardedOtherRootsKeepTheirOwnValidation()
+    {
+        // No expectedHash: a guarded schema root answers with the template refusal, every other
+        // root keeps the validation it had before the guard (here, the missing-hash error).
+        String[][] cases = {
+            {"Report.Sales#/templates/TotalRow", "schema", "read-only"},
+            {"CommonTemplate.Analytics#/templates/TotalRow", "schema", "read-only"},
+            {"Report.Sales.Template.CustomDcs#/groupTemplates/0", "schema", "read-only"},
+            {"Catalog.Products.Form.ListForm#/templates/TotalRow", "conditionalAppearance", null},
+            {"Catalog.Products.Form.ListForm.Attribute.List#/templates/TotalRow", "dynamicList", null},
+            {"Catalog.Products#/templates/TotalRow", "schema", null},
+        };
+        for (String[] item : cases)
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("fqn", item[0]); //$NON-NLS-1$
+            params.put("action", "remove"); //$NON-NLS-1$ //$NON-NLS-2$
+            params.put("type", item[1]); //$NON-NLS-1$
+
+            String error = JsonParser.parseString(new DcsTool().execute(params)).getAsJsonObject()
+                .get("error").getAsString(); //$NON-NLS-1$
+
+            if (item[2] != null)
+            {
+                assertTrue(item[0] + ": " + error, error.contains("Template address '" + item[0] //$NON-NLS-1$
+                    + "' is " + item[2])); //$NON-NLS-1$
+            }
+            else
+            {
+                assertFalse(item[0] + ": " + error, error.contains("Template address")); //$NON-NLS-1$
+                assertTrue(item[0] + ": " + error, error.contains("expectedHash is required")); //$NON-NLS-1$
+            }
+        }
+        assertNull(DcsTemplateProjection.writeRefusal("remove", //$NON-NLS-1$
+            DcsAddress.parse("Catalog.Products.Form.ListForm#/templates/X").address())); //$NON-NLS-1$
+    }
+
+    @Test
     public void testOnlyTemplateCollectionsAreGuarded()
     {
         assertNull(DcsTemplateProjection.writeRefusal("update", //$NON-NLS-1$

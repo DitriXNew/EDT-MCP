@@ -2423,7 +2423,7 @@ public final class DcsReadProjection
         if (DcsTemplateProjection.TEMPLATES.equals(collection) && owner instanceof DataCompositionSchema)
         {
             // Not a NATURAL_NAME_COLLECTIONS member: that set also drives the writer's key checks.
-            return DcsTemplateProjection.templateSelector(item, index);
+            return DcsTemplateProjection.templateSelector((DataCompositionSchema)owner, item, index);
         }
         boolean unionItems = FEATURE_ITEMS.equals(collection)
             && owner instanceof DataCompositionSchemaDataSetUnion;

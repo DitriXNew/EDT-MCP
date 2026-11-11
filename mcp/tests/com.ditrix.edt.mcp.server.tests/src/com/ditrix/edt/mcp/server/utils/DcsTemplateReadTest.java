@@ -192,7 +192,80 @@ public class DcsTemplateReadTest
             "| name | TotalRow |"); //$NON-NLS-1$
     }
 
+    @Test
+    public void testNumericTemplateNameAndUnnamedTemplateGetDistinctResolvableAddresses()
+    {
+        DataCompositionSchema schema = plainSchema();
+        DataCompositionSchemaTemplateDescription unnamed =
+            DcsFactory.eINSTANCE.createDataCompositionSchemaTemplateDescription();
+        schema.getTemplates().add(unnamed);
+        DataCompositionSchemaTemplateDescription numeric =
+            DcsFactory.eINSTANCE.createDataCompositionSchemaTemplateDescription();
+        numeric.setName("0"); //$NON-NLS-1$
+        schema.getTemplates().add(numeric);
+        schema.getGroupTemplates().add(binding("Totals", "0")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String summary = success(render(schema, ROOT, "schema")); //$NON-NLS-1$
+        assertContains(summary, "| (unset) | 0 rows, 0 cells, 0 parameters | Report.Sales#/templates/0 |"); //$NON-NLS-1$
+        // A name that reads as an index would collide with an unnamed sibling, so it is index-addressed.
+        assertContains(summary, "| 0 | 0 rows, 0 cells, 0 parameters | Report.Sales#/templates/1 |"); //$NON-NLS-1$
+
+        String named = success(render(schema, ROOT + "#/templates/1", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(named, "| name | 0 |"); //$NON-NLS-1$
+        assertContains(named, "| Report.Sales#/groupTemplates/0 | Totals · Header → 0 |"); //$NON-NLS-1$
+        String anonymous = success(render(schema, ROOT + "#/templates/0", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(anonymous, anonymous.contains("| name | 0 |")); //$NON-NLS-1$
+        assertContains(anonymous, "_(no grouping binds this template)_"); //$NON-NLS-1$
+
+        String link = success(render(schema, ROOT + "#/groupTemplates/0", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(link, "| Template address | Report.Sales#/templates/1 |"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDuplicateTemplateNamesAreIndexAddressedAndTheirBindingIsAmbiguous()
+    {
+        DataCompositionSchema schema = plainSchema();
+        for (int i = 0; i < 2; i++)
+        {
+            DataCompositionSchemaTemplateDescription duplicate =
+                DcsFactory.eINSTANCE.createDataCompositionSchemaTemplateDescription();
+            duplicate.setName("Dup"); //$NON-NLS-1$
+            schema.getTemplates().add(duplicate);
+        }
+        DataCompositionSchemaTemplateDescription single =
+            DcsFactory.eINSTANCE.createDataCompositionSchemaTemplateDescription();
+        single.setName("Single"); //$NON-NLS-1$
+        schema.getTemplates().add(single);
+        schema.getGroupTemplates().add(binding("Totals", "Dup")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String summary = success(render(schema, ROOT, "schema")); //$NON-NLS-1$
+        assertContains(summary, "| Dup | 0 rows, 0 cells, 0 parameters | Report.Sales#/templates/0 |"); //$NON-NLS-1$
+        assertContains(summary, "| Dup | 0 rows, 0 cells, 0 parameters | Report.Sales#/templates/1 |"); //$NON-NLS-1$
+        assertContains(summary, "Report.Sales#/templates/Single"); //$NON-NLS-1$
+        assertFalse(summary, summary.contains("#/templates/Dup")); //$NON-NLS-1$
+
+        String link = success(render(schema, ROOT + "#/groupTemplates/0", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(link, "| Template address | (ambiguous: 2 templates are named 'Dup': " //$NON-NLS-1$
+            + "Report.Sales#/templates/0, Report.Sales#/templates/1) |"); //$NON-NLS-1$
+        String second = success(render(schema, ROOT + "#/templates/1", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(second, "| Report.Sales#/groupTemplates/0 | Totals · Header → Dup |"); //$NON-NLS-1$
+        assertContains(second, "2 templates are named 'Dup'"); //$NON-NLS-1$
+
+        DcsReadProjection.Result byName = render(schema, ROOT + "#/templates/Dup", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(byName.isSuccess());
+        assertContains(byName.error(), "Existing keys/indices at that level: 0, 1, Single."); //$NON-NLS-1$
+    }
+
     // ----- fixtures -----
+
+    private static DataCompositionSchemaGroupTemplate binding(String groupName, String template)
+    {
+        DataCompositionSchemaGroupTemplate binding = DcsFactory.eINSTANCE.createDataCompositionSchemaGroupTemplate();
+        binding.setGroupName(groupName);
+        binding.setTemplateType(DataCompositionAreaTemplateType.HEADER);
+        binding.setTemplate(template);
+        return binding;
+    }
 
     private static DataCompositionSchema templatedSchema()
     {

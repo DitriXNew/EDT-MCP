@@ -25,7 +25,8 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTemplateDescriptio
  *
  * <p>They are read under {@code type='schema'}, as data-set links are: the typed write vocabulary
  * has no template type, and the lossless XML channel is the only way to author them. A template is
- * addressed by its {@code name}, a binding by its zero-based index. A template page summarises the
+ * addressed by its {@code name} when that name is unique and not numeric, otherwise by its index
+ * (see {@link #templateSelector}); a binding by its zero-based index. A template page summarises the
  * area body instead of expanding it, because its rows, cells and appearance have no addressable read
  * type; the body itself is read with {@code format='xml'}.
  *
@@ -56,8 +57,10 @@ public final class DcsTemplateProjection
      */
     public static String writeRefusal(String action, DcsAddress address)
     {
-        if (address == null || !address.hasPointer() || !isCollection(address.segments().get(0)))
+        if (address == null || !address.hasPointer() || !isCollection(address.segments().get(0))
+            || !isSchemaRoot(address))
         {
+            // Only a schema root has templates; any other root keeps its own validation path.
             return null;
         }
         String root = DcsAddress.render(address.rootFqn(), Collections.<String> emptyList());
@@ -83,12 +86,38 @@ public final class DcsTemplateProjection
             || value instanceof DataCompositionSchemaGroupTemplate;
     }
 
-    /** A template's selector: its name, or its index when the name is empty. */
-    static String templateSelector(EObject template, int index)
+    private static boolean isSchemaRoot(DcsAddress address)
+    {
+        DcsTargetResolver.RootClassification root = DcsTargetResolver.classifyRoot(address);
+        return root.isSuccess() && (root.kind == DcsTargetResolver.TargetKind.REPORT_MAIN_DCS
+            || root.kind == DcsTargetResolver.TargetKind.COMMON_TEMPLATE
+            || root.kind == DcsTargetResolver.TargetKind.OWNED_TEMPLATE);
+    }
+
+    /**
+     * A template's selector, the same name-else-index shape the other named DCS collections use,
+     * but made unique: a template is addressed by its name only when that name is non-empty, no
+     * sibling shares it, and it does not read as an index. Every other template is addressed by its
+     * index. Name selectors are then distinct and never numeric, index selectors are distinct and
+     * always numeric, so every printed address resolves to the one template it names.
+     */
+    static String templateSelector(DataCompositionSchema schema, EObject template, int index)
     {
         String name = template instanceof DataCompositionSchemaTemplateDescription
             ? ((DataCompositionSchemaTemplateDescription)template).getName() : null;
-        return name == null || name.isEmpty() ? Integer.toString(index) : name;
+        return name == null || name.isEmpty() || DcsAddress.isZeroBasedIndex(name)
+            || namedCount(schema, name) != 1 ? Integer.toString(index) : name;
+    }
+
+    private static int namedCount(DataCompositionSchema schema, String name)
+    {
+        if (schema == null) return 1;
+        int count = 0;
+        for (DataCompositionSchemaTemplateDescription template : schema.getTemplates())
+        {
+            if (name.equals(template.getName())) count++;
+        }
+        return count;
     }
 
     /** Summary-table rows {@code Name | Summary | Address} for the schema's templates. */
@@ -99,7 +128,7 @@ public final class DcsTemplateProjection
         for (int i = 0; i < schema.getTemplates().size(); i++)
         {
             DataCompositionSchemaTemplateDescription template = schema.getTemplates().get(i);
-            String address = DcsReadProjection.child(collection, templateSelector(template, i));
+            String address = DcsReadProjection.child(collection, templateSelector(schema, template, i));
             rows.add(MarkdownUtils.tableRow(
                 DcsReadProjection.boundedTableCell(nameOf(template), address), summary(template),
                 address));
@@ -233,6 +262,13 @@ public final class DcsTemplateProjection
             result.append("_(no grouping binds this template)_\n"); //$NON-NLS-1$
             return;
         }
+        int namesakes = namedCount(schema, name);
+        if (namesakes > 1)
+        {
+            // A binding names its template, so it cannot tell same-named templates apart.
+            result.append(MarkdownUtils.escapeMarkdown(ambiguity(namesakes, name)))
+                .append(", so these bindings do not tell them apart.\n\n"); //$NON-NLS-1$
+        }
         result.append(MarkdownUtils.tableHeader("Address", "Binding")); //$NON-NLS-1$ //$NON-NLS-2$
         bound.forEach(result::append);
     }
@@ -290,19 +326,37 @@ public final class DcsTemplateProjection
         {
             return UNSET;
         }
-        if (schema != null)
+        List<String> matches = namedAddresses(name, schema, schemaAddress);
+        if (matches.isEmpty())
         {
-            for (int i = 0; i < schema.getTemplates().size(); i++)
+            return "(no template named '" + name + "' in this schema)"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return matches.size() == 1 ? matches.get(0)
+            : "(ambiguous: " + ambiguity(matches.size(), name) + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                + String.join(", ", matches) + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The addresses of every template whose name is exactly {@code name}, in model order. */
+    private static List<String> namedAddresses(String name, DataCompositionSchema schema,
+        String schemaAddress)
+    {
+        List<String> result = new ArrayList<>();
+        if (schema == null) return result;
+        String collection = DcsReadProjection.child(schemaAddress, TEMPLATES);
+        for (int i = 0; i < schema.getTemplates().size(); i++)
+        {
+            DataCompositionSchemaTemplateDescription template = schema.getTemplates().get(i);
+            if (name.equals(template.getName()))
             {
-                DataCompositionSchemaTemplateDescription template = schema.getTemplates().get(i);
-                if (name.equals(template.getName()))
-                {
-                    return DcsReadProjection.child(DcsReadProjection.child(schemaAddress, TEMPLATES),
-                        templateSelector(template, i));
-                }
+                result.add(DcsReadProjection.child(collection, templateSelector(schema, template, i)));
             }
         }
-        return "(no template named '" + name + "' in this schema)"; //$NON-NLS-1$ //$NON-NLS-2$
+        return result;
+    }
+
+    private static String ambiguity(int count, String name)
+    {
+        return count + " templates are named '" + name + "'"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String parameterExpression(EObject parameter)
