@@ -222,7 +222,12 @@ public final class MetadataValueCodec
             for (Value item : array.getValues()) values.add(render(item));
             result.add("values", values);
         }
-        else if (value instanceof StringValue string) { result.addProperty("kind", "string"); result.addProperty("value", string.getValue()); }
+        else if (value instanceof StringValue string)
+        {
+            // EDT stores an empty string fill value as a null value; render what the writer accepts.
+            result.addProperty("kind", "string");
+            result.addProperty("value", string.getValue() == null ? "" : string.getValue());
+        }
         else if (value instanceof NumberValue number) { result.addProperty("kind", "number"); result.addProperty("value", number.getValue()); }
         else if (value instanceof BooleanValue bool) { result.addProperty("kind", "boolean"); result.addProperty("value", bool.isValue()); }
         else if (value instanceof DateValue date) { result.addProperty("kind", "date"); result.addProperty("value", date.getValue().toString()); }

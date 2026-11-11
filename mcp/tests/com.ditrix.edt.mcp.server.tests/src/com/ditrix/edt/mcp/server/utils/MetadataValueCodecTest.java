@@ -39,6 +39,15 @@ public class MetadataValueCodecTest
         }
     }
 
+    @Test public void aNullStringValueRendersAsTheFeedableEmptyString()
+    {
+        StringValue stored = McoreFactory.eINSTANCE.createStringValue(); // EDT's default for a new string member
+        JsonObject rendered = MetadataValueCodec.render(stored);
+        assertEquals(json("{kind:'string',value:''}"), rendered);
+        assertEquals(rendered, MetadataValueCodec.render(
+            MetadataValueCodec.parse(rendered, "again", ref -> null).create(null)));
+    }
+
     @Test public void fixedArrayPreservesOrderAndNestedValues()
     {
         FixedArrayValue array = (FixedArrayValue)parse("{kind:'fixedArray',values:[{kind:'string',value:'A'},"
