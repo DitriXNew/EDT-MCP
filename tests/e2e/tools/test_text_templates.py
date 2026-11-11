@@ -234,10 +234,10 @@ def test_spreadsheet_template_empty_retype_to_text_then_cell_retype_refused():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_text_template_dcs_and_unknown_type_refused_without_creation():
+def test_text_template_unknown_type_refused_without_creation():
     owner, root = _owner("Refused")
     try:
-        for index, bad in enumerate(("DataCompositionSchema", "NoSuchTemplateType730", "BinaryData")):
+        for index, bad in enumerate(("NoSuchTemplateType730", "BinaryData")):
             fqn = owner + ".Template.Refused%d" % index
             owner_file = Path(PROJECT_DIR, root, root.rsplit("/", 1)[-1] + ".mdo")
             before = owner_file.read_bytes()
