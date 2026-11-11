@@ -169,8 +169,8 @@ public final class FormChoiceParameters
         if (info != null)
         {
             AbstractDataPath canonical = info.getDataPath(ScriptVariant.ENGLISH);
-            if (canonical != null && !canonical.getSegments().isEmpty())
-                return String.join(".", canonical.getSegments());
+            if (canonical != null && canonical.getSegments().size() == path.getSegments().size())
+                return String.join(".", FormElementWriter.withRequestedIndices(canonical.getSegments(), path.getSegments()));
             throw new IllegalStateException("EDT cannot provide an English dataPath for '" + requested
                 + "'. Retry after the form finishes loading.");
         }

@@ -156,6 +156,20 @@ public class FormChoiceParametersTest
         assertEquals(json("[]"), FormChoiceParameters.render(ext(field).getChoiceParameterLinks()));
     }
 
+    @Test public void anIndexedPathKeepsItsRowIndexThroughBothResolutionPhases()
+    {
+        PropertyInfo indexed = info("K.Settings.ConditionalAppearance.Filter.Use"); // EDT names carry no indices
+        when(service.findPropertyInfo(any(Form.class), any(AbstractDataPath.class))).thenAnswer(call ->
+            "K.Settings.ConditionalAppearance[0].Filter.Use".equals(
+                String.join(".", ((AbstractDataPath)call.getArgument(1)).getSegments())) ? indexed : null);
+        FormElementWriter.dataSourcesSource = () -> service;
+        FormField field = input();
+        JsonElement raw = json("[{name:'Filter.X',dataPath:'K.Settings.ConditionalAppearance[0].Filter.Use',changeMode:'Clear'}]");
+        FormChoiceParameters.prepare(null, field, "choiceParameterLinks", raw).apply(ext(field), null);
+        assertEquals("K.Settings.ConditionalAppearance[0].Filter.Use",
+            String.join(".", ext(field).getChoiceParameterLinks().get(0).getDatapath().getSegments()));
+    }
+
     @Test public void linksRecheckPathsOnApplyAndKeepTheOldListWhenTheTargetDisappears()
     {
         installPaths(); FormField field = input();

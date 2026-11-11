@@ -4602,16 +4602,7 @@ public final class FormElementWriter
             {
                 throw new IllegalStateException("EDT did not provide the path's English segments"); //$NON-NLS-1$
             }
-            List<String> canonical = new ArrayList<>(english.getSegments());
-            // PropertyInfo builds names without runtime row indices; keep each requested suffix.
-            for (int i = 0; i < segments.size(); i++)
-            {
-                int bracket = segments.get(i).indexOf('[');
-                if (bracket >= 0)
-                {
-                    canonical.set(i, canonical.get(i) + segments.get(i).substring(bracket));
-                }
-            }
+            List<String> canonical = withRequestedIndices(english.getSegments(), segments);
             TableBinding binding = kind == Kind.TABLE
                 ? (info.getSource() instanceof BasicTabularSection ? TableBinding.TABULAR_SECTION
                     : TableBinding.PLATFORM_COLLECTION) : null;
@@ -4623,6 +4614,24 @@ public final class FormElementWriter
                 + "': EDT's IDataSourceInfoAssociationService or form data tree is not ready. " //$NON-NLS-1$
                 + "Retry when the form model and service are ready. " + e.getMessage()); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * The English segments EDT resolved, with each requested row-index suffix kept: PropertyInfo
+     * builds names without runtime indices ({@code ConditionalAppearance[0]}).
+     */
+    static List<String> withRequestedIndices(List<String> english, List<String> requested)
+    {
+        List<String> canonical = new ArrayList<>(english);
+        for (int i = 0; i < requested.size() && i < canonical.size(); i++)
+        {
+            int bracket = requested.get(i).indexOf('[');
+            if (bracket >= 0)
+            {
+                canonical.set(i, canonical.get(i) + requested.get(i).substring(bracket));
+            }
+        }
+        return canonical;
     }
 
     /** Validate a Field/Table rebind inside the same transaction that will apply it. */
