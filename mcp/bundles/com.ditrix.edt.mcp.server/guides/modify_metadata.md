@@ -90,12 +90,12 @@ What is offered is judged on the object AS IT STANDS before the call: change an 
 Every refusal names what it refused, and a refused address (malformed, another object's, unknown or not offered) also lists what IS offered; nothing is written unless every entry resolves. On an object a configuration EXTENSION adopted, both lists are refused - an extension cannot change them (EDT keeps no extension state for them, and its own editor hides both lists): change it in the base configuration. Example: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'inputByString', value:['Catalog.Products.StandardAttribute.Description', 'Catalog.Products.StandardAttribute.Code']}]}`.
 
 ## Metadata member values (fillValue / choiceParameters / choiceParameterLinks)
-Feed back the Current JSON of `get_metadata_details(assignable:true)`. ValueSpec: `{kind:'string'|'number'|'boolean'|'date',value}` (date `2026-01-02T03:04:05`), `{kind:'null'}`, `{kind:'undefined'}`, `{kind:'ref',ref:'Enum.X.EnumValue.Y'|'Catalog.X.<Predefined>'|'Catalog.X.EmptyRef'}`, `{kind:'fixedArray',values:[<ValueSpec>]}`.
-- `fillValue`: one ValueSpec, never `fixedArray`; a type mismatch is refused. Absent on database tabular-section attributes, accumulation-register members and constants.
-- `choiceParameters`: `[{name,value}]`; a free name such as `Filter.Active`.
-- `choiceParameterLinks`: `[{name,field,changeMode:'Clear'|'DontChange'}]`.
+Reuse `get_metadata_details(assignable:true)` Current JSON. ValueSpec: `{kind:'string'|'number'|'boolean'|'date',value}` (date `2026-01-02T03:04:05`), `{kind:'null'|'undefined'}`, `{kind:'ref',ref}` (`Enum.X.EnumValue.Y`, `Catalog.X.<Predefined>` / `.EmptyRef`), `{kind:'fixedArray',values:[ValueSpec]}`.
+- `fillValue`: non-array ValueSpec; type mismatch refused. Absent on database tabular-section attributes, accumulation-register members and constants.
+- `choiceParameters`: `[{name,value}]`; free names.
+- `choiceParameterLinks`: `[{name,field,changeMode:'Clear'|'DontChange'}]`; input fields use `dataPath`, e.g. `Object.Company`.
 
-Each list is replaced whole; `[]` clears. A `type` change in the same call is applied first. Adopted members are refused: change the base configuration.
+Lists replace whole; `[]` clears; also on `...Form.X.Field.Y` input fields. Metadata `type` runs first; form `type`: separate call. Adopted members/forms: change the base.
 
 ## Setting a StyleItem value (Color / Font)
 A StyleItem (created generically with create_metadata) has no value yet; set its `value` property to a STRUCTURED object with EITHER a `color` OR a `font` member (not both). The style item's `type` (Color / Font) is set automatically to match the value.

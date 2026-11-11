@@ -914,3 +914,14 @@ def test_assignable_member_values_show_feedable_current_values888():
         assert_contains(result.text, '| choiceParameters | MEMBER_VALUES | [] |')
         assert_contains(result.text, '| choiceParameterLinks | MEMBER_VALUES | [] |')
     assert_no_diff()
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_input_choice_lists_use_the_form_path_grammar888():
+    for fqn in ("Catalog.Catalog.Form.ItemForm.Field.Attribute", "Справочник.Catalog.Форма.ItemForm.Поле.Attribute"):
+        result = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+        assert_ok(result)
+        assert_contains(result.text, '| choiceParameters | FORM_CHOICE_VALUES | [] |')
+        assert_contains(result.text, '| choiceParameterLinks | FORM_CHOICE_VALUES | [] |')
+        assert_contains(result.text, 'name,dataPath,changeMode:')
+        assert_no_diff("reading input-field lists must leave the fixture clean")

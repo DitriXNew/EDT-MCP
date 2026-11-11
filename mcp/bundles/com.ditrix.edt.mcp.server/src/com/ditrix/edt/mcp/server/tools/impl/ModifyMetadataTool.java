@@ -109,6 +109,7 @@ import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataMemberValues;
+import com.ditrix.edt.mcp.server.utils.FormChoiceParameters;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
@@ -5519,6 +5520,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private HolderChange prepareFormMemberChange(MetadataScope scope, Version version, EObject member,
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
+        String property = asString(prop.get("name"));
+        if (FormChoiceParameters.isProperty(property))
+        {
+            try
+            {
+                FormChoiceParameters.requireInputField(member, property);
+            }
+            catch (IllegalArgumentException e)
+            {
+                throw new FormValidationException(ToolResult.error(e.getMessage()).toJson());
+            }
+        }
         if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
         {
             JsonElement value = prop.get(KEY_VALUE);
@@ -6755,6 +6768,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
+            case FORM_CHOICE_VALUES:
+                try
+                {
+                    FormChoiceParameters.Plan values = FormChoiceParameters.prepare(ctx.scope, target,
+                        info.feature.getName(), prop.get(KEY_VALUE));
+                    out.add(PreparedChange.formChoiceValues(info.feature, values));
+                    return null;
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return ToolResult.error(e.getMessage()).toJson();
+                }
             case MEMBER_VALUES:
                 try
                 {
@@ -8181,7 +8206,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             /** A Field/Table dataPath validated by the same planner as creation (#728). */
             FORM_DATA_PATH,
             /** A field list (issue #740); the value is the list of field ids. */
-            FIELD_LIST, EXCLUDED_COMMANDS, MEMBER_VALUES
+            FIELD_LIST, EXCLUDED_COMMANDS, MEMBER_VALUES, FORM_CHOICE_VALUES
         }
 
         /**
@@ -8230,6 +8255,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange memberValues(EStructuralFeature feature, MetadataMemberValues.Plan value)
         {
             return new PreparedChange(feature, Kind.MEMBER_VALUES, value, null, null, null, null, false);
+        }
+
+        static PreparedChange formChoiceValues(EStructuralFeature feature, FormChoiceParameters.Plan value)
+        {
+            return new PreparedChange(feature, Kind.FORM_CHOICE_VALUES, value, null, null, null, null, false);
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
@@ -8649,6 +8679,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     return TypeChangeDefaults.Reset.NONE;
                 case MEMBER_VALUES:
                     ((MetadataMemberValues.Plan)scalarValue).apply(target, feature, tx);
+                    return TypeChangeDefaults.Reset.NONE;
+                case FORM_CHOICE_VALUES:
+                    ((FormChoiceParameters.Plan)scalarValue).apply(target, tx);
                     return TypeChangeDefaults.Reset.NONE;
                 case FIELD_LIST:
                 {
