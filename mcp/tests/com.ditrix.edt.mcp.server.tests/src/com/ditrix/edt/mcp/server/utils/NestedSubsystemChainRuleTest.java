@@ -139,6 +139,71 @@ public class NestedSubsystemChainRuleTest
             + "guard must judge it", VendorSupportGuard.refusalForFqn(scope, address, Intent.MODIFY));
     }
 
+    // ---- review round 2: the yo reading is decided per level ---------------------------------------
+
+    /** A top-level subsystem with one child, linked both ways. */
+    private Subsystem[] chain(String parentName, String childName)
+    {
+        Subsystem top = MdClassFactory.eINSTANCE.createSubsystem();
+        top.setName(parentName);
+        Subsystem leaf = MdClassFactory.eINSTANCE.createSubsystem();
+        leaf.setName(childName);
+        top.getSubsystems().add(leaf);
+        leaf.setParentSubsystem(top);
+        configuration.getSubsystems().add(top);
+        return new Subsystem[] {top, leaf};
+    }
+
+    @Test
+    public void testAYoParentAboveAYeChildResolvesByTheParentsStoredSpelling()
+    {
+        // The parent was created with normalizeYo=false (stored with 'yo'), the child with the default
+        // ('ye'). Normalizing the WHOLE address would change the parent too and find nothing.
+        Subsystem[] stored = chain("Ёж", YE_NAME);
+        String address = "Subsystem.Ёж.Subsystem." + YO_NAME;
+        assertSame(stored[1], MetadataNodeResolver.resolveAddress(scope, address, true));
+        MetadataNodeResolver.ResolvedNode write = MetadataNodeResolver.resolveNestedSubsystem(scope, address, true);
+        assertSame("the write resolves the same leaf the guard judges", stored[1], write.node.object);
+        assertEquals("Subsystem.Ёж.Subsystem." + YE_NAME, write.fqn);
+        assertNull("an exact-only caller still resolves exactly",
+            MetadataNodeResolver.resolveAddress(scope, address, false));
+    }
+
+    @Test
+    public void testAYeParentAboveAYoChildResolvesByTheChildsStoredSpelling()
+    {
+        Subsystem[] stored = chain("Еж", YO_NAME);
+        String address = "Subsystem.Ёж.Subsystem." + YO_NAME;
+        assertSame(stored[1], MetadataNodeResolver.resolveAddress(scope, address, true));
+        assertSame(stored[1], MetadataNodeResolver.resolveNestedSubsystem(scope, address, true).node.object);
+        assertNull(MetadataNodeResolver.resolveAddress(scope, address, false));
+    }
+
+    @Test
+    public void testTheGuardJudgesTheLeafOfAMixedSpellingChain()
+    {
+        Subsystem[] stored = chain("Ёж", YE_NAME);
+        when(support.canEdit(stored[0], EditingMode.DIRECT)).thenReturn(true);
+        when(support.canEdit(stored[1], EditingMode.DIRECT)).thenReturn(false);
+        String address = "Subsystem.Ёж.Subsystem." + YO_NAME;
+        VendorSupportGuard.Target target = VendorSupportGuard.resolveTarget(scope, address, Intent.MODIFY);
+        assertSame("never the editable parent", stored[1], target.object);
+        assertTrue(target.exact);
+        assertNotNull(VendorSupportGuard.refusalForFqn(scope, address, Intent.MODIFY));
+    }
+
+    @Test
+    public void testTwoYoReadingsOfOneAddressResolveToNeither()
+    {
+        // 'yo'-parent with a 'ye'-child AND 'ye'-parent with a 'yo'-child: the address spelled with 'yo'
+        // at both levels fits both. A write must not pick one of two different subsystems.
+        chain("Ёж", YE_NAME);
+        chain("Еж", YO_NAME);
+        String address = "Subsystem.Ёж.Subsystem." + YO_NAME;
+        assertNull(MetadataNodeResolver.resolveAddress(scope, address, true));
+        assertNull(MetadataNodeResolver.resolveNestedSubsystem(scope, address, true).node);
+    }
+
     // ---- finding 2: one malformed-chain rule ------------------------------------------------------
 
     @Test

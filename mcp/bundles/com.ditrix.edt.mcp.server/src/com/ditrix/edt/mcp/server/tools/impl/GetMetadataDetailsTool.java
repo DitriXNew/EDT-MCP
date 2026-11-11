@@ -429,10 +429,13 @@ public class GetMetadataDetailsTool implements IMcpTool
         // parents.
         String[] nestedChain = SubsystemUtils.nestedChain(MetadataTypeUtils.normalizeFqn(fqn));
         // Nor may a subsystem address that goes on past 'Subsystem.<Name>' without being a whole chain
-        // (one cut short, or with a foreign segment): resolveObject would render its FIRST level.
-        if (nestedChain == null && isMalformedSubsystemChain(fqn) && !ctx.scope.isExternalObjects())
+        // (one cut short, or with a foreign segment): resolveObject would render its FIRST level. A chain
+        // with a stray or padded segment is refused too, though it parses: the tolerant parse would
+        // render the subsystem its trimmed reading names (one rule with the writes, issue #897).
+        if (isMalformedSubsystemChain(fqn) && !ctx.scope.isExternalObjects())
         {
-            failures.add(new String[] { fqn, MALFORMED_SUBSYSTEM_CHAIN });
+            String segment = SubsystemUtils.malformedSegmentError(MetadataTypeUtils.normalizeFqn(fqn));
+            failures.add(new String[] { fqn, segment != null ? segment : MALFORMED_SUBSYSTEM_CHAIN });
             return;
         }
         // Only the special views above may consume a deeper address. The generic resolver reads
@@ -1608,17 +1611,17 @@ public class GetMetadataDetailsTool implements IMcpTool
      * or one with a foreign segment ({@code Subsystem.Sales.Attribute.Weight}). Below a subsystem
      * nothing but a nested subsystem has an address (its command interface is taken before this is
      * asked), so such an address names nothing - and {@link #resolveObject}, which reads only the
-     * first two segments, would render its FIRST level for it. Package-visible for tests.
+     * first two segments, would render its FIRST level for it. A chain with an empty or padded segment
+     * ({@code Subsystem.Sales.Subsystem.Orders.}) counts too: it parses, but only by dropping what the
+     * caller typed. Package-visible for tests.
      *
      * @param fqn the requested FQN (may be {@code null})
      * @return {@code true} for a subsystem address that no subsystem walk can take
      */
     static boolean isMalformedSubsystemChain(String fqn)
     {
-        // The shared classifier every subsystem write uses (issue #897): one rule for "asks for a
-        // subsystem below a top-level one".
-        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        return SubsystemUtils.isChainRequest(normFqn) && SubsystemUtils.nestedChain(normFqn) == null;
+        // The shared rule every subsystem write refuses a chain request by (issue #897).
+        return SubsystemUtils.malformedChainError(MetadataTypeUtils.normalizeFqn(fqn)) != null;
     }
 
     /**

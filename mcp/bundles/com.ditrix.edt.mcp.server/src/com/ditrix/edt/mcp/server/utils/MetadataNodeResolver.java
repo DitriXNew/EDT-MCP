@@ -681,8 +681,8 @@ public final class MetadataNodeResolver
      * <p>The address the result carries is the subsystem's canonical chain - every token English,
      * every level by its stored Name - when the subsystem's own parent links spell the address
      * ({@link SubsystemUtils.Lineage#spells}); otherwise the address as given. With {@code yoFallback}
-     * a chain the exact descent misses is retried once with yo normalized to ye over the whole
-     * address, exactly like {@link #resolveExistingWithYoFallback} retries a top object's FQN.</p>
+     * a chain the exact descent misses is resolved again with the yo reading decided level by level
+     * (see {@link #resolveSubsystemChain}).</p>
      *
      * @param scope the resolution root (may be {@code null})
      * @param fqn the normalized address (may be {@code null})
@@ -727,8 +727,9 @@ public final class MetadataNodeResolver
      * The ONE rule a subsystem chain address resolves by, for {@link #resolveAddress} (and so the
      * vendor-support guard) and {@link #resolveNestedSubsystem} (the write) alike, so the two judge and
      * change the same subsystem (issue #897): the exact descent ({@link SubsystemUtils#resolveInScope});
-     * then, only with {@code yoFallback}, the same descent once more over the whole address with yo
-     * normalized to ye. Never one of the chain's parents.
+     * then, only with {@code yoFallback}, a descent that matches each level by its exact name first and
+     * by its yo-normalized (ye) twin second, accepted only when exactly one chain matches. Never one of
+     * the chain's parents.
      *
      * @return the hit, or {@code null} when the address is no chain or names no subsystem in this root
      */
@@ -740,10 +741,24 @@ public final class MetadataNodeResolver
         {
             return new SubsystemHit(leaf, fqn, chain);
         }
-        String retry = yoFallback ? yoRetryFqn(fqn) : null;
-        String[] retryChain = retry == null ? null : SubsystemUtils.parseSubsystemPath(retry);
-        Subsystem viaYo = retryChain == null ? null : SubsystemUtils.resolveInScope(scope, retryChain);
-        return viaYo == null ? null : new SubsystemHit(viaYo, retry, retryChain);
+        if (chain == null || !yoFallback || scope == null || scope.isExternalObjects())
+        {
+            return null;
+        }
+        // The yo reading is decided PER LEVEL, never over the whole address: create_metadata stores each
+        // Name on its own (normalizeYo is a per-call choice), so a chain can hold a 'yo' parent above a
+        // 'ye' child. The shared per-level descent (SubsystemUtils.resolveStoredChain) tries, at each
+        // level, the exact name first and then its yo-normalized twin among the subsystems that really
+        // exist there. More than one matching chain is two different subsystems the address could mean:
+        // none is guessed.
+        List<String[]> stored = SubsystemUtils.resolveStoredChain(scope.configuration(), fqn);
+        if (stored.size() != 1)
+        {
+            return null;
+        }
+        String[] names = stored.get(0);
+        Subsystem viaYo = SubsystemUtils.resolveInScope(scope, names);
+        return viaYo == null ? null : new SubsystemHit(viaYo, SubsystemUtils.chainFqn(names, names.length), names);
     }
 
     /**
