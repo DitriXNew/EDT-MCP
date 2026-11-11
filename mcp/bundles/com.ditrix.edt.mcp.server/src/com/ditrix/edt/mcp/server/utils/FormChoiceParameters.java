@@ -64,7 +64,9 @@ public final class FormChoiceParameters
 
     private static void requireOwned(Form form, String property)
     {
-        if (ExtensionServices.isAdopted(form.getMdForm()) || form.getBaseForm() != null)
+        // EDT's own rule (FormExtensionExporterQualifier): a native form may carry a proxy baseForm.
+        Form base = form.getBaseForm();
+        if (ExtensionServices.isAdopted(form.getMdForm()) || (base != null && !base.eIsProxy()))
             throw new IllegalArgumentException("Cannot change '" + property + "' on adopted form '"
                 + (form.getMdForm() == null ? "unknown" : MetadataNodeResolver.addressOf(form.getMdForm()))
                 + "': EDT does not persist these input-field lists in the extension. "

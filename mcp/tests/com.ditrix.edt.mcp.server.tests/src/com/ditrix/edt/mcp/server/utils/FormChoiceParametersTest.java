@@ -229,6 +229,30 @@ public class FormChoiceParametersTest
         }
     }
 
+    @Test public void aNativeFormWithAProxyBaseFormIsNotAdopted()
+    {
+        FormField field = input(); Form form = (Form)field.eContainer();
+        CatalogForm mdForm = MdClassFactory.eINSTANCE.createCatalogForm(); mdForm.setName("ItemForm");
+        mdForm.setObjectBelonging(ObjectBelonging.NATIVE);
+        form.setMdForm(mdForm);
+        Form proxy = FormFactory.eINSTANCE.createForm();
+        ((org.eclipse.emf.ecore.InternalEObject)proxy).eSetProxyURI(URI.createURI("bm://p/Catalog.X.Form.ItemForm.Form"));
+        form.setBaseForm(proxy);
+        for (String property : List.of("choiceParameters", "choiceParameterLinks"))
+            FormChoiceParameters.prepare(null, field, property, json("[]")).apply(ext(field), null);
+
+        form.setBaseForm(FormFactory.eINSTANCE.createForm()); // a resolved base form = an extension's form
+        try
+        {
+            FormChoiceParameters.prepare(null, field, "choiceParameters", json("[]"));
+            fail("an extension form must be refused");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("adopted form"));
+        }
+    }
+
     @Test public void malformedSpecsAndLinkShapesFailBeforeReplacingAnything()
     {
         installPaths(); FormField field = input();

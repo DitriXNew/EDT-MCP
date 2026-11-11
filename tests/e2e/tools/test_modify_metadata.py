@@ -5051,8 +5051,9 @@ def test_form_input_choice_parameters_links_round_trip_and_clear888():
                   {"name": "Отбор.Массив888", "value": {"kind": "fixedArray", "values": [ref, ref]}}]
     links = [{"name": "Filter.Free888", "dataPath": "Object.Description", "changeMode": "DontChange"}]
 
+    # The form attribute keeps its programmatic Name (Object); only the standard field is Russian.
     _write_member888([{"name": "choiceParameters", "value": parameters},
-                      {"name": "choiceParameterLinks", "value": [dict(links[0], dataPath="Объект.Наименование")]}],
+                      {"name": "choiceParameterLinks", "value": [dict(links[0], dataPath="Object.Наименование")]}],
                      fqn=field_fqn)
     # Inspect the submitted export immediately, before any further MCP call.
     root = ET.fromstring(read_disk(form_file))
