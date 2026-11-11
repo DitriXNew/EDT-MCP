@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.metadata;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -504,4 +505,24 @@ public class UniversalMetadataFormatterTest
         assertTrue(md, md.contains("Catalog.Goods.StandardAttribute.Code")); //$NON-NLS-1$
         assertFalse("the stored address, not the field's EClass name: " + md, md.contains("Field.Code")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test
+    public void testPaletteColorStoredColorIsVisibleInBasicAndFullDetails()
+    {
+        var item = MdClassFactory.eINSTANCE.createPaletteColor();
+        item.setName("Accent");
+        var color = McoreFactory.eINSTANCE.createColorDef();
+        color.setRed(12);
+        color.setGreen(34);
+        color.setBlue(56);
+        item.setColor(color);
+        assertNull("appearanceItem is derived, not the stored color", item.getAppearanceItem());
+        for (boolean full : new boolean[] {false, true})
+        {
+            String md = f.format(item, full, EN);
+            assertTrue(md, md.contains("PaletteColor: Accent"));
+            assertTrue(md, md.contains("| Color | RGB(12, 34, 56) |"));
+        }
+    }
+
 }
