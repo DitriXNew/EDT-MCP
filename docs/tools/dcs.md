@@ -198,6 +198,10 @@ field table, and a canonical address on every rendered node. A settings pointer 
 the entire nested settings subtree as an address-aware outline. A chart node also lists
 its references under `## Chart references`: each point, series and measure with its address
 and a `Drawn` column, `no` when it, its chart, or a group or folder above it is switched off.
+Area templates (`#/templates/<name>`, or `#/templates/<index>` when the name is empty, shared or
+numeric) and their grouping bindings (`#/groupTemplates/<i>`, `#/groupHeaderTemplates/<i>`) are
+counted in the root summary and read with `type='schema'`; a template page summarises its body,
+parameters and bindings. They are read-only: change them through the lossless XML channel below.
 
 If a segment cannot be resolved, the error names that segment and lists the keys or
 indices that exist at its parent. Copy one of the listed values or read the parent
