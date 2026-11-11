@@ -71,3 +71,5 @@ With `full:true`, `ExternalDataSource.E.Table.T` renders its properties and a `T
 
 ## Additional columns
 `assignable:true` accepts an additional column's address, `...Form.F.Attribute.Object.Column.<TabularSection>.<Name>`. The form structure lists additional columns in their own `## Additional columns` table (Attribute, Table path, Name, Synonym, Type) with its own row cap; the table is omitted when the form has none. Details: get_tool_guide('create_metadata', section='Additional columns').
+
+For metadata members, `assignable:true` shows `fillValue`, `choiceParameters` and `choiceParameterLinks` Current as the exact ValueSpec/list JSON accepted by modify_metadata (including empty lists). Only properties the member model declares are offered.

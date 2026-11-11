@@ -62,7 +62,7 @@ public class TagSearchFilter extends ViewerFilter {
         "FunctionalOption", "FunctionalOptionsParameter", "DefinedType", "SettingsStorage",
         "CommonForm", "CommonCommand", "CommandGroup", "CommonTemplate", "CommonPicture",
         "XDTOPackage", "WebService", "HTTPService", "WSReference", "WebSocketClient",
-        "IntegrationService", "Style", "StyleItem", "Language"
+        "IntegrationService", "Style", "StyleItem", "PaletteColor", "Language"
     );
     
     /**

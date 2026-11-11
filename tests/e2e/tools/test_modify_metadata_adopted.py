@@ -712,3 +712,22 @@ def test_the_extensions_own_defined_type_and_subscription_are_written_natively()
             raise AssertionError("the model's source is the extension's catalog; got %r" % (row,))
 
     _restoring("the extension's own defined type and subscription", body)
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_adopted_member_values_refuse_before_write888():
+    def body():
+        fqn = "Catalog.Catalog.Attribute.Attribute"
+        _adopt(fqn, "seed adopted member for #888")
+        mdo = "src/Catalogs/Catalog/Catalog.mdo"
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        status = status_porcelain_rel(TESTS_PROJECT_REL)
+        for address in (fqn, "Справочник.Catalog.Реквизит.Attribute"):
+            for name, value in (("fillValue", {"kind": "string", "value": "No888"}),
+                                ("choiceParameters", []), ("choiceParameterLinks", [])):
+                result = _modify_ext(address, [{"name": name, "value": value}])
+                error = assert_error(result)
+                assert_error_quality(error, names=[name, "adopted"], suggests=["base configuration"])
+                assert read_fixture_file(TESTS_PROJECT_REL, mdo) == before
+                assert status_porcelain_rel(TESTS_PROJECT_REL) == status
+        assert_no_diff_rel("tests/TestConfiguration", "adopted member refusal must leave base unchanged")
+    _restoring("adopted member values #888", body)

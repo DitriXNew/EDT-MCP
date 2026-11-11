@@ -1440,4 +1440,38 @@ public class MetadataTypeUtilsTest
             assertEquals("the Russian token starts with the Cyrillic Es", 0x0421, info.getRussian().charAt(0)); //$NON-NLS-1$
         }
     }
+
+    @Test
+    public void testPaletteColorCatalogueAndNameResolutionInBothLanguages()
+    {
+        for (String name : new String[] {"Accent", "\u0410\u043A\u0446\u0435\u043D\u0442"}) // Акцент
+        {
+            var factory = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE;
+            var config = factory.createConfiguration();
+            var item = factory.createPaletteColor();
+            item.setName(name);
+            item.getSynonym().put("en", "Display accent");
+            config.getPaletteColors().add(item);
+            String[] tokens = {"PaletteColor", "PaletteColors", "paletteColors",
+                "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры
+                "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"}; // ЦветаПалитры
+            for (String token : tokens)
+            {
+                assertSame(token, MetadataTypeInfo.PALETTE_COLOR, MetadataTypeUtils.resolve(token));
+                assertEquals("PaletteColor", MetadataTypeUtils.toEnglishSingular(token));
+                assertEquals("paletteColors", MetadataTypeUtils.resolve(token).getConfigReferenceName());
+                assertEquals(Collections.singletonList(item), MetadataTypeUtils.getObjects(config, token));
+                assertSame(token, item, MetadataTypeUtils.findObject(config, token, name.toLowerCase(Locale.ROOT)));
+                assertNull("A synonym is not a Name", MetadataTypeUtils.findObject(config, token, "Display accent"));
+                assertEquals("PaletteColor." + name, MetadataTypeUtils.normalizeFqn(token + "." + name));
+                assertEquals("PaletteColors", MetadataTypeUtils.getDirectoryName(token));
+                assertEquals("src/PaletteColors/" + name + "/" + name + ".mdo",
+                    MetadataPathResolver.resolveTopObjectMdoPath(token + "." + name));
+            }
+            assertSame(item, StyleValueBuilder.findPaletteColor(config, name.toLowerCase(Locale.ROOT)));
+            assertNull(StyleValueBuilder.findPaletteColor(config, "Display accent"));
+            assertNull(StyleValueBuilder.findPaletteColor(null, name));
+        }
+    }
+
 }

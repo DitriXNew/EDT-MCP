@@ -608,8 +608,6 @@ public final class StyleValueBuilder
 
     /**
      * A configuration palette color by its programmatic Name (case-insensitive), whatever it holds.
-     * The {@link MetadataTypeUtils} type catalogue does not list PaletteColor (8.5.1+), so its
-     * collection is passed to the shared name rule directly.
      *
      * @param configuration the configuration, may be {@code null}
      * @param name the item name, may be {@code null}
@@ -618,8 +616,10 @@ public final class StyleValueBuilder
     public static com._1c.g5.v8.dt.metadata.mdclass.PaletteColor findPaletteColor(
         Configuration configuration, String name)
     {
-        return configuration == null ? null
-            : MetadataTypeUtils.findByName(configuration.getPaletteColors(), name);
+        MdObject item = MetadataTypeUtils.findObject(configuration,
+            MdClassPackage.Literals.PALETTE_COLOR.getName(), name);
+        return item instanceof com._1c.g5.v8.dt.metadata.mdclass.PaletteColor
+            ? (com._1c.g5.v8.dt.metadata.mdclass.PaletteColor)item : null;
     }
 
     /**

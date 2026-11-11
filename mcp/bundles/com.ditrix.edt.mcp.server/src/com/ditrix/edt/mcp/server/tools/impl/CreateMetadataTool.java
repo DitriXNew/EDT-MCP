@@ -42,8 +42,10 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
@@ -611,6 +613,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
             EClass createClass = target.topLevel
                 ? resolveCollectionElementType(config, target.configFeatureName) : target.elementType;
+            String compatibilityError = paletteColorCompatibilityError(createClass, config);
+            if (compatibilityError != null)
+            {
+                return () -> compatibilityError;
+            }
             if (props.templateType != null
                 && (createClass == null || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(createClass)))
             {
@@ -1285,6 +1292,35 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             this.typeSpecific = typeSpecific;
             this.normReport = normReport;
         }
+    }
+
+    /** The EDT factory initializes PaletteColor without checking the configuration's mode. */
+    static String paletteColorCompatibilityError(EClass type, Configuration config)
+    {
+        if (type != MdClassPackage.Literals.PALETTE_COLOR)
+        {
+            return null;
+        }
+        boolean extensionMode = usesExtensionCompatibilityMode(config);
+        CompatibilityMode mode = extensionMode
+            ? config.getConfigurationExtensionCompatibilityMode() : config.getCompatibilityMode();
+        if (mode != null && mode.getValue() >= CompatibilityMode.VERSION8_51.getValue())
+        {
+            return null;
+        }
+        return ToolResult.error("Cannot create PaletteColor with " //$NON-NLS-1$
+            + (extensionMode ? "extension " : "") + "compatibility mode '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (mode == null ? "unknown" : mode.getLiteral()) //$NON-NLS-1$
+            + "'. Set the " + (extensionMode ? "extension" : "configuration") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " compatibility mode to 8.5.1 or later in EDT, then retry create_metadata.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /** EDT's own rule: an extension root without its own compatibilityMode runs in the extension mode. */
+    static boolean usesExtensionCompatibilityMode(Configuration config)
+    {
+        return config.getObjectBelonging() == ObjectBelonging.ADOPTED
+            && !config.eIsSet(MdClassPackage.Literals.CONFIGURATION__COMPATIBILITY_MODE);
     }
 
     private java.util.function.Supplier<String> createTopLevel(TopLevelRequest req)

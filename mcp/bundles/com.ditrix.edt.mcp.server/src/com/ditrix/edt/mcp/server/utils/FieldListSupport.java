@@ -414,6 +414,8 @@ public final class FieldListSupport
      */
     static String symbolicName(String ownerAddress, String prefix, String name)
     {
+        // A constant's derived field name is already the complete Constant.<Name> address.
+        if ("Constant".equals(prefix)) return name;
         return COMMON_ATTRIBUTE.equals(prefix) ? COMMON_ATTRIBUTE + '.' + name
             : ownerAddress + '.' + prefix + '.' + name;
     }
@@ -585,9 +587,7 @@ public final class FieldListSupport
         List<EObject> proxies = new ArrayList<>();
         for (URI uri : proxyUris)
         {
-            Field proxy = McoreFactory.eINSTANCE.createField();
-            ((InternalEObject)proxy).eSetProxyURI(uri);
-            proxies.add(proxy);
+            proxies.add(fieldProxy(uri));
         }
         list.clear();
         list.addAll(proxies);
@@ -989,6 +989,26 @@ public final class FieldListSupport
         {
             return Collections.emptyList();
         }
+    }
+
+    /** EDT's choice-link picker includes surrounding tabular-section fields and other constants. */
+    public static List<Field> choiceLinkTargets(EObject member)
+    {
+        List<Field> result = new ArrayList<>();
+        for (Field field : com._1c.g5.v8.dt.md.FieldsSourceUtil.INSTANCE.getAllFieldsOf(member))
+        {
+            if (!(field instanceof DerivedField) || ((DerivedField)field).getSource() != member)
+                result.add(field);
+        }
+        return result;
+    }
+
+    /** A fresh proxy to a derived field, using the same stable BM URI representation as field lists. */
+    public static Field fieldProxy(URI uri)
+    {
+        Field proxy = McoreFactory.eINSTANCE.createField();
+        ((InternalEObject)proxy).eSetProxyURI(uri);
+        return proxy;
     }
 
     /** The addresses the list holds now; an unreadable list only loses the "drop it" wording. */

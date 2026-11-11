@@ -6,8 +6,6 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -5589,48 +5587,12 @@ public final class DcsSettingsWriter
                         com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDesignTimeValueValue();
                     designValue.setValue(design);
                     return ValueResult.success(designValue);
-                case "string": //$NON-NLS-1$
-                    String string = primitiveString(raw, path, true);
-                    if (parseScratch().primitiveStringError != null)
-                    {
-                        return ValueResult.failure(parseScratch().primitiveStringError);
-                    }
-                    StringValue stringValue = McoreFactory.eINSTANCE.createStringValue();
-                    stringValue.setValue(string);
-                    return ValueResult.success(stringValue);
-                case "number": //$NON-NLS-1$
-                    if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isNumber())
-                    {
-                        return ValueResult.failure("Number ValueSpec at '" + path //$NON-NLS-1$
-                            + "' needs a JSON number in 'value'."); //$NON-NLS-1$
-                    }
-                    return numberValue(raw, path);
-                case "boolean": //$NON-NLS-1$
-                    if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isBoolean())
-                    {
-                        return ValueResult.failure("Boolean ValueSpec at '" + path //$NON-NLS-1$
-                            + "' needs true or false in 'value'."); //$NON-NLS-1$
-                    }
-                    BooleanValue bool = McoreFactory.eINSTANCE.createBooleanValue();
-                    bool.setValue(raw.getAsBoolean());
-                    return ValueResult.success(bool);
-                case "date": //$NON-NLS-1$
-                    String date = requiredPrimitiveString(raw, path);
-                    if (parseScratch().primitiveStringError != null)
-                    {
-                        return ValueResult.failure(parseScratch().primitiveStringError);
-                    }
-                    DateValue dateValue = McoreFactory.eINSTANCE.createDateValue();
-                    dateValue.setValue(com._1c.g5.v8.dt.mcore.util.Date.fromString(date));
-                    return ValueResult.success(dateValue);
-                case "null": //$NON-NLS-1$
-                    if (raw != null && !raw.isJsonNull())
-                    {
-                        return ValueResult.failure("Null ValueSpec at '" + path //$NON-NLS-1$
-                            + "' must omit 'value' or set it to null."); //$NON-NLS-1$
-                    }
-                    NullValue nullValue = McoreFactory.eINSTANCE.createNullValue();
-                    return ValueResult.success(nullValue);
+                case "string":
+                case "number":
+                case "boolean":
+                case "date":
+                case "null":
+                    return ValueResult.success(ScalarValueCodec.parse(object, path));
                 case KIND_STANDARD_PERIOD:
                     return standardPeriodValue(raw, path);
                 case KIND_STANDARD_BEGINNING_DATE:
@@ -5645,65 +5607,8 @@ public final class DcsSettingsWriter
         }
         catch (IllegalArgumentException e)
         {
-            return ValueResult.failure("Date ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
-                + "' is invalid. Pass the platform date literal accepted by mcore Date.fromString."); //$NON-NLS-1$
+            return ValueResult.failure(e.getMessage());
         }
-    }
-
-    /**
-     * All JSON number write paths meet here. Like JsonUtils.parseExactDecimalLong, use exact
-     * decimal arithmetic to remove an integral transport Double's fraction; retain real fractions
-     * verbatim within the platform's Number limits. Check integer digits, fractional scale and
-     * significant precision before expansion or model construction. Number qualifiers require
-     * scale <= precision, so MAX_NUMBER_PRECISION also bounds the fractional scale.
-     */
-    private static ValueResult numberValue(JsonElement raw, String path)
-    {
-        BigDecimal decimal;
-        try
-        {
-            decimal = raw.getAsBigDecimal();
-        }
-        catch (NumberFormatException e)
-        {
-            // Newer Gson versions also reject extreme scales during parsing. Keep that rejection
-            // on the numeric error path, rather than the generic Date ValueSpec catch.
-            return numberValueFailure(raw, path);
-        }
-        // Zero has no significant exponent: discard even an extreme scale without expanding it.
-        if (decimal.signum() == 0)
-        {
-            decimal = BigDecimal.ZERO;
-        }
-        long integerDigits = (long)decimal.precision() - decimal.scale();
-        if (integerDigits > MetadataTypeBuilder.MAX_NUMBER_PRECISION
-            || decimal.scale() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
-        {
-            return numberValueFailure(raw, path);
-        }
-        BigDecimal significant = decimal.stripTrailingZeros();
-        if (significant.precision() > MetadataTypeBuilder.MAX_NUMBER_PRECISION)
-        {
-            return numberValueFailure(raw, path);
-        }
-        // Inspect integrality without growing a power of ten for a tiny fractional exponent.
-        if (decimal.scale() <= 0 || significant.scale() <= 0)
-        {
-            decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
-        }
-        NumberValue number = McoreFactory.eINSTANCE.createNumberValue();
-        number.setValue(decimal);
-        return ValueResult.success(number);
-    }
-
-    private static ValueResult numberValueFailure(JsonElement raw, String path)
-    {
-        return ValueResult.failure("Number ValueSpec value '" + raw + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
-            + "' cannot be stored as a 1C Number. Pass a finite JSON number with at most " //$NON-NLS-1$
-            + MetadataTypeBuilder.MAX_NUMBER_PRECISION
-            + " integer digits, " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
-            + " fractional digits and " + MetadataTypeBuilder.MAX_NUMBER_PRECISION //$NON-NLS-1$
-            + " significant digits."); //$NON-NLS-1$
     }
 
     /**

@@ -108,6 +108,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
+import com.ditrix.edt.mcp.server.utils.MetadataMemberValues;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
@@ -3041,6 +3042,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 lastTypeWrites.put(change.feature(), change);
             }
         }
+        String valueError = memberValueTypeError(target, changes);
+        if (valueError != null) throw new IllegalArgumentException(valueError);
         TypeChangeDefaults.Reset reset = TypeChangeDefaults.Reset.NONE;
         for (PreparedChange change : lastTypeWrites.values())
         {
@@ -4370,6 +4373,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             if (pErr != null)
             {
                 return pErr;
+            }
+        }
+        String valueError = memberValueTypeError(target, changes);
+        return valueError == null ? null : ToolResult.error(valueError).toJson();
+    }
+
+    /** Checks against the batch's final type, regardless of the JSON property order. */
+    static String memberValueTypeError(EObject target, List<PreparedChange> changes)
+    {
+        boolean hasFillValue = changes.stream().anyMatch(change ->
+            change.scalarValue instanceof MetadataMemberValues.Plan plan && plan.value() != null);
+        if (!hasFillValue) return null;
+        TypeDescription effective = MetadataMemberValues.typeOf(target);
+        for (PreparedChange change : changes)
+            if (change.isTypeChange() && change.scalarValue instanceof TypeDescription)
+                effective = (TypeDescription)change.scalarValue;
+        for (PreparedChange change : changes)
+        {
+            if (change.scalarValue instanceof MetadataMemberValues.Plan plan)
+            {
+                String error = plan.typeRefusal(effective);
+                if (error != null) return error;
             }
         }
         return null;
@@ -6776,6 +6801,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
+            case MEMBER_VALUES:
+                try
+                {
+                    MetadataMemberValues.Plan values = MetadataMemberValues.prepare(ctx.scope, target,
+                        info.feature.getName(), prop.get(KEY_VALUE));
+                    out.add(PreparedChange.memberValues(info.feature, values));
+                    return null;
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return ToolResult.error(e.getMessage()).toJson();
+                }
             case MCORE_VALUE_LIST:
                 return prepareMcoreValueList(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
@@ -8190,7 +8227,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             /** A Field/Table dataPath validated by the same planner as creation (#728). */
             FORM_DATA_PATH,
             /** A field list (issue #740); the value is the list of field ids. */
-            FIELD_LIST, EXCLUDED_COMMANDS
+            FIELD_LIST, EXCLUDED_COMMANDS, MEMBER_VALUES
         }
 
         /**
@@ -8234,6 +8271,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             this.referenceBmIds = referenceBmIds;
             this.styleBinding = styleBinding;
             this.typeChange = typeChange;
+        }
+
+        static PreparedChange memberValues(EStructuralFeature feature, MetadataMemberValues.Plan value)
+        {
+            return new PreparedChange(feature, Kind.MEMBER_VALUES, value, null, null, null, null, false);
         }
 
         static PreparedChange scalar(EStructuralFeature feature, Object value)
@@ -8650,6 +8692,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 case EXCLUDED_COMMANDS:
                     ((ExcludedCommandsSupport.Plan)scalarValue).apply(target, feature);
+                    return TypeChangeDefaults.Reset.NONE;
+                case MEMBER_VALUES:
+                    ((MetadataMemberValues.Plan)scalarValue).apply(target, feature, tx);
                     return TypeChangeDefaults.Reset.NONE;
                 case FIELD_LIST:
                 {

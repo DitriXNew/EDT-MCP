@@ -3380,4 +3380,37 @@ public class ModifyMetadataToolTest
         prop.addProperty("value", Boolean.valueOf(value)); //$NON-NLS-1$
         return prop;
     }
+
+    @Test
+    public void testPaletteColorUsesTheSharedContainedColorWritePath()
+    {
+        var item = MdClassFactory.eINSTANCE.createPaletteColor();
+        PropertyInfo info = MetadataPropertyIntrospector.find(item, "color");
+        assertNotNull(info);
+        assertEquals(MetadataPropertyIntrospector.ValueKind.COLOR, info.valueKind);
+        assertNull("The inferred appearance is not assignable",
+            MetadataPropertyIntrospector.find(item, "appearanceItem"));
+        assertNull("A palette color has no StyleItem value wrapper",
+            MetadataPropertyIntrospector.find(item, "value"));
+        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
+        assertNull(ModifyMetadataTool.prepareAppearanceWith(true, "color",
+            JsonParser.parseString("{color:{red:12,green:34,blue:56}}"),
+            MdClassFactory.eINSTANCE.createConfiguration(), null, info.feature, changes));
+        assertEquals(1, changes.size());
+        changes.get(0).applyTo(item, null);
+        var color = (com._1c.g5.v8.dt.mcore.ColorDef)item.getColor();
+        assertEquals(12, color.getRed());
+        assertEquals(34, color.getGreen());
+        assertEquals(56, color.getBlue());
+        assertNull(item.getAppearanceItem());
+        changes.clear();
+        String refusal = ModifyMetadataTool.prepareAppearanceWith(true, "color",
+            JsonParser.parseString("{color:{red:256,green:0,blue:0}}"),
+            MdClassFactory.eINSTANCE.createConfiguration(), null, info.feature, changes);
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("color"));
+        assertTrue(changes.isEmpty());
+        assertSame(color, item.getColor());
+    }
+
 }
