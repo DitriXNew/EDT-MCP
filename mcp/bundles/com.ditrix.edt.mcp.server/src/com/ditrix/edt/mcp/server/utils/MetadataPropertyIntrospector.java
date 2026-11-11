@@ -182,7 +182,9 @@ public final class MetadataPropertyIntrospector
          */
         FIELD_LIST,
         /** A form source's standard command names; the whole exclusion set is replaced. */
-        EXCLUDED_COMMANDS
+        EXCLUDED_COMMANDS,
+        /** A metadata member fill value or whole choice-parameter/link list (ValueSpec grammar). */
+        MEMBER_VALUES
     }
 
     /** One collection element's display name and complete comparison identity. */
@@ -731,6 +733,8 @@ public final class MetadataPropertyIntrospector
      */
     private static ValueKind classifyReference(EReference ref)
     {
+        if (MetadataMemberValues.isFeature(ref)) return ValueKind.MEMBER_VALUES;
+
         // The synonym (and other localized strings) is a containment map-entry reference reached
         // via getSynonym(); the remaining containment exceptions are explicit small value types.
         // Every other containment reference is a child/owned-object relation, not an assignable value.
@@ -948,6 +952,15 @@ public final class MetadataPropertyIntrospector
     /** The schema "allowed values" column: enum literals for enum kinds, reference target otherwise. */
     private static List<String> allowedValuesFor(EStructuralFeature feature, ValueKind kind)
     {
+        if (kind == ValueKind.MEMBER_VALUES)
+        {
+            return switch (feature.getName())
+            {
+                case "fillValue" -> List.of("ValueSpec: {kind,value}; {kind:'ref',ref}; {kind:'undefined'}");
+                case "choiceParameters" -> List.of("[{name,value:ValueSpec}]; fixedArray: {kind:'fixedArray',values:[ValueSpec]}; [] clears");
+                default -> List.of("[{name,field,changeMode:'Clear'|'DontChange'}]; [] clears");
+            };
+        }
         if (kind == ValueKind.ENUM || kind == ValueKind.MANY_ENUM)
         {
             return enumLiterals(feature);
@@ -1096,6 +1109,8 @@ public final class MetadataPropertyIntrospector
                     return referenceTarget(value);
                 case MANY_REFERENCE:
                     return renderReferenceList(value);
+                case MEMBER_VALUES:
+                    return Rendered.of(MetadataMemberValues.render(feature.getName(), value).toString());
                 case FIELD_LIST:
                     return renderFieldList(value);
                 case EXCLUDED_COMMANDS:
