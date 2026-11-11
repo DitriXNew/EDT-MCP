@@ -4882,3 +4882,152 @@ def test_role_rights_success_matches_output_schema():
     assert_ok(details, "read back authored Role right")
     assert_contains(details.text, "| Catalog.Catalog | Read | allowed |", "authored Role right")
     # The runner resets this in-test role and its rights resource after the test.
+
+# Issue #888: member ValueSpecs round-trip through the same properties surface.
+def _member_value888(text, property_name):
+    import json
+    row = next(line for line in text.splitlines() if line.startswith("| " + property_name + " |"))
+    return json.loads(row.split(" | ")[2])
+
+
+def _write_member888(properties, fqn="Catalog.Catalog.Attribute.Attribute"):
+    result = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "properties": properties})
+    assert_ok(result, "write metadata member values")
+    assert result.structured["persisted"] is True, result.structured
+    return result
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_member_fill_scalar_and_type_mismatch888():
+    _write_member888([{"name": "fillValue", "value": {"kind": "string", "value": "Fill888"}}])
+    root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    attribute = next(a for a in root.findall("attributes") if a.findtext("name") == "Attribute")
+    assert attribute.find("fillValue").attrib["{http://www.w3.org/2001/XMLSchema-instance}type"] == "core:StringValue"
+    assert attribute.findtext("fillValue/value") == "Fill888"
+    details = call("get_metadata_details", {"projectName": PROJECT,
+                   "objectFqns": ["Справочник.Catalog.Реквизит.Attribute"], "assignable": True})
+    assert_ok(details)
+    assert _member_value888(details.text, "fillValue") == {"kind": "string", "value": "Fill888"}
+    before = read_disk("src/Catalogs/Catalog/Catalog.mdo")
+    for value in ({"kind": "number", "value": 7}, {"kind": "fixedArray", "values": []}):
+        refused = call("modify_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.Attribute",
+                        "properties": [{"name": "comment", "value": "must-not-write888"},
+                                       {"name": "fillValue", "value": value}]})
+        error = assert_error(refused)
+        assert_error_quality(error, names=["fillValue"], suggests=["matching"] if value["kind"] == "number" else ["scalar"])
+        assert read_disk("src/Catalogs/Catalog/Catalog.mdo") == before
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_member_enum_fill_and_choice_values_links_and_clear888():
+    # The fixture contains no enum or reference-typed catalog attribute; seed both through MCP.
+    for fqn in ("Enum.E888Colors", "Enum.E888Colors.EnumValue.Красный"):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}))
+    assert_contains(read_disk("src/Enums/E888Colors/E888Colors.mdo"), "<name>Красный</name>")
+    wait_for_project_ready()
+    ref = {"kind": "ref", "ref": "Перечисление.E888Colors.ЗначениеПеречисления.Красный"}
+    canonical_ref = {"kind": "ref", "ref": "Enum.E888Colors.EnumValue.Красный"}
+    parameters = [{"name": "Filter.Free888", "value": {"kind": "string", "value": "Choice888"}},
+                  {"name": "Отбор.Массив888", "value": {"kind": "fixedArray", "values": [
+                      {"kind": "number", "value": 5}, ref, {"kind": "undefined"}]}},
+                  {"name": "FormParameter888", "value": ref}]
+    links = [{"name": "Filter.Free888", "field": "Справочник.Catalog.СтандартныйРеквизит.Наименование",
+              "changeMode": "Clear"}]
+    # Type deliberately comes LAST: the native reset must precede the explicit new values.
+    _write_member888([{"name": "fillValue", "value": ref},
+                      {"name": "choiceParameters", "value": parameters},
+                      {"name": "choiceParameterLinks", "value": links},
+                      {"name": "type", "value": {"types": [{"kind": "EnumRef", "ref": "E888Colors"}]}}])
+    root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    attribute = next(a for a in root.findall("attributes") if a.findtext("name") == "Attribute")
+    assert attribute.findtext("type/types") == "EnumRef.E888Colors"
+    assert attribute.findtext("fillValue/value") == canonical_ref["ref"]
+    assert len(attribute.findall("choiceParameters")) == 3
+    assert attribute.findall("choiceParameters")[1].find("value").attrib[
+        "{http://www.w3.org/2001/XMLSchema-instance}type"] == "core:FixedArrayValue"
+    assert attribute.findall("choiceParameters")[2].findtext("value/value") == canonical_ref["ref"]
+    assert attribute.findall("choiceParameters")[1].findtext("value/values/value") is not None
+    stored_array = attribute.findall("choiceParameters")[1].findall("value/values")
+    assert len(stored_array) == 3
+    assert stored_array[1].findtext("value") == canonical_ref["ref"]
+    assert attribute.findtext("choiceParameterLinks/field") == "Catalog.Catalog.StandardAttribute.Description"
+    details = call("get_metadata_details", {"projectName": PROJECT,
+                   "objectFqns": ["Catalog.Catalog.Attribute.Attribute"], "assignable": True})
+    assert_ok(details)
+    expected = [parameters[0], {"name": "Отбор.Массив888", "value": {"kind": "fixedArray", "values": [
+        {"kind": "number", "value": 5}, canonical_ref, {"kind": "undefined"}]}},
+        {"name": "FormParameter888", "value": canonical_ref}]
+    assert _member_value888(details.text, "fillValue") == canonical_ref
+    assert _member_value888(details.text, "choiceParameters") == expected
+    assert _member_value888(details.text, "choiceParameterLinks") == [
+        {"name": "Filter.Free888", "field": "Catalog.Catalog.StandardAttribute.Description", "changeMode": "Clear"}]
+    # Read-modify-write uses the exact current-value grammar.
+    _write_member888([{"name": "choiceParameters", "value": expected}])
+    assert len(ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo")).findall("attributes/choiceParameters")) == 3
+    _write_member888([{"name": "choiceParameters", "value": []}, {"name": "choiceParameterLinks", "value": []}])
+    root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    attribute = next(a for a in root.findall("attributes") if a.findtext("name") == "Attribute")
+    assert attribute.findall("choiceParameters") == [] and attribute.findall("choiceParameterLinks") == []
+    details = call("get_metadata_details", {"projectName": PROJECT,
+                   "objectFqns": ["Catalog.Catalog.Attribute.Attribute"], "assignable": True})
+    assert_ok(details)
+    assert _member_value888(details.text, "choiceParameters") == []
+    assert _member_value888(details.text, "choiceParameterLinks") == []
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_member_predefined_and_empty_reference888():
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Predefined.E888Item"}))
+    assert_contains(read_disk("src/Catalogs/Catalog/Catalog.mdo"), "<name>E888Item</name>")
+    wait_for_project_ready()
+    for suffix in ("E888Item", "EmptyRef"):
+        _write_member888([{"name": "fillValue", "value": {"kind": "ref", "ref": "Справочник.Catalog." + suffix}},
+                          {"name": "type", "value": {"types": [{"kind": "CatalogRef", "ref": "Catalog"}]}}])
+        root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+        attribute = next(a for a in root.findall("attributes") if a.findtext("name") == "Attribute")
+        assert attribute.findtext("fillValue/value") == "Catalog.Catalog." + suffix
+        details = call("get_metadata_details", {"projectName": PROJECT,
+                       "objectFqns": ["Catalog.Catalog.Attribute.Attribute"], "assignable": True})
+        assert_ok(details)
+        assert _member_value888(details.text, "fillValue") == {"kind": "ref", "ref": "Catalog.Catalog." + suffix}
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_member_choice_bad_target_and_unsupported_fill888():
+    bad = call("modify_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.Attribute",
+               "properties": [{"name": "choiceParameterLinks", "value": [{"name": "Free",
+                    "field": "Catalog.Catalog.Attribute.No888", "changeMode": "Clear"}]}]})
+    assert_error_quality(assert_error(bad), names=["No888"], suggests=["Catalog.Catalog.StandardAttribute.Description"])
+    assert_no_diff()
+    for value in ({"kind": "ref", "ref": "Enum.Missing888.EnumValue.X"},
+                  {"kind": "boolean", "value": "bad888"}):
+        bad = call("modify_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.Attribute",
+                   "properties": [{"name": "fillValue", "value": value}]})
+        assert_error_quality(assert_error(bad), names=["fillValue"], suggests=["Use"] if value["kind"] == "ref" else ["Pass"])
+        assert_no_diff()
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_member_fill_unavailable_on_tabular_attribute888():
+    result = call("modify_metadata", {"projectName": PROJECT,
+                  "fqn": "Document.QueryOrder.TabularSection.Items.Attribute.Quantity",
+                  "properties": [{"name": "fillValue", "value": {"kind": "number", "value": 1}}]})
+    assert_error_quality(assert_error(result), names=["fillValue"], suggests=["get_metadata_details"])
+    assert_no_diff()
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_constant_choice_link_uses_native_address888():
+    for name in ("E888Source", "E888Target"):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Constant." + name}))
+        assert_contains(read_disk("src/Constants/%s/%s.mdo" % (name, name)), "<name>%s</name>" % name)
+    wait_for_project_ready()
+    _write_member888([{"name": "choiceParameterLinks", "value": [
+        {"name": "Free888", "field": "Константа.E888Source", "changeMode": "DontChange"}]}],
+        fqn="Constant.E888Target")
+    root = ET.fromstring(read_disk("src/Constants/E888Target/E888Target.mdo"))
+    assert root.findtext("choiceParameterLinks/field") == "Constant.E888Source"
+    assert root.findtext("choiceParameterLinks/changeMode") == "DontChange"
+    details = call("get_metadata_details", {"projectName": PROJECT,
+                   "objectFqns": ["Constant.E888Target"], "assignable": True})
+    assert_ok(details)
+    assert _member_value888(details.text, "choiceParameterLinks") == [
+        {"name": "Free888", "field": "Constant.E888Source", "changeMode": "DontChange"}]

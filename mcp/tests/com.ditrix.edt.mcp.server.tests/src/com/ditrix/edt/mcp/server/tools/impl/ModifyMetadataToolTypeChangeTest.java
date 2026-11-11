@@ -122,6 +122,24 @@ public class ModifyMetadataToolTypeChangeTest
         VendorSupportGuard.setServiceForTests(null);
     }
 
+    @Test
+    public void explicitMemberValuesSurviveTheNativeResetEvenWhenTypeIsLast()
+    {
+        CatalogAttribute attribute = designerString10Attribute();
+        var feature = attribute.eClass().getEStructuralFeature("fillValue");
+        var fill = ModifyMetadataTool.PreparedChange.memberValues(feature,
+            com.ditrix.edt.mcp.server.utils.MetadataMemberValues.prepare(null, attribute, "fillValue",
+                com.google.gson.JsonParser.parseString("{kind:'number',value:42}")));
+        var parameters = ModifyMetadataTool.PreparedChange.memberValues(
+            attribute.eClass().getEStructuralFeature("choiceParameters"),
+            com.ditrix.edt.mcp.server.utils.MetadataMemberValues.prepare(null, attribute, "choiceParameters",
+                com.google.gson.JsonParser.parseString("[{name:'Free',value:{kind:'string',value:'kept'}}]")));
+        ModifyMetadataTool.applyChanges(attribute, List.of(fill, parameters, typeWrite(number(10, 2))),
+            mock(IBmTransaction.class));
+        assertEquals(42, ((NumberValue)attribute.getFillValue()).getValue().intValueExact());
+        assertEquals("kept", ((StringValue)attribute.getChoiceParameters().get(0).getValue()).getValue());
+    }
+
     // ==================== the type-dependent resets of a Constant / BasicFeature ====================
 
     @Test

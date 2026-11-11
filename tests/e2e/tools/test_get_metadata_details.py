@@ -903,3 +903,14 @@ def test_windowed_formatter_contract():
     from read_host_contracts import contract_get_metadata_details
     contract_get_metadata_details(call, "WINDOWED")
     assert_no_diff("pinned formatter reads must not change fixture files")
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_member_values_show_feedable_current_values888():
+    for fqn in ("Catalog.Catalog.Attribute.Attribute", "Справочник.Catalog.Реквизит.Attribute"):
+        result = call("get_metadata_details", {"projectName": PROJECT,
+                      "objectFqns": [fqn], "assignable": True})
+        assert_ok(result)
+        assert_contains(result.text, '| fillValue | MEMBER_VALUES | {"kind":"string","value":""} |')
+        assert_contains(result.text, '| choiceParameters | MEMBER_VALUES | [] |')
+        assert_contains(result.text, '| choiceParameterLinks | MEMBER_VALUES | [] |')
+    assert_no_diff()
