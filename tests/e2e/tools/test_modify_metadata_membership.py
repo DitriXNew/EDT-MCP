@@ -71,6 +71,11 @@ def _content_counts(r, ctx):
 # ExchangePlan.content — a wrapper list with a per-entry autoRecord (Allow / Deny)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# get_metadata_details renders a non-empty content list as an `Object | AutoRecord` table (#908);
+# an empty list renders no table at all.
+_XP_CONTENT_HEADER = "| Object | AutoRecord |"
+
+
 # The .mdo folder / file that owns an ExchangePlan's content list.
 def _plan_mdo(plan):
     return "src/ExchangePlans/%s/%s.mdo" % (plan, plan)
@@ -86,7 +91,7 @@ def test_exchange_plan_content_add_idempotent_update_remove():
     _create_ok(plan_fqn, "seed the exchange plan")
 
     # Precondition (anti-cheat): the plan starts with an EMPTY content list, so a no-op FAILS the diff.
-    assert "ExchangePlanContentItem" not in _details_text(plan_fqn), \
+    assert _XP_CONTENT_HEADER not in _details_text(plan_fqn), \
         "the fresh exchange plan must start with no content"
 
     # (1) ADD with autoRecord=Allow.
@@ -103,9 +108,9 @@ def test_exchange_plan_content_add_idempotent_update_remove():
     poll_diff_contains(member_fqn, ctx="the exchanged member FQN must land in the content on disk")
     poll_diff_contains("<autoRecord>Allow</autoRecord>",
                        ctx="the autoRecord=Allow flag must serialize for the added member")
-    # MODEL read-back: the plan now carries a content item (empty -> one row).
-    assert_contains(_details_text(plan_fqn), "ExchangePlanContentItem",
-                    "the model read-back must show the new content item")
+    # MODEL read-back: the plan's Content table now lists the member with its flag (issue #908).
+    assert_contains(_details_text(plan_fqn), "| %s | Allow |" % member_fqn,
+                    "the model read-back must show the new member and its autoRecord")
 
     # (2) IDEMPOTENT re-add with a DIFFERENT autoRecord -> UPDATE (not add), no duplicate row.
     upd = call("modify_metadata", {
@@ -121,10 +126,15 @@ def test_exchange_plan_content_add_idempotent_update_remove():
     poll_disk_lacks(_plan_mdo(plan), "<autoRecord>Allow</autoRecord>",
                     ctx="updating to the default autoRecord=Deny drops the Allow flag from the .mdo")
     # No duplicate ROW: exactly one content item references the member on disk (a robust XML-tag
-    # count; the reflective get_metadata_details renders the EMF type name more than once per item).
-    # The added==0 count above already proves the re-add created no new item; this pins it on disk.
+    # count). The added==0 count above already proves the re-add created no new item; this pins it
+    # on disk, and the read-back shows the one row with its new flag.
     assert read_disk(_plan_mdo(plan)).count("<mdObject>%s</mdObject>" % member_fqn) == 1, \
         "the idempotent re-add must NOT duplicate the member on disk"
+    updated = _details_text(plan_fqn)
+    assert_contains(updated, "| %s | Deny |" % member_fqn,
+                    "the model read-back must show the updated autoRecord")
+    assert updated.count("| %s |" % member_fqn) == 1, \
+        "the read-back must list the member once: %r" % updated
 
     # (3) REMOVE -> the member is detached from the content.
     rem = call("modify_metadata", {
@@ -138,7 +148,7 @@ def test_exchange_plan_content_add_idempotent_update_remove():
         "a pure remove must not add / update: %r" % (rem.structured,)
     poll_disk_lacks(_plan_mdo(plan), member_fqn,
                     ctx="the detached member must be gone from the exchange plan .mdo")
-    assert "ExchangePlanContentItem" not in _details_text(plan_fqn), \
+    assert _XP_CONTENT_HEADER not in _details_text(plan_fqn), \
         "the model read-back must show the content item removed"
 
 

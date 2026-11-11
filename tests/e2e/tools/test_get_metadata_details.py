@@ -33,6 +33,8 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    poll_disk_contains_all,
+    poll_disk_count,
     read_disk,
     wait_for_project_ready,
     e2e_test,
@@ -843,6 +845,45 @@ def test_get_metadata_details_renders_xdto_structure():
     assert_contains(row, "string", "the property row must show its XSD string type")
     # (No assert_no_diff: the test intentionally seeds a fresh XDTO package + members, so the tree
     # is dirty by design -- kind="write-metadata" resets it after the test.)
+
+
+# EXCHANGE PLAN content (issue #908) — the `### Content` section lists each member's address and
+# its autoRecord flag, the pair modify_metadata's content[] writes; it used to print only the
+# element class name. The fixture ships no ExchangePlan, so seed one with two members.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_get_metadata_details_renders_exchange_plan_content():
+    plan_fqn = "ExchangePlan.E2EDetXPNode"
+    allowed, denied = "Catalog.E2EDetXPCat", "Document.E2EDetXPDoc"
+    for fqn in (allowed, denied, plan_fqn):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+        wait_for_project_ready()
+    written = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": plan_fqn,
+        "content": [{"metadata": allowed, "autoRecord": "Allow"},
+                    {"metadata": denied, "autoRecord": "Deny"}],
+    })
+    assert_ok(written, "write the exchange plan content")
+    # On disk first: both members are stored, only the Allow one carries the (non-default) flag.
+    mdo = "src/ExchangePlans/E2EDetXPNode/E2EDetXPNode.mdo"
+    poll_disk_contains_all(mdo, ["<mdObject>%s</mdObject>" % allowed, "<mdObject>%s</mdObject>" % denied],
+                           ctx="both members are stored in the exchange plan .mdo")
+    poll_disk_count(mdo, "<autoRecord>Allow</autoRecord>", 1,
+                    ctx="exactly one member carries the non-default autoRecord=Allow on disk")
+
+    for full in (False, True):
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [plan_fqn], "full": full})
+        assert_ok(r, "get_metadata_details on the exchange plan (full=%s)" % full)
+        if "## Errors" in r.text:
+            raise AssertionError("the seeded exchange plan should resolve:\n" + r.text[:400])
+        assert_contains(r.text, "### Content\n\n| Object | AutoRecord |\n|---|---|\n"
+                        "| %s | Allow |\n| %s | Deny |\n" % (allowed, denied),
+                        "the Content table lists both members with their flags in content order "
+                        "(full=%s)" % full)
+        assert_not_contains(r.text, "ExchangePlanContentItem",
+                            "the element class name must not stand in for the content (full=%s)" % full)
+    # (No assert_no_diff: the objects are seeded on purpose - kind="write-metadata" resets them.)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

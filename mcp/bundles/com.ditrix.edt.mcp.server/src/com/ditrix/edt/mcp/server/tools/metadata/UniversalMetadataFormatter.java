@@ -8,10 +8,14 @@ package com.ditrix.edt.mcp.server.tools.metadata;
 
 import java.util.Collection;
 
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.InternalEObject;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.AutoRegistrationChanges;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
@@ -19,6 +23,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.CharacteristicsDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeContentItem;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlanContentItem;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.Value;
@@ -29,6 +34,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 
@@ -263,6 +269,10 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         {
             formatCommonAttributeContentCollection(sb, collectionName, collection);
         }
+        else if (firstItem instanceof ExchangePlanContentItem)
+        {
+            formatExchangePlanContentCollection(sb, collectionName, collection);
+        }
         else if (firstItem instanceof MdObject)
         {
             formatMdObjectCollection(sb, collectionName, collection, full, language);
@@ -295,7 +305,102 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
             }
         }
     }
-    
+
+    /**
+     * Formats an exchange plan's content: one row per member with its address and its
+     * {@code autoRecord} flag ({@code Allow} / {@code Deny}) - the pair {@code modify_metadata}'s
+     * {@code content[]} payload writes ({@code metadata} / {@code autoRecord}), so a written content
+     * list can be read back. The member is printed by {@link MetadataNodeResolver#addressOf} (the
+     * {@code Type.Name} address, {@code CalculationRegister.R.Recalculation.X} for a recalculation).
+     * A real plan can list thousands of members, so at most {@link #MAX_DYNAMIC_ROWS} rows are
+     * printed in content order; the notice row then counts the omitted members by flag, so the
+     * Allow / Deny totals stay complete.
+     */
+    private void formatExchangePlanContentCollection(StringBuilder sb, String name, Collection<?> items)
+    {
+        addSectionHeader(sb, name);
+        startTable(sb, "Object", "AutoRecord"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        int rendered = 0;
+        int omittedAllow = 0;
+        int omittedDeny = 0;
+        for (Object item : items)
+        {
+            if (!(item instanceof ExchangePlanContentItem))
+            {
+                continue;
+            }
+            ExchangePlanContentItem contentItem = (ExchangePlanContentItem)item;
+            AutoRegistrationChanges autoRecord = contentItem.getAutoRecord();
+            if (rendered >= MAX_DYNAMIC_ROWS)
+            {
+                if (autoRecord == AutoRegistrationChanges.ALLOW)
+                {
+                    omittedAllow++;
+                }
+                else
+                {
+                    omittedDeny++;
+                }
+                continue;
+            }
+            addTableRow(sb, exchangePlanContentObject(contentItem.getMdObject()), formatEnum(autoRecord));
+            rendered++;
+        }
+        int omitted = omittedAllow + omittedDeny;
+        if (omitted > 0)
+        {
+            addTableRow(sb, "[truncated]", omitted + " more content items omitted (section capped at " //$NON-NLS-1$ //$NON-NLS-2$
+                + MAX_DYNAMIC_ROWS + "): " + omittedAllow + " Allow, " + omittedDeny + " Deny"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
+    /**
+     * The Object cell of an exchange-plan content row. A member that no longer resolves is not
+     * dropped and not printed as a plain address: it is marked {@link #UNRESOLVED_METADATA}, followed
+     * by the address its stored reference still carries (the top-object FQN of a BM proxy URI, else
+     * the raw URI), so a dangling entry cannot pass for a valid one.
+     */
+    private static String exchangePlanContentObject(MdObject member)
+    {
+        if (member == null)
+        {
+            return UNRESOLVED_METADATA;
+        }
+        if (member.eIsProxy())
+        {
+            URI uri = member instanceof InternalEObject ? ((InternalEObject)member).eProxyURI() : null;
+            String carried = proxyAddress(uri);
+            return carried == null ? UNRESOLVED_METADATA : UNRESOLVED_METADATA + " " + carried; //$NON-NLS-1$
+        }
+        return MetadataNodeResolver.addressOf(member);
+    }
+
+    /** The address a proxy URI carries: a BM URI's top-object FQN, otherwise the URI itself. */
+    private static String proxyAddress(URI uri)
+    {
+        if (uri == null)
+        {
+            return null;
+        }
+        try
+        {
+            if (BmUriUtil.isBmUri(uri))
+            {
+                String fqn = BmUriUtil.extractTopObjectFqn(uri);
+                if (fqn != null && !fqn.isEmpty())
+                {
+                    return fqn;
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Not a well-formed BM URI: fall back to the URI text below.
+        }
+        return uri.toString();
+    }
+
     /**
      * Format a collection of forms.
      */
