@@ -258,6 +258,21 @@ public final class StyleValueBuilder
         return Result.ok(colorValue, StyleElementType.COLOR, "Color=" + prefix + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /** The font writer's body for a stored FontDef; valid only where fontRefusal returns null. */
+    static JsonObject fontBody(FontDef definition)
+    {
+        JsonObject body = new JsonObject();
+        if (definition.getFaceName() != null) body.addProperty("faceName", definition.getFaceName()); //$NON-NLS-1$
+        // Zero means an omitted height to this writer; fontRefusal compares the stored float.
+        float height = definition.getHeight();
+        if (height > 0) body.addProperty("height", (int)height); //$NON-NLS-1$
+        body.addProperty("bold", definition.isBold()); //$NON-NLS-1$
+        body.addProperty("italic", definition.isItalic()); //$NON-NLS-1$
+        body.addProperty("underline", definition.isUnderline()); //$NON-NLS-1$
+        body.addProperty("strikeout", definition.isStrikeout()); //$NON-NLS-1$
+        return body;
+    }
+
     /** Dry-runs the real font writer; only an exactly reproducible stored font can be replaced. */
     static String fontRefusal(Font font)
     {
@@ -280,18 +295,9 @@ public final class StyleValueBuilder
                 + " cannot be written; the font writer uses scale 100"); //$NON-NLS-1$
         }
 
-        JsonObject body = new JsonObject();
-        if (definition.getFaceName() != null) body.addProperty("faceName", definition.getFaceName()); //$NON-NLS-1$
-        // Zero means an omitted height to this writer. Equality below still compares the stored
-        // float, so projecting it never normalizes or changes the original font.
-        if (height > 0) body.addProperty("height", (int)height); //$NON-NLS-1$
-        body.addProperty("bold", definition.isBold()); //$NON-NLS-1$
-        body.addProperty("italic", definition.isItalic()); //$NON-NLS-1$
-        body.addProperty("underline", definition.isUnderline()); //$NON-NLS-1$
-        body.addProperty("strikeout", definition.isStrikeout()); //$NON-NLS-1$
         // Explicit false flags keep even the writer's all-default output representable. Scale
         // and every other feature the writer leaves alone must retain its factory default.
-        Result result = buildFont(body);
+        Result result = buildFont(fontBody(definition));
         if (result.error != null)
         {
             return fontRebuildRefusal("font writer dry run refused the stored font: " + result.error); //$NON-NLS-1$

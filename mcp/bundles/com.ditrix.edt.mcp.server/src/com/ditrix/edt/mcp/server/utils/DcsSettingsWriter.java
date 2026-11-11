@@ -105,6 +105,7 @@ import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
+import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.Line;
 import com._1c.g5.v8.dt.mcore.LineValue;
@@ -3788,6 +3789,19 @@ public final class DcsSettingsWriter
         return null;
     }
 
+    /** The key of the direct item that holds {@code declared} deeper down, or null when it is direct. */
+    private static String nestedParentName(DcsAvailableParameterCollection available, DcsAvailableParameter declared)
+    {
+        for (int i = 0; i < available.itemsCount(); i++)
+            if (available.getItemAt(i) == declared) return null;
+        for (int i = 0; i < available.itemsCount(); i++)
+        {
+            DcsAvailableParameter parent = available.getItemAt(i);
+            if (findAppearanceParameter(parent.getSubParameters(), declared.key(0)) == declared) return parent.key(0);
+        }
+        return null;
+    }
+
     private static DataCompositionParameterValue newAppearanceItem(JsonObject body)
     {
         return body.has(KEY_VIEW_MODE) || body.has(KEY_USER_SETTING_ID) || body.has(KEY_USER_SETTING_PRESENTATION)
@@ -3815,6 +3829,10 @@ public final class DcsSettingsWriter
         DcsAvailableParameter declared = findAppearanceParameter(available, name);
         if (declared == null) return "Unknown appearance key '" + name + "' at '" + path
             + "'. Copy a parameter name from dcs action='options'.";
+        // EDT keeps a nested leaf under its parent; a flattened copy would duplicate it.
+        String parent = nestedParentName(available, declared);
+        if (parent != null) return "Appearance key '" + name + "' at '" + path + "' is nested under '" + parent
+            + "'. Put it in that item's nestedParameterValues, or use the dotted shorthand key.";
         if (!scalar.has("value") && !scalar.has(KEY_VALUES) && (nested == null || nested.isEmpty()))
             return "Appearance key '" + name + "' needs a value or nestedParameterValues. Pass a typed value or nested items.";
         if (scalar.has(KEY_VALUES))
@@ -3965,7 +3983,8 @@ public final class DcsSettingsWriter
             JsonArray values = new JsonArray();
             for (Value value : item.getValues())
             {
-                List<JsonElement> forms = typedBodies(value);
+                JsonElement style = styleBody(value);
+                List<JsonElement> forms = style == null ? typedBodies(value) : List.of(style);
                 if (forms.isEmpty()) return null;
                 values.add(forms.get(0));
             }
@@ -4308,6 +4327,34 @@ public final class DcsSettingsWriter
      * a catalogue proxy, a proxy with a bare-name URI or a resolved object depending on how it was
      * loaded - one stored value under three object identities.
      */
+    /** {color:{<source member>:<Name>}} for a {@code <Source>.<Name>} reference, or null. */
+    private static JsonObject colorReferenceBody(String name)
+    {
+        int dot = name == null ? -1 : name.indexOf('.');
+        String member = dot <= 0 ? null : StyleValueBuilder.namedColorMember(name.substring(0, dot));
+        if (member == null) return null;
+        JsonObject named = new JsonObject();
+        named.addProperty(member, name.substring(dot + 1));
+        JsonObject body = new JsonObject();
+        body.add("color", named); //$NON-NLS-1$
+        return body;
+    }
+
+    /** Style values the shared typed projection omits: an exactly reproducible font or a named color. */
+    private static JsonElement styleBody(Value value)
+    {
+        if (value instanceof FontValue && ((FontValue)value).getValue() instanceof FontDef
+            && StyleValueBuilder.fontRefusal(((FontValue)value).getValue()) == null)
+        {
+            JsonObject body = new JsonObject();
+            body.add("font", StyleValueBuilder.fontBody((FontDef)((FontValue)value).getValue())); //$NON-NLS-1$
+            return body;
+        }
+        if (value instanceof ColorValue && ((ColorValue)value).getValue() instanceof ColorRef)
+            return colorReferenceBody(AppearanceValueBuilder.colorReferenceName((ColorRef)((ColorValue)value).getValue()));
+        return null;
+    }
+
     private static String colorReferenceRefusal(ColorRef stored,
         StyleValueBuilder.NamedColorResolver namedColors,
         java.util.function.Function<JsonElement, ValueResult> writer)
@@ -4318,17 +4365,12 @@ public final class DcsSettingsWriter
             return "the color reference names no target; the color writer restates a reference only " //$NON-NLS-1$
                 + "by its <Source>.<Name>"; //$NON-NLS-1$
         }
-        int dot = name.indexOf('.');
-        String member = StyleValueBuilder.namedColorMember(name.substring(0, dot));
-        if (member == null)
+        JsonObject body = colorReferenceBody(name);
+        if (body == null)
         {
             return "the color reference names '" + name + "', and no color body names a " //$NON-NLS-1$ //$NON-NLS-2$
-                + name.substring(0, dot) + " color"; //$NON-NLS-1$
+                + name.substring(0, Math.max(0, name.indexOf('.'))) + " color"; //$NON-NLS-1$
         }
-        JsonObject named = new JsonObject();
-        named.addProperty(member, name.substring(dot + 1));
-        JsonObject body = new JsonObject();
-        body.add("color", named); //$NON-NLS-1$
         ValueResult rebuilt = withNamedColors(namedColors, () -> writer.apply(body));
         if (rebuilt.error != null) return "the writer refuses its body: " + rebuilt.error; //$NON-NLS-1$
         Color color = rebuilt.value instanceof ColorValue ? ((ColorValue)rebuilt.value).getValue() : null;

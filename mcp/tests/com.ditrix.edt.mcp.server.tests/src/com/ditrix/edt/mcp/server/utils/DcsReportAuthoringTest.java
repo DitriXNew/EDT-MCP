@@ -147,6 +147,34 @@ public class DcsReportAuthoringTest
         assertTrue(EcoreUtil.equals(built.value, rewritten.value));
     }
 
+    @Test public void explicitItemsRefuseAFlattenedNestedLeaf() throws Exception
+    {
+        var catalogue = DcsReplaceTestCatalogues.load(DcsSettingsWriter.AppearanceCatalogue.SCHEMA, Version.V8_3_27, "en");
+        for (String key : List.of("BorderStyle.Left", "СтильГраницы.Слева"))
+        {
+            var result = DcsSettingsWriter.buildAppearanceForTest(json("{\"items\":[{\"parameter\":{\"kind\":\"parameter\",\"value\":\""
+                + key + "\"},\"values\":[{\"kind\":\"line\",\"value\":{\"width\":2,\"style\":\"Solid\"}}]}]}"), null, LANGUAGES, catalogue);
+            assertNotNull(key, result.error);
+            assertTrue(result.error, result.error.contains(key) && result.error.contains("nestedParameterValues"));
+        }
+    }
+
+    @Test public void aFontNextToANestedBorderKeepsTheWritableGetBody() throws Exception
+    {
+        var catalogue = DcsReplaceTestCatalogues.load(DcsSettingsWriter.AppearanceCatalogue.SCHEMA, Version.V8_3_27, "en");
+        var built = DcsSettingsWriter.buildAppearanceForTest(json("""
+            {"Font":{"font":{"faceName":"Arial","height":10,"bold":true}},
+             "BorderStyle.Left":{"kind":"line","value":{"width":2,"style":"Solid"}}}
+            """), null, LANGUAGES, catalogue);
+        assertNull(built.error);
+        JsonObject body = DcsSettingsWriter.appearanceBody(built.value);
+        assertNotNull(body);
+        assertTrue(body.toString(), body.toString().contains("\"faceName\":\"Arial\""));
+        var rewritten = DcsSettingsWriter.buildAppearanceForTest(body, null, LANGUAGES, catalogue);
+        assertNull(rewritten.error);
+        assertTrue(EcoreUtil.equals(built.value, rewritten.value));
+    }
+
     @Test public void invalidLinesAndUnknownNestedKeysGiveActionableRefusals() throws Exception
     {
         var catalogue = DcsReplaceTestCatalogues.load(DcsSettingsWriter.AppearanceCatalogue.SCHEMA, Version.V8_3_27, "en");
