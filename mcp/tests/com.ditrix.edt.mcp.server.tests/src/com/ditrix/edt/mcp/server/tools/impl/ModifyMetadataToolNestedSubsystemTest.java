@@ -259,6 +259,37 @@ public class ModifyMetadataToolNestedSubsystemTest
         assertTrue(resolved.error, resolved.error.contains("padded segment"));
     }
 
+    @Test
+    public void testAChainThatDoesNotParseIsRefusedByTheSharedRuleNotNotFound()
+    {
+        // Review round 1: a chain request that does not parse (an empty mid segment, a foreign kind)
+        // used to skip the subsystem refusal and fall into the generic "Node not found".
+        Resolved empty = resolve("Subsystem.A..Subsystem.B");
+        assertNull(empty.node);
+        assertTrue(empty.error, empty.error.contains("EMPTY segment"));
+        assertTrue(empty.error, empty.error.contains("Nothing was changed"));
+        assertFalse(empty.error, empty.error.contains("Node not found"));
+        Resolved foreign = resolve("Subsystem.A.Catalog.B");
+        assertNull(foreign.node);
+        assertTrue(foreign.error, foreign.error.contains("is not a subsystem address"));
+        assertFalse(foreign.error, foreign.error.contains("Node not found"));
+    }
+
+    @Test
+    public void testTheEntryRefusalCoversEveryPayloadButNotACommandInterface()
+    {
+        // Asked in executeOnUiThread before the context (and the vendor-support lookup) is resolved, so
+        // a content payload on 'Subsystem.A.Subsystem.B.' is refused too, not written on B.
+        Class<?>[] types = {String.class};
+        String trailing = (String)invoke("malformedChainRefusal", types, "Subsystem.A.Subsystem.B.");
+        assertNotNull(trailing);
+        assertTrue(trailing, trailing.contains("EMPTY segment"));
+        assertNull("a section's command interface is a valid address below a subsystem",
+            invoke("malformedChainRefusal", types, "Subsystem.A.CommandInterface"));
+        assertNull(invoke("malformedChainRefusal", types, "Subsystem.A.Subsystem.B"));
+        assertNull(invoke("malformedChainRefusal", types, "Catalog.Goods.Attribute.Weight"));
+    }
+
     // ---- the write that follows -------------------------------------------------------------------
 
     @Test

@@ -1183,23 +1183,16 @@ public final class RoleRightsWriter
     }
 
     /**
-     * The refusal of a nested-subsystem {@code rights[].object} with an empty or padded segment, or
-     * {@code null} for any other address: a right is WRITTEN on the object, so an address that reads
-     * differently from a well-formed one is refused, as create / modify / delete refuse it, rather than
-     * granted on the subsystem its trimmed reading names.
+     * The refusal of a {@code rights[].object} that asks for a subsystem below a top-level one without
+     * being a well-formed chain ({@link SubsystemUtils#malformedChainError} - an empty or padded segment,
+     * a foreign kind token, a level without its name), or {@code null} for any other address: a right is
+     * WRITTEN on the object, so such an address is refused by the rule modify / delete refuse it with,
+     * rather than granted on the subsystem its trimmed reading names or answered by "Did you mean" with
+     * the top-level parent.
      */
     static String malformedChain(String fqn)
     {
-        if (fqn == null)
-        {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
-        }
-        String norm = MetadataTypeUtils.normalizeFqn(fqn);
-        if (SubsystemUtils.nestedChain(norm) == null)
-        {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
-        }
-        String malformed = SubsystemUtils.malformedSegmentError(fqn);
+        String malformed = SubsystemUtils.malformedChainError(fqn);
         return malformed == null ? null : "Invalid right entry object: " + malformed + " Nothing was changed."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 

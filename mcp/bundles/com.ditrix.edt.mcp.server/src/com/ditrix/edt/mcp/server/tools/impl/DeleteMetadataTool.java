@@ -857,14 +857,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // missing local owner - sending the caller to look for something that can never be here
         // (issue #309).
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        // Validate nested addresses before context resolution can run the tolerant support lookup.
-        if (SubsystemUtils.nestedChain(normFqn) != null)
+        // Validate subsystem chain requests before context resolution can run the tolerant support
+        // lookup - by the one rule modify_metadata applies too, whether or not the address parses as a
+        // chain (Subsystem.A..Subsystem.B, Subsystem.A.Catalog.B; issue #897).
+        String malformed = SubsystemUtils.malformedChainError(normFqn);
+        if (malformed != null)
         {
-            String malformed = SubsystemUtils.malformedSegmentError(normFqn);
-            if (malformed != null)
-            {
-                return ToolResult.error(malformed + " Nothing was deleted.").toJson(); //$NON-NLS-1$
-            }
+            return ToolResult.error(malformed + " Nothing was deleted.").toJson(); //$NON-NLS-1$
         }
         ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())

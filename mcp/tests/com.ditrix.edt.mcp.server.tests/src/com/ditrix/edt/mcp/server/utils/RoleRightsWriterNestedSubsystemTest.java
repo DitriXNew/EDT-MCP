@@ -182,6 +182,29 @@ public class RoleRightsWriterNestedSubsystemTest
         assertNull(invoke("malformedChain", new Class<?>[] {String.class}, "Catalog.Goods.Attribute.Weight"));
     }
 
+    @Test
+    public void testAChainThatDoesNotParseIsRefusedByTheSharedRule()
+    {
+        String empty = (String)invoke("malformedChain", new Class<?>[] {String.class}, "Subsystem.A..Subsystem.B");
+        assertNotNull(empty);
+        assertTrue(empty, empty.contains("EMPTY segment"));
+        String foreign = (String)invoke("malformedChain", new Class<?>[] {String.class}, "Subsystem.A.Catalog.B");
+        assertNotNull(foreign);
+        assertTrue(foreign, foreign.contains("is not a subsystem address"));
+    }
+
+    @Test
+    public void testAForeignKindBelowASubsystemIsRefusedWithoutOfferingTheParent()
+    {
+        IRightInfosService infos = mock(IRightInfosService.class);
+        List<IBmTask<?>> tasks = new ArrayList<>();
+        RoleRightsWriter.Result result = apply(infos, tasks, rightsEntry("Subsystem.A.Catalog.B", "View"));
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("is not a subsystem address"));
+        assertFalse(result.error, result.error.contains("Did you mean"));
+        verify(infos, never()).getRights(any());
+    }
+
     // ---- the write, through the REAL apply ---------------------------------------------------------
 
     @Test

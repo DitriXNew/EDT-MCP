@@ -1615,14 +1615,10 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     static boolean isMalformedSubsystemChain(String fqn)
     {
+        // The shared classifier every subsystem write uses (issue #897): one rule for "asks for a
+        // subsystem below a top-level one".
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        if (normFqn == null)
-        {
-            return false;
-        }
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        return parts.length > 2 && SubsystemUtils.isSubsystemTypeToken(parts[0])
-            && SubsystemUtils.nestedChain(normFqn) == null;
+        return SubsystemUtils.isChainRequest(normFqn) && SubsystemUtils.nestedChain(normFqn) == null;
     }
 
     /**

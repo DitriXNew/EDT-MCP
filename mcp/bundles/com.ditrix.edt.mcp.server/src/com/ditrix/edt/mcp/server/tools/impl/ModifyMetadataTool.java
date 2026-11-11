@@ -542,6 +542,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // resolve subsystems and XDTO packages through the Configuration - the BASE one for a
         // linked external-objects project (issue #309).
         String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
+        // A malformed subsystem chain is refused before the context (and its vendor-support lookup) is
+        // resolved, for every payload - content as much as properties (issue #897).
+        String malformedChain = malformedChainRefusal(normFqn);
+        if (malformedChain != null)
+        {
+            return malformedChain;
+        }
         ProjectContext ctx = resolveProjectAndScope(args.projectName, normFqn);
         if (ctx.hasError())
         {
@@ -1806,20 +1813,34 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * use downstream, or a ready JSON {@link ResolvedTarget#error} when the node does not exist.
      * Extracted verbatim from {@link #executeOnUiThread}.
      */
+    /** Ends a refusal that is decided before anything is written. */
+    private static final String NOTHING_CHANGED = " Nothing was changed."; //$NON-NLS-1$
+
+    /**
+     * The shared refusal of a malformed subsystem chain request ({@link SubsystemUtils#malformedChainError}),
+     * as this tool words it, or {@code null}. Asked before the project context is resolved, so the
+     * tolerant vendor-support lookup never runs on the trimmed reading of such an address, and again
+     * by {@link #resolveModifyTarget}. Package-visible for tests.
+     */
+    static String malformedChainRefusal(String normFqn)
+    {
+        String malformed = SubsystemUtils.malformedChainError(normFqn);
+        return malformed == null ? null : ToolResult.error(malformed + NOTHING_CHANGED).toJson();
+    }
+
     static ResolvedTarget resolveModifyTarget(MetadataScope scope, String fqn, String normFqn)
     {
         // A NESTED subsystem is a separate top object its parent only refers to, so the containment
         // grammar below has no step to it (issue #897): it is resolved by its chain, through the same
         // shared descent create / delete / get_metadata_details use, and refused by the subsystem texts.
-        boolean nested = SubsystemUtils.nestedChain(normFqn) != null;
-        if (nested)
+        // A subsystem chain request that is no well-formed chain is refused by the shared rule, never
+        // resolved by its trimmed reading or answered by the generic "not found".
+        String malformed = malformedChainRefusal(normFqn);
+        if (malformed != null)
         {
-            String malformed = SubsystemUtils.malformedSegmentError(normFqn);
-            if (malformed != null)
-            {
-                return ResolvedTarget.notFound(ToolResult.error(malformed + " Nothing was changed.").toJson()); //$NON-NLS-1$
-            }
+            return ResolvedTarget.notFound(malformed);
         }
+        boolean nested = SubsystemUtils.nestedChain(normFqn) != null;
         MetadataNodeResolver.ResolvedNode resolved = nested
             ? MetadataNodeResolver.resolveNestedSubsystem(scope, normFqn, true)
             : MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);

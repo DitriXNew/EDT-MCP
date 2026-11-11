@@ -440,3 +440,27 @@ def test_subsystem_properties_on_a_missing_chain_teaches_how_subsystems_are_addr
     assert_not_contains(e, "Node not found",
                         "a nested chain is refused by the subsystem text, not the generic one")
     assert_no_diff("a refused properties change must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write")
+def test_subsystem_malformed_chain_is_refused_by_the_shared_rule():
+    # #897 review: a request for a subsystem below a top-level one that is not a well-formed chain is
+    # refused by name for every payload - never answered by "Node not found", and never written on the
+    # subsystem its trimmed reading names (a stray '.' after a real chain).
+    cases = (
+        ("Subsystem.Subsystem..Subsystem.E2EX", {"properties": [{"name": "includeInCommandInterface",
+                                                                 "value": False}]}, "EMPTY segment"),
+        ("Subsystem.Subsystem.Catalog.Catalog", {"properties": [{"name": "includeInCommandInterface",
+                                                                 "value": False}]},
+         "is not a subsystem address"),
+        ("Subsystem.Subsystem.", {"content": [{"op": "add", "metadata": "Catalog.Catalog"}]}, "EMPTY segment"),
+    )
+    for fqn, payload, reason in cases:
+        args = {"projectName": PROJECT, "fqn": fqn}
+        args.update(payload)
+        r = call("modify_metadata", args)
+        e = assert_error(r, "a malformed subsystem chain " + fqn)
+        assert_error_quality(e, names=[fqn], suggests=[reason, "Nothing was changed"],
+                             ctx="the shared malformed-chain refusal names the address and the defect")
+        assert_not_contains(e, "Node not found", "not the generic refusal: " + fqn)
+    assert_no_diff("a refused malformed chain must not touch the project")

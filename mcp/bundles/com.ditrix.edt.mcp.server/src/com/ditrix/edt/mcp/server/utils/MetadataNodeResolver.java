@@ -692,37 +692,58 @@ public final class MetadataNodeResolver
      */
     public static ResolvedNode resolveNestedSubsystem(MetadataScope scope, String fqn, boolean yoFallback)
     {
-        ResolvedNode exact = nestedSubsystemNode(scope, fqn, false);
-        if (exact.node != null || !yoFallback)
-        {
-            return exact;
-        }
-        String retry = yoRetryFqn(fqn);
-        if (retry != null)
-        {
-            ResolvedNode normalized = nestedSubsystemNode(scope, retry, true);
-            if (normalized.node != null)
-            {
-                return normalized;
-            }
-        }
-        return exact;
-    }
-
-    /** One descent of {@link #resolveNestedSubsystem}, with no retry. */
-    private static ResolvedNode nestedSubsystemNode(MetadataScope scope, String fqn, boolean yoFallback)
-    {
-        String[] chain = SubsystemUtils.nestedChain(fqn);
-        Subsystem leaf = chain == null ? null : SubsystemUtils.resolveInScope(scope, chain);
-        if (leaf == null)
+        if (SubsystemUtils.nestedChain(fqn) == null)
         {
             return new ResolvedNode(null, fqn, false);
         }
-        Subsystem parent = SubsystemUtils.resolveByPath(scope.configuration(), chain, chain.length - 1);
-        SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(leaf);
-        String address = lineage.spells(chain) ? lineage.chainFqn() : fqn;
-        return new ResolvedNode(new MetadataNode(leaf, parent, MdClassPackage.Literals.SUBSYSTEM__SUBSYSTEMS, true),
-            address, yoFallback);
+        SubsystemHit hit = resolveSubsystemChain(scope, fqn, yoFallback);
+        if (hit == null)
+        {
+            return new ResolvedNode(null, fqn, false);
+        }
+        Subsystem parent = SubsystemUtils.resolveByPath(scope.configuration(), hit.chain, hit.chain.length - 1);
+        SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(hit.leaf);
+        String address = lineage.spells(hit.chain) ? lineage.chainFqn() : hit.address;
+        return new ResolvedNode(new MetadataNode(hit.leaf, parent, MdClassPackage.Literals.SUBSYSTEM__SUBSYSTEMS, true),
+            address, !hit.address.equals(fqn));
+    }
+
+    /** A subsystem a chain address resolved to, with the address and parsed chain that hit. */
+    private static final class SubsystemHit
+    {
+        final Subsystem leaf;
+        final String address;
+        final String[] chain;
+
+        SubsystemHit(Subsystem leaf, String address, String[] chain)
+        {
+            this.leaf = leaf;
+            this.address = address;
+            this.chain = chain;
+        }
+    }
+
+    /**
+     * The ONE rule a subsystem chain address resolves by, for {@link #resolveAddress} (and so the
+     * vendor-support guard) and {@link #resolveNestedSubsystem} (the write) alike, so the two judge and
+     * change the same subsystem (issue #897): the exact descent ({@link SubsystemUtils#resolveInScope});
+     * then, only with {@code yoFallback}, the same descent once more over the whole address with yo
+     * normalized to ye. Never one of the chain's parents.
+     *
+     * @return the hit, or {@code null} when the address is no chain or names no subsystem in this root
+     */
+    private static SubsystemHit resolveSubsystemChain(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
+        Subsystem leaf = chain == null ? null : SubsystemUtils.resolveInScope(scope, chain);
+        if (leaf != null)
+        {
+            return new SubsystemHit(leaf, fqn, chain);
+        }
+        String retry = yoFallback ? yoRetryFqn(fqn) : null;
+        String[] retryChain = retry == null ? null : SubsystemUtils.parseSubsystemPath(retry);
+        Subsystem viaYo = retryChain == null ? null : SubsystemUtils.resolveInScope(scope, retryChain);
+        return viaYo == null ? null : new SubsystemHit(viaYo, retry, retryChain);
     }
 
     /**
@@ -746,8 +767,10 @@ public final class MetadataNodeResolver
      * <li>Any other address must have a valid arity ({@link #isValidArity}) and resolves through
      * {@link #resolveExisting(MetadataScope, String)} - or, with {@code yoFallback}, through
      * {@link #resolveExistingWithYoFallback(MetadataScope, String)}, which also finds a name
-     * {@code create_metadata} stored with ye when the address spells it with yo. The subsystem and
-     * form branches have no such retry.</li>
+     * {@code create_metadata} stored with ye when the address spells it with yo. The subsystem branch
+     * honours the same flag by the rule the {@code modify_metadata} write resolves a chain with
+     * ({@link #resolveSubsystemChain}), so the guard judges the very subsystem the write then changes
+     * (issue #897); the form branch has no retry.</li>
      * </ul>
      *
      * @param scope the resolution root (may be {@code null})
@@ -762,10 +785,10 @@ public final class MetadataNodeResolver
         {
             return null;
         }
-        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
-        if (chain != null)
+        if (SubsystemUtils.parseSubsystemPath(fqn) != null)
         {
-            return SubsystemUtils.resolveInScope(scope, chain);
+            SubsystemHit hit = resolveSubsystemChain(scope, fqn, yoFallback);
+            return hit == null ? null : hit.leaf;
         }
         String formPath = FormElementWriter.parseFormPath(fqn);
         if (formPath != null)
