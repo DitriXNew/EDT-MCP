@@ -312,4 +312,22 @@ public class StyleValueBuilderTest
         assertNull(StyleValueBuilder.findPaletteColor(config, "HeaderFont")); //$NON-NLS-1$
         assertNull(StyleValueBuilder.findStyleItem(null, "HeaderFont")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testPaletteLookupUsesTheCatalogueNameRule()
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var item = MdClassFactory.eINSTANCE.createPaletteColor();
+        String name = "\u0410\u043A\u0446\u0435\u043D\u0442"; // Акцент
+        item.setName(name);
+        item.getSynonym().put("en", "Display accent");
+        config.getPaletteColors().add(item);
+        assertEquals(MetadataTypeUtils.findObject(config, "PaletteColor", name),
+            StyleValueBuilder.findPaletteColor(config, name.toLowerCase(java.util.Locale.ROOT)));
+        assertEquals(item, StyleValueBuilder.findPaletteColor(config, name));
+        assertNull(StyleValueBuilder.findPaletteColor(config, "Display accent"));
+        assertNull(StyleValueBuilder.findPaletteColor(config, "Missing"));
+        assertNull(StyleValueBuilder.findPaletteColor(null, name));
+    }
+
 }

@@ -154,6 +154,10 @@ public final class MetadataTypeUtils
         STYLE_ITEM("StyleItem", "StyleItems", "styleItems", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0421\u0442\u0438\u043B\u044F"), // ЭлементСтиля //$NON-NLS-1$
 
+        PALETTE_COLOR("PaletteColor", "PaletteColors", "paletteColors", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры //$NON-NLS-1$
+            "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"), // ЦветаПалитры //$NON-NLS-1$
+
         DEFINED_TYPE("DefinedType", "DefinedTypes", "definedTypes", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041E\u043F\u0440\u0435\u0434\u0435\u043B\u044F\u0435\u043C\u044B\u0439\u0422\u0438\u043F"), // ОпределяемыйТип //$NON-NLS-1$
 

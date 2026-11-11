@@ -56,6 +56,8 @@ from harness import (
     poll_disk_contains,
     poll_disk_contains_all,
     read_disk,
+    assert_disk_lacks,
+    poll_disk_path_gone,
     metadata_collection_order,
     metadata_collection_state,
     assert_autosort_notice,
@@ -3661,3 +3663,87 @@ def test_create_external_data_source_nested_members_survive_refresh_825():
     assert_not_contains(details.text, "## Errors", "every new node survives refresh")
     for canonical, _, _, _, _ in cases:
         assert_contains(details.text, canonical, "model read-back after refresh")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_palette_color_lifecycle():
+    name = "McpE2ePalette"
+    fqn = "PaletteColor." + name
+    config_path = "src/Configuration/Configuration.mdo"
+    object_path = "src/PaletteColors/{0}/{0}.mdo".format(name)
+    reference = "<paletteColors>" + fqn + "</paletteColors>"
+    created = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(created, "create a palette color on the 8.5.1 fixture")
+    assert_contains(read_disk(config_path), reference, "create exports the configuration reference")
+    assert_contains(read_disk(object_path), "<name>" + name + "</name>", "create exports the palette object")
+    assert created.structured.get("fqn") == fqn, created.structured
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(details, "read the new palette color")
+    assert_contains(details.text, "PaletteColor: " + name, "details resolve the palette object")
+    assert_contains(details.text, "| Color | RGB(0, 0, 0) |", "EDT initializes the stored color to black")
+    for token in ("PaletteColor", "PaletteColors"):
+        listed = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": token})
+        assert_ok(listed, "list palette colors by " + token)
+        assert_contains(listed.text, "| " + name + " |", "the type filter includes the created object")
+    listed = call("get_metadata_objects", {"projectName": PROJECT, "nameFilter": name})
+    assert_ok(listed, "list across all metadata types")
+    assert_contains(listed.text, name, "the unfiltered catalogue includes palette colors")
+
+    changed = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [
+            {"name": "synonym", "value": "MCP palette accent", "language": "en"},
+            {"name": "comment", "value": "Palette lifecycle probe"},
+            {"name": "color", "value": {"color": {"red": 12, "green": 34, "blue": 56}}},
+        ],
+    })
+    assert_ok(changed, "modify palette synonym, comment and stored color")
+    root = ET.fromstring(read_disk(object_path))
+    assert root.findtext("synonym/key") == "en", "synonym is keyed by language code"
+    assert root.findtext("synonym/value") == "MCP palette accent", "synonym must be exported"
+    assert root.findtext("comment") == "Palette lifecycle probe", "comment must be exported"
+    color = root.find("color")
+    assert color is not None, "the color is a stored containment value"
+    assert (color.findtext("red"), color.findtext("green"), color.findtext("blue")) == ("12", "34", "56"), ET.tostring(color)
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": [fqn], "language": "en", "full": True})
+    assert_ok(details, "read back palette changes from the model")
+    assert_contains(details.text, "MCP palette accent", "model synonym changed")
+    assert_contains(details.text, "Palette lifecycle probe", "model comment changed")
+    assert_contains(details.text, "| Color | RGB(12, 34, 56) |", "model color changed")
+
+    before = tree_snapshot()
+    preview = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(preview, "preview palette deletion")
+    assert preview.structured.get("action") == "preview", preview.structured
+    assert_tree_unchanged(before, "delete preview must preserve the palette color")
+    deleted = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(deleted, "delete the palette color")
+    assert_disk_lacks(config_path, reference, "delete exports removal from the configuration")
+    poll_disk_path_gone(object_path, ctx="EDT refactoring removes the palette object's own file")
+    listed = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "PaletteColors"})
+    assert_ok(listed, "read back palette deletion")
+    assert_not_contains(listed.text, name, "the deleted palette color is absent from the model")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_palette_color_russian_tokens_resolve_the_programmatic_name():
+    # EDT type tokens; the programmatic Name remains unchanged in either language.
+    name = "McpE2ePalette"
+    singular = "\u0426\u0432\u0435\u0442\u041f\u0430\u043b\u0438\u0442\u0440\u044b"  # ЦветПалитры
+    plural = "\u0426\u0432\u0435\u0442\u0430\u041f\u0430\u043b\u0438\u0442\u0440\u044b"  # ЦветаПалитры
+    created = call("create_metadata", {"projectName": PROJECT, "fqn": singular + "." + name})
+    assert_ok(created, "create using the Russian palette type token")
+    assert_contains(read_disk("src/Configuration/Configuration.mdo"),
+                    "<paletteColors>PaletteColor." + name + "</paletteColors>", "canonical reference is exported")
+    assert_contains(read_disk("src/PaletteColors/{0}/{0}.mdo".format(name)),
+                    "<name>" + name + "</name>", "Russian token creates the same metadata class")
+    assert created.structured.get("fqn") == "PaletteColor." + name, created.structured
+    for token in (singular, plural):
+        details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [token + "." + name]})
+        assert_ok(details, "lookup with Russian palette token")
+        assert_contains(details.text, "PaletteColor: " + name, "Russian type resolves the stored Name")
+        listed = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": token})
+        assert_ok(listed, "filter by Russian palette token")
+        assert_contains(listed.text, "| " + name + " |", "Russian filter finds the same palette color")

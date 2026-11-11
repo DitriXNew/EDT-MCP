@@ -630,4 +630,34 @@ public class MetadataNodeResolverTest
         list.add(element);
         return element;
     }
+
+    @Test
+    public void testPaletteColorBilingualCreateAndExistingAddresses()
+    {
+        for (String name : new String[] {"Accent", "\u0410\u043A\u0446\u0435\u043D\u0442"}) // Акцент
+        {
+            Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+            var item = MdClassFactory.eINSTANCE.createPaletteColor();
+            item.setName(name);
+            item.getSynonym().put("en", "Display accent");
+            config.getPaletteColors().add(item);
+            for (String token : new String[] {"PaletteColor", "PaletteColors",
+                "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры
+                "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"}) // ЦветаПалитры
+            {
+                var node = MetadataNodeResolver.resolveExisting(config, token + "." + item.getName());
+                assertNotNull(token, node);
+                assertSame(item, node.object);
+                assertTrue(node.topLevel);
+                assertNull(MetadataNodeResolver.resolveExisting(config, token + ".Display accent"));
+                var target = MetadataNodeResolver.resolveForCreate(config, token + ".NewAccent");
+                assertNotNull(token, target);
+                assertTrue(target.topLevel);
+                assertEquals("PaletteColor", target.topLevelType);
+                assertEquals("paletteColors", target.configFeatureName);
+                assertEquals("NewAccent", target.childName);
+            }
+        }
+    }
+
 }

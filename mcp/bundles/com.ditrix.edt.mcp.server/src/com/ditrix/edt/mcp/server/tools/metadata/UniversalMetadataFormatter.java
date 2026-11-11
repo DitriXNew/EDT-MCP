@@ -24,6 +24,7 @@ import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
+import com._1c.g5.v8.dt.metadata.mdclass.PaletteColor;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com.ditrix.edt.mcp.server.Activator;
@@ -115,6 +116,12 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         if (mdObject instanceof StyleItem)
         {
             formatStyleItemValue(sb, (StyleItem) mdObject);
+        }
+        else if (mdObject instanceof PaletteColor)
+        {
+            addSectionHeader(sb, VALUE_TOKEN);
+            startTable(sb, "Property", VALUE_TOKEN); //$NON-NLS-1$
+            addPropertyRow(sb, "Color", StyleValueBuilder.renderColor(((PaletteColor)mdObject).getColor())); //$NON-NLS-1$
         }
 
         // Format containment collections (attributes, tabular sections, forms, commands, etc.)

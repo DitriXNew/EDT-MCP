@@ -67,6 +67,9 @@ from harness import (
     poll_disk_contains,
     poll_disk_lacks,
     read_disk,
+    poll_disk_path_gone,
+    tree_snapshot,
+    assert_tree_unchanged,
     settle_or_fail,
     split_markdown_row,
     e2e_test,
@@ -1294,3 +1297,36 @@ def test_a_cyrillic_new_name_is_accepted():
     assert_ok(r, "rename a form attribute to a Cyrillic name")
     poll_disk_contains(_FORM, "<name>%s</name>" % new_name,
                        ctx="a Cyrillic name is a legal 1C name and must land on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_palette_color_rename_preserves_the_object():
+    old, new = "McpE2ePalette", "McpE2ePaletteRenamed"
+    created = call("create_metadata", {"projectName": PROJECT, "fqn": "PaletteColor." + old})
+    assert_ok(created, "seed the palette color to rename")
+    assert_contains(read_disk("src/PaletteColors/{0}/{0}.mdo".format(old)),
+                    "<name>" + old + "</name>", "seed is exported before rename")
+    _settle_before_rename()
+    before = tree_snapshot()
+    preview = rename_call({"projectName": PROJECT, "objectFqn": "PaletteColor." + old, "newName": new})
+    assert_ok(preview, "preview palette rename")
+    assert_contains(preview.text, "preview", "rename is previewed")
+    assert_tree_unchanged(before, "rename preview preserves the palette color")
+    renamed = rename_call({"projectName": PROJECT, "objectFqn": "PaletteColor." + old,
+                           "newName": new, "confirm": True})
+    assert_ok(renamed, "rename palette color through the shared resolver")
+    poll_disk_contains("src/PaletteColors/{0}/{0}.mdo".format(new), "<name>" + new + "</name>",
+                       ctx="renamed palette object is exported")
+    poll_disk_path_gone("src/PaletteColors/{0}/{0}.mdo".format(old), ctx="old palette file is removed")
+    poll_disk_contains("src/Configuration/Configuration.mdo",
+                       "<paletteColors>PaletteColor." + new + "</paletteColors>", ctx="new reference is exported")
+    poll_disk_lacks("src/Configuration/Configuration.mdo",
+                    "<paletteColors>PaletteColor." + old + "</paletteColors>", ctx="old reference is removed")
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["PaletteColor." + new]})
+    assert_ok(details, "read back the renamed palette object")
+    assert_contains(details.text, "PaletteColor: " + new, "new Name resolves")
+    assert_contains(details.text, "| Color | RGB(0, 0, 0) |", "rename preserves the stored color")
+    listed = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "PaletteColors"})
+    assert_ok(listed, "read back palette collection after rename")
+    assert_contains(listed.text, "| " + new + " |", "new Name appears in the model")
+    assert_not_contains(listed.text, "| " + old + " |", "old Name is gone from the model")

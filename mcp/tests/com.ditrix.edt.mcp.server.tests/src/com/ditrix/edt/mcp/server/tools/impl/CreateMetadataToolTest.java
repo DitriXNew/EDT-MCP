@@ -1730,4 +1730,34 @@ public class CreateMetadataToolTest
         }
         return null;
     }
+
+    @Test
+    public void testPaletteColorRequiresCompatibilityMode851()
+    {
+        var config = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration();
+        for (var mode : com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.values())
+        {
+            config.setCompatibilityMode(mode);
+            String error = CreateMetadataTool.paletteColorCompatibilityError(
+                com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.PALETTE_COLOR, config);
+            if (mode.getValue() < com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode.VERSION8_51.getValue())
+            {
+                assertNotNull(mode.getLiteral(), error);
+                var json = com.google.gson.JsonParser.parseString(error).getAsJsonObject();
+                assertFalse(json.get("success").getAsBoolean());
+                assertTrue(error, error.contains(mode.getLiteral()));
+                assertTrue(error, error.contains("8.5.1 or later in EDT"));
+                assertTrue(error, error.contains("retry create_metadata"));
+            }
+            else
+            {
+                assertNull(error);
+            }
+            assertNull("StyleItem is not gated by the new palette rule",
+                CreateMetadataTool.paletteColorCompatibilityError(
+                    com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.STYLE_ITEM, config));
+            assertTrue(config.getPaletteColors().isEmpty());
+        }
+    }
+
 }

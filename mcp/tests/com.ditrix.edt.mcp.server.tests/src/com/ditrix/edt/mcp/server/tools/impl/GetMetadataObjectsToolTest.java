@@ -526,4 +526,30 @@ public class GetMetadataObjectsToolTest
             assertTrue(fixture.reads >= 5);
         }
     }
+
+    @Test
+    public void testPaletteColorTypeFilterCollectsOnlyPaletteColors()
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var palette = MdClassFactory.eINSTANCE.createPaletteColor();
+        palette.setName("Accent");
+        config.getPaletteColors().add(palette);
+        var style = MdClassFactory.eINSTANCE.createStyleItem();
+        style.setName("Accent");
+        config.getStyleItems().add(style);
+        for (String token : new String[] {"PaletteColor", "PaletteColors",
+            "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры
+            "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"}) // ЦветаПалитры
+        {
+            List<GetMetadataObjectsTool.MetadataInfo> rows = new ArrayList<>();
+            int total = new GetMetadataObjectsTool().collectMetadataObjects(config,
+                MetadataTypeUtils.resolve(token), rows, null,
+                GetMetadataObjectsTool.FilterMode.NAME, 10, "en");
+            assertEquals(token, 1, total);
+            assertEquals(1, rows.size());
+            assertEquals("PaletteColor", rows.get(0).type);
+            assertEquals("Accent", rows.get(0).name);
+        }
+    }
+
 }

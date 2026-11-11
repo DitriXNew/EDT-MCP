@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
@@ -611,6 +612,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
             EClass createClass = target.topLevel
                 ? resolveCollectionElementType(config, target.configFeatureName) : target.elementType;
+            String compatibilityError = paletteColorCompatibilityError(createClass, config);
+            if (compatibilityError != null)
+            {
+                return () -> compatibilityError;
+            }
             if (props.templateType != null
                 && (createClass == null || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(createClass)))
             {
@@ -1285,6 +1291,24 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             this.typeSpecific = typeSpecific;
             this.normReport = normReport;
         }
+    }
+
+    /** The EDT factory initializes PaletteColor without checking the configuration's mode. */
+    static String paletteColorCompatibilityError(EClass type, Configuration config)
+    {
+        if (type != MdClassPackage.Literals.PALETTE_COLOR)
+        {
+            return null;
+        }
+        CompatibilityMode mode = config.getCompatibilityMode();
+        if (mode != null && mode.getValue() >= CompatibilityMode.VERSION8_51.getValue())
+        {
+            return null;
+        }
+        return ToolResult.error("Cannot create PaletteColor with compatibility mode '" //$NON-NLS-1$
+            + (mode == null ? "unknown" : mode.getLiteral()) //$NON-NLS-1$
+            + "'. Set the configuration compatibility mode to 8.5.1 or later in EDT, then retry create_metadata.") //$NON-NLS-1$
+            .toJson();
     }
 
     private java.util.function.Supplier<String> createTopLevel(TopLevelRequest req)
