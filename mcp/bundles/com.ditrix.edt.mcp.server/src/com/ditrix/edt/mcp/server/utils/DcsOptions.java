@@ -181,6 +181,7 @@ public final class DcsOptions
             result.add(new Option(kind, DcsSettingsWriter.parameterName(parameter, languages),
                 declaredValueType(parameter, value, enumerator),
                 DcsSettingsWriter.enumeratorLiterals(enumerator)));
+            addParameters(result, kind, parameter.getSubParameters(), languages);
         }
     }
 

@@ -2,7 +2,7 @@
 body tables define supported operations. Dynamic-list `listSettings` shares the report
 settings writer.
 
-Changing an empty MCP template to `templateType=DataCompositionSchema` immediately
+Creating or changing an empty MCP template to `templateType=DataCompositionSchema` immediately
 exports `Templates/<name>/Template.dcs`. An empty schema also supports `get format=xml`.
 For a submitted query or `autoFillFields` flag, an enabled query data set fills fields
 and missing parameters synchronously using EDT's designer routines, then exports them
@@ -25,7 +25,7 @@ the writer would not rebuild exactly (a value kind it cannot build, an empty fie
 expression, a localized text in a language the configuration does not declare or a formatted
 localized text, a color channel outside 0-255, an AutoColor, which EDT saves as #000000, or a color
 reference whose name no longer resolves), more values than the parameter takes, an input parameter
-without a parameter name, a conditional-appearance item with no value, a name absent from the
+without a parameter name, a conditional-appearance leaf item with no value, a name absent from the
 platform catalogue for the project's version (including an older alias), a value that does not
 match the declared type, or a font the writer cannot rebuild exactly. A font is accepted only
 when a dry run of the font writer rebuilds it exactly, including every feature and its set or
@@ -263,6 +263,8 @@ and a token immediately followed by `(` is read as a function call rather than a
 `Сумма(Оборот)` does not pin a field named `Сумма`. Update the expression the refusal names,
 re-run get, and retry.
 
+`body.insertPosition` on an ordered settings collection (`filter`, `selection`, `order`, `conditionalAppearance`, `items`) inserts new items at a 1-based position in `1..size+1` with `expectedHash` from `get`; omit it to append, and omit it for existing-item edits.
+
 An empty array is a no-op in `upsert` and clears that collection in `replace`. `update`
 rejects schema-layer root/collection targets where no single existing node is selected;
 settings holders and dynamic-list roots can be updated when they already exist. `remove`
@@ -273,6 +275,8 @@ before the first mutation, then committed in one BM write transaction and force-
 
 The body shapes below define the current authoring contract. Optional members are
 marked with `?`; omitted members have the action semantics from the table above.
+
+Schema parameter `valueType:{types:[{kind:"StandardPeriod"}]}` (or `СтандартныйПериод`) accepts `standardPeriod` values in `values` and variant `dataParameters`.
 
 Shared localized text and value shapes:
 
@@ -287,6 +291,7 @@ ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null
              "value": <matching value>}
           | {"kind": "standardPeriod", "value": {"variant"?: string, "startDate"?: date,
                                                   "endDate"?: date}}
+          | {"kind": "line", "value": {"width": int, "style": "Solid", "gap"?: boolean, "styleType"?: string}}
           | {"kind": "standardBeginningDate", "value": {"variant"?: string, "date"?: date}}
           | {"kind": "valueList", "value": {"items"?: [{"value"?: ValueSpec, "presentation"?: string,
                                                         "checkState"?: int, "id"?: int}],
@@ -358,6 +363,8 @@ language map as `title` (codes must be declared); `{}` clears localized text:
 ```
 
 The same `value` may be `"Sales"` or `{"en":"Sales","ru":"Продажи"}`.
+Border keys include `BorderStyle.Left` / `СтильГраницы.Слева` and `.Right` / `.Справа`; nested values use `appearance:{items:[{parameter:ValueSpec, values?:[ValueSpec], use?, viewMode?, userSettingID?, userSettingPresentation?, nestedParameterValues:[...]}]}`, also emitted by `get`.
+
 Both field and conditional `appearance` use one parser: bare values and `{kind,value}`
 are accepted, including Boolean, Number, string/LocalString, enum, color and font:
 

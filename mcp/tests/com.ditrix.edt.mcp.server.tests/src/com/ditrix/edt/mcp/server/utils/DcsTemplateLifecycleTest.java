@@ -55,6 +55,28 @@ public class DcsTemplateLifecycleTest
         verify(tx).attachTopObject(same((com._1c.g5.v8.bm.core.IBmObject)template.getTemplate()), eq(exported));
     }
 
+    @Test public void creationUsesTheRetypeSchemaInitializerInBothLanguages() throws Exception
+    {
+        for (String spelling : List.of("DataCompositionSchema", "СхемаКомпоновкиДанных"))
+        {
+            var type = TemplateContentSupport.resolveType(spelling);
+            assertEquals(TemplateType.DATA_COMPOSITION_SCHEMA, type);
+            assertNull(TemplateContentSupport.unsupportedTypeError(type, spelling));
+            var template = MdClassFactory.eINSTANCE.createTemplate();
+            template.setName("Created665");
+            var tx = mock(IBmTransaction.class);
+            var names = mock(ITopObjectFqnGenerator.class);
+            when(names.generateExternalPropertyFqn(any(), any())).thenReturn("Template.Created665.Content");
+            String exported = TemplateContentSupport.initialize(template, type, tx, null, names, null);
+            assertEquals("Template.Created665.Content", exported);
+            assertTrue(template.getTemplate() instanceof DataCompositionSchema);
+            verify(tx).attachTopObject(same((com._1c.g5.v8.bm.core.IBmObject)template.getTemplate()), eq(exported));
+            String xml = DcsStoredXmlTestSupport.serialize((DataCompositionSchema)template.getTemplate());
+            assertTrue(xml, xml.contains("DataCompositionSchema"));
+            assertTrue(DcsStoredXmlTestSupport.deserialize(xml).getDataSets().isEmpty());
+        }
+    }
+
     @Test public void emptyXmlUsesNativeSerializerWithoutMaterializingTheTemplate() throws Exception
     {
         var serializer = mock(com._1c.g5.v8.dt.dcs.util.DcsV8Serializer.class);

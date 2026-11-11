@@ -1394,8 +1394,12 @@ public final class MetadataTypeBuilder
             }
             if (!buildsFormVocabulary(typeTarget))
             {
+                // EDT's ParameterCategoryTypeInfoProvider explicitly includes StandardPeriod.
                 if ((typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
                     && producedKind.hasKnownMetadataType())
+                    || (typeTarget == TypeTarget.DCS_PARAMETER
+                        && ("StandardPeriod".equalsIgnoreCase(kind)
+                            || "СтандартныйПериод".equalsIgnoreCase(kind)))
                     || (typeTarget == TypeTarget.SESSION_PARAMETER && isFixedCollectionKind(kind)))
                 {
                     td.getTypes().add(platformType);

@@ -72,7 +72,7 @@ public class DcsReplaceStoredValueRoundTripTest
     /** Prodazhi, the Russian word for Sales. */
     private static final String RU_SALES = "\u041f\u0440\u043e\u0434\u0430\u0436\u0438";
     /** Platform defaults of kinds the writer has no body for; their refusal predates #682 round 3. */
-    private static final Set<String> NO_BODY_KINDS = Set.of("LineValue", "ChartTrendlinesValue",
+    private static final Set<String> NO_BODY_KINDS = Set.of("ChartTrendlinesValue",
         "UsedDatabaseCopiesValue");
 
     /**
@@ -502,7 +502,11 @@ public class DcsReplaceStoredValueRoundTripTest
     private static List<String> bodies(Value declared)
     {
         List<String> result = new ArrayList<>();
-        if (declared instanceof LocalString)
+        if (declared instanceof com._1c.g5.v8.dt.mcore.LineValue)
+        {
+            result.add(DcsSettingsWriter.valueSpec(declared).toString());
+        }
+        else if (declared instanceof LocalString)
         {
             result.add("\"Sales\"");
             result.add("{\"ru\":\"" + RU_SALES + "\",\"en\":\"Sales\"}");

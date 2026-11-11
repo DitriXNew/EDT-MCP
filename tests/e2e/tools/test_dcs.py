@@ -7,6 +7,7 @@ resources lazily, and a read must still roll that model side effect back.
 """
 
 import os
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -55,6 +56,117 @@ _VERTICAL_OVERALL_PLACEMENT_RU = (
     "\u041e\u0431\u0449\u0438\u0445\u0418\u0442\u043e\u0433\u043e\u0432"
 )
 _TITLE_RU = "\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_standard_period_parameter_type_defaults_and_variant_values_665():
+    name = "E2EDcsPeriod665"
+    root = _seed_report(name)
+    path = "src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE)
+    period = {"kind": "standardPeriod", "value": {"variant": "ThisYear"}}
+    for suffix, kind in [("En", "StandardPeriod"), ("Ru", "СтандартныйПериод")]:
+        parameter = "Period" + suffix
+        assert_ok(_write(root, "upsert", "parameter", {
+            "name": parameter, "valueType": {"types": [{"kind": kind}]}, "values": [period],
+        }), "create StandardPeriod parameter " + kind)
+        disk = read_disk(path)
+        assert "StandardPeriod" in disk and "ThisYear" in disk, disk
+        assert re.search(r"<(?:\w+:)?name>%s</" % parameter, disk), disk
+        read = _get(root + "#/parameters/" + parameter, "parameter")
+        assert_ok(read, "read typed period")
+        blocks = [json.loads(block) for block in re.findall(r"```json\n([^\n]+)\n```", read.text)]
+        assert period in blocks, read.text
+        assert_ok(_write(root + "#/parameters/" + parameter, "update", "parameter", {
+            "values": [next(block for block in blocks if block == period)],
+        }, expectedHash=_hash(read)), "round-trip the get ValueSpec")
+        assert "ThisYear" in read_disk(path)
+    assert_ok(_write(root, "upsert", "variant", {"name": "PeriodView", "presentation": "Period view", "settings": {
+        "dataParameters": {"items": [{"parameter": {"kind": "parameter", "value": "PeriodEn"},
+                                      "value": {"kind": "standardPeriod", "value": {
+                                          "variant": "Custom", "startDate": "2026-01-01T00:00:00",
+                                          "endDate": "2026-12-31T23:59:59"}}}]},
+    }}), "variant custom period")
+    disk = read_disk(path)
+    assert "2026-01-01T00:00:00" in disk and "2026-12-31T23:59:59" in disk, disk
+    read = _get(root + "#/variants/PeriodView/settings/dataParameters", "dataParameter")
+    assert_ok(read, "read variant period")
+    assert_contains(read.text, "2026-12-31T23:59:59", "variant period end date")
+    before = tree_snapshot()
+    refused = _write(root, "upsert", "parameter", {"name": "BadPeriod", "valueType": {"types": [{"kind": "StandardPeriod"}]},
+                     "values": [{"kind": "standardPeriod", "value": {"variant": "BadVariant665"}}]})
+    assert_error_quality(assert_error(refused), names=["BadVariant665"], suggests=["Use"])
+    assert_tree_unchanged(before, "invalid period must not mutate")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_lines_and_bilingual_nested_appearance_round_trip_get_665():
+    name = "E2EDcsLines665"
+    root = _seed_report(name)
+    address = root + "#/defaultSettings/conditionalAppearance"
+    line = {"kind": "line", "value": {"width": 2, "style": "Solid"}}
+    for parent, side in [("BorderStyle", "BorderStyle.Left"), ("СтильГраницы", "СтильГраницы.Слева")]:
+        appearance = {"items": [{"parameter": {"kind": "parameter", "value": parent}, "use": True,
+            "viewMode": "Normal", "userSettingID": "border665", "values": [line],
+            "nestedParameterValues": [{"parameter": {"kind": "parameter", "value": side},
+                "use": False, "viewMode": "Normal", "userSettingID": "left665", "values": [line]}]}]}
+        assert_ok(_write(address, "upsert", "conditionalAppearance", {"items": [{"appearance": appearance}]}),
+                  "write bilingual nested lines")
+        disk = read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE))
+        assert 'width="2"' in disk and "Solid" in disk, disk
+        appearances = [element for element in ET.fromstring(disk).iter()
+                       if element.tag.rsplit("}", 1)[-1] == "appearance"]
+        assert any(any(child.tag.rsplit("}", 1)[-1] == "item" for child in item)
+                   for appearance_node in appearances for item in appearance_node), disk
+        assert "border665" in disk and "left665" in disk, disk
+    rule = address + "/items/1"
+    read = _get(rule, "conditionalAppearance")
+    assert_ok(read, "read nested appearance")
+    blocks = [json.loads(block) for block in re.findall(r"```json\n([^\n]+)\n```", read.text)]
+    body = next(block for block in blocks if "items" in block)
+    assert body["items"][0]["nestedParameterValues"][0]["userSettingID"] == "left665", body
+    assert_ok(_write(rule, "update", "conditionalAppearance", {"appearance": body}, expectedHash=_hash(read)),
+              "write the exact appearance body returned by get")
+    disk = read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE))
+    assert "left665" in disk and 'width="2"' in disk and "Solid" in disk, disk
+    again = _get(rule, "conditionalAppearance")
+    assert_ok(again, "read nested round-trip")
+    assert_contains(again.text, json.dumps(body, ensure_ascii=False, separators=(",", ":")), "unchanged get body")
+    before = tree_snapshot()
+    refused = _write(rule, "update", "conditionalAppearance", {"appearance": {
+        "СтильГраницы.NoSide665": line}}, expectedHash=_hash(again))
+    assert_error_quality(assert_error(refused), names=["NoSide665"], suggests=["correct"])
+    assert_tree_unchanged(before, "unknown nested side must not mutate")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_insert_position_preserves_quick_setting_order_and_existing_properties_665():
+    name = "E2EDcsInsert665"
+    root = _seed_report(name)
+    address = root + "#/defaultSettings/filter"
+    def item(marker):
+        return {"left": {"kind": "field", "value": "Amount1"}, "comparisonType": "Equal",
+                "right": [{"kind": "number", "value": 1}], "use": True,
+                "userSettingID": marker, "viewMode": "Normal"}
+    assert_ok(_write(address, "upsert", "filter", {"items": [item("first665"), item("last665")]}), "seed ordered filters")
+    before = _get(address, "filter")
+    assert_ok(before)
+    snapshot = tree_snapshot()
+    missing_hash = _write(address, "upsert", "filter", {"insertPosition": 2, "items": [item("middle665")]})
+    assert_error_quality(assert_error(missing_hash), names=["insertPosition", "expectedHash"], suggests=["get"])
+    assert_tree_unchanged(snapshot, "positional insertion requires the observed hash")
+    assert_ok(_write(address, "upsert", "filter", {"insertPosition": 2, "items": [item("middle665")]},
+                     expectedHash=_hash(before)), "insert the middle quick setting")
+    disk = read_disk("src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE))
+    document = ET.fromstring(disk)
+    ids = [element.text for element in document.iter() if element.tag.rsplit("}", 1)[-1] == "userSettingID"]
+    assert ids == ["first665", "middle665", "last665"], (ids, disk)
+    read = _get(address, "filter")
+    assert_ok(read)
+    assert read.text.index("first665") < read.text.index("middle665") < read.text.index("last665"), read.text
+    snapshot = tree_snapshot()
+    refused = _write(address, "upsert", "filter", {"insertPosition": 0, "items": [item("bad665")]}, expectedHash=_hash(read))
+    assert_error_quality(assert_error(refused), names=["insertPosition", "0"], suggests=["1-based"])
+    assert_tree_unchanged(snapshot, "invalid position must leave model and disk unchanged")
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
