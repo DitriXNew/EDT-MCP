@@ -56,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsWriterCatalogues;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
+import com.ditrix.edt.mcp.server.utils.DcsTemplateProjection;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
@@ -405,6 +406,11 @@ public class DcsTool implements IMcpTool
                     + "'. Omit it; reads do not mutate the target.").toJson(); //$NON-NLS-1$
             }
             return null;
+        }
+        String templateRefusal = DcsTemplateProjection.writeRefusal(action, address);
+        if (templateRefusal != null)
+        {
+            return ToolResult.error(templateRefusal).toJson();
         }
         if (hasLimit || hasOffset)
         {
