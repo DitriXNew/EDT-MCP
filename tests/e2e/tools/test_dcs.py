@@ -681,6 +681,69 @@ def test_xml_replace_keeps_four_parameters_and_followup_dataset_write_in_model_a
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_xml_replace_accepts_empty_group_items_904():
+    name = "E2EDcsEmptyGroupItems904"
+    root = _seed_report(name)
+    path = "src/Reports/%s/Templates/%s/Template.dcs" % (name, MAIN_DCS_TEMPLATE)
+    current = _get(root, "schema")
+    assert_ok(current, "read hash before replacing the seeded report")
+    xml = """<DataCompositionSchema
+        xmlns="http://v8.1c.ru/8.1/data-composition-system/schema"
+        xmlns:dcsset="http://v8.1c.ru/8.1/data-composition-system/settings"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <dataSource><name>ИсточникДанных1</name><dataSourceType>Local</dataSourceType></dataSource>
+      <dataSet xsi:type="DataSetQuery"><name>НаборДанных1</name>
+        <field xsi:type="DataSetFieldField"><dataPath>Поле</dataPath><field>Поле</field></field>
+        <dataSource>ИсточникДанных1</dataSource><query>ВЫБРАТЬ 1 КАК Поле</query>
+      </dataSet>
+      <settingsVariant><dcsset:name>Основной</dcsset:name><dcsset:settings>
+        <dcsset:selection><dcsset:item xsi:type="dcsset:SelectedItemField">
+          <dcsset:field>Поле</dcsset:field>
+        </dcsset:item></dcsset:selection>
+        <dcsset:item xsi:type="dcsset:StructureItemGroup">
+          <dcsset:groupItems/>
+          <dcsset:order><dcsset:item xsi:type="dcsset:OrderItemAuto"/></dcsset:order>
+          <dcsset:selection><dcsset:item xsi:type="dcsset:SelectedItemAuto"/></dcsset:selection>
+        </dcsset:item>
+      </dcsset:settings></settingsVariant>
+    </DataCompositionSchema>"""
+    result = _write(root, "replace", "schema", {"xml": xml}, expectedHash=_hash(current))
+    assert_ok(result, "replace schema containing the reporter's empty groupItems")
+    assert_contains(result.text, "**Export drained:** `true`")
+    # The call's export must already be on disk before any model read-back.
+    disk = read_disk(path)
+    document = ET.fromstring(disk)
+    ns = {"s": "http://v8.1c.ru/8.1/data-composition-system/schema",
+          "d": "http://v8.1c.ru/8.1/data-composition-system/settings"}
+    assert document.find("s:dataSet/s:query", ns).text == "ВЫБРАТЬ 1 КАК Поле", disk
+    assert document.find("s:dataSet/s:field/s:dataPath", ns).text == "Поле", disk
+    variant = document.find("s:settingsVariant", ns)
+    assert variant.find("d:name", ns).text == "Основной", disk
+    assert variant.find("d:settings/d:selection/d:item/d:field", ns).text == "Поле", disk
+    group = variant.find("d:settings/d:item", ns)
+    xsi_type = "{http://www.w3.org/2001/XMLSchema-instance}type"
+    assert group.get(xsi_type).split(":")[-1] == "StructureItemGroup", disk
+    assert group.find("d:groupItems", ns) is None, disk
+    assert group.find("d:order/d:item", ns).get(xsi_type).split(":")[-1] == "OrderItemAuto", disk
+    assert group.find("d:selection/d:item", ns).get(xsi_type).split(":")[-1] == "SelectedItemAuto", disk
+    model_xml, _ = _read_all_xml(root)
+    assert _xml_structure(model_xml) == _xml_structure(disk), "model and exported schema must agree"
+    current = _get(root, "schema")
+    assert_ok(current, "read hash before submitting content EDT cannot retain")
+    before = tree_snapshot()
+    lossy = xml.replace("<dcsset:groupItems/>", "<dcsset:groupItems>Lost904</dcsset:groupItems>")
+    refused = _write(root, "replace", "schema", {"xml": lossy}, expectedHash=_hash(current))
+    assert_error_quality(
+        assert_error(refused, "nonempty groupItems must still be loss-checked"),
+        names=["/DataCompositionSchema/settingsVariant/settings/item/groupItems"],
+        suggests=["dropped or changed submitted XML content", "Check the value", "nothing was written"])
+    assert_tree_unchanged(before, "refused content loss must leave the fixture unchanged")
+    after = _get(root, "schema")
+    assert_ok(after, "read schema after the refused replacement")
+    assert _hash(after) == _hash(current), "refused replacement must roll back the model"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk():
     language = "Language.E2EDcsRussianXml"
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),

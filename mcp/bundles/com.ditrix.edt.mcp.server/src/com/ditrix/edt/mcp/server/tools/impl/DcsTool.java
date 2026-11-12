@@ -816,10 +816,7 @@ public class DcsTool implements IMcpTool
                         }
                         if (missing != null)
                         {
-                            throw DcsWriteFailure.message("XML replacement was refused because EDT's " //$NON-NLS-1$
-                                + "deserialize/serialize round trip removed submitted content at '" //$NON-NLS-1$
-                                + missing + "'. Correct the unrecognized type or namespace at that " //$NON-NLS-1$
-                                + "path and retry; nothing was written."); //$NON-NLS-1$
+                            throw DcsWriteFailure.message(xmlRoundTripLossError(missing));
                         }
                         return new WriteOutcome(DcsHash.compute(attachedSchema), content.contentFqn(),
                             null, false, DcsReadProjection.schemaCounts(attachedSchema));
@@ -1359,6 +1356,14 @@ public class DcsTool implements IMcpTool
     private static String dynamicPlanError(DcsDynamicListWriter.Result result)
     {
         return result.isErrorJson() ? result.error() : ToolResult.error(result.error()).toJson();
+    }
+
+    static String xmlRoundTripLossError(String missing)
+    {
+        return "XML replacement was refused because EDT's " //$NON-NLS-1$
+            + "deserialize/serialize round trip dropped or changed submitted XML content at '" //$NON-NLS-1$
+            + missing + "'. Check the value, type and namespace at that path against " //$NON-NLS-1$
+            + "EDT's DCS XML format and retry; nothing was written."; //$NON-NLS-1$
     }
 
     static String expectedHashError(String expected, String current, DcsAddress address)

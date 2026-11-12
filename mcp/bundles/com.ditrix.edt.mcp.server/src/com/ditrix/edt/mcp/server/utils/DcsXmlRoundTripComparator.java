@@ -58,6 +58,8 @@ public final class DcsXmlRoundTripComparator
      * Returns the first submitted XML path whose content cannot be found in the re-serialization.
      * Extra elements and attributes in {@code serialized} are allowed, except a newly introduced
      * {@code xsi:nil="true"}, which changes the submitted element's value.
+     * A content-free element (no attributes, children or text) may be omitted: EDT drops empty
+     * containers such as {@code groupItems} or {@code selection}, and it carries nothing to lose.
      *
      * @param submitted caller's complete XML document
      * @param serialized EDT serialization after import
@@ -206,6 +208,17 @@ public final class DcsXmlRoundTripComparator
             for (int expectedIndex : actualMatches)
             {
                 if (expectedIndex >= 0) expectedMatched[expectedIndex] = true;
+            }
+            for (int i = 0; i < expected.size(); i++)
+            {
+                Element element = expected.get(i);
+                // EDT's DCS serializer skips empty containers (groupItems, selection, ...).
+                // A surviving counterpart must still pass the normal checks (especially xsi:nil).
+                if (!expectedMatched[i] && !actualNameCounts.containsKey(expandedName(element))
+                    && contentFree(element))
+                {
+                    expectedMatched[i] = true;
+                }
             }
             return new ChildMatching(actualMatches, expectedMatched);
         }
@@ -620,6 +633,13 @@ public final class DcsXmlRoundTripComparator
         return children;
     }
 
+    /** No attributes (xsi:nil/xsi:type included), child elements or text: nothing EDT could have lost. */
+    private static boolean contentFree(Element element)
+    {
+        return canonicalAttributes(element).isEmpty() && childElements(element).isEmpty()
+            && directText(element).trim().isEmpty();
+    }
+
     private static List<String> canonicalAttributes(Element element)
     {
         List<String> result = new ArrayList<>();
@@ -676,7 +696,10 @@ public final class DcsXmlRoundTripComparator
                 value.append(text);
             }
         }
-        return semanticText(value.toString(), element);
+        String raw = value.toString();
+        // EDT pretty-prints an empty container as <x>\n\t\t</x>; a line break never belongs to a blank value.
+        if (raw.trim().isEmpty() && (raw.indexOf('\n') >= 0 || raw.indexOf('\r') >= 0)) raw = ""; //$NON-NLS-1$
+        return semanticText(raw, element);
     }
 
     /** Canonicalizes a leading QName against this document's own in-scope namespace bindings. */
