@@ -59,6 +59,7 @@ NEW_EXT = "CreateProjTest_Ext_e2e"
 NEW_CONFIG = "CreateProjTest_Config_e2e"
 NEW_EXT_OBJ = "CreateProjTest_ExtObj_e2e"
 NEW_EXT_OBJ_SEEDED = "CreateProjTest_ExtObjSeeded_e2e"
+NEW_EXT_OBJ_BOUND = "CreateProjTest_ExtObjBound_e2e"
 SEEDED_ROOT = "ExternalDataProcessor.CreateProjSeededRoot_e2e"
 
 
@@ -281,6 +282,20 @@ def test_nonexistent_base_project_errors():
     assert_error_quality(e, names=[bad], suggests=["list_projects"],
                          ctx="nonexistent base project named + list_projects hint")
     assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_project", kind="action")
+def test_external_objects_nonexistent_base_project_errors():
+    """An optional external-project base must exist when supplied."""
+    bad = "NoSuchBase_external907"
+    r = call("create_project", {
+        "projectKind": "externalObjects", "name": NEW_EXT_OBJ_BOUND,
+        "baseProjectName": bad,
+    })
+    e = assert_error(r, "external objects with a nonexistent base")
+    assert_error_quality(e, names=[bad], suggests=["list_projects"],
+                         ctx="external-project base refusal names the base and recovery")
+    assert_no_diff("a refused external-project create must leave the fixture untouched")
 
 
 @e2e_test(tool="create_project", kind="action")
@@ -814,6 +829,42 @@ def test_create_configuration_then_delete():
 
 
 # ── HAPPY PATH (externalObjects) ──────────────────────────────────────────────
+
+@e2e_test(tool="create_project", kind="action")
+def test_create_external_objects_with_base_then_validate_query_and_delete():
+    """The base is persisted and supplies configuration metadata to both query dialects."""
+    _ensure_absent(NEW_EXT_OBJ_BOUND)
+    try:
+        r = call("create_project", {
+            "projectKind": "externalObjects", "name": NEW_EXT_OBJ_BOUND,
+            "baseProjectName": PROJECT,
+        })
+        assert_ok(r, "create external objects bound to the fixture configuration")
+        assert r.structured is not None, "response must carry structuredContent"
+        assert r.structured.get("baseProject") == PROJECT, r.structured
+        assert r.structured.get("state") == "ready", r.structured
+        assert wait_for_project_ready(), "bound external project must finish indexing"
+
+        manifest_path = os.path.join(_project_dir(NEW_EXT_OBJ_BOUND), "DT-INF", "PROJECT.PMF")
+        with open(manifest_path, encoding="utf-8") as manifest:
+            headers = manifest.read().splitlines()
+        assert "Base-Project: " + PROJECT in headers, headers
+
+        for query in ("SELECT Ref FROM Catalog.Catalog",
+                      "ВЫБРАТЬ Ссылка ИЗ Справочник.Catalog"):
+            validated = call("validate_query", {
+                "projectName": NEW_EXT_OBJ_BOUND, "queryText": query,
+            })
+            assert_ok(validated, "resolve a base catalog from the external project")
+            assert validated.structured is not None, validated.text
+            assert validated.structured.get("validationState") == "VALID", validated.structured
+            assert validated.structured.get("validationComplete") is True, validated.structured
+            assert validated.structured.get("valid") is True, validated.structured
+            assert validated.structured.get("issues") == [], validated.structured
+    finally:
+        _ensure_absent(NEW_EXT_OBJ_BOUND)
+    assert_no_diff("the bound-project round-trip must leave the fixture untouched")
+
 
 @e2e_test(tool="create_project", kind="action")
 def test_create_external_objects_with_seeded_root_then_delete():

@@ -13,8 +13,14 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyZeroInteractions;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -31,13 +39,24 @@ import org.junit.After;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
+import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool.ExternalObjectSpec;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
+import com.ditrix.edt.mcp.server.utils.ProjectImportValidation;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
@@ -779,6 +798,285 @@ public class CreateProjectToolTest
         assertTrue("baseProjectName for configuration kind must be an error", //$NON-NLS-1$
             result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue("error must mention 'baseProjectName'", result.contains("baseProjectName")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("'baseProjectName' is only valid for projectKind=extension or externalObjects. "
+            + "Remove the 'baseProjectName' parameter for kind=configuration.", errorOf(result));
+    }
+
+    private Field pluginField;
+    private Activator savedActivator;
+    private IV8ProjectManager projectManager;
+    private IExternalObjectProjectManager externalManager;
+    private IExternalObjectProject createdV8Project;
+    private final List<List<Object>> externalCreates = new ArrayList<>();
+
+    private void installExternalPlatform() throws Exception
+    {
+        Activator platform = mock(Activator.class);
+        projectManager = mock(IV8ProjectManager.class);
+        externalManager = mock(IExternalObjectProjectManager.class);
+        createdV8Project = mock(IExternalObjectProject.class);
+        IDtProjectManager dtManager = mock(IDtProjectManager.class);
+        IDtProject dtProject = mock(IDtProject.class);
+        when(dtProject.getName()).thenReturn("CreatedExternal907");
+        when(dtManager.getDtProject(any(IProject.class))).thenReturn(dtProject);
+        IWorkspaceOrchestrator workspace = mock(IWorkspaceOrchestrator.class);
+        when(workspace.isStarted(dtProject)).thenReturn(true);
+        when(platform.getV8ProjectManager()).thenReturn(projectManager);
+        when(platform.getExternalObjectProjectManager()).thenReturn(externalManager);
+        when(platform.getDtProjectManager()).thenReturn(dtManager);
+        when(platform.getWorkspaceOrchestrator()).thenReturn(workspace);
+        when(platform.getServicesOrchestrator()).thenReturn(mock(IServicesOrchestrator.class));
+        when(projectManager.getProject(dtProject)).thenReturn(createdV8Project);
+        doAnswer(call -> {
+            String name = call.getArgument(0);
+            externalCreates.add(java.util.Arrays.asList(name, call.getArgument(1),
+                call.getArgument(2), call.getArgument(3)));
+            IProject created = createWorkspaceProject(name, null);
+            when(projectManager.getProject(created)).thenReturn(createdV8Project);
+            return created;
+        }).when(externalManager).create(anyString(), any(Version.class),
+            org.mockito.ArgumentMatchers.nullable(MdObject.class),
+            org.mockito.ArgumentMatchers.nullable(IProject.class), any());
+        pluginField = Activator.class.getDeclaredField("plugin");
+        pluginField.setAccessible(true);
+        savedActivator = (Activator)pluginField.get(null);
+        pluginField.set(null, platform);
+    }
+
+    @After
+    public void restoreExternalPlatform() throws Exception
+    {
+        if (pluginField != null)
+        {
+            pluginField.set(null, savedActivator);
+        }
+    }
+
+    private IProject createWorkspaceProject(String name, String nature) throws CoreException
+    {
+        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(name);
+        projects.add(project);
+        project.create(new NullProgressMonitor());
+        project.open(new NullProgressMonitor());
+        if (nature != null)
+        {
+            IProjectDescription description = project.getDescription();
+            description.setNatureIds(new String[] { nature });
+            project.setDescription(description, IResource.AVOID_NATURE_CONFIG, new NullProgressMonitor());
+        }
+        return project;
+    }
+
+    private IProject configurationBase(String prefix) throws CoreException
+    {
+        IProject base = createWorkspaceProject(prefix + uniqueName(), ProjectImportValidation.NATURE_CONFIGURATION);
+        IV8Project v8Base = mock(IV8Project.class);
+        when(v8Base.getVersion()).thenReturn(new Version("8.3.27"));
+        when(projectManager.getProject(base)).thenReturn(v8Base);
+        when(createdV8Project.getParentProject()).thenReturn(base);
+        return base;
+    }
+
+    private static Map<String, String> externalParams(String base)
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectKind", "externalObjects");
+        params.put("name", uniqueName());
+        if (base != null)
+        {
+            params.put("baseProjectName", base);
+        }
+        return params;
+    }
+
+    private static JsonObject executeExternal(Map<String, String> params)
+    {
+        return JsonParser.parseString(new CreateProjectTool().execute(params)).getAsJsonObject();
+    }
+
+    private static void assertBaseError(JsonObject result, String bad, String fix)
+    {
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        String error = result.get("error").getAsString();
+        assertTrue(error, error.contains(bad));
+        assertTrue(error, error.contains(fix));
+    }
+
+    @Test
+    public void testExternalBaseAcceptedInBothLanguagesAndRuntimeInherited() throws Exception
+    {
+        installExternalPlatform();
+        for (String prefix : List.of("Accounting", "БУХ"))
+        {
+            IProject base = configurationBase(prefix);
+            Map<String, String> params = externalParams(" " + base.getName() + " ");
+            JsonObject result = executeExternal(params);
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            assertEquals(base.getName(), result.get("baseProject").getAsString());
+            assertEquals("ready", result.get("state").getAsString());
+            assertEquals("8.3.27", result.get("version").getAsString());
+            assertEquals(params.get("name"), result.get("project").getAsString());
+            List<Object> creation = externalCreates.get(externalCreates.size() - 1);
+            assertEquals(new Version("8.3.27"), creation.get(1));
+            assertNull(creation.get(2));
+            assertEquals(base, creation.get(3));
+        }
+    }
+
+    @Test
+    public void testExternalBaseAllowsMatchingExplicitVersion() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("БУХ");
+        Map<String, String> params = externalParams(base.getName());
+        params.put("version", "8.3.27");
+        JsonObject result = executeExternal(params);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(new Version("8.3.27"), externalCreates.get(0).get(1));
+    }
+
+    @Test
+    public void testExternalSeededRootUsesBaseRuntimeAndParent() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("БУХ");
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject root = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        when(factory.create(MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR, new Version("8.3.27")))
+            .thenReturn(root);
+        when(Activator.getDefault().getModelObjectFactory()).thenReturn(factory);
+        Map<String, String> params = externalParams(base.getName());
+        params.put("externalObject", "ExternalDataProcessor.Обработка");
+        JsonObject result = executeExternal(params);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("ExternalDataProcessor.Обработка", result.get("externalObject").getAsString());
+        assertEquals("Обработка", root.getName());
+        assertEquals(root, externalCreates.get(0).get(2));
+        assertEquals(base, externalCreates.get(0).get(3));
+    }
+
+    @Test
+    public void testExternalBaseRejectsMissingBaseInBothLanguages() throws Exception
+    {
+        installExternalPlatform();
+        for (String prefix : List.of("Missing", "НетБазы"))
+        {
+            String base = prefix + uniqueName();
+            assertBaseError(executeExternal(externalParams(base)), base, "list_projects");
+        }
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalBaseRejectsClosedBaseInBothLanguages() throws Exception
+    {
+        installExternalPlatform();
+        for (String prefix : List.of("Closed", "ЗакрытаяБаза"))
+        {
+            IProject base = configurationBase(prefix);
+            base.close(new NullProgressMonitor());
+            assertBaseError(executeExternal(externalParams(base.getName())), base.getName(), "Open it in EDT");
+        }
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalBaseRejectsOtherProjectKindsInBothLanguages() throws Exception
+    {
+        installExternalPlatform();
+        for (String nature : List.of(ProjectImportValidation.NATURE_EXTENSION,
+            ProjectImportValidation.NATURE_EXTERNAL_OBJECTS))
+        {
+            for (String prefix : List.of("WrongKind", "ДругаяБаза"))
+            {
+                IProject base = createWorkspaceProject(prefix + uniqueName(), nature);
+                assertBaseError(executeExternal(externalParams(base.getName())), base.getName(),
+                    "Pass the configuration project");
+            }
+        }
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalBaseRejectsVersionMismatchBeforeCreating() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("БУХ");
+        Map<String, String> params = externalParams(base.getName());
+        params.put("version", "8.3.26");
+        JsonObject result = executeExternal(params);
+        assertBaseError(result, base.getName(), "Omit version or pass '8.3.27'");
+        assertTrue(result.toString(), result.get("error").getAsString().contains("8.3.26"));
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalBaseRequiresAvailableRuntime() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("Accounting");
+        when(projectManager.getProject(base)).thenReturn(null);
+        assertBaseError(executeExternal(externalParams(base.getName())), base.getName(), "Wait for it to finish loading");
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalBaseRejectsInvalidVersion() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("Accounting");
+        Map<String, String> params = externalParams(base.getName());
+        params.put("version", "bogus");
+        assertBaseError(executeExternal(params), "bogus", "8.3.27");
+        verifyZeroInteractions(externalManager);
+    }
+
+    @Test
+    public void testExternalWithoutBaseKeepsLatestRuntime() throws Exception
+    {
+        installExternalPlatform();
+        for (String base : java.util.Arrays.asList(null, "", "  "))
+        {
+            JsonObject result = executeExternal(externalParams(base));
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            assertEquals(Version.LATEST.toString(), result.get("version").getAsString());
+            assertFalse(result.has("baseProject"));
+            assertNull(externalCreates.get(externalCreates.size() - 1).get(3));
+        }
+    }
+
+    @Test
+    public void testExternalBaseUnconfirmedBindingIsPostMutationError() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("БУХ");
+        when(createdV8Project.getParentProject()).thenReturn(null);
+        JsonObject result = executeExternal(externalParams(base.getName()));
+        assertBaseError(result, base.getName(), "check list_projects");
+        assertTrue(result.toString(), result.get("mutationCommitted").getAsBoolean());
+        assertEquals(1, externalCreates.size());
+    }
+
+    @Test
+    public void testExternalSlowResponseReportsOnlyObservedBase() throws Exception
+    {
+        installExternalPlatform();
+        IProject base = configurationBase("БУХ");
+        IProject created = createWorkspaceProject(uniqueName(), null);
+        when(projectManager.getProject(created)).thenReturn(createdV8Project);
+        for (String root : java.util.Arrays.asList(null, "ExternalDataProcessor.Unconfirmed"))
+        {
+            ExternalObjectSpec spec = root == null ? null : CreateProjectTool.resolveExternalObject(root);
+            when(createdV8Project.getParentProject()).thenReturn(base);
+            JsonObject observed = JsonParser.parseString(CreateProjectTool.buildExternalObjectsSlowResponse(
+                created.getName(), created.getName(), Version.LATEST, null, spec, base.getName())).getAsJsonObject();
+            assertEquals(base.getName(), observed.get("baseProject").getAsString());
+            assertFalse("a slow create cannot claim ready", "ready".equals(observed.get("state").getAsString()));
+            when(createdV8Project.getParentProject()).thenReturn(null);
+            JsonObject unknown = JsonParser.parseString(CreateProjectTool.buildExternalObjectsSlowResponse(
+                created.getName(), created.getName(), Version.LATEST, null, spec, base.getName())).getAsJsonObject();
+            assertFalse(unknown.toString(), unknown.has("baseProject"));
+        }
     }
 
     @Test

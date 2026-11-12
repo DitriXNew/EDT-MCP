@@ -1329,9 +1329,8 @@ public final class ProjectStateChecker
                         // the two views disagree about is not classifiable at all.
                         return SearchDependenciesResult.undetermined();
                     }
-                    // An external-objects project is legitimately UNLINKED: create_project REJECTS
-                    // baseProjectName for that kind, so this is the state such a project is CREATED
-                    // in. Without a parent it has no base-configuration scope and can therefore hold
+                    // An external-objects project is legitimately UNLINKED when created without
+                    // baseProjectName. Without a parent it has no base-configuration scope and can therefore hold
                     // no reference to a base-configuration object, which makes it genuinely
                     // unrelated. Failing closed here instead would hand every workspace that merely
                     // has one open the workspace-wide scan this scoping exists to avoid.

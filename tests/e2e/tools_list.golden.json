@@ -1216,7 +1216,7 @@
           "type": "boolean"
         },
         "baseProjectName": {
-          "description": "Name of the BASE configuration EDT project (required for extension; REJECTED for configuration and externalObjects). Must be an existing, open V8 configuration project. Use list_projects to find it.",
+          "description": "Name of the BASE configuration EDT project (required for extension; optional for externalObjects; REJECTED for configuration). Must be an existing, open V8 configuration project. Use list_projects to find it.",
           "type": "string"
         },
         "comment": {
@@ -1276,7 +1276,7 @@
           "type": "string"
         },
         "version": {
-          "description": "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: Version.LATEST when omitted.",
+          "description": "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: base runtime when bound, otherwise Version.LATEST; must match the base.",
           "type": "string"
         }
       },

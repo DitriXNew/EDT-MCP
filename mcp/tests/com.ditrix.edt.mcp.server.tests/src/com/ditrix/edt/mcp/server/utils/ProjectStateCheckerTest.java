@@ -223,8 +223,8 @@ public class ProjectStateCheckerTest
     }
 
     /**
-     * An external-objects project is legitimately UNLINKED - {@code create_project} REJECTS
-     * baseProjectName for that kind, so this is the state it is CREATED in. Treating that null
+     * An external-objects project is legitimately UNLINKED when created without
+     * baseProjectName. Treating that null
      * parent as "undeterminable" hands every workspace merely containing one the workspace-wide
      * scan this scoping exists to avoid, and (because adopted-target augmentation needs the
      * snapshot) silently drops references living in a genuine extension.
