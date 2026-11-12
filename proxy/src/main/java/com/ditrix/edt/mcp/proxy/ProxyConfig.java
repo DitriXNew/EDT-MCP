@@ -8,7 +8,11 @@ package com.ditrix.edt.mcp.proxy;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -274,6 +278,13 @@ public final class ProxyConfig
         ConfigFileSource file = loadConfigFileSource(args);
         String value = trimmedOrNull(file.properties.getProperty(PROP_PORT));
         int port = value == null ? DEFAULT_PORT : parseListenPort(configFileSource(file.label, PROP_PORT), value);
+        value = trimmedOrNull(file.properties.getProperty(PROP_BIND));
+        String bind = value == null ? "127.0.0.1" : parseHost(configFileSource(file.label, PROP_BIND), value);
+        value = env == null ? null : trimmedOrNull(env.get(ENV_HOST));
+        if (value != null)
+        {
+            bind = parseHost(ENV_HOST, value);
+        }
         value = env == null ? null : trimmedOrNull(env.get(ENV_PORT));
         if (value != null)
         {
@@ -292,10 +303,14 @@ public final class ProxyConfig
                 {
                     optionValue(option, args, ++i);
                 }
+                else if (OPT_BIND.equals(option))
+                {
+                    bind = parseHost(OPT_BIND, optionValue(option, args, ++i));
+                }
                 else
                 {
                     throw new IllegalArgumentException("Unknown option '" + option
-                        + "'. Status and stop accept --port N and --config PATH.");
+                        + "'. Status and stop accept --port N, --bind HOST and --config PATH.");
                 }
             }
         }
@@ -304,18 +319,38 @@ public final class ProxyConfig
             throw new IllegalArgumentException("Status and stop require the running proxy's actual port;"
                 + " supply --port N when the server configuration uses port=0.");
         }
-        return new ClientOptions(port, ProxyCredentials.readClientToken(file.properties, env));
+        return new ClientOptions(port, bind, ProxyCredentials.readClientToken(file.properties, env));
     }
 
     static final class ClientOptions
     {
         final int port;
         final String token;
+        final InetAddress address;
 
-        ClientOptions(int port, String token)
+        ClientOptions(int port, String bind, String token)
         {
             this.port = port;
             this.token = token;
+            try
+            {
+                InetAddress resolved = InetAddress.getByName(bind);
+                // A wildcard listener includes loopback only in its own address family.
+                address = resolved.isAnyLocalAddress()
+                    ? InetAddress.getByName(resolved instanceof Inet6Address ? "::1" : "127.0.0.1") : resolved;
+            }
+            catch (UnknownHostException e)
+            {
+                throw new IllegalArgumentException("Cannot resolve the configured proxy bind address: " + bind);
+            }
+        }
+
+        URI uri(String path)
+        {
+            // Use the resolved numeric address for every request, including session cleanup.
+            String host = address instanceof Inet6Address ? "[" + address.getHostAddress() + "]"
+                : address.getHostAddress();
+            return URI.create("http://" + host + ":" + port + path);
         }
     }
 

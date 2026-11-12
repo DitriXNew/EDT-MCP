@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.gson.JsonObject;
 
@@ -58,7 +59,13 @@ public final class Backend
     private final URI mcpUri;
     private final URI healthUri;
     private final String authToken;
-    private volatile int authenticationFailureStatus;
+    private final AtomicLong authenticationRequestSequence = new AtomicLong();
+    private final AtomicReference<AuthenticationObservation> authentication =
+        new AtomicReference<>(new AuthenticationObservation(0, 0));
+
+    private record AuthenticationObservation(long sequence, int failureStatus)
+    {
+    }
     private final AtomicLong requestId = new AtomicLong(0);
 
     /** Guarded by {@code this}: whether the lazy MCP handshake has been performed. */
@@ -173,8 +180,7 @@ public final class Backend
 
         HttpRequest initialize =
             newPostRequest(buildJsonRpcRequest("initialize", params), null, HANDSHAKE_TIMEOUT_SECONDS); //$NON-NLS-1$
-        HttpResponse<String> response = client.send(initialize, HttpResponse.BodyHandlers.ofString());
-        checkAuthentication(response);
+        HttpResponse<String> response = sendMcpRequest(initialize, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200)
         {
             throw new IOException("initialize against backend :" + port + " failed with HTTP " //$NON-NLS-1$ //$NON-NLS-2$
@@ -203,8 +209,8 @@ public final class Backend
         }
 
         String initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"; //$NON-NLS-1$
-        checkAuthentication(client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
-            HttpResponse.BodyHandlers.discarding()));
+        sendMcpRequest(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
+            HttpResponse.BodyHandlers.discarding());
 
         sessionId = issued;
         handshakeDone = true;
@@ -306,10 +312,9 @@ public final class Backend
                 invalidateSessionIfCurrent(session);
                 continue;
             }
-            HttpResponse<InputStream> response = client.send(
+            HttpResponse<InputStream> response = sendMcpRequest(
                 newPostRequest(rawBody, session, requestTimeoutSeconds, accept),
                 HttpResponse.BodyHandlers.ofInputStream());
-            checkAuthentication(response);
             if (attempt == 0 && isStaleSession(response, session))
             {
                 closeQuietly(response.body());
@@ -340,10 +345,9 @@ public final class Backend
         JsonObject params = new JsonObject();
         params.addProperty("name", "list_projects"); //$NON-NLS-1$ //$NON-NLS-2$
         params.add("arguments", arguments); //$NON-NLS-1$
-        HttpResponse<InputStream> response = client.send(newPostRequest(
+        HttpResponse<InputStream> response = sendMcpRequest(newPostRequest(
             buildJsonRpcRequest("tools/call", params), session, HANDSHAKE_TIMEOUT_SECONDS), //$NON-NLS-1$
             HttpResponse.BodyHandlers.ofInputStream());
-        checkAuthentication(response);
         if (isStaleSession(response, session))
         {
             closeQuietly(response.body());
@@ -383,7 +387,7 @@ public final class Backend
 
     String authenticationError()
     {
-        int status = authenticationFailureStatus;
+        int status = authentication.get().failureStatus();
         return status == 0 ? null : authenticationError(status);
     }
 
@@ -394,11 +398,20 @@ public final class Backend
             + ".tokenEnv and restart the proxy after changing credentials.";
     }
 
-    private void checkAuthentication(HttpResponse<?> response) throws AuthenticationException
+    private <T> HttpResponse<T> sendMcpRequest(HttpRequest request, HttpResponse.BodyHandler<T> handler)
+        throws IOException, InterruptedException
+    {
+        long sequence = authenticationRequestSequence.incrementAndGet();
+        HttpResponse<T> response = client.send(request, handler);
+        checkAuthentication(response, sequence);
+        return response;
+    }
+
+    private void checkAuthentication(HttpResponse<?> response, long sequence) throws AuthenticationException
     {
         if (response.statusCode() == 401 || response.statusCode() == 403)
         {
-            authenticationFailureStatus = response.statusCode();
+            recordAuthentication(sequence, response.statusCode());
             if (response.body() instanceof InputStream body)
             {
                 closeQuietly(body);
@@ -407,8 +420,16 @@ public final class Backend
         }
         if (response.statusCode() >= 200 && response.statusCode() < 300)
         {
-            authenticationFailureStatus = 0;
+            recordAuthentication(sequence, 0);
         }
+    }
+
+    private void recordAuthentication(long sequence, int failureStatus)
+    {
+        // Atomic ordering covers both late successes and late failures. Health probes never
+        // participate: a public 200 from /health proves nothing about the backend credential.
+        authentication.updateAndGet(previous -> sequence > previous.sequence()
+            ? new AuthenticationObservation(sequence, failureStatus) : previous);
     }
 
     /**

@@ -406,80 +406,85 @@ public final class McpProxyHandler implements HttpHandler
     }
 
     /**
-     * Serves {@code tools/list}: forwards the raw request to the DONOR backend (see
-     * {@link BackendRegistry#toolsListDonor()} - the lowest-port one that supports the machine
-     * project list, so a mixed-version fleet does not publish an outdated descriptor set), injects
-     * the two {@code router_*} descriptors, and caches the injected response. With zero live
-     * backends, serves the cache (re-stamped with the caller's request id) when one exists,
-     * or a minimal list containing ONLY the router tools otherwise.
+     * Serves {@code tools/list} from an eligible donor, preferring the machine project-list
+     * contract and ascending ports. Authentication/transport failures try the next candidate,
+     * then the cached descriptors. With no cache, authentication failures stay explicit; a
+     * proxy with no live backends exposes only its router tools.
      */
     private void handleToolsList(HttpExchange exchange, String rawBody, Object requestId) throws IOException
     {
-        List<Backend> live = registry.live();
-        if (live.isEmpty())
+        String authenticationFailure = null;
+        Integer unreachablePort = null;
+        for (Backend backend : registry.toolsListDonors())
         {
-            String cached = registry.cachedToolsListResponse();
-            String body = cached != null ? rewriteId(cached, requestId) : minimalToolsListResponse(requestId);
-            sendMcpResponse(exchange, 200, body, null);
-            return;
-        }
-
-        // NOT simply the lowest port: in a mixed-version fleet that one may run a plugin whose
-        // list_projects has no 'format' parameter, and publishing its descriptors would hide the
-        // machine contract from schema-driven clients. Read ONCE - a refresh between the emptiness
-        // check above and this call can leave no backend at all.
-        Backend backend = registry.toolsListDonor();
-        if (backend == null)
-        {
-            // The registry emptied between the check above and this read: answer the same way the
-            // zero-backend path does rather than dereferencing nothing.
-            String cached = registry.cachedToolsListResponse();
-            sendMcpResponse(exchange, 200,
-                cached != null ? rewriteId(cached, requestId) : minimalToolsListResponse(requestId), null);
-            return;
-        }
-        try
-        {
-            HttpResponse<InputStream> response = backend.forward(rawBody);
-            String raw;
-            try (InputStream in = response.body())
+            try
             {
-                // Bounded like every other read in this class: the descriptor set has to be
-                // parsed and rewritten in memory here (the router tools are injected into it),
-                // so an oversized one would be buffered whole on a worker thread.
-                byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
-                if (bytes.length > MAX_BODY_BYTES)
+                HttpResponse<InputStream> response = backend.forward(rawBody);
+                String raw;
+                try (InputStream in = response.body())
                 {
-                    sendMcpResponse(exchange, 200, buildJsonRpcError(ERROR_INTERNAL,
-                        "The tools/list response from backend port " + backend.getPort() //$NON-NLS-1$
-                            + " is larger than " + MAX_BODY_BYTES //$NON-NLS-1$
-                            + " bytes, which the proxy cannot inject the router tools into. " //$NON-NLS-1$
-                            + "Reduce that backend's published tool set (progressive disclosure) " //$NON-NLS-1$
-                            + "or connect to it directly.", requestId), null); //$NON-NLS-1$
-                    return;
+                    // Bounded like every other read in this class: the descriptor set has to be
+                    // parsed and rewritten in memory here (the router tools are injected into it),
+                    // so an oversized one would be buffered whole on a worker thread.
+                    byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
+                    if (bytes.length > MAX_BODY_BYTES)
+                    {
+                        sendMcpResponse(exchange, 200, buildJsonRpcError(ERROR_INTERNAL,
+                            "The tools/list response from backend port " + backend.getPort() //$NON-NLS-1$
+                                + " is larger than " + MAX_BODY_BYTES //$NON-NLS-1$
+                                + " bytes, which the proxy cannot inject the router tools into. " //$NON-NLS-1$
+                                + "Reduce that backend's published tool set (progressive disclosure) " //$NON-NLS-1$
+                                + "or connect to it directly.", requestId), null); //$NON-NLS-1$
+                        return;
+                    }
+                    raw = new String(bytes, StandardCharsets.UTF_8);
                 }
-                raw = new String(bytes, StandardCharsets.UTF_8);
+                String injected = RouterTools.injectIntoToolsList(Backend.stripSseFraming(raw));
+                registry.cacheToolsListResponse(injected);
+                sendMcpResponse(exchange, 200, rewriteId(injected, requestId), null);
+                return;
             }
-            String injected = RouterTools.injectIntoToolsList(Backend.stripSseFraming(raw));
-            registry.cacheToolsListResponse(injected);
-            sendMcpResponse(exchange, 200, rewriteId(injected, requestId), null);
+            catch (Backend.AuthenticationException e)
+            {
+                authenticationFailure = e.getMessage();
+            }
+            catch (IOException e)
+            {
+                unreachablePort = backend.getPort();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                sendPlain(exchange, 500,
+                    buildJsonRpcError(ERROR_INTERNAL, "Interrupted while forwarding tools/list to a backend", requestId)); //$NON-NLS-1$
+                return;
+            }
         }
-        catch (Backend.AuthenticationException e)
-        {
-            sendMcpResponse(exchange, 200, buildJsonRpcError(-32002, e.getMessage(), requestId), null);
-        }
-        catch (IOException e)
+        if (unreachablePort != null)
         {
             registry.refresh();
-            sendMcpResponse(exchange, 200,
-                buildJsonRpcError(ERROR_BACKEND_UNREACHABLE, deadBackendMessage(backend.getPort()), requestId), null);
         }
-        catch (InterruptedException e)
+        String cached = registry.cachedToolsListResponse();
+        if (cached != null)
         {
-            Thread.currentThread().interrupt();
-            sendPlain(exchange, 500,
-                buildJsonRpcError(ERROR_INTERNAL, "Interrupted while forwarding tools/list to a backend", requestId)); //$NON-NLS-1$
+            sendMcpResponse(exchange, 200, rewriteId(cached, requestId), null);
+            return;
         }
+        // A discovery-time rejection removes the backend from the candidate list, but its
+        // diagnostic must remain visible when no healthy donor or cached descriptors exist.
+        for (Backend backend : registry.live())
+        {
+            String failure = backend.authenticationError();
+            if (failure != null)
+            {
+                authenticationFailure = failure;
+                break;
+            }
+        }
+        String body = authenticationFailure != null ? buildJsonRpcError(-32002, authenticationFailure, requestId)
+            : unreachablePort != null ? buildJsonRpcError(ERROR_BACKEND_UNREACHABLE,
+                deadBackendMessage(unreachablePort), requestId) : minimalToolsListResponse(requestId);
+        sendMcpResponse(exchange, 200, body, null);
     }
 
     /**

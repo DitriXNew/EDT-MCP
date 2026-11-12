@@ -385,19 +385,28 @@ public final class BackendRegistry
      * machine contract from schema-driven clients even though the proxy and the other backends
      * support it.
      *
-     * @return the donor backend, or {@code null} when no backend is live
+     * @return the donor backend, or {@code null} when no live backend is eligible
      */
     public Backend toolsListDonor()
     {
+        List<Backend> candidates = toolsListDonors();
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    /** Eligible donors from one snapshot, preferring the machine contract and then ascending ports. */
+    List<Backend> toolsListDonors()
+    {
         Snapshot current = snapshot;
+        List<Backend> candidates = new ArrayList<>();
         for (Backend backend : current.live)
         {
-            if (!current.unsupported.contains(backend.getPort()))
+            if (backend.authenticationError() == null)
             {
-                return backend;
+                candidates.add(backend);
             }
         }
-        return current.live.isEmpty() ? null : current.live.get(0);
+        candidates.sort(java.util.Comparator.comparing(backend -> current.unsupported.contains(backend.getPort())));
+        return List.copyOf(candidates);
     }
 
     /**

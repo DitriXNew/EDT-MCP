@@ -15,7 +15,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -85,6 +88,32 @@ public final class FakeBackend
     private volatile String lastAuthorization;
     private volatile int authFailureStatus = 401;
     private final AtomicInteger rejectedAuthCount = new AtomicInteger();
+    private final AtomicInteger toolsListCount = new AtomicInteger();
+    private final AtomicReference<RequestGate> nextRequestGate = new AtomicReference<>();
+
+    int toolsListCount()
+    {
+        return toolsListCount.get();
+    }
+
+    RequestGate pauseNextRequest()
+    {
+        RequestGate gate = new RequestGate();
+        nextRequestGate.set(gate);
+        return gate;
+    }
+
+    static final class RequestGate implements AutoCloseable
+    {
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public void close()
+        {
+            release.countDown();
+        }
+    }
 
     void setAuthToken(String token)
     {
@@ -284,11 +313,31 @@ public final class FakeBackend
     {
         try
         {
-            lastAuthorization = exchange.getRequestHeaders().getFirst("Authorization");
-            if (authToken != null && !("Bearer " + authToken).equals(lastAuthorization))
+            String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            lastAuthorization = authorization;
+            boolean authorized = authToken == null || ("Bearer " + authToken).equals(authorization);
+            int rejectedStatus = authFailureStatus;
+            RequestGate gate = nextRequestGate.getAndSet(null);
+            if (gate != null)
+            {
+                gate.entered.countDown();
+                try
+                {
+                    if (!gate.release.await(10, TimeUnit.SECONDS))
+                    {
+                        throw new IOException("Timed out waiting for the test to release a response");
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted test response", e);
+                }
+            }
+            if (!authorized)
             {
                 rejectedAuthCount.incrementAndGet();
-                sendPlain(exchange, authFailureStatus, "application/json", "{\"error\":\"Unauthorized\"}");
+                sendPlain(exchange, rejectedStatus, "application/json", "{\"error\":\"Unauthorized\"}");
                 return;
             }
             if (!"POST".equals(exchange.getRequestMethod()))
@@ -350,6 +399,7 @@ public final class FakeBackend
             }
             if ("tools/list".equals(method))
             {
+                toolsListCount.incrementAndGet();
                 sendFramed(exchange, jsonRpcResponse(id, toolsListResult()), acceptsSse);
                 return;
             }

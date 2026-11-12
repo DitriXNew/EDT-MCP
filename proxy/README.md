@@ -222,8 +222,11 @@ public `/health` endpoint reports only liveness, the proxy role and backend coun
 **Bearer authentication does not encrypt HTTP.** For network traffic, use a TLS
 reverse proxy or VPN, restrict the firewall to intended clients, and keep EDT ports
 bound to loopback. When using a TLS reverse proxy, forward Authorization unchanged
-and restrict the direct HTTP listener to that reverse proxy. Native TLS and OAuth
-are not provided by this module.
+and restrict the direct HTTP listener to that reverse proxy. **Allow only the exact
+`/mcp` path (and optionally `/health`) through the reverse proxy. Do not forward
+`/admin/` or any other path; do not proxy `/` as a catch-all.** The TCP peer seen by
+this service is the reverse proxy, so a loopback upstream does not prove that the
+original client is local. Native TLS and OAuth are not provided by this module.
 
 Two further limits guard against resource exhaustion regardless of the bind address:
 
@@ -232,12 +235,19 @@ Two further limits guard against resource exhaustion regardless of the bind addr
 - **Session cap** - the proxy tracks at most 10,000 concurrently open client sessions;
   `initialize` past that cap is refused with a JSON-RPC error asking idle sessions to be closed
   (`DELETE /mcp`) first.
-- **Admin endpoint stays loopback-only, always** - `POST /admin/shutdown` (the `stop`
-  subcommand's target) is accepted only when the caller's remote address is loopback,
-  checked on the actual TCP peer address of every request - **regardless of `--bind`**.
-  It also requires the proxy token when one is configured.
-  Even a proxy bound to `0.0.0.0` cannot be remotely shut down; any other HTTP method or a
-  non-loopback caller gets `405`/`403`.
+- **Admin endpoint checks the immediate TCP peer** - `POST /admin/shutdown` (the `stop`
+  subcommand's target) requires a loopback peer and the proxy token when configured.
+  Direct non-loopback callers get `403`, and other HTTP methods get `405`.
+  A reverse proxy connected through loopback satisfies that peer check: it **must
+  exclude `/admin/` from forwarding**, even for clients with a valid MCP token.
+
+The `status` and `stop` commands use the configured `bind` address, with the same
+CLI (`--bind HOST`) > environment (`EDT_MCP_PROXY_HOST`) > file precedence as `serve`.
+Wildcard IPv4/IPv6 binds use loopback in their own address family; concrete addresses
+are used directly. All status requests, including session cleanup, use that one
+resolved destination without HTTP redirects or an HTTP proxy. For a concrete
+non-loopback bind, `stop` refuses before sending a request: use the service manager
+or server console instead. No fallback to an unrelated loopback listener is made.
 
 ## How routing works
 
@@ -303,8 +313,10 @@ the additional argument.
 ### Other MCP methods
 
 - `initialize` / `ping` — the proxy answers itself and issues its own session id.
-- `tools/list` — taken from the first live backend with the two router tools injected;
-  the last successful response is cached for zero-backend service.
+- `tools/list` — prefers an authenticated backend supporting the machine project-list
+  contract, with the two router tools injected. A rejected/unreachable donor is skipped;
+  the next eligible backend is tried, then the last cached descriptors. With no cache
+  and no eligible donor, authentication failures remain explicit in the response.
 - `notifications/*` — accepted with `202`, mirroring the plugin.
 - Any other method — forwarded raw to the first live backend.
 
@@ -325,7 +337,7 @@ Two extra tools are injected into `tools/list` (both take no parameters):
 | `GET /health`          | `200` with `{"status":"ok","role":"proxy","backends":<live count>}`  |
 | `POST /mcp`            | Requires the proxy token when configured; MCP Streamable HTTP with SSE `data:` frames and `Mcp-Session-Id` |
 | `DELETE /mcp`          | Requires the same authentication as POST; closes the client's session **on the proxy**; backend sessions are untouched |
-| `POST /admin/shutdown` | Requires the proxy token when configured and loopback callers only, regardless of `--bind`: `200 {"status":"stopping"}` then graceful shutdown; authenticated non-loopback callers get `403`; other authenticated HTTP methods get `405`. This is the `stop` subcommand's target. |
+| `POST /admin/shutdown` | Requires the proxy token when configured and an immediate loopback TCP peer: `200 {"status":"stopping"}` then graceful shutdown; authenticated non-loopback peers get `403`; other authenticated HTTP methods get `405`. Reverse proxies must never forward this path. This is the `stop` subcommand's target. |
 
 ## Zero-backend behaviour
 
@@ -417,8 +429,8 @@ does not start user services without an active login, enable lingering once with
 - **No lifecycle management.** The proxy never starts or stops EDT instances; the AI
   agent (or you) does that. The proxy only discovers what is already running.
 - **One tool surface.** Tool names are not prefixed per backend; all backends are
-  assumed to expose the same EDT-MCP tool set (`tools/list` is taken from the first
-  live backend).
+  assumed to expose the same EDT-MCP tool set (`tools/list` uses an eligible donor,
+  preferring one that supports the machine project-list contract).
 
 ## Development
 

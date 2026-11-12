@@ -18,6 +18,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
@@ -30,7 +32,7 @@ import com.ditrix.edt.mcp.proxy.ProxyRoutingIT.McpTestClient;
 import com.ditrix.edt.mcp.proxy.ProxyRoutingIT.ProxyFixture;
 import com.google.gson.JsonObject;
 
-/** Real HTTP tests with two independently authenticated EDT backends and a protected LAN listener. */
+/** Real HTTP tests with two independently authenticated EDT backends and a protected loopback listener. */
 public class AuthenticationIT
 {
     private static final String CLIENT_TOKEN = "test-proxy-client-key";
@@ -66,7 +68,7 @@ public class AuthenticationIT
         first.start();
         second.start();
         properties = ProxyCredentialsTest.properties("port", "0", "scan", ports[0] + "-" + ports[1],
-            "refresh", "3600", "timeout", "3", "bind", "0.0.0.0", "authToken", CLIENT_TOKEN,
+            "refresh", "3600", "timeout", "3", "bind", "127.0.0.1", "authToken", CLIENT_TOKEN,
             "backend." + ports[0] + ".token", FIRST_TOKEN, "backend." + ports[1] + ".token", SECOND_TOKEN);
     }
 
@@ -274,6 +276,99 @@ public class AuthenticationIT
     }
 
     @Test
+    public void coldToolsListSkipsAnAuthenticationRejectedDonor() throws Exception
+    {
+        properties.remove("backend." + first.getPort() + ".token");
+        connect();
+        int rejected = first.rejectedAuthCount();
+        assertNotNull(client.request("tools/list", new JsonObject()).getAsJsonObject("result"));
+        assertEquals(1, second.toolsListCount());
+        assertEquals("Known authentication failures must not be retried for discovery", rejected,
+            first.rejectedAuthCount());
+        assertPort(second.getPort(), client.callTool("echo_port", projectArgs("Beta")));
+    }
+
+    @Test
+    public void cachedToolsRemainAvailableWhenAllDonorsRejectAuthentication() throws Exception
+    {
+        connect();
+        JsonObject initial = client.request("tools/list", new JsonObject()).getAsJsonObject("result");
+        first.setAuthToken("revoked-first");
+        second.setAuthToken("revoked-second");
+        JsonObject response = client.request("tools/list", new JsonObject());
+        assertEquals(initial, response.getAsJsonObject("result"));
+        assertEquals(1, first.rejectedAuthCount());
+        assertEquals(1, second.rejectedAuthCount());
+        assertTrue(client.callTool("router_status", new JsonObject()).toString().contains("authenticationError"));
+        assertTrue(isToolError(client.callTool("echo_port", projectArgs("Alpha"))));
+    }
+
+    @Test
+    public void coldToolsListReportsAuthenticationWhenNoDonorOrCacheExists() throws Exception
+    {
+        properties.remove("backend." + first.getPort() + ".token");
+        properties.remove("backend." + second.getPort() + ".token");
+        connect();
+        JsonObject response = client.request("tools/list", new JsonObject());
+        assertEquals(-32002, response.getAsJsonObject("error").get("code").getAsInt());
+        assertTrue(response.toString().contains("HTTP 401"));
+        assertNoSecrets(response.toString());
+    }
+
+    @Test
+    public void olderSuccessCannotClearANewerAuthenticationFailure() throws Exception
+    {
+        Backend backend = new Backend(first.getPort(), http, 3, FIRST_TOKEN);
+        backend.ensureSession();
+        var executor = Executors.newSingleThreadExecutor();
+        try (var gate = first.pauseNextRequest())
+        {
+            var older = executor.submit(() -> backend.callToolBlocking("echo_port", projectArgs("Alpha")));
+            assertTrue(gate.entered.await(3, TimeUnit.SECONDS));
+            first.setAuthToken("revoked");
+            assertThrows(Backend.AuthenticationException.class,
+                () -> backend.callToolBlocking("echo_port", projectArgs("Alpha")));
+            String failure = backend.authenticationError();
+            assertNotNull(failure);
+            gate.close();
+            older.get(3, TimeUnit.SECONDS);
+            assertEquals(failure, backend.authenticationError());
+            first.setAuthToken(FIRST_TOKEN);
+            backend.callToolBlocking("echo_port", projectArgs("Alpha"));
+            assertNull(backend.authenticationError());
+        }
+        finally
+        {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void olderFailureCannotOverwriteANewerAuthenticatedResponse() throws Exception
+    {
+        Backend backend = new Backend(first.getPort(), http, 3, FIRST_TOKEN);
+        backend.ensureSession();
+        first.setAuthToken("revoked");
+        first.setAuthFailureStatus(403);
+        var executor = Executors.newSingleThreadExecutor();
+        try (var gate = first.pauseNextRequest())
+        {
+            var older = executor.submit(() -> assertThrows(Backend.AuthenticationException.class,
+                () -> backend.callToolBlocking("echo_port", projectArgs("Alpha"))));
+            assertTrue(gate.entered.await(3, TimeUnit.SECONDS));
+            first.setAuthToken(FIRST_TOKEN);
+            backend.callToolBlocking("echo_port", projectArgs("Alpha"));
+            gate.close();
+            older.get(3, TimeUnit.SECONDS);
+            assertNull(backend.authenticationError());
+        }
+        finally
+        {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     public void revokedTokenDuringASessionIsNotReportedAsADeadBackendOrRetried() throws Exception
     {
         connect();
@@ -281,8 +376,9 @@ public class AuthenticationIT
         first.setAuthFailureStatus(403);
         int initializations = first.getInitializeCount();
         JsonObject response = client.request("tools/list", new JsonObject());
-        assertEquals(-32002, response.getAsJsonObject("error").get("code").getAsInt());
-        assertTrue(response.toString(), response.toString().contains("HTTP 403"));
+        assertNotNull(response.getAsJsonObject("result"));
+        assertEquals(1, second.toolsListCount());
+        assertTrue(client.callTool("router_status", new JsonObject()).toString().contains("HTTP 403"));
         assertFalse(response.toString().contains("stopped responding"));
         assertEquals(1, first.rejectedAuthCount());
         assertEquals(initializations, first.getInitializeCount());

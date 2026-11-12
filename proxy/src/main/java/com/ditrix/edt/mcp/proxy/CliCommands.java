@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.proxy;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -176,7 +177,7 @@ public final class CliCommands
         }
 
         int port = options.port;
-        if (!isHealthy(port))
+        if (!isHealthy(options))
         {
             err.println(unreachableMessage(port));
             return 1;
@@ -184,7 +185,7 @@ public final class CliCommands
 
         try
         {
-            JsonObject structured = fetchRouterStatus(port, options.token);
+            JsonObject structured = fetchRouterStatus(options);
             if (structured == null)
             {
                 err.println("edt-mcp-proxy: proxy on :" + port //$NON-NLS-1$
@@ -209,8 +210,7 @@ public final class CliCommands
 
     /**
      * Implements the {@code stop} subcommand: {@code POST}s the running proxy's
-     * {@code /admin/shutdown} endpoint (loopback only - see {@link ProxyServer}; a CLI client
-     * connecting to {@code 127.0.0.1} always qualifies) and reports the result.
+     * {@code /admin/shutdown} endpoint, only when the configured listener includes loopback.
      *
      * @param args the {@code stop} CLI arguments ({@code --port N}, {@code --config PATH})
      * @param out the stream the confirmation is printed to
@@ -232,7 +232,13 @@ public final class CliCommands
         }
 
         int port = options.port;
-        HttpRequest request = BearerAuthentication.addHeader(HttpRequest.newBuilder(adminShutdownUri(port))
+        if (!options.address.isLoopbackAddress())
+        {
+            err.println("edt-mcp-proxy: stop requires a loopback listener. The configured bind has no"
+                + " supported shutdown destination; stop it through its service manager or console.");
+            return 1;
+        }
+        HttpRequest request = BearerAuthentication.addHeader(HttpRequest.newBuilder(options.uri("/admin/shutdown"))
             .timeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
             .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_JSON)
             .POST(HttpRequest.BodyPublishers.noBody()), options.token)
@@ -284,7 +290,7 @@ public final class CliCommands
             "", //$NON-NLS-1$
             "A bare invocation with no subcommand (options only, or none at all) is an alias for", //$NON-NLS-1$
             "'serve', for backward compatibility with the CLI before subcommands existed.", //$NON-NLS-1$
-            "'status' and 'stop' accept --port N and --config PATH; the config file is auto-discovered.",
+            "'status' and 'stop' accept --port N, --bind HOST and --config PATH; the config file is auto-discovered.",
             "They use the proxy auth token from the config/environment, not the backend credentials.");
         return String.join(System.lineSeparator() + System.lineSeparator(), subcommandOverview, ProxyConfig.usage());
     }
@@ -303,11 +309,11 @@ public final class CliCommands
     // status / stop plumbing
     // ------------------------------------------------------------------------------------
 
-    private static boolean isHealthy(int port)
+    private static boolean isHealthy(ProxyConfig.ClientOptions options)
     {
         try
         {
-            HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/health")) //$NON-NLS-1$ //$NON-NLS-2$
+            HttpRequest request = HttpRequest.newBuilder(options.uri("/health"))
                 .timeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
                 .GET()
                 .build();
@@ -337,10 +343,11 @@ public final class CliCommands
      * @return the {@code structuredContent} object, or {@code null} when the handshake or the
      *         call did not yield a usable response
      */
-    private static JsonObject fetchRouterStatus(int port, String token) throws IOException, InterruptedException
+    private static JsonObject fetchRouterStatus(ProxyConfig.ClientOptions options) throws IOException, InterruptedException
     {
         HttpClient client = newClient();
-        URI mcpUri = URI.create("http://127.0.0.1:" + port + "/mcp"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI mcpUri = options.uri("/mcp");
+        String token = options.token;
 
         JsonObject clientInfo = new JsonObject();
         clientInfo.addProperty(KEY_NAME, CLIENT_NAME);
@@ -566,13 +573,9 @@ public final class CliCommands
             + ". Is it running? Start it with: java -jar edt-mcp-proxy.jar serve --port " + port; //$NON-NLS-1$
     }
 
-    private static URI adminShutdownUri(int port)
-    {
-        return URI.create("http://127.0.0.1:" + port + "/admin/shutdown"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
     private static HttpClient newClient()
     {
-        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS)).build();
+        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
+            .proxy(ProxySelector.of(null)).followRedirects(HttpClient.Redirect.NEVER).build();
     }
 }

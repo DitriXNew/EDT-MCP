@@ -144,6 +144,44 @@ public class ProxyCredentialsTest
     }
 
     @Test
+    public void cliTargetsRespectConcreteAddressesAndWildcardFamilies() throws Exception
+    {
+        String[][] cases = {
+            { "0.0.0.0", "127.0.0.1" }, { "::", "::1" }, { "[::]", "::1" },
+            { "::1", "::1" }, { "192.0.2.20", "192.0.2.20" },
+            { "2001:db8::20", "2001:db8::20" }, { "127.0.0.2", "127.0.0.2" }
+        };
+        for (String[] pair : cases)
+        {
+            ProxyConfig.ClientOptions options = ProxyConfig.parseClient(
+                new String[] { "--bind", pair[0], "--port", "8764" }, Map.of());
+            for (String path : new String[] { "/health", "/mcp", "/admin/shutdown" })
+            {
+                var uri = options.uri(path);
+                assertEquals(java.net.InetAddress.getByName(pair[1]), java.net.InetAddress.getByName(uri.getHost()));
+                assertEquals(8764, uri.getPort());
+                assertEquals(path, uri.getPath());
+            }
+        }
+    }
+
+    @Test
+    public void cliBindUsesTheSamePrecedenceAsServe() throws Exception
+    {
+        Path file = temporary.newFile().toPath();
+        Files.writeString(file, "bind=192.0.2.20\nport=8764\nauthToken=client-key\n");
+        String[] args = { "--config", file.toString() };
+        assertEquals("192.0.2.20", ProxyConfig.parseClient(args, Map.of()).uri("/mcp").getHost());
+        assertEquals("127.0.0.2", ProxyConfig.parseClient(args,
+            Map.of(ProxyConfig.ENV_HOST, "127.0.0.2")).uri("/mcp").getHost());
+        assertEquals("127.0.0.1", ProxyConfig.parseClient(
+            new String[] { "--config", file.toString(), "--bind", "0.0.0.0" },
+            Map.of(ProxyConfig.ENV_HOST, "127.0.0.2")).uri("/mcp").getHost());
+        assertThrows(IllegalArgumentException.class,
+            () -> ProxyConfig.parseClient(new String[] { "--bind", "[" }, Map.of()));
+    }
+
+    @Test
     public void ambiguousSecretSourcesAreRejected()
     {
         assertThrows(IllegalArgumentException.class, () -> ProxyCredentials.parse(
