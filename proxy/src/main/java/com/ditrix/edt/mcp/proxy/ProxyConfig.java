@@ -48,7 +48,7 @@ import java.util.Properties;
  * <p>An inverted scan range ({@code FROM > TO}) is accepted and means an <b>empty</b> scan range:
  * no backend ports are probed and the proxy starts (and stays alive) with zero backends.
  *
- * <p><b>Bind address (security).</b> By default the proxy binds loopback only ({@code 127.0.0.1}),
+ * <p><b>Bind address (security).</b> By default the proxy binds the JVM's preferred loopback address,
  * mirroring the EDT-MCP plugin's own default: the proxy forwards {@code tools/call} to EDT-MCP
  * backends whose tool surface includes arbitrary-BSL execution and destructive operations, so it
  * must not be reachable from the network unless explicitly opted in. Setting {@code --bind HOST}
@@ -279,7 +279,7 @@ public final class ProxyConfig
         String value = trimmedOrNull(file.properties.getProperty(PROP_PORT));
         int port = value == null ? DEFAULT_PORT : parseListenPort(configFileSource(file.label, PROP_PORT), value);
         value = trimmedOrNull(file.properties.getProperty(PROP_BIND));
-        String bind = value == null ? "127.0.0.1" : parseHost(configFileSource(file.label, PROP_BIND), value);
+        String bind = value == null ? null : parseHost(configFileSource(file.label, PROP_BIND), value);
         value = env == null ? null : trimmedOrNull(env.get(ENV_HOST));
         if (value != null)
         {
@@ -334,7 +334,8 @@ public final class ProxyConfig
             this.token = token;
             try
             {
-                InetAddress resolved = InetAddress.getByName(bind);
+                // Match ProxyServer.start(), including the JVM's IPv6 preference when no bind is given.
+                InetAddress resolved = bind == null ? InetAddress.getLoopbackAddress() : InetAddress.getByName(bind);
                 // A wildcard listener includes loopback only in its own address family.
                 address = resolved.isAnyLocalAddress()
                     ? InetAddress.getByName(resolved instanceof Inet6Address ? "::1" : "127.0.0.1") : resolved;

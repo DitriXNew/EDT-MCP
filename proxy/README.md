@@ -243,11 +243,15 @@ Two further limits guard against resource exhaustion regardless of the bind addr
 
 The `status` and `stop` commands use the configured `bind` address, with the same
 CLI (`--bind HOST`) > environment (`EDT_MCP_PROXY_HOST`) > file precedence as `serve`.
+When no bind is specified, both the server and CLI follow the JVM's loopback-address
+policy, including `java.net.preferIPv6Addresses`.
 Wildcard IPv4/IPv6 binds use loopback in their own address family; concrete addresses
 are used directly. All status requests, including session cleanup, use that one
 resolved destination without HTTP redirects or an HTTP proxy. For a concrete
 non-loopback bind, `stop` refuses before sending a request: use the service manager
 or server console instead. No fallback to an unrelated loopback listener is made.
+Backend HTTP connections also go directly to the configured local EDT ports, without
+following redirects or using the JVM's default HTTP proxy selector.
 
 ## How routing works
 

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.proxy;
 
 import java.io.IOException;
+import java.net.ProxySelector;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -112,6 +113,8 @@ public final class BackendRegistry
         this.cfg = cfg;
         this.client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
+            .proxy(ProxySelector.of(null))
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
     }
 

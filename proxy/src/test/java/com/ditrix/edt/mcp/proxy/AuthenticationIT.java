@@ -7,6 +7,8 @@ import static org.junit.Assert.*;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.InetSocketAddress;
+import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -412,6 +414,53 @@ public class AuthenticationIT
             assertEquals(0, proxy.activeSessions());
             assertEquals(0, CliCommands.stop(authenticated, capture, capture));
             assertNoSecrets(output.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    public void backendCredentialsBypassTheJvmHttpProxy() throws Exception
+    {
+        FakeBackend interceptor = new FakeBackend("Intercepted");
+        interceptor.start();
+        try
+        {
+            Path file = temporary.newFile().toPath();
+            try (var out = Files.newOutputStream(file))
+            {
+                properties.store(out, "Test credentials only");
+            }
+            BackendRegistry registry;
+            ProxySelector previous = ProxySelector.getDefault();
+            try
+            {
+                ProxySelector.setDefault(ProxySelector.of(new InetSocketAddress("127.0.0.1", interceptor.getPort())));
+                registry = new BackendRegistry(ProxyConfig.parse(new String[] { "--config", file.toString() }, Map.of()));
+            }
+            finally
+            {
+                // HttpClient captures its selector on construction. Restore the process-wide
+                // default before exercising the captured client, to isolate this test.
+                ProxySelector.setDefault(previous);
+            }
+            registry.refresh();
+            assertNull("The system HTTP proxy must never receive an EDT credential", interceptor.lastAuthorization());
+            assertEquals(2, registry.live().size());
+            Backend backend = registry.byProject("Alpha");
+            assertNotNull(backend);
+            HttpResponse<java.io.InputStream> response = backend.forward(PING);
+            try (var body = response.body())
+            {
+                assertEquals(200, response.statusCode());
+                body.readAllBytes();
+            }
+            registry.refresh();
+            assertNull(interceptor.lastAuthorization());
+            assertEquals("Bearer " + FIRST_TOKEN, first.lastAuthorization());
+            assertEquals("Bearer " + SECOND_TOKEN, second.lastAuthorization());
+        }
+        finally
+        {
+            interceptor.stop();
         }
     }
 
