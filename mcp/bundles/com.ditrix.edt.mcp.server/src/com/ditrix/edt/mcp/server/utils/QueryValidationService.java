@@ -23,6 +23,7 @@ import org.eclipse.xtext.EcoreUtil2;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
 import org.eclipse.xtext.resource.XtextResource;
+import org.eclipse.xtext.service.OperationCanceledError;
 import org.eclipse.xtext.ui.resource.IResourceSetProvider;
 import org.eclipse.xtext.util.CancelIndicator;
 import org.eclipse.xtext.validation.CheckMode;
@@ -52,12 +53,16 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 public class QueryValidationService
 {
     private static final URI LOOKUP = URI.createURI("/nopr/mcp_validation.qldcs"); //$NON-NLS-1$
+    public static final int MAX_FUNCTION_DEPTH = 16;
+    static final int VALIDATION_SECONDS = 30;
 
     public enum State { VALID, INVALID, PARTIAL }
 
-    /** Dispatch before opening any writer transaction; native QL reads run in a BM read boundary. */
+    /** Native QL reads run on the calling thread inside a BM read boundary. */
     public Result validate(IProject project, String queryText, boolean dcsMode)
     {
+        Result refusal = precheck(queryText, dcsMode);
+        if (refusal != null) return refusal;
         AtomicReference<Result> result = new AtomicReference<>();
         Runnable work = () ->
         {
@@ -71,7 +76,7 @@ public class QueryValidationService
                     ? Result.unavailable(dcsMode, "BM model is unavailable for project '" + project.getName()
                         + "'. Check list_projects, wait for project loading and retry.")
                     : BmTransactions.read(model, "ValidateQuery", (tx, monitor) ->
-                        validateOnDisplay(project, v8Project, queryText, dcsMode)));
+                        validateNative(project, v8Project, queryText, dcsMode)));
             }
             catch (RuntimeException e)
             {
@@ -79,22 +84,43 @@ public class QueryValidationService
                     + e.getMessage() + ". Wait for project loading and retry validate_query."));
             }
         };
-        try
-        {
-            dispatch(work);
-        }
-        catch (RuntimeException e)
-        {
-            return Result.unavailable(dcsMode, "Could not dispatch native query validation: "
-                + e.getMessage() + ". Reopen the EDT workbench and retry.");
-        }
+        dispatch(work);
         return result.get();
     }
 
-    /** Dispatch precedes the BM read boundary; headless tests substitute only the display. */
+    private static Result precheck(String queryText, boolean dcsMode)
+    {
+        int depth = QueryFunctionDepth.maximum(queryText);
+        return depth > MAX_FUNCTION_DEPTH
+            ? Result.unavailable(dcsMode, "Query function nesting depth " + depth
+                + " exceeds the limit " + MAX_FUNCTION_DEPTH
+                + ". Move steps into temporary tables or intermediate fields, then retry validation. "
+                + "Writes are refused because this query cannot be validated safely.") : null;
+    }
+
+    /** No SWT service is used by the QL resource provider or validator. */
     protected void dispatch(Runnable work)
     {
-        ReadToolExecution.dispatchOnCurrentOrDefaultDisplay(work);
+        work.run();
+    }
+
+    protected long nanoTime() { return System.nanoTime(); }
+
+    private final class Budget implements CancelIndicator
+    {
+        private final long started = nanoTime();
+        @Override public boolean isCanceled()
+        {
+            return Thread.currentThread().isInterrupted()
+                || nanoTime() - started >= java.util.concurrent.TimeUnit.SECONDS.toNanos(VALIDATION_SECONDS);
+        }
+    }
+
+    private static Result canceled(boolean mode)
+    {
+        return Result.unavailable(mode, "Query validation exceeded " + VALIDATION_SECONDS
+            + " s or was interrupted. Move steps into temporary tables or intermediate fields, "
+            + "then retry validate_query. Writes are refused until validation completes.");
     }
 
     private static String validationScope(QlDcsResource resource, IV8Project v8Project)
@@ -112,9 +138,10 @@ public class QueryValidationService
         return scope;
     }
 
-    private Result validateOnDisplay(IProject project, IV8Project v8Project, String text, boolean dcsMode)
+    private Result validateNative(IProject project, IV8Project v8Project, String text, boolean dcsMode)
     {
         XtextResource resource = null;
+        Budget budget = new Budget();
         try
         {
             IResourceServiceProvider provider =
@@ -143,10 +170,16 @@ public class QueryValidationService
             {
                 resource.load(input, null);
             }
-            return new Result(inspect(resource, validator, computer, dcsMode), scope);
+            Result inspected = inspect(resource, validator, computer, dcsMode, budget);
+            return inspected.available() ? new Result(inspected, scope) : inspected;
+        }
+        catch (OperationCanceledError e)
+        {
+            return canceled(dcsMode);
         }
         catch (Exception e)
         {
+            if (budget.isCanceled()) return canceled(dcsMode);
             return Result.unavailable(dcsMode, "Native query validation failed: " + e.getMessage()
                 + ". Reopen the project and retry validate_query.");
         }
@@ -155,8 +188,8 @@ public class QueryValidationService
             if (resource != null)
             {
                 ResourceSet set = resource.getResourceSet();
-                resource.unload();
-                if (set != null) set.getResources().remove(resource);
+                try { resource.unload(); }
+                finally { if (set != null) set.getResources().remove(resource); }
             }
         }
     }
@@ -165,9 +198,17 @@ public class QueryValidationService
     static Result inspect(XtextResource resource, IResourceValidator validator,
         IDynamicDbViewFieldComputer computer, boolean dcsMode)
     {
+        return inspect(resource, validator, computer, dcsMode, CancelIndicator.NullImpl);
+    }
+
+    static Result inspect(XtextResource resource, IResourceValidator validator,
+        IDynamicDbViewFieldComputer computer, boolean dcsMode, CancelIndicator indicator)
+    {
+        if (indicator.isCanceled()) return canceled(dcsMode);
         List<Problem> problems = new ArrayList<>();
         // Validation installs derived state before the source census.
-        List<Issue> nativeIssues = validator.validate(resource, CheckMode.ALL, CancelIndicator.NullImpl);
+        List<Issue> nativeIssues = validator.validate(resource, CheckMode.ALL, indicator);
+        if (indicator.isCanceled()) return canceled(dcsMode);
         for (Resource.Diagnostic diagnostic : resource.getErrors())
             problems.add(new Problem("ERROR", diagnostic.getMessage(), diagnostic.getLine(),
                 diagnostic.getColumn(), -1, "resource", null, false));
@@ -179,6 +220,7 @@ public class QueryValidationService
         var all = resource.getAllContents();
         while (all.hasNext())
         {
+            if (indicator.isCanceled()) return canceled(dcsMode);
             EObject object = all.next();
             if (object instanceof QuerySchemaTable)
                 sources.add(inspectSource((QuerySchemaTable)object, computer));
@@ -204,7 +246,7 @@ public class QueryValidationService
                 issue.getColumn() == null ? -1 : issue.getColumn(),
                 issue.getOffset() == null ? -1 : issue.getOffset(), "validator", issue.getCode(), incomplete));
         }
-        return new Result(dcsMode, problems, sources, null);
+        return indicator.isCanceled() ? canceled(dcsMode) : new Result(dcsMode, problems, sources, null);
     }
 
     private static Source inspectSource(QuerySchemaTable source, IDynamicDbViewFieldComputer computer)

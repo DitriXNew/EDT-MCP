@@ -93,13 +93,41 @@ public final class QueryWriteValidation
             results.add(value);
             if (!result.available() || result.state() == QueryValidationService.State.INVALID)
             {
-                String message = "Query at '" + query.path() + "' was refused before mutation. "
-                    + "Run validate_query with the same query and dcsMode=" + query.dcsMode()
-                    + ", correct its errors, then retry.";
+                String message = refusal(query, result);
                 return new Batch(ToolResult.error(message).put("queryValidation", results).toJson(), results);
             }
         }
         return new Batch(null, results);
+    }
+
+    private static String refusal(Query query, QueryValidationService.Result result)
+    {
+        Map<String, Object> values = result.values();
+        StringBuilder message = new StringBuilder("Query at '").append(query.path())
+            .append("' was refused before mutation. Correct the query and retry.");
+        if (values.get("incompleteReason") instanceof String reason) message.append('\n').append(reason);
+        if (values.get("issues") instanceof List<?> issues)
+        {
+            var listed = new ArrayList<>(issues);
+            listed.sort(java.util.Comparator.comparingInt(item -> item instanceof Map<?, ?> issue
+                && "ERROR".equals(issue.get("severity")) ? 0 : 1));
+            int count = 0;
+            for (Object item : listed)
+            {
+                if (!(item instanceof Map<?, ?> issue)) continue;
+                if (count++ == 10)
+                {
+                    message.append("\nFurther issues omitted; see structuredContent.queryValidation.");
+                    break;
+                }
+                message.append('\n').append(issue.get("severity")).append(": ").append(issue.get("message"));
+                if (issue.containsKey("line")) message.append("; line ").append(issue.get("line"));
+                if (issue.containsKey("column")) message.append(", column ").append(issue.get("column"));
+            }
+        }
+        if (!result.complete()) message.append("\nRun validate_query with the same query and dcsMode=")
+            .append(query.dcsMode()).append(" after resolving the incomplete validation, then retry.");
+        return message.toString();
     }
 
     public record Batch(String errorJson, List<Map<String, Object>> results)

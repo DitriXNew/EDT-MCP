@@ -3887,12 +3887,22 @@ def test_query_gate_refuses_invalid_dataset_before_mutation_and_reads_back_valid
     disk = _poll_report_dcs(report_name, ctx="settle seeded schema before refusal")
     original_disk = read_disk(disk)
     snapshot = tree_snapshot()
-    invalid = _write(address, "update", "dataSet", {
-        "query": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
-    })
-    error = assert_error(invalid, "invalid dataset query must be refused before BM mutation")
-    assert_error_quality(error, names=["query"], suggests=["validate_query"])
-    assert not invalid.structured.get("mutationCommitted"), invalid.structured
+    for query in ("SELECT\n C.MissingField513 FROM Catalog.Catalog AS C",
+                  "ВЫБРАТЬ\n C.MissingField513 ИЗ Справочник.Catalog КАК C"):
+        invalid = _write(address, "update", "dataSet", {"query": query})
+        error = assert_error(invalid, "invalid dataset query must be refused before BM mutation")
+        assert_error_quality(error, names=["body/query"], suggests=["Correct", "retry"])
+        issues = invalid.structured["queryValidation"][0]["issues"]
+        errors = [issue for issue in issues if issue["severity"] == "ERROR"]
+        assert errors, invalid.structured
+        for issue in errors[:10]:
+            assert issue["line"] == 2, issue
+            assert issue["column"] > 0, issue
+            assert issue["message"] in invalid.text, invalid.text
+            assert "line %s, column %s" % (issue["line"], issue["column"]) in invalid.text, invalid.text
+        assert "availableFields" not in invalid.text, invalid.text
+        assert "Run validate_query" not in invalid.text, invalid.text
+        assert not invalid.structured.get("mutationCommitted"), invalid.structured
     assert_tree_unchanged(snapshot, "refused query must preserve fixture bytes")
     after = _get(address, "dataSet")
     assert_ok(after, "read dataset after refused query")
@@ -3919,7 +3929,7 @@ def test_dynamic_list_query_gate_refuses_invalid_and_reports_partial_forward_aut
         "queryText": "SELECT C.MissingField513 FROM Catalog.Catalog AS C",
     })
     error = assert_error(invalid, "invalid dynamic-list query must be refused before mutation")
-    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_error_quality(error, names=["queryText"], suggests=["Correct", "retry"])
     assert_tree_unchanged(snapshot, "refused dynamic-list query must preserve fixture bytes")
     after = _get(root + "#/queryText", "dynamicList")
     assert_ok(after, "read dynamic list after refusal")
