@@ -23,6 +23,14 @@ public class QueryFunctionDepthTest
         assertEquals(2, QueryFunctionDepth.maximum("Upper // ignored ) f(\r\n ( Lower (&S))"));
     }
 
+    @Test public void leftAndRightAreCallsNotJoinKeywords()
+    {
+        assertEquals(17, QueryFunctionDepth.maximum("SELECT " + "Left(".repeat(17) + "&S" + ", 1)".repeat(17)));
+        assertEquals(2, QueryFunctionDepth.maximum("SELECT Right(Left(&S, 2), 1)"));
+        assertEquals(1, QueryFunctionDepth.maximum("SELECT 1 FROM A AS A LEFT JOIN (SELECT Upper(&S) AS F) AS B ON TRUE"));
+        assertEquals(0, QueryFunctionDepth.maximum("SELECT 1 FROM A AS A RIGHT OUTER JOIN (SELECT 1 AS F) AS B ON TRUE"));
+    }
+
     @Test public void plainParenthesesAndKeywordsAreNotCalls()
     {
         assertEquals(0, QueryFunctionDepth.maximum("SELECT (((1 + 1))) WHERE (1 IN (1,2)) AND NOT (1=2)"));
