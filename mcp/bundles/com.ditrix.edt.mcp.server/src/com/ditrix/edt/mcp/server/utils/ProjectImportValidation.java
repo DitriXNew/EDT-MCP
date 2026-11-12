@@ -76,6 +76,13 @@ public final class ProjectImportValidation
         {
             return null;
         }
+        return validateConfigurationBase(baseProjectName, label, resolved);
+    }
+
+    /** Validates an open configuration dependency; returns a refusal or populates {@code resolved}. */
+    public static String validateConfigurationBase(String baseProjectName, String label,
+        AtomicReference<IProject> resolved)
+    {
         if (WorkspacePaths.projectNameProblem(baseProjectName) != null
             || !ProjectContext.of(baseProjectName).exists())
         {

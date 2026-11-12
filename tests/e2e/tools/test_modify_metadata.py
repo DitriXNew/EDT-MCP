@@ -4777,7 +4777,7 @@ def test_dynamic_list_query_write_uses_shared_native_validator():
     r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
         {"name": "queryText", "value": "SELECT C.MissingField513 FROM Catalog.Catalog AS C"}]})
     error = assert_error(r, "invalid custom query must be refused before attribute conversion")
-    assert_error_quality(error, names=["queryText"], suggests=["validate_query"])
+    assert_error_quality(error, names=["queryText", "MissingField513"], suggests=["Correct", "retry"])
     assert_tree_unchanged(snapshot, "invalid query must not convert the attribute or write the form")
     r = call("modify_metadata", {"projectName": PROJECT, "fqn": root, "properties": [
         {"name": "queryText", "value": "SELECT Ref AS GateValid513 FROM Catalog.Catalog"}]})

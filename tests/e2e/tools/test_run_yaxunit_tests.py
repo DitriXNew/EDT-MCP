@@ -370,6 +370,33 @@ def test_unknown_external_infobase_changes_value_is_rejected():
 
 
 @e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_live_nonexistent_cyrillic_module_reports_zero_match_warning():
+    """An empty filtered run must warn explicitly without becoming a tool error."""
+    requires_live_infobase("runs YAXUnit with a nonexistent Cyrillic module filter")
+    launch = {"launchConfigurationName": LIVE_LAUNCH_CONFIG}
+    missing_module = "Тест_НесуществующийМодуль_910"
+    try:
+        assert_ok(call("terminate_launch", launch), "quiet the selected infobase")
+        wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
+        wait_for_project_ready(timeout=180)
+        result = follow_pending(call("run_yaxunit_tests", dict(
+            launch, modules=[missing_module], timeout=45)), "zero-match Cyrillic filter")
+        assert_ok(result, "an empty filter match is a warning, not an error")
+        counts = parse_yaxunit_counts(result.text)
+        assert counts.get("total") == 0, counts
+        for metric in ("passed", "failed", "errors", "skipped"):
+            assert counts.get(metric) == 0, counts
+        assert_contains(result.text, "**WARNING: The filter matched no tests (Total=0).**")
+        assert_contains(result.text, missing_module, "the warning names the original Cyrillic filter")
+        assert_contains(result.text, "**Result: NO TESTS MATCHED**")
+        assert "**Result: PASSED**" not in result.text, result.text
+    finally:
+        assert_ok(call("terminate_launch", launch), "stop the selected test client")
+        wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
+    assert_no_substantive_diff("a filtered YAXUnit run must preserve the fixture")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
 def test_live_debug_rerun_after_client_termination_preserves_standalone_server():
     """Requires a prestarted debug standalone server; never pauses the debugger (#668)."""
     requires_live_infobase("repeat a debug YAXUnit launch while preserving its standalone server")

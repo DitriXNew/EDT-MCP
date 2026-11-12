@@ -11,9 +11,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.google.gson.JsonObject;
 
 /** Shared discovery and rendering for complete or partial YAXUnit JUnit reports. */
 public final class YaxunitReportUtils
@@ -52,7 +55,7 @@ public final class YaxunitReportUtils
     {
         try
         {
-            String markdown = render(junitXml);
+            String markdown = render(junitXml, true);
             Path reportFile = junitXml.toPath().resolveSibling("report.md"); //$NON-NLS-1$
             if (writeReportFile(reportFile, markdown))
             {
@@ -81,7 +84,7 @@ public final class YaxunitReportUtils
         }
         try
         {
-            return render(junitXml);
+            return render(junitXml, false);
         }
         catch (Exception e) // NOSONAR incomplete XML is an expected cancellation outcome
         {
@@ -89,10 +92,29 @@ public final class YaxunitReportUtils
         }
     }
 
-    private static String render(File junitXml) throws Exception
+    private static String render(File junitXml, boolean completed) throws Exception
     {
         JUnitTestResults results = JUnitXmlParser.parse(junitXml);
+        Path paramsFile = junitXml.toPath().resolveSibling("xUnitParams.json"); //$NON-NLS-1$
+        if (completed && results.getTotal() == 0 && Files.exists(paramsFile))
+        {
+            // Read the selections actually written for this report, including reused launches.
+            JsonObject params = GsonProvider.fromJson(Files.readString(paramsFile, StandardCharsets.UTF_8),
+                JsonObject.class);
+            JsonObject filter = params.getAsJsonObject("filter"); //$NON-NLS-1$
+            if (filter != null)
+            {
+                return JUnitMarkdownFormatter.format(results,
+                    filterValues(filter, "modules"), filterValues(filter, "tests")); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
         return JUnitMarkdownFormatter.format(results);
+    }
+
+    private static List<String> filterValues(JsonObject filter, String family)
+    {
+        return filter.has(family)
+            ? List.of(GsonProvider.get().fromJson(filter.get(family), String[].class)) : List.of();
     }
 
     private static boolean writeReportFile(Path reportFile, String markdown)

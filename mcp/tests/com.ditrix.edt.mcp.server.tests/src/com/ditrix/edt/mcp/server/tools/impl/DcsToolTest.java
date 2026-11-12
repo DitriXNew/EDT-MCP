@@ -48,6 +48,18 @@ import com.google.gson.JsonParser;
 public class DcsToolTest
 {
     @Test
+    public void testXmlRoundTripRefusalNamesLostContentWithoutAssumingItsCause()
+    {
+        String path = "/DataCompositionSchema/settingsVariant/settings/item/groupItems";
+        String error = DcsTool.xmlRoundTripLossError(path);
+        assertTrue(error, error.contains(path));
+        assertTrue(error, error.contains("dropped or changed submitted XML content"));
+        assertTrue(error, error.contains("Check the value, type and namespace"));
+        assertTrue(error, error.contains("retry; nothing was written"));
+        assertFalse(error, error.contains("unrecognized"));
+    }
+
+    @Test
     public void testWriteResultWaitsForTheRecordedExportBeforeAnswering()
     {
         WriteScope scope = new WriteScope();

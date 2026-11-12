@@ -77,8 +77,33 @@ public final class JUnitMarkdownFormatter
      */
     public static String format(JUnitTestResults results)
     {
+        return format(results, List.of(), List.of());
+    }
+
+    /** Formats results with the module/test selections used by the run. */
+    public static String format(JUnitTestResults results, List<String> modules, List<String> tests)
+    {
         StringBuilder sb = new StringBuilder();
         sb.append("# YAXUnit Test Results\n\n"); //$NON-NLS-1$
+
+        boolean noMatch = results.getTotal() == 0 && (!modules.isEmpty() || !tests.isEmpty());
+        if (noMatch)
+        {
+            sb.append("**WARNING: The filter matched no tests (Total=0).**\n\n" //$NON-NLS-1$
+                + "No tests were executed. Check the modules/tests filter values.\n\n"); //$NON-NLS-1$
+            sb.append(MarkdownUtils.tableHeader("Filter", "Values")); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!modules.isEmpty())
+            {
+                sb.append(MarkdownUtils.tableRow("modules", //$NON-NLS-1$
+                    MarkdownUtils.inlineCode(String.join(", ", modules)))); //$NON-NLS-1$
+            }
+            if (!tests.isEmpty())
+            {
+                sb.append(MarkdownUtils.tableRow("tests", //$NON-NLS-1$
+                    MarkdownUtils.inlineCode(String.join(", ", tests)))); //$NON-NLS-1$
+            }
+            sb.append('\n');
+        }
 
         sb.append("## Summary\n\n"); //$NON-NLS-1$
         sb.append("| Metric | Count |\n"); //$NON-NLS-1$
@@ -89,7 +114,14 @@ public final class JUnitMarkdownFormatter
         sb.append("| Errors | ").append(results.getErrors()).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("| Skipped | ").append(results.getSkipped()).append(" |\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        sb.append(results.isPassed() ? "**Result: PASSED**\n" : "**Result: FAILED**\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (noMatch && results.isPassed())
+        {
+            sb.append("**Result: NO TESTS MATCHED**\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append(results.isPassed() ? "**Result: PASSED**\n" : "**Result: FAILED**\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
 
         appendSection(sb, "Failures", results.getFailureDetails(), true); //$NON-NLS-1$
         appendSection(sb, "Errors", results.getErrorDetails(), true); //$NON-NLS-1$

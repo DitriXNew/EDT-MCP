@@ -8,10 +8,10 @@ Start a new EDT configuration, extension, or external-objects project. Parameter
 | projectKind | yes | string (one of: configuration, extension, externalObjects) | Kind of project to create (required): 'configuration' = standalone 1C configuration; 'extension' = configuration extension bound to a base project; 'externalObjects' = external data processors/reports project. |
 | name | yes | string | Name of the new Configuration object (required). For configuration/extension: the programmatic Configuration name. For externalObjects: used as the default project name (no Configuration object exists). Must be a valid 1C identifier: starts with a letter or underscore, then letters, digits and underscores only (Cyrillic allowed). Also used as the default EDT project name if projectName is not supplied. |
 | projectName | — | string | EDT workspace project name to create. Default: extension -> '<baseProjectName>.<name>'; configuration/externalObjects -> 'name'. |
-| version | — | string | Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: Version.LATEST when omitted. |
+| version | — | string | Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: base runtime when bound, otherwise Version.LATEST; must match the base. |
 | externalObject | — | string | Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian and is not normalized; Name is a programmatic identifier whose 'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; REJECTED for other project kinds. |
 | normalizeYo | — | boolean | Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root NAME (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized. |
-| baseProjectName | — | string | Name of the BASE configuration EDT project (required for extension; REJECTED for configuration and externalObjects). Must be an existing, open V8 configuration project. Use list_projects to find it. |
+| baseProjectName | — | string | Name of the BASE configuration EDT project (required for extension; optional for externalObjects; REJECTED for configuration). Must be an existing, open V8 configuration project. Use list_projects to find it. |
 | prefix | — | string | NamePrefix for the extension (extension only; REJECTED for other kinds). Default: empty string. The wizard generates a value like 'Ext1_'; pass an explicit value or omit for empty. |
 | purpose | — | string (one of: Customization, AddOn, Patch) | Extension purpose (extension only; REJECTED for other kinds). Default: Customization. Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix. |
 | compatibilityMode | — | string | Optional extension compatibility-mode string matching a CompatibilityMode enum literal (e.g. 'Version8_3_24'); omitted or empty = the base configuration's compatibility mode, the one EDT's new-extension wizard always uses. Unknown values are rejected, and so is 8.3.13 or lower over a base above 8.3.13. Extension only; REJECTED for other kinds. |
@@ -89,7 +89,9 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 
 ### externalObjects kind
 
-- **version** (optional): platform version string. Default: `Version.LATEST`.
+- **baseProjectName** (optional): existing, open configuration project supplying metadata.
+- **version** (optional): defaults to the base runtime, or `Version.LATEST` without a base.
+  An explicit version must match the base, as in EDT's wizard.
 - **externalObject** (optional): root object to seed, addressed as
   `ExternalDataProcessor.<Name>` or `ExternalReport.<Name>`. The TYPE token is resolved by
   the shared bilingual metadata resolver, so its registered Russian spellings work too, and
@@ -104,7 +106,7 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 - **scriptVariant** (optional, `Russian` or `English`): applied post-create via
   `IExternalObjectProjectManager.setScriptVariant`. Non-fatal on failure (see
   `scriptVariantNote` in response).
-- **baseProjectName**, **prefix**, **purpose**, **compatibilityMode**, **synonym**,
+- **prefix**, **purpose**, **compatibilityMode**, **synonym**,
   **comment**: all REJECTED for this kind.
 
 ## Extension root
@@ -246,7 +248,7 @@ On success the response includes:
 - `projectKind` — kind of project created.
 - `name` — the Configuration name (configuration and extension only; not reported by a slow
   extension create).
-- `baseProject` — the base configuration project (extension only).
+- `baseProject` — the bound base configuration project (extension or externalObjects, when confirmed).
 - `prefix` / `purpose` — extension-only attributes applied (not reported by a slow
   extension create: see Gotchas).
 - `compatibilityMode` — the extension's effective compatibility mode as its enum name, e.g.
