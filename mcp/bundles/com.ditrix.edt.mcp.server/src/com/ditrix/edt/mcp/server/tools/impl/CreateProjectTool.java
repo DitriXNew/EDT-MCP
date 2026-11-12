@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -64,6 +65,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
@@ -71,6 +73,7 @@ import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectImportValidation;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
@@ -286,7 +289,7 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty(KEY_VERSION,
                 "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; " //$NON-NLS-1$
                     + "for extension: REJECTED — version is always inherited from the base configuration). " //$NON-NLS-1$
-                    + "Default: Version.LATEST when omitted.") //$NON-NLS-1$
+                    + "Default: base runtime when bound, otherwise Version.LATEST; must match the base.") //$NON-NLS-1$
             .stringProperty(KEY_EXTERNAL_OBJECT,
                 "Optional root to seed for projectKind=externalObjects: " //$NON-NLS-1$
                     + "'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be " //$NON-NLS-1$
@@ -300,7 +303,7 @@ public class CreateProjectTool implements IMcpTool
                     + "Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized.") //$NON-NLS-1$
             .stringProperty("baseProjectName", //$NON-NLS-1$
                 "Name of the BASE configuration EDT project (required for extension; " //$NON-NLS-1$
-                    + "REJECTED for configuration and externalObjects). " //$NON-NLS-1$
+                    + "optional for externalObjects; REJECTED for configuration). " //$NON-NLS-1$
                     + "Must be an existing, open V8 configuration project. Use list_projects to find it.") //$NON-NLS-1$
             .stringProperty(KEY_PREFIX,
                 "NamePrefix for the extension (extension only; REJECTED for other kinds). " //$NON-NLS-1$
@@ -355,7 +358,7 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty("name", //$NON-NLS-1$
                 "Configuration name (configuration/extension) or the supplied identifier (externalObjects).") //$NON-NLS-1$
             .stringProperty(KEY_BASE_PROJECT,
-                "Name of the base configuration project it extends (extension only, conditional)") //$NON-NLS-1$
+                "Name of the bound base configuration project (extension or externalObjects, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_PREFIX, "NamePrefix applied (extension only, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_PURPOSE, "ConfigurationExtensionPurpose value applied (extension only, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_COMPATIBILITY_MODE,
@@ -594,17 +597,16 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
-     * Rejects extension-only parameters ({@code baseProjectName}, {@code prefix}, {@code purpose},
-     * {@code compatibilityMode}) when {@code projectKind} is not {@code extension}.
+     * Rejects baseProjectName for configuration and extension-only parameters for other kinds.
      *
      * @return a ready-to-return JSON error string, or {@code null} when valid
      */
     private static String validateNonExtensionParams(KindConstraintInputs in)
     {
-        if (!in.isExtension && in.baseProjectName != null && !in.baseProjectName.isEmpty())
+        if (!in.isExtension && !in.isExternalObjects && in.baseProjectName != null && !in.baseProjectName.isEmpty())
         {
             return ToolResult.error(
-                "'baseProjectName' is only valid for projectKind=extension. " //$NON-NLS-1$
+                "'baseProjectName' is only valid for projectKind=extension or externalObjects. " //$NON-NLS-1$
                     + "Remove the 'baseProjectName' parameter for kind=" + in.projectKind + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (!in.isExtension && in.prefix != null && !in.prefix.isEmpty())
@@ -1431,8 +1433,19 @@ public class CreateProjectTool implements IMcpTool
             return taken;
         }
 
-        // Parse version (read-only)
-        VersionResolution versionResolution = parseVersion(req.versionStr);
+        String baseProjectName = ProjectImportValidation.trimToNull(req.baseProjectName);
+        AtomicReference<IProject> baseProject = new AtomicReference<>();
+        if (baseProjectName != null)
+        {
+            String baseError = ProjectImportValidation.validateConfigurationBase(baseProjectName,
+                "external objects project", baseProject); //$NON-NLS-1$
+            if (baseError != null)
+            {
+                return ToolResult.error(baseError).toJson();
+            }
+        }
+
+        VersionResolution versionResolution = externalObjectsVersion(req.versionStr, baseProject.get());
         if (versionResolution.error != null)
         {
             return versionResolution.error;
@@ -1489,10 +1502,8 @@ public class CreateProjectTool implements IMcpTool
             {
                 try
                 {
-                    // A null external object preserves the legitimate empty-project/import workflow;
-                    // the second null means the project has no parent configuration.
                     createdHolder[0] = extObjMgr.create(
-                        finalEffectiveProjectName, finalVersion, finalExternalObject, null, monitor);
+                        finalEffectiveProjectName, finalVersion, finalExternalObject, baseProject.get(), monitor);
                 }
                 catch (Throwable t)
                 {
@@ -1508,7 +1519,7 @@ public class CreateProjectTool implements IMcpTool
             // Creation exceeded the wait window. A requested root needs its own read-back:
             // the project container existing does not prove EDT attached the root before cancel.
             return buildExternalObjectsSlowResponse(finalEffectiveProjectName, configName,
-                finalVersion, scriptVariantStr, req.externalObject);
+                finalVersion, scriptVariantStr, req.externalObject, baseProjectName);
         }
         if (jobResult.errorJson != null)
         {
@@ -1526,6 +1537,14 @@ public class CreateProjectTool implements IMcpTool
 
         // Wait for lifecycle STARTED
         String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTERNAL_OBJECTS);
+        if (baseProjectName != null
+            && !baseProject.get().equals(ExtensionOriginUtils.resolveBaseProject(createdHolder[0])))
+        {
+            return ToolResult.errorAfterMutation("Base project '" + baseProjectName //$NON-NLS-1$
+                + "' was not confirmed for external objects project '" + finalEffectiveProjectName //$NON-NLS-1$
+                + "'. Wait for EDT to finish loading and check list_projects before using it; " //$NON-NLS-1$
+                + "do not repeat create_project.").toJson(); //$NON-NLS-1$
+        }
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap =
@@ -1533,7 +1552,38 @@ public class CreateProjectTool implements IMcpTool
 
         return buildExternalObjectsSuccessResponse(new ExternalObjectsSuccessInputs(extObjMgr,
             finalEffectiveProjectName, configName, finalVersion, createdHolder[0], projectState,
-            scriptVariantStr, codestyleMap, req.externalObject));
+            scriptVariantStr, codestyleMap, req.externalObject, baseProjectName));
+    }
+
+    /** Uses the base runtime like EDT's dependent-project wizard, which disables its version selector. */
+    private static VersionResolution externalObjectsVersion(String requested, IProject base)
+    {
+        if (base == null)
+        {
+            return parseVersion(requested);
+        }
+        String runtime = ProjectImportValidation.runtimeVersionOf(base);
+        if (runtime == null)
+        {
+            return new VersionResolution(ToolResult.error("Base project '" + base.getName() //$NON-NLS-1$
+                + "' has no available runtime version. Wait for it to finish loading in EDT and retry.").toJson(), null); //$NON-NLS-1$
+        }
+        VersionResolution inherited = parseVersion(runtime);
+        if (requested == null || inherited.error != null)
+        {
+            return inherited;
+        }
+        VersionResolution explicit = parseVersion(requested);
+        if (explicit.error != null)
+        {
+            return explicit;
+        }
+        if (!inherited.version.equals(explicit.version))
+        {
+            return new VersionResolution(ToolResult.error("version '" + requested + "' differs from base project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + base.getName() + "' runtime '" + runtime + "'. Omit version or pass '" + runtime + "'.").toJson(), null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return inherited;
     }
 
     /**
@@ -1580,6 +1630,10 @@ public class CreateProjectTool implements IMcpTool
             .put(KEY_STATE, in.projectState)
             .put(KEY_CODESTYLE, in.codestyleMap)
             .put(McpKeys.MESSAGE, message);
+        if (in.baseProjectName != null)
+        {
+            result.put(KEY_BASE_PROJECT, in.baseProjectName);
+        }
         if (requestedSv != null)
         {
             // Emit the canonical ScriptVariant literal (normalized from user input casing)
@@ -1607,12 +1661,18 @@ public class CreateProjectTool implements IMcpTool
     static String buildExternalObjectsSlowResponse(String effectiveProjectName, String configName,
         Version version, String scriptVariantStr, ExternalObjectSpec externalObject)
     {
+        return buildExternalObjectsSlowResponse(effectiveProjectName, configName, version,
+            scriptVariantStr, externalObject, null);
+    }
+
+    static String buildExternalObjectsSlowResponse(String effectiveProjectName, String configName,
+        Version version, String scriptVariantStr, ExternalObjectSpec externalObject, String baseProjectName)
+    {
         if (externalObject == null)
         {
-            // This is the pre-seeded-root response byte-for-byte: project existence is the complete
-            // fact for the intentional empty-project workflow, so its old answer remains correct.
+            // Preserve the original empty-project response when no base binding was requested.
             return buildEmptyExternalObjectsSlowResponse(effectiveProjectName, configName, version,
-                scriptVariantStr);
+                scriptVariantStr, baseProjectName);
         }
 
         boolean rootConfirmed = confirmExternalObject(effectiveProjectName, externalObject);
@@ -1653,6 +1713,10 @@ public class CreateProjectTool implements IMcpTool
             .put(KEY_CODESTYLE, slowPathCodestyleMap())
             .put(McpKeys.MESSAGE, message);
         externalObject.normReport.addTo(slowResult);
+        if (!putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName))
+        {
+            slowResult.put(McpKeys.MESSAGE, message + unconfirmedExternalBaseMessage(baseProjectName));
+        }
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
             // Emit canonical literal (normalized from user input casing)
@@ -1666,9 +1730,9 @@ public class CreateProjectTool implements IMcpTool
         return slowResult.toJson();
     }
 
-    /** The unchanged slow response for an intentionally empty external-objects project. */
+    /** The original empty-project response, unless a requested base binding is unconfirmed. */
     private static String buildEmptyExternalObjectsSlowResponse(String effectiveProjectName, String configName,
-        Version version, String scriptVariantStr)
+        Version version, String scriptVariantStr, String baseProjectName)
     {
         ToolResult slowResult = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
@@ -1681,6 +1745,13 @@ public class CreateProjectTool implements IMcpTool
             .put(McpKeys.MESSAGE, "External objects project '" + effectiveProjectName //$NON-NLS-1$
                 + "' created (creation completed past the " //$NON-NLS-1$
                 + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
+        if (!putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName))
+        {
+            slowResult.put(McpKeys.ACTION, VAL_VERIFICATION_REQUIRED)
+                .put(McpKeys.MESSAGE, "External objects project '" + effectiveProjectName //$NON-NLS-1$
+                    + "' exists after creation exceeded the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                    + "s wait window." + unconfirmedExternalBaseMessage(baseProjectName)); //$NON-NLS-1$
+        }
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
             ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
@@ -1691,6 +1762,30 @@ public class CreateProjectTool implements IMcpTool
             slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
         }
         return slowResult.toJson();
+    }
+
+    /** Returns true when no binding was requested or the requested runtime parent was observed. */
+    private static boolean putObservedExternalBase(ToolResult result, String projectName, String requestedBase)
+    {
+        if (requestedBase != null)
+        {
+            IProject parent = ExtensionOriginUtils.resolveBaseProject(ProjectContext.of(projectName).project());
+            if (parent != null && requestedBase.equals(parent.getName()))
+            {
+                result.put(KEY_BASE_PROJECT, parent.getName());
+                return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static String unconfirmedExternalBaseMessage(String requestedBase)
+    {
+        return " Base binding '" + requestedBase + "' was NOT CONFIRMED. Once indexing finishes, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "check list_projects and use get_metadata_objects against a known base object; " //$NON-NLS-1$
+            + "DT-INF/PROJECT.PMF must carry Base-Project: " + requestedBase //$NON-NLS-1$
+            + ". Do not repeat create_project: the duplicate-project guard will refuse the existing project."; //$NON-NLS-1$
     }
 
     /**
@@ -2226,10 +2321,12 @@ public class CreateProjectTool implements IMcpTool
         final String scriptVariantStr;
         final Map<String, Object> codestyleMap;
         final ExternalObjectSpec externalObject;
+        final String baseProjectName;
 
         private ExternalObjectsSuccessInputs(IExternalObjectProjectManager extObjMgr, String effectiveProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String configName, Version version, IProject createdProject, String projectState,
-            String scriptVariantStr, Map<String, Object> codestyleMap, ExternalObjectSpec externalObject)
+            String scriptVariantStr, Map<String, Object> codestyleMap, ExternalObjectSpec externalObject,
+            String baseProjectName)
         {
             this.extObjMgr = extObjMgr;
             this.effectiveProjectName = effectiveProjectName;
@@ -2240,6 +2337,7 @@ public class CreateProjectTool implements IMcpTool
             this.scriptVariantStr = scriptVariantStr;
             this.codestyleMap = codestyleMap;
             this.externalObject = externalObject;
+            this.baseProjectName = baseProjectName;
         }
     }
 

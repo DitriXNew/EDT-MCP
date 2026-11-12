@@ -21,13 +21,30 @@ rubber-stamping.
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_no_diff, assert_no_diff_rel, FIXTURE_REL_BY_PROJECT,
-    e2e_test, PROJECT, TESTS_PROJECT, assert_diff_contains, read_disk,
+    e2e_test, PROJECT, TESTS_PROJECT, assert_diff_contains, read_disk, time,
 )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Happy paths
 # ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="validate_query", kind="read")
+def test_deep_function_nesting_is_refused_before_native_parsing_fast():
+    for function, select in (("ISNULL", "SELECT"), ("ЕСТЬNULL", "ВЫБРАТЬ")):
+        query = select + " " + (function + "(") * 42 + "&S" + ",0)" * 42
+        started = time.monotonic()
+        result = call("validate_query", {
+            "projectName": PROJECT, "queryText": query, "dcsMode": True,
+        })
+        elapsed = time.monotonic() - started
+        error = assert_error(result, "deep functions must be refused before EDT parses them")
+        assert_error_quality(error, names=["depth 42", "limit 16"],
+                             suggests=["temporary tables", "intermediate fields"])
+        assert result.structured["validationComplete"] is False, result.structured
+        assert elapsed < 3.0, "lexical refusal took %.3f s" % elapsed
+    assert_no_diff("depth refusal must not change the fixture")
+
+
 @e2e_test(tool="validate_query", kind="read")
 def test_valid_query_against_fixture_catalog_is_clean():
     # Catalog.Catalog is a real metadata object in TestConfiguration, so this

@@ -2818,7 +2818,22 @@ public class RunYaxunitTestsTool implements IMcpTool
             params.put("filter", filter); //$NON-NLS-1$
         }
 
-        return GsonProvider.toJson(params);
+        // Keep the file readable when the engine assumes an ANSI code page, without adding a BOM.
+        String json = GsonProvider.toJson(params);
+        StringBuilder ascii = new StringBuilder(json.length());
+        for (int i = 0; i < json.length(); i++)
+        {
+            char ch = json.charAt(i);
+            if (ch > 0x7F)
+            {
+                ascii.append(String.format("\\u%04x", (int) ch)); //$NON-NLS-1$
+            }
+            else
+            {
+                ascii.append(ch);
+            }
+        }
+        return ascii.toString();
     }
 
     /**

@@ -61,11 +61,7 @@ public class QueryValidationServiceProjectScopeTest
     private boolean reading;
     private final List<TestQlResource> loaded = new ArrayList<>();
     private final ResourceSet resources = new ResourceSetImpl();
-    private final QueryValidationService service = new QueryValidationService()
-    {
-        @Override
-        protected void dispatch(Runnable work) { work.run(); }
-    };
+    private final QueryValidationService service = new QueryValidationService();
 
     @Before
     public void setUp() throws Exception
@@ -257,6 +253,59 @@ public class QueryValidationServiceProjectScopeTest
         assertUnavailableWithoutScope(service.validate(project, QUERY, false));
         assertTrue(loaded.get(0).unloaded);
         assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void validationStaysOnTheCallingThreadAndTimeoutUnloadsTheResource()
+    {
+        Thread caller = Thread.currentThread();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        QueryValidationService timed = new QueryValidationService()
+        {
+            @Override protected long nanoTime() { return clock.get(); }
+        };
+        doAnswer(invocation -> {
+            assertSame(caller, Thread.currentThread());
+            org.eclipse.xtext.util.CancelIndicator indicator = invocation.getArgument(2);
+            assertNotSame(org.eclipse.xtext.util.CancelIndicator.NullImpl, indicator);
+            assertFalse(indicator.isCanceled());
+            clock.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(31));
+            assertTrue(indicator.isCanceled());
+            return List.of();
+        }).when(validator).validate(any(), any(), any());
+        var result = timed.validate(project, QUERY, true);
+        assertUnavailableWithoutScope(result);
+        assertTrue(result.toJson(), result.toJson().contains("exceeded 30 s"));
+        assertTrue(result.toJson().contains("intermediate fields"));
+        assertTrue(loaded.get(0).unloaded);
+        assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void cancellationErrorStillUnloadsTheResource()
+    {
+        doAnswer(invocation -> {
+            org.eclipse.xtext.util.CancelIndicator indicator = invocation.getArgument(2);
+            Thread.currentThread().interrupt();
+            assertTrue(indicator.isCanceled());
+            throw new org.eclipse.xtext.service.OperationCanceledError(new IllegalStateException("canceled"));
+        }).when(validator).validate(any(), any(), any());
+        QueryValidationService.Result result;
+        try { result = service.validate(project, QUERY, true); }
+        finally { Thread.interrupted(); }
+        assertFalse(result.available());
+        assertTrue(result.toJson().contains("interrupted"));
+        assertTrue(loaded.get(0).unloaded);
+        assertTrue(resources.getResources().isEmpty());
+    }
+
+    @Test
+    public void depthAtTheLimitStillRunsNativeValidation()
+    {
+        String query = "SELECT " + "ISNULL(".repeat(16) + "&S" + ",0)".repeat(16);
+        assertTrue(service.validate(project, query, false).available());
+        verify(validator, times(1)).validate(any(), any(), any());
+        assertEquals(query, loaded.get(0).text);
     }
 
     @Test

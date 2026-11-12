@@ -64,7 +64,9 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 
 ### externalObjects kind
 
-- **version** (optional): platform version string. Default: `Version.LATEST`.
+- **baseProjectName** (optional): existing, open configuration project supplying metadata.
+- **version** (optional): defaults to the base runtime, or `Version.LATEST` without a base.
+  An explicit version must match the base, as in EDT's wizard.
 - **externalObject** (optional): root object to seed, addressed as
   `ExternalDataProcessor.<Name>` or `ExternalReport.<Name>`. The TYPE token is resolved by
   the shared bilingual metadata resolver, so its registered Russian spellings work too, and
@@ -79,7 +81,7 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 - **scriptVariant** (optional, `Russian` or `English`): applied post-create via
   `IExternalObjectProjectManager.setScriptVariant`. Non-fatal on failure (see
   `scriptVariantNote` in response).
-- **baseProjectName**, **prefix**, **purpose**, **compatibilityMode**, **synonym**,
+- **prefix**, **purpose**, **compatibilityMode**, **synonym**,
   **comment**: all REJECTED for this kind.
 
 ## Extension root
@@ -221,7 +223,7 @@ On success the response includes:
 - `projectKind` — kind of project created.
 - `name` — the Configuration name (configuration and extension only; not reported by a slow
   extension create).
-- `baseProject` — the base configuration project (extension only).
+- `baseProject` — the bound base configuration project (extension or externalObjects, when confirmed).
 - `prefix` / `purpose` — extension-only attributes applied (not reported by a slow
   extension create: see Gotchas).
 - `compatibilityMode` — the extension's effective compatibility mode as its enum name, e.g.

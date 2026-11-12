@@ -449,7 +449,7 @@ Submitted query datasets (including nested unions and XML schema replacements) u
 `validate_query`'s shared native EDT validator with `dcsMode=true`. Dynamic-list
 `queryText` writes use the same service with `dcsMode=false`, including the
 `modify_metadata` form-attribute path. `INVALID` refuses the whole call before BM
-mutation. The error includes `queryValidation` details and the submitted query slot.
+mutation. Errors list the query slot and up to 10 issues; `queryValidation` keeps full details.
 
 `PARTIAL` permits forward authoring and explicitly reports query validation incomplete,
 `validationComplete=false`, and unresolved sources. It does not mean the query has

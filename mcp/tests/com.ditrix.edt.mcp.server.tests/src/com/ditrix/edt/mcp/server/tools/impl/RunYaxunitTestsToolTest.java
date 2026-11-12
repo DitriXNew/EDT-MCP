@@ -18,6 +18,7 @@ import static org.mockito.Mockito.mock;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -54,6 +55,8 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link RunYaxunitTestsTool}.
@@ -1706,6 +1709,119 @@ public class RunYaxunitTestsToolTest
         return new RunYaxunitTestsTool.RunRequest("Cfg", "Proj", "App", extensions, modules, tests,
             tags, 45, true, null, ExternalInfobaseChangesPolicy.OVERRIDE,
             StandaloneServerPortConflictPolicy.CANCEL, false);
+    }
+
+    @Test
+    public void testParamsJsonEscapesAllNonAsciiAndRoundTripsThroughAnsi() throws Exception
+    {
+        String reportPath = "C:\\Проекты\\Тесты\\junit.xml";
+        Map<String, String> selections = Map.of(
+            "extensions", "РасширениеТестов",
+            "modules", "Тест_ДымовыеТесты",
+            "tests", "Тест_ДымовыеТесты.Проверка",
+            "tags", "дымовые\uD83D\uDE80");
+        String json = RunYaxunitTestsTool.buildParamsJson(reportPath, req(
+            selections.get("extensions"), selections.get("modules"),
+            selections.get("tests"), selections.get("tags")));
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        for (byte value : bytes)
+        {
+            assertTrue("the entire params file must be ASCII without a BOM", value >= 0);
+        }
+        assertTrue("Cyrillic must use JSON Unicode escapes", json.contains("\\u0422"));
+        assertTrue("supplementary characters must escape both UTF-16 units",
+            json.contains("\\ud83d\\ude80"));
+        Path paramsFile = Files.createTempFile("edt-mcp-ascii-params", ".json");
+        try
+        {
+            Files.write(paramsFile, bytes);
+            JsonObject parsed = JsonParser.parseString(new String(Files.readAllBytes(paramsFile),
+                Charset.forName("windows-1251"))).getAsJsonObject();
+            assertEquals(reportPath, parsed.get("reportPath").getAsString());
+            JsonObject filter = parsed.getAsJsonObject("filter");
+            for (Map.Entry<String, String> selection : selections.entrySet())
+            {
+                assertEquals(selection.getValue(),
+                    filter.getAsJsonArray(selection.getKey()).get(0).getAsString());
+            }
+        }
+        finally
+        {
+            Files.deleteIfExists(paramsFile);
+        }
+    }
+
+    @Test
+    public void testParamsJsonAsciiInputIsByteIdentical()
+    {
+        String json = RunYaxunitTestsTool.buildParamsJson("C:\\Tests\\junit.xml",
+            req("Ext", "Module", "Module.Test", "smoke"));
+        String expected = "{\"reportPath\":\"C:\\\\Tests\\\\junit.xml\",\"reportFormat\":\"jUnit\","
+            + "\"closeAfterTests\":true,\"filter\":{\"extensions\":[\"Ext\"],\"modules\":[\"Module\"],"
+            + "\"tests\":[\"Module.Test\"],\"tags\":[\"smoke\"]}}";
+        assertArrayEquals(expected.getBytes(StandardCharsets.UTF_8), json.getBytes(StandardCharsets.UTF_8));
+        assertEquals("{\"reportPath\":\"/tmp/junit.xml\",\"reportFormat\":\"jUnit\",\"closeAfterTests\":true}",
+            RunYaxunitTestsTool.buildParamsJson("/tmp/junit.xml", req(null, null, null, null)));
+    }
+
+    @Test
+    public void testParamsJsonPreservesExistingJsonEscapes()
+    {
+        String value = "Тест\\u0410\"\n\t<>&'";
+        String json = RunYaxunitTestsTool.buildParamsJson(value, req(null, value, null, null));
+        JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
+        assertEquals(value, parsed.get("reportPath").getAsString());
+        assertEquals(value.trim(), parsed.getAsJsonObject("filter").getAsJsonArray("modules")
+            .get(0).getAsString());
+        assertTrue("ASCII HTML characters keep GsonProvider's existing spelling", json.contains("<>&'"));
+    }
+
+    @Test
+    public void testCyrillicFilterRunIdentityStillFollowsGeneratedBytes()
+    {
+        RunYaxunitTestsTool.RunRequest plain = req(null, "Тест_ДымовыеТесты", null, null);
+        RunYaxunitTestsTool.RunRequest padded = req(null, " Тест_ДымовыеТесты , ", null, null);
+        assertEquals(RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", plain),
+            RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", padded));
+        assertEquals(key(plain), key(padded));
+        RunYaxunitTestsTool.RunRequest literalEscape = req(null, "\\u0422ест_ДымовыеТесты", null, null);
+        assertFalse(RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", plain)
+            .equals(RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", literalEscape)));
+        assertFalse(key(plain).equals(key(literalEscape)));
+    }
+
+    @Test
+    public void testFinishedFilteredLaunchReturnsAndSavesZeroMatchWarning() throws Exception
+    {
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-no-match");
+        try
+        {
+            Files.writeString(reportDir.resolve("junit.xml"), "<testsuite tests=\"0\"/>",
+                StandardCharsets.UTF_8);
+            Files.writeString(reportDir.resolve("xUnitParams.json"),
+                RunYaxunitTestsTool.buildParamsJson(reportDir.resolve("junit.xml").toString(),
+                    req(null, "Тест_Несуществующий", null, null)), StandardCharsets.UTF_8);
+            for (boolean alreadyTerminated : new boolean[] {true, false})
+            {
+                ILaunch launch = mock(ILaunch.class);
+                Mockito.when(launch.isTerminated()).thenReturn(alreadyTerminated, true);
+                String report = new RunYaxunitTestsTool().handleExistingLaunch(launch, reportDir,
+                    Long.MAX_VALUE, "no-match", "NoMatchProject", "NoMatchApp");
+                assertTrue(report.contains("**WARNING: The filter matched no tests (Total=0).**"));
+                assertTrue(report.contains("Тест_Несуществующий"));
+                assertTrue(report.contains("**Result: NO TESTS MATCHED**"));
+                assertFalse(report.contains("**Result: PASSED**"));
+                assertTrue(report.startsWith(Files.readString(reportDir.resolve("report.md"),
+                    StandardCharsets.UTF_8)));
+            }
+        }
+        finally
+        {
+            Files.deleteIfExists(reportDir.resolve("report.md"));
+            Files.deleteIfExists(reportDir.resolve("xUnitParams.json"));
+            Files.deleteIfExists(reportDir.resolve("junit.xml"));
+            Files.deleteIfExists(reportDir);
+        }
     }
 
     @Test
