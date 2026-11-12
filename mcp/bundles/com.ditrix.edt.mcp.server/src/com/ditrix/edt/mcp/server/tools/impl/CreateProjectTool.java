@@ -1670,8 +1670,7 @@ public class CreateProjectTool implements IMcpTool
     {
         if (externalObject == null)
         {
-            // This is the pre-seeded-root response byte-for-byte: project existence is the complete
-            // fact for the intentional empty-project workflow, so its old answer remains correct.
+            // Preserve the original empty-project response when no base binding was requested.
             return buildEmptyExternalObjectsSlowResponse(effectiveProjectName, configName, version,
                 scriptVariantStr, baseProjectName);
         }
@@ -1714,7 +1713,10 @@ public class CreateProjectTool implements IMcpTool
             .put(KEY_CODESTYLE, slowPathCodestyleMap())
             .put(McpKeys.MESSAGE, message);
         externalObject.normReport.addTo(slowResult);
-        putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName);
+        if (!putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName))
+        {
+            slowResult.put(McpKeys.MESSAGE, message + unconfirmedExternalBaseMessage(baseProjectName));
+        }
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
             // Emit canonical literal (normalized from user input casing)
@@ -1728,7 +1730,7 @@ public class CreateProjectTool implements IMcpTool
         return slowResult.toJson();
     }
 
-    /** The unchanged slow response for an intentionally empty external-objects project. */
+    /** The original empty-project response, unless a requested base binding is unconfirmed. */
     private static String buildEmptyExternalObjectsSlowResponse(String effectiveProjectName, String configName,
         Version version, String scriptVariantStr, String baseProjectName)
     {
@@ -1743,7 +1745,13 @@ public class CreateProjectTool implements IMcpTool
             .put(McpKeys.MESSAGE, "External objects project '" + effectiveProjectName //$NON-NLS-1$
                 + "' created (creation completed past the " //$NON-NLS-1$
                 + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
-        putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName);
+        if (!putObservedExternalBase(slowResult, effectiveProjectName, baseProjectName))
+        {
+            slowResult.put(McpKeys.ACTION, VAL_VERIFICATION_REQUIRED)
+                .put(McpKeys.MESSAGE, "External objects project '" + effectiveProjectName //$NON-NLS-1$
+                    + "' exists after creation exceeded the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                    + "s wait window." + unconfirmedExternalBaseMessage(baseProjectName)); //$NON-NLS-1$
+        }
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
             ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
@@ -1756,7 +1764,8 @@ public class CreateProjectTool implements IMcpTool
         return slowResult.toJson();
     }
 
-    private static void putObservedExternalBase(ToolResult result, String projectName, String requestedBase)
+    /** Returns true when no binding was requested or the requested runtime parent was observed. */
+    private static boolean putObservedExternalBase(ToolResult result, String projectName, String requestedBase)
     {
         if (requestedBase != null)
         {
@@ -1764,8 +1773,19 @@ public class CreateProjectTool implements IMcpTool
             if (parent != null && requestedBase.equals(parent.getName()))
             {
                 result.put(KEY_BASE_PROJECT, parent.getName());
+                return true;
             }
+            return false;
         }
+        return true;
+    }
+
+    private static String unconfirmedExternalBaseMessage(String requestedBase)
+    {
+        return " Base binding '" + requestedBase + "' was NOT CONFIRMED. Once indexing finishes, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "check list_projects and use get_metadata_objects against a known base object; " //$NON-NLS-1$
+            + "DT-INF/PROJECT.PMF must carry Base-Project: " + requestedBase //$NON-NLS-1$
+            + ". Do not repeat create_project: the duplicate-project guard will refuse the existing project."; //$NON-NLS-1$
     }
 
     /**

@@ -637,7 +637,7 @@ public final class DcsXmlRoundTripComparator
     private static boolean contentFree(Element element)
     {
         return canonicalAttributes(element).isEmpty() && childElements(element).isEmpty()
-            && directText(element).trim().isEmpty();
+            && directText(element).isEmpty();
     }
 
     private static List<String> canonicalAttributes(Element element)
@@ -697,8 +697,10 @@ public final class DcsXmlRoundTripComparator
             }
         }
         String raw = value.toString();
-        // EDT pretty-prints an empty container as <x>\n\t\t</x>; a line break never belongs to a blank value.
-        if (raw.trim().isEmpty() && (raw.indexOf('\n') >= 0 || raw.indexOf('\r') >= 0)) raw = ""; //$NON-NLS-1$
+        // EDT pretty-prints attribute-free empty containers as <x>\n\t\t</x>.
+        // Attributes (in particular xsi:type on scalar values) make whitespace significant.
+        if (canonicalAttributes(element).isEmpty() && raw.trim().isEmpty()
+            && (raw.indexOf('\n') >= 0 || raw.indexOf('\r') >= 0)) raw = ""; //$NON-NLS-1$
         return semanticText(raw, element);
     }
 

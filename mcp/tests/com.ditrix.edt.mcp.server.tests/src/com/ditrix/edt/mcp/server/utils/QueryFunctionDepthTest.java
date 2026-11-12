@@ -32,6 +32,78 @@ public class QueryFunctionDepthTest
         assertEquals(1, QueryFunctionDepth.maximum("ВЫБРАТЬ РАЗЛИЧНЫЕ (ВРег(&S))"));
     }
 
+    @Test public void likeBetweenAndEscapeDoNotCountAsCalls()
+    {
+        for (String condition : new String[] {
+            "Description LIKE (\"pattern\") ESCAPE (\"!\")",
+            "Description \u041f\u041e\u0414\u041e\u0411\u041d\u041e (\"pattern\") \u0421\u041f\u0415\u0426\u0421\u0418\u041c\u0412\u041e\u041b (\"!\")",
+            "Amount BETWEEN (1 AND 2) AND (3)",
+            "Amount \u041c\u0415\u0416\u0414\u0423 (1 \u0418 2) \u0418 (3)"})
+        {
+            assertEquals(condition, 0, QueryFunctionDepth.maximum("SELECT 1 WHERE " + condition));
+        }
+        for (String operator : new String[] {"LIKE", "\u041f\u041e\u0414\u041e\u0411\u041d\u041e", "BETWEEN", "\u041c\u0415\u0416\u0414\u0423", "ESCAPE", "\u0421\u041f\u0415\u0426\u0421\u0418\u041c\u0412\u041e\u041b"})
+        {
+            assertEquals(operator, 2, QueryFunctionDepth.maximum(
+                "SELECT 1 WHERE Description " + operator + " (UPPER(UPPER(&S)))"));
+        }
+    }
+
+    @Test public void groupingAndIndexSetsDoNotCountAsCalls()
+    {
+        for (String clause : new String[] {"GROUP BY GROUPING SETS ((A), ())",
+            "\u0421\u0413\u0420\u0423\u041f\u041f\u0418\u0420\u041e\u0412\u0410\u0422\u042c \u041f\u041e \u0413\u0420\u0423\u041f\u041f\u0418\u0420\u0423\u042e\u0429\u0418\u041c \u041d\u0410\u0411\u041e\u0420\u0410\u041c ((A), ())",
+            "INDEX BY SETS ((A), (B))", "\u0418\u041d\u0414\u0415\u041a\u0421\u0418\u0420\u041e\u0412\u0410\u0422\u042c \u041f\u041e \u041d\u0410\u0411\u041e\u0420\u0410\u041c ((A), (B))",
+            "\u041d\u0410\u0411\u041e\u0420\u042b ((A), ())"})
+        {
+            assertEquals(clause, 0, QueryFunctionDepth.maximum("SELECT A " + clause));
+        }
+    }
+
+    @Test public void totalsPeriodsDoNotCountAsCalls()
+    {
+        assertEquals(0, QueryFunctionDepth.maximum("SELECT A TOTALS BY A PERIODS (DAY, &Start, &End)"));
+        assertEquals(0, QueryFunctionDepth.maximum("\u0412\u042b\u0411\u0420\u0410\u0422\u042c A \u0418\u0422\u041e\u0413\u0418 \u041f\u041e A \u041f\u0415\u0420\u0418\u041e\u0414\u0410\u041c\u0418 (\u0414\u0415\u041d\u042c, &Start, &End)"));
+        assertEquals(2, QueryFunctionDepth.maximum("SELECT A TOTALS BY A PERIODS (DAY, Upper(Lower(&S)))"));
+    }
+
+    @Test public void dcsCharacteristicKeywordsDoNotCountAsCalls()
+    {
+        // QlDcs.ReadCharacteristic accepts nested queries or parenthesized field expressions.
+        for (String keyword : new String[] {
+            "CHARACTERISTICTYPES",
+            "\u0412\u0418\u0414\u042b\u0425\u0410\u0420\u0410\u041a\u0422\u0415\u0420\u0418\u0421\u0422\u0418\u041a",
+            "LIST",
+            "\u0421\u041f\u0418\u0421\u041e\u041a",
+            "CHARACTERISTICVALUES",
+            "\u0417\u041d\u0410\u0427\u0415\u041d\u0418\u042f\u0425\u0410\u0420\u0410\u041a\u0422\u0415\u0420\u0418\u0421\u0422\u0418\u041a",
+            "VALUES",
+            "\u0417\u041d\u0410\u0427\u0415\u041d\u0418\u042f",
+            "KEYFIELD",
+            "\u041f\u041e\u041b\u0415\u041a\u041b\u042e\u0427\u0410",
+            "ID",
+            "\u0418\u0414\u0415\u041d\u0422\u0418\u0424\u0418\u041a\u0410\u0422\u041e\u0420",
+            "NAMEFIELD",
+            "\u041f\u041e\u041b\u0415\u0418\u041c\u0415\u041d\u0418",
+            "NAME",
+            "\u0418\u041c\u042f",
+            "VALUETYPEFIELD",
+            "\u041f\u041e\u041b\u0415\u0422\u0418\u041f\u0410\u0417\u041d\u0410\u0427\u0415\u041d\u0418\u042f",
+            "OBJECTFIELD",
+            "\u041f\u041e\u041b\u0415\u041e\u0411\u042a\u0415\u041a\u0422\u0410",
+            "OBJECT",
+            "\u041e\u0411\u042a\u0415\u041a\u0422",
+            "TYPEFIELD",
+            "\u041f\u041e\u041b\u0415\u0412\u0418\u0414\u0410",
+            "CHARACTERISTIC",
+            "\u0425\u0410\u0420\u0410\u041a\u0422\u0415\u0420\u0418\u0421\u0422\u0418\u041a\u0410",
+            "VALUEFIELD",
+            "\u041f\u041e\u041b\u0415\u0417\u041d\u0410\u0427\u0415\u041d\u0418\u042f"})
+        {
+            assertEquals(keyword, 0, QueryFunctionDepth.maximum(keyword + " (SELECT A)"));
+            assertEquals(keyword, 2, QueryFunctionDepth.maximum(keyword + " (Upper(Lower(&S)))"));
+        }
+    }
     @Test public void castAndTypeConstructorsCountConservatively()
     {
         assertEquals(3, QueryFunctionDepth.maximum("SELECT CAST(CAST(&S AS STRING(100)) AS STRING(100))"));

@@ -117,6 +117,33 @@ public class DcsEmptyGroupItemsRoundTripTest
     }
 
     @Test
+    public void testSingleSpaceValueCannotDisappear()
+    {
+        assertEquals("/root/value", DcsXmlRoundTripComparator.firstMissingPath(
+            "<root><value> </value></root>", "<root/>"));
+    }
+
+    @Test
+    public void testTypedNewlineValueCannotBecomeEmpty()
+    {
+        String value = "<value xmlns:xs='http://www.w3.org/2001/XMLSchema' xsi:type='xs:string'>"
+            + "&#10;</value>";
+        assertNotNull(DcsXmlRoundTripComparator.firstMissingPath(group(value),
+            group(value.replace("&#10;", ""))));
+        assertNull(DcsXmlRoundTripComparator.firstMissingPath(group(value),
+            group(value.replace("&#10;", "\n"))));
+    }
+
+    @Test
+    public void testSubmittedPrettyPrintedEmptyContainerMatchesDifferentIndentation()
+    {
+        String submitted = group("<dcsset:order>\n\t\t</dcsset:order>");
+        assertNull(DcsXmlRoundTripComparator.firstMissingPath(submitted,
+            group("<dcsset:order>\n    </dcsset:order>")));
+        assertNull(DcsXmlRoundTripComparator.firstMissingPath(submitted, group("")));
+    }
+
+    @Test
     public void testIgnoredEmptySiblingDoesNotHideLostContentOrChangeItsPath()
     {
         assertEquals("/root/item/selection/item/field", DcsXmlRoundTripComparator.firstMissingPath(

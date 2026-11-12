@@ -1063,6 +1063,7 @@ public class CreateProjectToolTest
         installExternalPlatform();
         IProject base = configurationBase("БУХ");
         IProject created = createWorkspaceProject(uniqueName(), null);
+        IProject differentBase = createWorkspaceProject(uniqueName(), null);
         when(projectManager.getProject(created)).thenReturn(createdV8Project);
         for (String root : java.util.Arrays.asList(null, "ExternalDataProcessor.Unconfirmed"))
         {
@@ -1071,11 +1072,25 @@ public class CreateProjectToolTest
             JsonObject observed = JsonParser.parseString(CreateProjectTool.buildExternalObjectsSlowResponse(
                 created.getName(), created.getName(), Version.LATEST, null, spec, base.getName())).getAsJsonObject();
             assertEquals(base.getName(), observed.get("baseProject").getAsString());
+            assertEquals(root == null ? "created" : "verificationRequired",
+                observed.get("action").getAsString());
+            assertFalse(observed.toString(), observed.get("message").getAsString().contains("Base binding"));
             assertFalse("a slow create cannot claim ready", "ready".equals(observed.get("state").getAsString()));
-            when(createdV8Project.getParentProject()).thenReturn(null);
-            JsonObject unknown = JsonParser.parseString(CreateProjectTool.buildExternalObjectsSlowResponse(
-                created.getName(), created.getName(), Version.LATEST, null, spec, base.getName())).getAsJsonObject();
-            assertFalse(unknown.toString(), unknown.has("baseProject"));
+            for (IProject parent : java.util.Arrays.asList(null, differentBase))
+            {
+                when(createdV8Project.getParentProject()).thenReturn(parent);
+                JsonObject unknown = JsonParser.parseString(CreateProjectTool.buildExternalObjectsSlowResponse(
+                    created.getName(), created.getName(), Version.LATEST, null, spec, base.getName())).getAsJsonObject();
+                assertTrue(unknown.get("success").getAsBoolean());
+                assertFalse(unknown.toString(), unknown.has("baseProject"));
+                assertEquals("verificationRequired", unknown.get("action").getAsString());
+                String message = unknown.get("message").getAsString();
+                assertTrue(message, message.contains("Base binding '" + base.getName() + "' was NOT CONFIRMED"));
+                assertTrue(message, message.contains("list_projects"));
+                assertTrue(message, message.contains("get_metadata_objects against a known base object"));
+                assertTrue(message, message.contains("DT-INF/PROJECT.PMF must carry Base-Project: " + base.getName()));
+                assertTrue(message, message.contains("Do not repeat create_project"));
+            }
         }
     }
 
