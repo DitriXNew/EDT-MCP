@@ -86,6 +86,64 @@ public class ProxyCredentialsTest
     }
 
     @Test
+    public void backendTokensFollowEdtNormalizationForFileAndEnvironmentValues()
+    {
+        String[][] cases = {
+            { "p@ss!word", "p@ss!word" },
+            { "two words", "two words" },
+            { "two  spaces", "two  spaces" },
+            { " \t padded token \t ", "padded token" },
+            { "\r\ntrimmed-token\r\n", "trimmed-token" }
+        };
+        for (String[] pair : cases)
+        {
+            ProxyCredentials literal = ProxyCredentials.parse(properties("authToken", "client-key",
+                "backend.8765.token", pair[0]), Map.of());
+            assertEquals(pair[1], literal.backendToken(8765));
+            ProxyCredentials environment = ProxyCredentials.parse(properties("authToken", "client-key",
+                "backend.8765.tokenEnv", "EDT_KEY"), Map.of("EDT_KEY", pair[0]));
+            assertEquals(pair[1], environment.backendToken(8765));
+        }
+    }
+
+    @Test
+    public void invalidBackendTokensFailAtStartupWithoutLeakingJdkHeaderErrors()
+    {
+        for (String value : new String[] { "", " \t ", "secret\r\nInjected: yes", "secret\nvalue",
+            "secret\u0100value", "secret\u0001value", "secret\u007fvalue", "secret\tvalue",
+            "secret\u00e9\u00ff", "x".repeat(4097) })
+        {
+            for (boolean fromEnvironment : new boolean[] { false, true })
+            {
+                String key = "backend.8765." + (fromEnvironment ? "tokenEnv" : "token");
+                Properties config = properties("authToken", "client-key", key,
+                    fromEnvironment ? "EDT_KEY" : value);
+                Map<String, String> env = fromEnvironment ? Map.of("EDT_KEY", value) : Map.of();
+                IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> ProxyCredentials.parse(config, env));
+                assertTrue(error.getMessage().contains(key));
+                assertNull("JDK header exceptions can contain the credential", error.getCause());
+                if (!value.isBlank())
+                {
+                    assertFalse(error.toString().contains(value));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void relaxedBackendSyntaxDoesNotRelaxProxyClientTokens()
+    {
+        for (String value : new String[] { "p@ss!word", "two words", "caf\u00e9", " padded " })
+        {
+            assertThrows(IllegalArgumentException.class,
+                () -> ProxyCredentials.parse(properties("authToken", value), Map.of()));
+            assertThrows(IllegalArgumentException.class,
+                () -> ProxyCredentials.parse(new Properties(), Map.of(ProxyCredentials.ENV_AUTH_TOKEN, value)));
+        }
+    }
+
+    @Test
     public void ambiguousSecretSourcesAreRejected()
     {
         assertThrows(IllegalArgumentException.class, () -> ProxyCredentials.parse(

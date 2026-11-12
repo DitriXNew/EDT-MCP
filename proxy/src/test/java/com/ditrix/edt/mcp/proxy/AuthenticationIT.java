@@ -99,6 +99,33 @@ public class AuthenticationIT
     }
 
     @Test
+    public void edtTokensWithPunctuationAndSpacesSurviveTheHttpRoundTrip() throws Exception
+    {
+        String firstToken = "p@ss!word with  spaces";
+        StringBuilder printableAscii = new StringBuilder("all-ascii:");
+        for (char c = 0x20; c <= 0x7E; c++)
+        {
+            printableAscii.append(c);
+        }
+        String secondToken = printableAscii.toString();
+        first.setAuthToken(firstToken);
+        second.setAuthToken(secondToken);
+        properties.setProperty("backend." + first.getPort() + ".token", " \t" + firstToken + "\t ");
+        properties.setProperty("backend." + second.getPort() + ".token", secondToken);
+        connect();
+        assertEquals("Bearer " + firstToken, first.lastAuthorization());
+        assertEquals("Bearer " + secondToken, second.lastAuthorization());
+        assertPort(first.getPort(), client.callTool("echo_port", projectArgs("Alpha")));
+        assertPort(second.getPort(), client.callTool("echo_port", projectArgs("Beta")));
+        assertEquals(0, first.rejectedAuthCount());
+        assertEquals(0, second.rejectedAuthCount());
+        String status = client.callTool("router_status", new JsonObject()).toString();
+        assertFalse(status.contains(firstToken));
+        assertFalse(status.contains(secondToken));
+        assertNoSecrets(status);
+    }
+
+    @Test
     public void workspaceSelectionAndReconnectPreserveTheCorrectEdtCredential() throws Exception
     {
         connect();
@@ -178,8 +205,61 @@ public class AuthenticationIT
         assertNoSecrets(status + error);
         assertFalse((status + error).contains("incorrect-edt-key"));
         JsonObject listing = client.callTool("list_projects", new JsonObject());
-        assertTrue("A partial project list must not look complete", isToolError(listing));
-        assertTrue(errorText(listing).contains("HTTP 401"));
+        assertFalse("A rejected EDT must not hide another EDT's projects", isToolError(listing));
+        assertTrue(listing.toString().contains("partial project list"));
+        assertTrue(listing.toString().contains("Alpha"));
+        assertFalse(listing.toString().contains("Beta"));
+        assertTrue(listing.toString().contains("HTTP 401"));
+        JsonObject arguments = new JsonObject();
+        arguments.addProperty("format", "json");
+        JsonObject payload = structuredContent(client.callTool("list_projects", arguments));
+        assertEquals(2, payload.getAsJsonArray("projects").size());
+        String diagnostic = structuredContent(Json.parseObject(status)).getAsJsonArray("backends").get(1)
+            .getAsJsonObject().get("authenticationError").getAsString();
+        assertEquals(diagnostic, payload.getAsJsonArray("warnings").get(0).getAsString());
+        assertNoSecrets(payload.toString());
+        assertFalse(payload.toString().contains("incorrect-edt-key"));
+        arguments.addProperty("workspacePath", "/work/first");
+        JsonObject scoped = structuredContent(client.callTool("list_projects", arguments));
+        assertEquals(2, scoped.getAsJsonArray("projects").size());
+        assertFalse("An excluded backend must not warn about a scoped result", scoped.has("warnings"));
+    }
+
+    @Test
+    public void missingFirstTokenDoesNotHideProjectsFromTheSecondBackend() throws Exception
+    {
+        properties.remove("backend." + first.getPort() + ".token");
+        first.setAuthFailureStatus(403);
+        connect();
+        JsonObject arguments = new JsonObject();
+        arguments.addProperty("format", "json");
+        JsonObject response = client.callTool("list_projects", arguments);
+        assertFalse(isToolError(response));
+        JsonObject payload = structuredContent(response);
+        assertEquals(2, payload.getAsJsonArray("projects").size());
+        assertTrue(payload.getAsJsonArray("projects").toString().contains("Beta"));
+        assertFalse(payload.getAsJsonArray("projects").toString().contains("Alpha"));
+        String warning = payload.getAsJsonArray("warnings").get(0).getAsString();
+        assertTrue(warning.contains(":" + first.getPort()));
+        assertTrue(warning.contains("HTTP 403"));
+        assertNull(first.lastAuthorization());
+        assertNoSecrets(response.toString());
+    }
+
+    @Test
+    public void allRejectedBackendsReturnAnAuthenticationErrorRatherThanAnEmptySuccess() throws Exception
+    {
+        properties.setProperty("backend." + first.getPort() + ".token", "wrong-first");
+        properties.remove("backend." + second.getPort() + ".token");
+        connect();
+        JsonObject response = client.callTool("list_projects", new JsonObject());
+        assertTrue(isToolError(response));
+        String error = errorText(response);
+        assertTrue(error.contains(":" + first.getPort()));
+        assertTrue(error.contains(":" + second.getPort()));
+        assertTrue(error.contains("HTTP 401"));
+        assertFalse(response.toString().contains("wrong-first"));
+        assertNoSecrets(response.toString());
     }
 
     @Test

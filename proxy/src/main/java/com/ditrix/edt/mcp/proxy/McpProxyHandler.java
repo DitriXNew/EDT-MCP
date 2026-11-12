@@ -673,16 +673,9 @@ public final class McpProxyHandler implements HttpHandler
         {
             registry.refresh();
         }
-        if (!authenticationFailures.isEmpty())
-        {
-            sendMcpResponse(exchange, 200, RouterTools.toolCallError(
-                "Cannot list all requested EDT projects: " + String.join(" ", authenticationFailures)
-                    + " Use router_status to inspect each backend or select an accessible workspacePath.",
-                requestId, allowStructuredContent), null);
-            return;
-        }
         sendMcpResponse(exchange, 200,
-            FanOut.mergeListProjects(responses, requestId, jsonFormat, allowStructuredContent), null);
+            FanOut.mergeListProjects(responses, requestId, jsonFormat, allowStructuredContent,
+                authenticationFailures), null);
     }
 
     /** Answers {@code router_status} / {@code router_refresh} itself via {@link RouterTools}. */

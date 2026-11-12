@@ -138,10 +138,18 @@ These are **independent credentials**:
 
 Configure only one source per token. A configured empty token, missing environment
 variable, malformed bearer value, or invalid backend credential key fails startup;
-it never silently disables authentication. Tokens are ASCII bearer values without
-whitespace (up to 4096 characters). Use independently generated tokens with at least
-32 random bytes for the proxy and each EDT. There are no CLI options containing
-tokens, so they need not appear in process arguments or shell history.
+it never silently disables authentication. Proxy client tokens are ASCII bearer values
+without whitespace (up to 4096 characters). Backend tokens follow EDT's normalization:
+surrounding whitespace is trimmed; all printable ASCII punctuation (for example `@`
+and `!`) and internal spaces are accepted. The normalized value must be non-empty and
+at most 4096 characters. Non-ASCII and internal tab/control characters are rejected
+because Java HttpClient serializes HTTP/1.1 headers as ASCII (replacing Latin-1 with
+`?`) and the HTTP server rewrites tabs to spaces. These transport limits are narrower
+than EDT's token validator: a token usable with another client may need to be changed
+before using this proxy. Unsupported values are rejected at startup without exposing
+the token. Use independently generated tokens with at least
+32 random bytes for the proxy and each EDT. There are no CLI options containing tokens,
+so they need not appear in process arguments or shell history.
 
 Example configuration for two authenticated EDT instances:
 
@@ -183,9 +191,13 @@ Unconfigured ports receive no token. `/health` probes receive no token either.
 Tokens are loaded once at startup. To rotate a token or change an EDT's port, update
 the configuration/environment and restart the proxy; update clients when rotating
 the proxy token. A token rejected by an EDT yields an explicit authentication error
-and `authenticationError` in that backend's `router_status` entry. `list_projects`
-fails rather than presenting a complete-looking partial list when a selected EDT
-rejects authentication. Other EDT instances remain directly routable through the
+and `authenticationError` in that backend's `router_status` entry. If some selected
+EDTs reject authentication, `list_projects` returns the available projects with
+warnings identifying the rejected ports. JSON results include a `warnings` array
+(also when JSON is delivered as plain text); Markdown begins with a partial-result
+warning. A selected EDT that returns an empty project list still counts as a successful
+response. If no usable project list is available, the call remains an error with the
+authentication diagnostics. Other EDT instances remain directly routable through the
 proxy; select an accessible `workspacePath` to list only that workspace.
 
 ## Security
