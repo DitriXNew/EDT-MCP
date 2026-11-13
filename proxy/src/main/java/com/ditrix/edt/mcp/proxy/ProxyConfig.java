@@ -8,7 +8,11 @@ package com.ditrix.edt.mcp.proxy;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -44,14 +48,14 @@ import java.util.Properties;
  * <p>An inverted scan range ({@code FROM > TO}) is accepted and means an <b>empty</b> scan range:
  * no backend ports are probed and the proxy starts (and stays alive) with zero backends.
  *
- * <p><b>Bind address (security).</b> By default the proxy binds loopback only ({@code 127.0.0.1}),
+ * <p><b>Bind address (security).</b> By default the proxy binds the JVM's preferred loopback address,
  * mirroring the EDT-MCP plugin's own default: the proxy forwards {@code tools/call} to EDT-MCP
  * backends whose tool surface includes arbitrary-BSL execution and destructive operations, so it
  * must not be reachable from the network unless explicitly opted in. Setting {@code --bind HOST}
  * (or {@value #ENV_HOST}) - e.g. {@code --bind 0.0.0.0} - opts into binding {@code HOST} instead
- * and sets {@link #allowRemote}. <b>The proxy has no authentication in v1</b> - exposing it beyond
- * loopback means any host that can reach the port can invoke every routed tool, including
- * arbitrary BSL, on every backend the proxy discovers. Only do this on a trusted network.
+ * and sets {@link #allowRemote}. A resolved non-loopback bind requires client authentication.
+ * Backend credentials also require client authentication, including on loopback. Tokens are
+ * read from the config file or environment at startup, never from command-line arguments.
  */
 public final class ProxyConfig
 {
@@ -127,8 +131,11 @@ public final class ProxyConfig
      */
     public final String bindHost;
 
+    /** Kept out of status responses and diagnostics. */
+    final ProxyCredentials credentials;
+
     private ProxyConfig(int port, int scanFrom, int scanTo, int refreshSeconds, int backendTimeoutSeconds,
-        boolean allowRemote, String bindHost)
+        boolean allowRemote, String bindHost, ProxyCredentials credentials)
     {
         this.port = port;
         this.scanFrom = scanFrom;
@@ -137,6 +144,7 @@ public final class ProxyConfig
         this.backendTimeoutSeconds = backendTimeoutSeconds;
         this.allowRemote = allowRemote;
         this.bindHost = bindHost;
+        this.credentials = credentials;
     }
 
     /**
@@ -260,7 +268,91 @@ public final class ProxyConfig
             }
         }
 
-        return new ProxyConfig(port, scanFrom, scanTo, refreshSeconds, backendTimeoutSeconds, allowRemote, bindHost);
+        return new ProxyConfig(port, scanFrom, scanTo, refreshSeconds, backendTimeoutSeconds, allowRemote, bindHost,
+            ProxyCredentials.parse(configFile.properties, env));
+    }
+
+    /** Resolves status/stop options without resolving or validating backend credentials. */
+    static ClientOptions parseClient(String[] args, Map<String, String> env)
+    {
+        ConfigFileSource file = loadConfigFileSource(args);
+        String value = trimmedOrNull(file.properties.getProperty(PROP_PORT));
+        int port = value == null ? DEFAULT_PORT : parseListenPort(configFileSource(file.label, PROP_PORT), value);
+        value = trimmedOrNull(file.properties.getProperty(PROP_BIND));
+        String bind = value == null ? null : parseHost(configFileSource(file.label, PROP_BIND), value);
+        value = env == null ? null : trimmedOrNull(env.get(ENV_HOST));
+        if (value != null)
+        {
+            bind = parseHost(ENV_HOST, value);
+        }
+        value = env == null ? null : trimmedOrNull(env.get(ENV_PORT));
+        if (value != null)
+        {
+            port = parseListenPort(ENV_PORT, value);
+        }
+        if (args != null)
+        {
+            for (int i = 0; i < args.length; i++)
+            {
+                String option = args[i];
+                if (OPT_PORT.equals(option))
+                {
+                    port = parseListenPort(OPT_PORT, optionValue(option, args, ++i));
+                }
+                else if (OPT_CONFIG.equals(option))
+                {
+                    optionValue(option, args, ++i);
+                }
+                else if (OPT_BIND.equals(option))
+                {
+                    bind = parseHost(OPT_BIND, optionValue(option, args, ++i));
+                }
+                else
+                {
+                    throw new IllegalArgumentException("Unknown option '" + option
+                        + "'. Status and stop accept --port N, --bind HOST and --config PATH.");
+                }
+            }
+        }
+        if (port == 0)
+        {
+            throw new IllegalArgumentException("Status and stop require the running proxy's actual port;"
+                + " supply --port N when the server configuration uses port=0.");
+        }
+        return new ClientOptions(port, bind, ProxyCredentials.readClientToken(file.properties, env));
+    }
+
+    static final class ClientOptions
+    {
+        final int port;
+        final String token;
+        final InetAddress address;
+
+        ClientOptions(int port, String bind, String token)
+        {
+            this.port = port;
+            this.token = token;
+            try
+            {
+                // Match ProxyServer.start(), including the JVM's IPv6 preference when no bind is given.
+                InetAddress resolved = bind == null ? InetAddress.getLoopbackAddress() : InetAddress.getByName(bind);
+                // A wildcard listener includes loopback only in its own address family.
+                address = resolved.isAnyLocalAddress()
+                    ? InetAddress.getByName(resolved instanceof Inet6Address ? "::1" : "127.0.0.1") : resolved;
+            }
+            catch (UnknownHostException e)
+            {
+                throw new IllegalArgumentException("Cannot resolve the configured proxy bind address: " + bind);
+            }
+        }
+
+        URI uri(String path)
+        {
+            // Use the resolved numeric address for every request, including session cleanup.
+            String host = address instanceof Inet6Address ? "[" + address.getHostAddress() + "]"
+                : address.getHostAddress();
+            return URI.create("http://" + host + ":" + port + path);
+        }
     }
 
     /**
@@ -292,18 +384,24 @@ public final class ProxyConfig
             "  --refresh N     Periodic backend rediscovery interval in seconds (default 20)", //$NON-NLS-1$
             "  --timeout N     Per-forwarded-call backend timeout in seconds (default 300)", //$NON-NLS-1$
             "  --bind HOST     Bind HOST instead of loopback only (e.g. 0.0.0.0 for all interfaces).", //$NON-NLS-1$
-            "                  WARNING: v1 has no authentication - this exposes every routed EDT", //$NON-NLS-1$
-            "                  tool, including arbitrary BSL, to anyone who can reach the port.", //$NON-NLS-1$
+            "                  Non-loopback binding requires a proxy auth token.", //$NON-NLS-1$
             "  --config PATH   Load port/scan/refresh/timeout/bind from a java.util.Properties", //$NON-NLS-1$
             "                  file (keys: port, scan, refresh, timeout, bind). Without this flag,", //$NON-NLS-1$
             "                  a file named " + AUTO_CONFIG_FILE_NAME + " next to the running jar is used if present.", //$NON-NLS-1$ //$NON-NLS-2$
             "  --help          Print this help and exit", //$NON-NLS-1$
             "", //$NON-NLS-1$
+            "Authentication (config file only; tokens must not be put on the command line):",
+            "  authToken / authTokenEnv           Proxy token, or name of its environment variable",
+            "  backend.<port>.token / tokenEnv    EDT token, or name of its environment variable",
+            "  Configure only one form per token. Backend tokens require proxy authentication.",
+            "  Tokens are loaded at startup; restart after rotation. Use HTTPS/VPN for network traffic.",
+            "",
             "Precedence: CLI options > environment variables > config file > defaults.", //$NON-NLS-1$
             "", //$NON-NLS-1$
             "Environment variables:", //$NON-NLS-1$
             "  EDT_MCP_PROXY_PORT, EDT_MCP_PROXY_SCAN (FROM-TO),", //$NON-NLS-1$
-            "  EDT_MCP_PROXY_REFRESH, EDT_MCP_PROXY_TIMEOUT, EDT_MCP_PROXY_HOST"); //$NON-NLS-1$
+            "  EDT_MCP_PROXY_REFRESH, EDT_MCP_PROXY_TIMEOUT, EDT_MCP_PROXY_HOST,", //$NON-NLS-1$
+            "  EDT_MCP_PROXY_AUTH_TOKEN (overrides authToken/authTokenEnv)");
     }
 
     private static String optionValue(String option, String[] args, int index)

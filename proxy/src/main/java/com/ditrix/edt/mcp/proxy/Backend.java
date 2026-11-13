@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.gson.JsonObject;
 
@@ -57,6 +58,14 @@ public final class Backend
     private final int timeoutSeconds;
     private final URI mcpUri;
     private final URI healthUri;
+    private final String authToken;
+    private final AtomicLong authenticationRequestSequence = new AtomicLong();
+    private final AtomicReference<AuthenticationObservation> authentication =
+        new AtomicReference<>(new AuthenticationObservation(0, 0));
+
+    private record AuthenticationObservation(long sequence, int failureStatus)
+    {
+    }
     private final AtomicLong requestId = new AtomicLong(0);
 
     /** Guarded by {@code this}: whether the lazy MCP handshake has been performed. */
@@ -74,11 +83,18 @@ public final class Backend
      */
     public Backend(int port, HttpClient client, int timeoutSeconds)
     {
+        this(port, client, timeoutSeconds, null);
+    }
+
+    /** The configured token belongs only to this local backend port. */
+    Backend(int port, HttpClient client, int timeoutSeconds, String authToken)
+    {
         this.port = port;
         this.client = client;
         this.timeoutSeconds = timeoutSeconds;
         this.mcpUri = URI.create("http://127.0.0.1:" + port + "/mcp"); //$NON-NLS-1$ //$NON-NLS-2$
         this.healthUri = URI.create("http://127.0.0.1:" + port + "/health"); //$NON-NLS-1$ //$NON-NLS-2$
+        this.authToken = authToken;
     }
 
     /**
@@ -164,7 +180,7 @@ public final class Backend
 
         HttpRequest initialize =
             newPostRequest(buildJsonRpcRequest("initialize", params), null, HANDSHAKE_TIMEOUT_SECONDS); //$NON-NLS-1$
-        HttpResponse<String> response = client.send(initialize, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = sendMcpRequest(initialize, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200)
         {
             throw new IOException("initialize against backend :" + port + " failed with HTTP " //$NON-NLS-1$ //$NON-NLS-2$
@@ -193,7 +209,7 @@ public final class Backend
         }
 
         String initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"; //$NON-NLS-1$
-        client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
+        sendMcpRequest(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
             HttpResponse.BodyHandlers.discarding());
 
         sessionId = issued;
@@ -296,7 +312,7 @@ public final class Backend
                 invalidateSessionIfCurrent(session);
                 continue;
             }
-            HttpResponse<InputStream> response = client.send(
+            HttpResponse<InputStream> response = sendMcpRequest(
                 newPostRequest(rawBody, session, requestTimeoutSeconds, accept),
                 HttpResponse.BodyHandlers.ofInputStream());
             if (attempt == 0 && isStaleSession(response, session))
@@ -329,7 +345,7 @@ public final class Backend
         JsonObject params = new JsonObject();
         params.addProperty("name", "list_projects"); //$NON-NLS-1$ //$NON-NLS-2$
         params.add("arguments", arguments); //$NON-NLS-1$
-        HttpResponse<InputStream> response = client.send(newPostRequest(
+        HttpResponse<InputStream> response = sendMcpRequest(newPostRequest(
             buildJsonRpcRequest("tools/call", params), session, HANDSHAKE_TIMEOUT_SECONDS), //$NON-NLS-1$
             HttpResponse.BodyHandlers.ofInputStream());
         if (isStaleSession(response, session))
@@ -356,6 +372,64 @@ public final class Backend
         {
             super(message);
         }
+    }
+
+    /** No backend response body or token is included in authentication diagnostics. */
+    static final class AuthenticationException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        AuthenticationException(String message)
+        {
+            super(message);
+        }
+    }
+
+    String authenticationError()
+    {
+        int status = authentication.get().failureStatus();
+        return status == 0 ? null : authenticationError(status);
+    }
+
+    private String authenticationError(int status)
+    {
+        return "EDT backend :" + port + " rejected authentication (HTTP " + status
+            + "). Check backend." + port + ".token or backend." + port
+            + ".tokenEnv and restart the proxy after changing credentials.";
+    }
+
+    private <T> HttpResponse<T> sendMcpRequest(HttpRequest request, HttpResponse.BodyHandler<T> handler)
+        throws IOException, InterruptedException
+    {
+        long sequence = authenticationRequestSequence.incrementAndGet();
+        HttpResponse<T> response = client.send(request, handler);
+        checkAuthentication(response, sequence);
+        return response;
+    }
+
+    private void checkAuthentication(HttpResponse<?> response, long sequence) throws AuthenticationException
+    {
+        if (response.statusCode() == 401 || response.statusCode() == 403)
+        {
+            recordAuthentication(sequence, response.statusCode());
+            if (response.body() instanceof InputStream body)
+            {
+                closeQuietly(body);
+            }
+            throw new AuthenticationException(authenticationError(response.statusCode()));
+        }
+        if (response.statusCode() >= 200 && response.statusCode() < 300)
+        {
+            recordAuthentication(sequence, 0);
+        }
+    }
+
+    private void recordAuthentication(long sequence, int failureStatus)
+    {
+        // Atomic ordering covers both late successes and late failures. Health probes never
+        // participate: a public 200 from /health proves nothing about the backend credential.
+        authentication.updateAndGet(previous -> sequence > previous.sequence()
+            ? new AuthenticationObservation(sequence, failureStatus) : previous);
     }
 
     /**
@@ -510,7 +584,7 @@ public final class Backend
         {
             builder.header(HEADER_SESSION_ID, session);
         }
-        return builder.build();
+        return BearerAuthentication.addHeader(builder, authToken).build();
     }
 
     private static void closeQuietly(InputStream in)

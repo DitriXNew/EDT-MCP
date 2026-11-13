@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.proxy;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -35,8 +36,6 @@ import com.google.gson.JsonObject;
 public final class CliCommands
 {
     private static final Logger LOG = Logger.getLogger(CliCommands.class.getName());
-
-    private static final String OPT_PORT = "--port"; //$NON-NLS-1$
 
     private static final String HEADER_SESSION_ID = "Mcp-Session-Id"; //$NON-NLS-1$
     private static final String HEADER_ACCEPT = "Accept"; //$NON-NLS-1$
@@ -115,7 +114,16 @@ public final class CliCommands
 
         // Initial discovery so /health and the first requests see the backends immediately.
         registry.refresh();
-        server.start();
+        try
+        {
+            server.start();
+        }
+        catch (IllegalArgumentException e)
+        {
+            System.err.println("edt-mcp-proxy: " + e.getMessage());
+            System.exit(2);
+            return;
+        }
 
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "edt-mcp-proxy-refresh"); //$NON-NLS-1$
@@ -149,7 +157,7 @@ public final class CliCommands
      * prints a human-readable table of the live backends, their projects, duplicate projects,
      * the scan range and the last refresh time.
      *
-     * @param args the {@code status} CLI arguments (only {@code --port N} is supported)
+     * @param args the {@code status} CLI arguments ({@code --port N}, {@code --config PATH})
      * @param out the stream the status table is printed to (normally {@link System#out})
      * @param err the stream an actionable failure line is printed to (normally {@link System#err})
      * @return {@code 0} when the proxy answered, {@code 1} when it could not be reached or its
@@ -157,10 +165,10 @@ public final class CliCommands
      */
     static int status(String[] args, PrintStream out, PrintStream err)
     {
-        int port;
+        ProxyConfig.ClientOptions options;
         try
         {
-            port = parsePort(args);
+            options = ProxyConfig.parseClient(args, System.getenv());
         }
         catch (IllegalArgumentException e)
         {
@@ -168,7 +176,8 @@ public final class CliCommands
             return 2;
         }
 
-        if (!isHealthy(port))
+        int port = options.port;
+        if (!isHealthy(options))
         {
             err.println(unreachableMessage(port));
             return 1;
@@ -176,7 +185,7 @@ public final class CliCommands
 
         try
         {
-            JsonObject structured = fetchRouterStatus(port);
+            JsonObject structured = fetchRouterStatus(options);
             if (structured == null)
             {
                 err.println("edt-mcp-proxy: proxy on :" + port //$NON-NLS-1$
@@ -188,7 +197,7 @@ public final class CliCommands
         }
         catch (IOException e)
         {
-            err.println(unreachableMessage(port) + " (" + e.getMessage() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            err.println("edt-mcp-proxy: could not read router status on :" + port + ": " + e.getMessage());
             return 1;
         }
         catch (InterruptedException e)
@@ -201,10 +210,9 @@ public final class CliCommands
 
     /**
      * Implements the {@code stop} subcommand: {@code POST}s the running proxy's
-     * {@code /admin/shutdown} endpoint (loopback only - see {@link ProxyServer}; a CLI client
-     * connecting to {@code 127.0.0.1} always qualifies) and reports the result.
+     * {@code /admin/shutdown} endpoint, only when the configured listener includes loopback.
      *
-     * @param args the {@code stop} CLI arguments (only {@code --port N} is supported)
+     * @param args the {@code stop} CLI arguments ({@code --port N}, {@code --config PATH})
      * @param out the stream the confirmation is printed to
      * @param err the stream an actionable failure line is printed to
      * @return {@code 0} when the shutdown request was accepted, {@code 1} when the proxy could
@@ -212,10 +220,10 @@ public final class CliCommands
      */
     static int stop(String[] args, PrintStream out, PrintStream err)
     {
-        int port;
+        ProxyConfig.ClientOptions options;
         try
         {
-            port = parsePort(args);
+            options = ProxyConfig.parseClient(args, System.getenv());
         }
         catch (IllegalArgumentException e)
         {
@@ -223,10 +231,17 @@ public final class CliCommands
             return 2;
         }
 
-        HttpRequest request = HttpRequest.newBuilder(adminShutdownUri(port))
+        int port = options.port;
+        if (!options.address.isLoopbackAddress())
+        {
+            err.println("edt-mcp-proxy: stop requires a loopback listener. The configured bind has no"
+                + " supported shutdown destination; stop it through its service manager or console.");
+            return 1;
+        }
+        HttpRequest request = BearerAuthentication.addHeader(HttpRequest.newBuilder(options.uri("/admin/shutdown"))
             .timeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
             .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_JSON)
-            .POST(HttpRequest.BodyPublishers.noBody())
+            .POST(HttpRequest.BodyPublishers.noBody()), options.token)
             .build();
         try
         {
@@ -275,7 +290,8 @@ public final class CliCommands
             "", //$NON-NLS-1$
             "A bare invocation with no subcommand (options only, or none at all) is an alias for", //$NON-NLS-1$
             "'serve', for backward compatibility with the CLI before subcommands existed.", //$NON-NLS-1$
-            "'status' and 'stop' accept only --port N (default " + ProxyConfig.defaultPort() + ")."); //$NON-NLS-1$ //$NON-NLS-2$
+            "'status' and 'stop' accept --port N, --bind HOST and --config PATH; the config file is auto-discovered.",
+            "They use the proxy auth token from the config/environment, not the backend credentials.");
         return String.join(System.lineSeparator() + System.lineSeparator(), subcommandOverview, ProxyConfig.usage());
     }
 
@@ -293,50 +309,11 @@ public final class CliCommands
     // status / stop plumbing
     // ------------------------------------------------------------------------------------
 
-    private static int parsePort(String[] args)
-    {
-        int port = ProxyConfig.defaultPort();
-        if (args != null)
-        {
-            for (int i = 0; i < args.length; i++)
-            {
-                if (OPT_PORT.equals(args[i]))
-                {
-                    if (++i >= args.length)
-                    {
-                        throw new IllegalArgumentException(
-                            "Option '" + OPT_PORT + "' requires a value. Run with --help for usage."); //$NON-NLS-1$ //$NON-NLS-2$
-                    }
-                    port = parsePortValue(args[i]);
-                }
-                else
-                {
-                    throw new IllegalArgumentException("Unknown option '" + args[i] //$NON-NLS-1$
-                        + "'. Only " + OPT_PORT + " is supported here."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
-        }
-        return port;
-    }
-
-    private static int parsePortValue(String value)
+    private static boolean isHealthy(ProxyConfig.ClientOptions options)
     {
         try
         {
-            return Integer.parseInt(value);
-        }
-        catch (NumberFormatException e)
-        {
-            throw new IllegalArgumentException("Invalid value for " + OPT_PORT + ": '" + value //$NON-NLS-1$ //$NON-NLS-2$
-                + "' - expected an integer."); //$NON-NLS-1$
-        }
-    }
-
-    private static boolean isHealthy(int port)
-    {
-        try
-        {
-            HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/health")) //$NON-NLS-1$ //$NON-NLS-2$
+            HttpRequest request = HttpRequest.newBuilder(options.uri("/health"))
                 .timeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
                 .GET()
                 .build();
@@ -366,10 +343,11 @@ public final class CliCommands
      * @return the {@code structuredContent} object, or {@code null} when the handshake or the
      *         call did not yield a usable response
      */
-    private static JsonObject fetchRouterStatus(int port) throws IOException, InterruptedException
+    private static JsonObject fetchRouterStatus(ProxyConfig.ClientOptions options) throws IOException, InterruptedException
     {
         HttpClient client = newClient();
-        URI mcpUri = URI.create("http://127.0.0.1:" + port + "/mcp"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI mcpUri = options.uri("/mcp");
+        String token = options.token;
 
         JsonObject clientInfo = new JsonObject();
         clientInfo.addProperty(KEY_NAME, CLIENT_NAME);
@@ -380,7 +358,7 @@ public final class CliCommands
         initParams.add(KEY_CLIENT_INFO, clientInfo);
 
         HttpResponse<String> initResponse =
-            post(client, mcpUri, null, jsonRpcRequest(1, METHOD_INITIALIZE, initParams));
+            post(client, mcpUri, null, jsonRpcRequest(1, METHOD_INITIALIZE, initParams), token);
         if (initResponse.statusCode() != 200)
         {
             return null;
@@ -391,23 +369,44 @@ public final class CliCommands
             return null;
         }
 
-        JsonObject initializedNotification = new JsonObject();
-        initializedNotification.addProperty(KEY_JSONRPC, JSONRPC_VERSION);
-        initializedNotification.addProperty(KEY_METHOD, METHOD_INITIALIZED_NOTIFICATION);
-        post(client, mcpUri, sessionId, initializedNotification);
-
-        JsonObject callParams = new JsonObject();
-        callParams.addProperty(KEY_NAME, TOOL_ROUTER_STATUS);
-        callParams.add(KEY_ARGUMENTS, new JsonObject());
-        HttpResponse<String> statusResponse =
-            post(client, mcpUri, sessionId, jsonRpcRequest(2, METHOD_TOOLS_CALL, callParams));
-        if (statusResponse.statusCode() != 200)
+        try
         {
-            return null;
+            JsonObject initializedNotification = new JsonObject();
+            initializedNotification.addProperty(KEY_JSONRPC, JSONRPC_VERSION);
+            initializedNotification.addProperty(KEY_METHOD, METHOD_INITIALIZED_NOTIFICATION);
+            post(client, mcpUri, sessionId, initializedNotification, token);
+
+            JsonObject callParams = new JsonObject();
+            callParams.addProperty(KEY_NAME, TOOL_ROUTER_STATUS);
+            callParams.add(KEY_ARGUMENTS, new JsonObject());
+            HttpResponse<String> statusResponse =
+                post(client, mcpUri, sessionId, jsonRpcRequest(2, METHOD_TOOLS_CALL, callParams), token);
+            if (statusResponse.statusCode() != 200)
+            {
+                return null;
+            }
+            JsonObject envelope = Json.parseObject(statusResponse.body());
+            JsonObject result = envelope == null ? null : Json.obj(envelope, KEY_RESULT);
+            return result == null ? null : Json.obj(result, KEY_STRUCTURED_CONTENT);
         }
-        JsonObject envelope = Json.parseObject(statusResponse.body());
-        JsonObject result = envelope == null ? null : Json.obj(envelope, KEY_RESULT);
-        return result == null ? null : Json.obj(result, KEY_STRUCTURED_CONTENT);
+        finally
+        {
+            HttpRequest close = BearerAuthentication.addHeader(HttpRequest.newBuilder(mcpUri)
+                .timeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
+                .header(HEADER_SESSION_ID, sessionId).DELETE(), token).build();
+            try
+            {
+                client.send(close, HttpResponse.BodyHandlers.discarding());
+            }
+            catch (IOException ignored)
+            {
+                // Cleanup must not hide the status result or original failure.
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private static JsonObject jsonRpcRequest(int id, String method, JsonObject params)
@@ -425,7 +424,8 @@ public final class CliCommands
      * plain JSON rather than SSE - see {@code McpProxyHandler#sendMcpResponse}), avoiding any
      * SSE-framing parsing in this small CLI client.
      */
-    private static HttpResponse<String> post(HttpClient client, URI uri, String sessionId, JsonObject body)
+    private static HttpResponse<String> post(HttpClient client, URI uri, String sessionId, JsonObject body,
+        String token)
         throws IOException, InterruptedException
     {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
@@ -437,7 +437,15 @@ public final class CliCommands
         {
             builder.header(HEADER_SESSION_ID, sessionId);
         }
-        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = client.send(BearerAuthentication.addHeader(builder, token).build(),
+            HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() == 401 || response.statusCode() == 403)
+        {
+            throw new IOException("Proxy rejected authentication (HTTP " + response.statusCode()
+                + "). Supply --config PATH with authToken/authTokenEnv or set "
+                + ProxyCredentials.ENV_AUTH_TOKEN + ".");
+        }
+        return response;
     }
 
     private static void printStatusTable(PrintStream out, int queriedPort, JsonObject structured)
@@ -459,6 +467,10 @@ public final class CliCommands
                 int backendPort = backend.get(KEY_PORT).getAsInt();
                 out.println("  " + padRight(String.valueOf(backendPort), 8) + " " //$NON-NLS-1$ //$NON-NLS-2$
                     + joinOrNone(asArray(backend, KEY_PROJECTS)));
+                if (backend.has("authenticationError"))
+                {
+                    out.println("           " + backend.get("authenticationError").getAsString());
+                }
             }
         }
         out.println();
@@ -561,13 +573,9 @@ public final class CliCommands
             + ". Is it running? Start it with: java -jar edt-mcp-proxy.jar serve --port " + port; //$NON-NLS-1$
     }
 
-    private static URI adminShutdownUri(int port)
-    {
-        return URI.create("http://127.0.0.1:" + port + "/admin/shutdown"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
     private static HttpClient newClient()
     {
-        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS)).build();
+        return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(CLIENT_TIMEOUT_SECONDS))
+            .proxy(ProxySelector.of(null)).followRedirects(HttpClient.Redirect.NEVER).build();
     }
 }

@@ -83,6 +83,138 @@ public class FanOutTest
         return names;
     }
 
+    @Test
+    public void partialListPreservesProjectsAndWarningsInStructuredJson()
+    {
+        List<String> warnings = List.of("EDT backend :8766 rejected authentication (HTTP 401).",
+            "EDT backend :8767 rejected authentication (HTTP 403).");
+        JsonObject response = Json.parseObject(FanOut.mergeListProjects(
+            List.of(listProjectsResponse(1, "Available")), 99, true, true, warnings));
+        assertEquals(List.of("Available"), projectNamesOf(response));
+        JsonObject result = response.getAsJsonObject("result");
+        assertFalse(result.get("isError").getAsBoolean());
+        JsonObject payload = result.getAsJsonObject("structuredContent");
+        assertTrue(payload.get("success").getAsBoolean());
+        assertEquals(2, payload.getAsJsonArray("warnings").size());
+        for (int i = 0; i < warnings.size(); i++)
+        {
+            assertEquals(warnings.get(i), payload.getAsJsonArray("warnings").get(i).getAsString());
+            assertTrue(contentTextOf(response).contains(warnings.get(i)));
+        }
+        assertTrue(contentTextOf(response).contains("partial project list"));
+        assertEquals(99, response.get("id").getAsInt());
+    }
+
+    @Test
+    public void partialWarningsReachMarkdownClientsInBothContentModes()
+    {
+        String backend = listProjectsResponse(1, "Available");
+        String warning = "EDT backend :8766 rejected authentication (HTTP 401).";
+        for (String raw : List.of(backend, asPlainTextJson(backend)))
+        {
+            for (boolean allowStructured : new boolean[] { true, false })
+            {
+                JsonObject response = Json.parseObject(FanOut.mergeListProjects(
+                    List.of(raw), 2, false, allowStructured, List.of(warning)));
+                assertNull(Json.obj(response.getAsJsonObject("result"), "structuredContent"));
+                assertTrue(contentTextOf(response).contains(warning));
+                assertTrue(contentTextOf(response).contains("partial project list"));
+                assertTrue(contentTextOf(response).contains("| Available |"));
+            }
+        }
+    }
+
+    @Test
+    public void partialWarningsReachJsonClientsWithoutStructuredContent()
+    {
+        String backend = listProjectsResponse(1, "Available");
+        String warning = "EDT backend :8766 rejected authentication (HTTP 401).";
+        for (String raw : List.of(backend, asPlainTextJson(backend)))
+        {
+            JsonObject response = Json.parseObject(FanOut.mergeListProjects(
+                List.of(raw), 2, true, false, List.of(warning)));
+            assertNull(Json.obj(response.getAsJsonObject("result"), "structuredContent"));
+            JsonObject payload = Json.parseObject(contentTextOf(response));
+            assertEquals(warning, payload.getAsJsonArray("warnings").get(0).getAsString());
+            assertEquals("Available", payload.getAsJsonArray("projects").get(0).getAsJsonObject()
+                .get("name").getAsString());
+            assertTrue(payload.get("success").getAsBoolean());
+        }
+        // A plain-text backend also keeps its response channel when the client has not opted out.
+        JsonObject plain = Json.parseObject(FanOut.mergeListProjects(
+            List.of(asPlainTextJson(backend)), 2, true, true, List.of(warning)));
+        assertNull(Json.obj(plain.getAsJsonObject("result"), "structuredContent"));
+        assertEquals(warning, Json.parseObject(contentTextOf(plain)).getAsJsonArray("warnings")
+            .get(0).getAsString());
+    }
+
+    @Test
+    public void partialWarningsSurviveTheHumanContentSizeCap()
+    {
+        String[] projects = new String[2000];
+        for (int i = 0; i < projects.length; i++)
+        {
+            projects[i] = "Project" + i + "x".repeat(80);
+        }
+        String backend = listProjectsResponse(1, projects);
+        String warning = "EDT backend :8766 rejected authentication (HTTP 401).";
+        JsonObject structured = Json.parseObject(FanOut.mergeListProjects(
+            List.of(backend), 2, true, true, List.of(warning)));
+        assertEquals(projects.length, projectNamesOf(structured).size());
+        String markdown = contentTextOf(structured);
+        assertTrue(markdown.startsWith("**Warning: partial project list.**"));
+        assertTrue(markdown.contains(warning));
+        assertTrue(markdown.contains("truncated"));
+        assertTrue(markdown.length() <= FanOut.MAX_CONTENT_CHARS);
+        JsonObject plain = Json.parseObject(FanOut.mergeListProjects(
+            List.of(backend), 2, true, false, List.of(warning)));
+        String text = contentTextOf(plain);
+        assertTrue(text.contains(warning));
+        assertTrue(text.contains("truncated"));
+        assertTrue(text.length() <= FanOut.MAX_CONTENT_CHARS);
+    }
+
+    @Test
+    public void allRejectedResponsesStayErrorsWithUsefulDiagnostics()
+    {
+        String warning = "EDT backend :8766 rejected authentication (HTTP 401).";
+        for (boolean allowStructured : new boolean[] { true, false })
+        {
+            JsonObject response = Json.parseObject(FanOut.mergeListProjects(
+                List.of(), 9, true, allowStructured, List.of(warning)));
+            JsonObject result = response.getAsJsonObject("result");
+            assertTrue(result.get("isError").getAsBoolean());
+            assertTrue(contentTextOf(response).contains(warning));
+            assertEquals(allowStructured, result.has("structuredContent"));
+            assertEquals(9, response.get("id").getAsInt());
+        }
+    }
+
+    @Test
+    public void anAccessibleEmptyWorkspaceIsAValidPartialResult()
+    {
+        JsonObject response = Json.parseObject(FanOut.mergeListProjects(
+            List.of(listProjectsResponse(1)), 3, true, true, List.of("EDT backend :8766 rejected authentication.")));
+        assertTrue(projectNamesOf(response).isEmpty());
+        JsonObject result = response.getAsJsonObject("result");
+        assertFalse(result.get("isError").getAsBoolean());
+        assertEquals(1, result.getAsJsonObject("structuredContent").getAsJsonArray("warnings").size());
+    }
+
+    private static String asPlainTextJson(String backend)
+    {
+        JsonObject response = Json.parseObject(backend);
+        JsonObject result = response.getAsJsonObject("result");
+        JsonObject payload = result.remove("structuredContent").getAsJsonObject();
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "text");
+        item.addProperty("text", Json.compact(payload));
+        JsonArray content = new JsonArray();
+        content.add(item);
+        result.add("content", content);
+        return Json.compact(response);
+    }
+
     // ---- merging 2 valid responses ----
 
     @Test

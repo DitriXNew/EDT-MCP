@@ -259,9 +259,4 @@ public class WorkspaceRoutingIT
         return args;
     }
 
-    private static void assertPort(int expected, JsonObject response)
-    {
-        assertFalse(response.toString(), isToolError(response));
-        assertEquals(expected, structuredContent(response).get("port").getAsInt());
-    }
 }

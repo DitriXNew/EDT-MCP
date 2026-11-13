@@ -429,6 +429,10 @@ Copy the bundled [stdio configuration](docs/stdio.md) into `claude_desktop_confi
 
 ## Multi-EDT Proxy
 
+The proxy supports [client bearer authentication and separate tokens for each EDT](proxy/README.md#client-and-backend-tokens).
+Network listeners require a proxy token; use HTTPS through a reverse proxy or a VPN to encrypt LAN traffic.
+An HTTPS reverse proxy must forward only `/mcp` (and optionally `/health`), never `/admin/` or a catch-all `/` route; see [proxy security](proxy/README.md#security).
+
 Running more than one EDT instance at once? [`edt-mcp-proxy`](proxy/) is a standalone router that exposes a single, stable MCP endpoint on `:8764` and forwards each call to the right EDT-MCP instance by `projectName`, discovering live instances in the background. It ships as `edt-mcp-proxy-<version>.jar` alongside the plugin archive in every [release](https://github.com/DitriXNew/EDT-MCP/releases). See [proxy/README.md](proxy/README.md) for setup, CLI options and configuration.
 
 For duplicate project names, the proxy reports `workspacePath` in `list_projects` and

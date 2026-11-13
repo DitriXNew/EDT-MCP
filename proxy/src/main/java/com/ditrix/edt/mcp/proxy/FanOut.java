@@ -47,6 +47,7 @@ public final class FanOut
     private static final String KEY_IS_ERROR = "isError"; //$NON-NLS-1$
     private static final String KEY_STRUCTURED_CONTENT = "structuredContent"; //$NON-NLS-1$
     private static final String KEY_PROJECTS = "projects"; //$NON-NLS-1$
+    private static final String KEY_WARNINGS = "warnings"; //$NON-NLS-1$
     private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
     private static final String KEY_CONTENT = "content"; //$NON-NLS-1$
     private static final String KEY_RESOURCE = "resource"; //$NON-NLS-1$
@@ -129,6 +130,13 @@ public final class FanOut
     public static String mergeListProjects(List<String> backendResponses, Object requestId,
         boolean jsonFormat, boolean allowStructuredContent)
     {
+        return mergeListProjects(backendResponses, requestId, jsonFormat, allowStructuredContent, List.of());
+    }
+
+    /** Merges available project lists and exposes rejected-backend diagnostics in every output format. */
+    static String mergeListProjects(List<String> backendResponses, Object requestId,
+        boolean jsonFormat, boolean allowStructuredContent, List<String> warnings)
+    {
         JsonArray mergedProjects = new JsonArray();
         JsonObject firstEnvelope = null;
         int supportedBackends = 0;
@@ -168,6 +176,12 @@ public final class FanOut
 
         if (firstEnvelope == null)
         {
+            if (!warnings.isEmpty())
+            {
+                return RouterTools.toolCallError("No requested EDT backend returned a usable project list. "
+                    + String.join(" ", warnings) + " Use router_status to inspect each backend.",
+                    requestId, allowStructuredContent);
+            }
             return jsonRpcError(ERROR_NO_BACKENDS, MSG_NO_BACKENDS, requestId);
         }
         if (supportedBackends == 0)
@@ -183,7 +197,8 @@ public final class FanOut
                     + " plugin, or call list_projects on that EDT directly."; //$NON-NLS-1$
             return jsonRpcError(ERROR_NO_BACKENDS, answeringBackends
                 + " live EDT backend(s) answered, but none returned a machine-readable project list -" //$NON-NLS-1$
-                + cause + " 'router_status' names them.", requestId); //$NON-NLS-1$
+                + cause + " 'router_status' names them." //$NON-NLS-1$
+                + (warnings.isEmpty() ? "" : " " + String.join(" ", warnings)), requestId);
         }
 
         JsonObject result = Json.obj(firstEnvelope, KEY_RESULT);
@@ -203,20 +218,22 @@ public final class FanOut
         // proxy mirrors what that backend would have answered, so it must not invent the field here
         // either - the same reason the Markdown path already follows the donor's shape.
         boolean structuredJson = jsonFormat && allowStructuredContent && !plainText;
+        String warningText = warnings.isEmpty() ? ""
+            : "**Warning: partial project list.**\n\n- " + String.join("\n- ", warnings) + "\n\n";
         if (structuredJson)
         {
-            rebuildContent(result, capMarkdown(renderProjectsTable(mergedProjects), true));
+            rebuildContent(result, capMarkdown(warningText + renderProjectsTable(mergedProjects), true));
         }
         else if (jsonFormat)
         {
             // Opted out: the machine payload as text - the table would be rendered only to be thrown
             // away, and its "read the full list from structuredContent" hint would name a field this
             // response deliberately omits.
-            result.add(KEY_CONTENT, freshTextContent(capText(machinePayload(mergedProjects))));
+            result.add(KEY_CONTENT, freshTextContent(capText(machinePayload(mergedProjects, warnings))));
         }
         else
         {
-            String markdown = capMarkdown(renderProjectsTable(mergedProjects), false);
+            String markdown = capMarkdown(warningText + renderProjectsTable(mergedProjects), false);
             result.add(KEY_CONTENT, plainText ? freshTextContent(markdown) : freshResourceContent(markdown));
         }
         if (structuredJson)
@@ -231,6 +248,7 @@ public final class FanOut
             // Keep the success flag a direct format=json call carries, even when the donating
             // envelope came from a backend that answered without structuredContent.
             structured.addProperty(KEY_SUCCESS, true);
+            addWarnings(structured, warnings);
             structured.remove(WorkspaceRouting.WORKSPACE_PATH);
             structured.add(KEY_PROJECTS, mergedProjects);
         }
@@ -250,14 +268,27 @@ public final class FanOut
      * as text to a client that cannot accept {@code structuredContent}.
      *
      * @param mergedProjects the merged projects array
+     * @param warnings diagnostics for selected backends that rejected authentication
      * @return the payload as compact JSON
      */
-    private static String machinePayload(JsonArray mergedProjects)
+    private static String machinePayload(JsonArray mergedProjects, List<String> warnings)
     {
         JsonObject payload = new JsonObject();
         payload.addProperty(KEY_SUCCESS, true);
+        // Put warnings before the potentially huge project list so a capped text payload keeps them.
+        addWarnings(payload, warnings);
         payload.add(KEY_PROJECTS, mergedProjects);
         return Json.compact(payload);
+    }
+
+    private static void addWarnings(JsonObject payload, List<String> warnings)
+    {
+        if (!warnings.isEmpty())
+        {
+            JsonArray messages = new JsonArray();
+            warnings.forEach(messages::add);
+            payload.add(KEY_WARNINGS, messages);
+        }
     }
 
     /**
