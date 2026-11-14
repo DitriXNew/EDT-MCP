@@ -3487,6 +3487,9 @@
           },
           "type": "array"
         },
+        "offset": {
+          "type": "integer"
+        },
         "projectName": {
           "type": "string"
         },

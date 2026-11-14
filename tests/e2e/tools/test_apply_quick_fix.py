@@ -157,8 +157,8 @@ def _scan_detailed_rows(project):
     truncated scan would silently read as "no fixable marker beyond the cut exists", and a
     truncated before/after count comparison would misreport a real fix as having "done
     nothing" once the fixed marker's surviving siblings sit beyond the cut. Raises E2ESkip
-    when the response still reports the limit reached - the marker set is then incomplete
-    and neither discovery nor a count comparison can draw a reliable conclusion from it.
+    when the response names a next page - the marker set is then incomplete and neither
+    discovery nor a count comparison can draw a reliable conclusion from it.
 
     Rows are split with the shared escape-aware parser (harness.split_markdown_row): a
     literal '|' inside a cell is escaped as '\\|' by production, and a naive split would
@@ -169,7 +169,7 @@ def _scan_detailed_rows(project):
              {"projectName": project, "responseFormat": "detailed", "limit": _DETAILED_SCAN_LIMIT})
     assert_ok(r, "get_project_errors detailed scan")
     text = r.text or ""
-    if "limit reached" in text:
+    if "next page: offset=" in text:
         raise E2ESkip(
             "get_project_errors hit its %d-row limit scanning %s - the marker set is "
             "incomplete, so a fixable-marker scan/count here would be unreliable"

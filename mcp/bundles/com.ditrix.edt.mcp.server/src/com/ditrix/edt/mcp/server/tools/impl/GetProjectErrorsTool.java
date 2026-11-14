@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -19,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -56,6 +58,7 @@ import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -108,6 +111,35 @@ public class GetProjectErrorsTool implements IMcpTool
     /** structuredContent field: how many problem rows the report carries. */
     static final String KEY_PROBLEMS_FOUND = "problemsFound"; //$NON-NLS-1$
 
+    /** Paging: how many matching problems to skip before the first row of this page. */
+    static final String PARAM_OFFSET = "offset"; //$NON-NLS-1$
+
+    /** structuredContent field: how many problems match the filters in total, across every page. */
+    static final String KEY_PROBLEMS_TOTAL = "problemsTotal"; //$NON-NLS-1$
+
+    /** structuredContent field: whether problems beyond this page remain. */
+    static final String KEY_HAS_MORE = "hasMore"; //$NON-NLS-1$
+
+    /** structuredContent field: the {@code offset} of the next page (offset + rows on this page). */
+    static final String KEY_NEXT_OFFSET = "nextOffset"; //$NON-NLS-1$
+
+    /**
+     * Character budget of the problem TABLE of a Markdown report. The whole content text is capped
+     * at {@link OutputSizeGuard#MAX_CONTENT_CHARS}, and that cap cuts wherever it lands - mid-row,
+     * dropping every later row without saying which. The rows are therefore stopped at a ROW
+     * boundary below it, with room left for the header and the trailing notes, and the report
+     * names the offset to continue from. {@code limit} stays the count the caller asked for; this
+     * only keeps the page that is sent intact.
+     */
+    static final int REPORT_TABLE_BUDGET_CHARS = OutputSizeGuard.MAX_CONTENT_CHARS - 10_000;
+
+    /**
+     * The same budget for an {@code objectFqns} call, whose text channel carries the JSON payload:
+     * the Markdown report AND every row again as a {@code problems} object, so a row costs about
+     * three times its table line there.
+     */
+    static final int ADDRESS_TABLE_BUDGET_CHARS = OutputSizeGuard.MAX_CONTENT_CHARS / 3;
+
     @Override
     public String getName()
     {
@@ -126,7 +158,8 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "Filter by EDT project name; omit to scan all projects (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .enumProperty("severity", "Filter by severity (optional)", //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty("severity", "Filter by one exact severity (optional); NONE is the level of a marker " //$NON-NLS-1$ //$NON-NLS-2$
+                + "EDT stores without a severity, not 'all levels' - omit severity for every level", //$NON-NLS-1$
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty(PARAM_OBJECTS, "Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive " //$NON-NLS-1$
@@ -139,7 +172,8 @@ public class GetProjectErrorsTool implements IMcpTool
             .stringArrayProperty(PARAM_MODULE_PATHS,
                 "Exact module paths as shown in the Module path column, e.g. 'CommonModules/X/Module.bsl'; " //$NON-NLS-1$
                     + "AND-ed with the other filters.") //$NON-NLS-1$
-            .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT, "Max problems per page; default 100, max 1000 (optional)") //$NON-NLS-1$
+            .integerProperty(PARAM_OFFSET, "Skip this many matching problems - the next page; default 0 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table; detailed = adds stored Offset/Length and 'Has docs'", //$NON-NLS-1$
                 "concise", "detailed") //$NON-NLS-1$ //$NON-NLS-2$
@@ -254,15 +288,17 @@ public class GetProjectErrorsTool implements IMcpTool
 
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
+        int offset = Math.max(0, JsonUtils.extractIntArgument(params, PARAM_OFFSET, 0));
 
         List<String> modulePaths = modulePathsOf(params);
 
         if (!objectFqns.isEmpty())
         {
             return getProjectErrorsByAddress(projectName, severity, checkId, objectFqns, limit,
-                detailed, modulePaths);
+                detailed, modulePaths, offset);
         }
-        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, false, modulePaths);
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, false, modulePaths,
+            offset);
     }
 
     /** The normalised, non-blank {@code modulePaths} entries of a call, in request order (never {@code null}). */
@@ -328,7 +364,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param severity filter by severity (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL)
      * @param checkId filter by check ID substring
      * @param objects filter by object FQNs (empty list for all objects)
-     * @param limit maximum number of results
+     * @param limit maximum number of rows on the page (the total is still counted)
      * @param detailed when {@code true} include saved text ranges and {@code Has docs};
      *        when {@code false} (the default) render the existing compact table.
      *        Only the table presentation changes — the
@@ -361,6 +397,19 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static String getProjectErrors(String projectName, String severity, String checkId,
         List<String> objects, int limit, boolean detailed, boolean exactScope, List<String> modulePaths)
+    {
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, exactScope, modulePaths, 0);
+    }
+
+    /**
+     * As {@link #getProjectErrors(String, String, String, List, int, boolean, boolean, List)} for one PAGE:
+     * the first {@code offset} matching problems are skipped and at most {@code limit} rows follow. Every
+     * matching problem is still counted, so the report states the total and the offset of the next page
+     * instead of ending silently at the limit.
+     */
+    static String getProjectErrors(String projectName, String severity, String checkId,
+        List<String> objects, int limit, boolean detailed, boolean exactScope, List<String> modulePaths,
+        int offset)
     {
         try
         {
@@ -405,20 +454,22 @@ public class GetProjectErrorsTool implements IMcpTool
 
             final CollectContext collectContext = new CollectContext(finalSeverityFilter,
                 finalCheckId, finalObjects, checkRepository, fixRepository, limit, unresolvedShown,
-                unresolvedFilteredOut, exactScope, null, MarkerRows.modulePathKeys(modulePaths));
+                unresolvedFilteredOut, exactScope, null, MarkerRows.modulePathKeys(modulePaths), offset);
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
                 collectContext);
 
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
 
-            if (errors.isEmpty())
+            if (collectContext.total() == 0)
             {
                 appendNoErrorsSection(md, projectName, severity, objects, PARAM_OBJECTS, modulePaths);
+                appendOtherSeverities(md, markersByProject, bmModelManager, collectContext);
             }
             else
             {
-                appendProblemsTable(md, errors, limit, detailed);
+                appendProblemsPage(md, errors, offset, collectContext.total(), detailed,
+                    REPORT_TABLE_BUDGET_CHARS);
             }
 
             // NOTE: no objectsNotFound here, on purpose. This filter is a documented SUBSTRING
@@ -578,7 +629,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param severity the severity filter, already validated by {@link #execute}
      * @param checkId the check-id substring filter, may be {@code null}
      * @param objectFqns the requested exact addresses (non-empty, already cleaned)
-     * @param limit the result limit
+     * @param limit maximum number of rows on the page
      * @param detailed whether to render the full table
      * @return the JSON payload for {@code structuredContent}
      */
@@ -595,6 +646,17 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static String getProjectErrorsByAddress(String projectName, String severity, String checkId,
         List<String> objectFqns, int limit, boolean detailed, List<String> modulePaths)
+    {
+        return getProjectErrorsByAddress(projectName, severity, checkId, objectFqns, limit, detailed,
+            modulePaths, 0);
+    }
+
+    /**
+     * As {@link #getProjectErrorsByAddress(String, String, String, List, int, boolean, List)} for one PAGE
+     * starting at {@code offset}; the payload carries the total and the next offset next to the rows.
+     */
+    static String getProjectErrorsByAddress(String projectName, String severity, String checkId,
+        List<String> objectFqns, int limit, boolean detailed, List<String> modulePaths, int offset)
     {
         try
         {
@@ -620,6 +682,8 @@ public class GetProjectErrorsTool implements IMcpTool
             final int[] unresolvedShown = {0};
             final int[] unresolvedFilteredOut = {0};
             List<ErrorInfo> errors = Collections.emptyList();
+            int total = 0;
+            StringBuilder otherSeverities = new StringBuilder();
             if (!resolution.resolved.isEmpty())
             {
                 // The SCAN is scoped by the spellings that really resolved, PER PROJECT (see
@@ -630,20 +694,35 @@ public class GetProjectErrorsTool implements IMcpTool
                     checkId, Collections.<String> emptySet(),
                     Activator.getDefault().getCheckRepository(), Activator.getDefault().getFixRepository(),
                     limit, unresolvedShown, unresolvedFilteredOut, true,
-                    filterVariantsByProject(resolution.scopeByProject), MarkerRows.modulePathKeys(modulePaths));
-                errors = collectErrors(MarkerRows.groupMarkersByProject(markerManager, projectName),
-                    bmModelManager, collectContext);
+                    filterVariantsByProject(resolution.scopeByProject), MarkerRows.modulePathKeys(modulePaths),
+                    offset);
+                Map<IProject, List<Marker>> markersByProject =
+                    MarkerRows.groupMarkersByProject(markerManager, projectName);
+                errors = collectErrors(markersByProject, bmModelManager, collectContext);
+                total = collectContext.total();
+                if (total == 0)
+                {
+                    appendOtherSeverities(otherSeverities, markersByProject, bmModelManager, collectContext);
+                }
             }
 
-            String report = assembleAddressReport(errors, projectName, severity, objectFqns,
-                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut, modulePaths);
+            StringBuilder table = new StringBuilder();
+            int shown = 0;
+            if (total > 0)
+            {
+                shown = appendProblemsPage(table, errors, offset, total, detailed, ADDRESS_TABLE_BUDGET_CHARS);
+            }
+            String report = assembleAddressReport(table.length() > 0 ? table.toString() : null, projectName,
+                severity, objectFqns, resolution, unresolvedShown, unresolvedFilteredOut, modulePaths);
             if (resolution.error != null)
             {
                 return resolution.error;
             }
-            StringBuilder withModuleNote = new StringBuilder(report);
+            StringBuilder withModuleNote = new StringBuilder(report).append(otherSeverities);
             appendModulePathsNotFound(withModuleNote, projectName, modulePaths);
-            return addressPayload(withModuleNote.toString(), errors, resolution);
+            // The machine rows are the rows the report shows: a row cut by the size budget is on the next page.
+            return addressPayload(withModuleNote.toString(), errors.subList(0, Math.min(shown, errors.size())),
+                resolution, total, offset);
         }
         catch (Exception e)
         {
@@ -680,11 +759,11 @@ public class GetProjectErrorsTool implements IMcpTool
      * partial-answer warning from the report reddened nothing, because the only test called
      * {@link #appendIncompleteScopeWarning} directly.</p>
      *
-     * @param errors the collected problem rows
+     * @param errors every matching problem row (the first {@code limit} are rendered as the page)
      * @param projectName the project filter, may be {@code null}/empty
      * @param severity the severity filter, may be {@code null}/empty
      * @param objectFqns the requested addresses, echoed in the banner
-     * @param limit the result limit
+     * @param limit the page size
      * @param detailed whether to render the full table
      * @param resolution the per-address verdicts, including the partial-answer map
      * @param unresolvedShown out-counter of markers shown with a placeholder location
@@ -704,6 +783,28 @@ public class GetProjectErrorsTool implements IMcpTool
         List<String> objectFqns, int limit, boolean detailed, AddressResolution resolution,
         int[] unresolvedShown, int[] unresolvedFilteredOut, List<String> modulePaths)
     {
+        // Here the rows are the WHOLE match set and limit the page size: the first page is rendered, with
+        // the total and the next offset when the set is longer than one page.
+        String table = null;
+        if (!errors.isEmpty())
+        {
+            StringBuilder rendered = new StringBuilder();
+            appendProblemsPage(rendered, errors.subList(0, Math.min(Math.max(1, limit), errors.size())), 0,
+                errors.size(), detailed, ADDRESS_TABLE_BUDGET_CHARS);
+            table = rendered.toString();
+        }
+        return assembleAddressReport(table, projectName, severity, objectFqns, resolution, unresolvedShown,
+            unresolvedFilteredOut, modulePaths);
+    }
+
+    /**
+     * As the overloads taking the rows, with the problem table already rendered as one page
+     * ({@link #appendProblemsPage}); {@code null} when nothing matched, which gives the empty-report banner.
+     */
+    static String assembleAddressReport(String table, String projectName, String severity,
+        List<String> objectFqns, AddressResolution resolution, int[] unresolvedShown,
+        int[] unresolvedFilteredOut, List<String> modulePaths)
+    {
         if (resolution.resolved.isEmpty()
             && (!resolution.notFound.isEmpty() || !resolution.unsupported.isEmpty()))
         {
@@ -712,13 +813,13 @@ public class GetProjectErrorsTool implements IMcpTool
             return resolution.error;
         }
         StringBuilder md = new StringBuilder();
-        if (errors.isEmpty())
+        if (table == null)
         {
             appendNoErrorsSection(md, projectName, severity, objectFqns, PARAM_OBJECT_FQNS, modulePaths);
         }
         else
         {
-            appendProblemsTable(md, errors, limit, detailed);
+            md.append(table);
         }
         // Appended AFTER either branch on purpose: a PARTIAL miss (some addresses resolved, some did
         // not) must be visible next to the results too, not only on an empty report.
@@ -772,9 +873,28 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static String addressPayload(String report, List<ErrorInfo> problems, AddressResolution resolution)
     {
+        return addressPayload(report, problems, resolution, problems.size(), 0);
+    }
+
+    /**
+     * As {@link #addressPayload(String, List, AddressResolution)} for one page of a longer result: next to
+     * the rows of this page ({@code problemsFound}) it carries how many problems match in total
+     * ({@code problemsTotal}), whether more remain ({@code hasMore}) and the {@code offset} that fetches
+     * them ({@code nextOffset}). All four are always emitted.
+     *
+     * @param total how many problems match the filters across every page
+     * @param offset the offset this page starts at
+     */
+    static String addressPayload(String report, List<ErrorInfo> problems, AddressResolution resolution,
+        int total, int offset)
+    {
+        int nextOffset = offset + problems.size();
         return ToolResult.success()
             .put(KEY_REPORT, report)
             .put(KEY_PROBLEMS_FOUND, problems.size())
+            .put(KEY_PROBLEMS_TOTAL, total)
+            .put(KEY_HAS_MORE, nextOffset < total)
+            .put(KEY_NEXT_OFFSET, nextOffset)
             .put("problems", problems) //$NON-NLS-1$
             .put(KEY_OBJECTS_RESOLVED, resolution.resolved)
             .put(KEY_OBJECTS_NOT_FOUND, resolution.notFound)
@@ -2371,13 +2491,50 @@ public class GetProjectErrorsTool implements IMcpTool
         IBmModelManager bmModelManager, CollectContext context)
     {
         final List<ErrorInfo> errors = new ArrayList<>();
+        // EVERY marker is tested, also past the page: the total is what tells the caller the answer is
+        // partial, and stopping at the limit is how a long answer used to end without saying so (#917).
+        // Past the page a marker is only MATCHED (no row is built, and the object presentation - the one
+        // model read - is read only when an objects filter needs it), so counting stays cheap.
+        forEachScopedProject(markersByProject, bmModelManager, context, (projectObjects, projectMarkers) -> {
+            for (Marker marker : projectMarkers)
+            {
+                // The modulePaths filter is part of the match, so it narrows the stream BEFORE the page.
+                if (!MarkerRows.matches(marker, context.severityFilter, context.checkId, projectObjects,
+                    context.modulePathKeys, context.checkRepository, context.unresolvedFilteredOut,
+                    context.exactScope))
+                {
+                    continue;
+                }
+                int index = context.total[0]++;
+                if (index < context.offset || errors.size() >= context.limit)
+                {
+                    continue;
+                }
+                // The marker already matched, so the row filters cannot exclude it again; a scratch counter
+                // keeps a second look at an unresolved location from being counted twice.
+                ErrorInfo row = MarkerRows.buildIfMatches(marker, context.severityFilter, context.checkId,
+                    projectObjects, context.modulePathKeys, context.checkRepository, context.fixRepository,
+                    context.unresolvedShown, new int[1], context.exactScope, ErrorInfo::new);
+                if (row != null)
+                {
+                    errors.add(row);
+                }
+            }
+        });
+        return errors;
+    }
+
+    /**
+     * Runs {@code scan} over each project's markers inside that project's BM read boundary (when a model
+     * is available), with the object filter that applies to THAT project. A project that must contribute
+     * nothing ({@link CollectContext#objectsFor} returns {@code null}) is skipped.
+     */
+    private static void forEachScopedProject(Map<IProject, List<Marker>> markersByProject,
+        IBmModelManager bmModelManager, CollectContext context,
+        BiConsumer<Set<String>, List<Marker>> scan)
+    {
         for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
         {
-            if (errors.size() >= context.limit)
-            {
-                break;
-            }
-
             // The objects filter of THIS project. An exact-address call scopes each project by the
             // spellings that resolved THERE, so a project that resolved nothing contributes no
             // marker: an exact address is a claim about one node, and a project the node does not
@@ -2389,30 +2546,17 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 continue;
             }
-
             final List<Marker> projectMarkers = entry.getValue();
-            final int remaining = context.limit - errors.size();
 
             // Resolve the project's BM model so getObjectPresentation() can lazily
             // resolve the marker target inside a read transaction. The getModel(IProject)
             // overload is the idiomatic path used across the plugin (FindReferencesTool,
             // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
             IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
-
-            // The modulePaths filter runs inside the row builder, so it narrows the stream BEFORE the limit.
-            Runnable collector = () -> projectMarkers.stream()
-                .map(marker -> MarkerRows.buildIfMatches(marker, context.severityFilter, context.checkId,
-                    projectObjects, context.modulePathKeys, context.checkRepository, context.fixRepository,
-                    context.unresolvedShown, context.unresolvedFilteredOut, context.exactScope,
-                    ErrorInfo::new))
-                .filter(Objects::nonNull)
-                .limit(remaining)
-                .forEach(errors::add);
-
             if (bmModel != null)
             {
                 BmTransactions.<Void>read(bmModel, "CollectProjectErrors", (tx, pm) -> { //$NON-NLS-1$
-                    collector.run();
+                    scan.accept(projectObjects, projectMarkers);
                     return null;
                 });
             }
@@ -2420,10 +2564,53 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 // Not an EDT project (no BM model): best effort. Per-marker access is
                 // still guarded, so an unresolved marker is reported, never dropped.
-                collector.run();
+                scan.accept(projectObjects, projectMarkers);
             }
         }
-        return errors;
+    }
+
+    /**
+     * Counts, per severity, the markers that pass every filter of {@code context} EXCEPT the severity one.
+     * Run only when a severity filter left nothing: it is what turns that empty answer into "nothing at this
+     * level, but N problems at these levels" instead of a report that reads like a clean scope (#918).
+     *
+     * @return severity -&gt; count, in severity order; empty when no severity filter is set or nothing else
+     *     matches either
+     */
+    static Map<MarkerSeverity, Integer> countOtherSeverities(Map<IProject, List<Marker>> markersByProject,
+        IBmModelManager bmModelManager, CollectContext context)
+    {
+        Map<MarkerSeverity, Integer> counts = new EnumMap<>(MarkerSeverity.class);
+        if (context.severityFilter == null)
+        {
+            return counts;
+        }
+        // Scratch counter: this second look must not double the unresolved-location warning of the scan.
+        int[] scratch = new int[1];
+        forEachScopedProject(markersByProject, bmModelManager, context, (projectObjects, projectMarkers) -> {
+            for (Marker marker : projectMarkers)
+            {
+                MarkerSeverity severity = marker.getSeverity() != null ? marker.getSeverity() : MarkerSeverity.NONE;
+                if (severity != context.severityFilter
+                    && MarkerRows.matches(marker, null, context.checkId, projectObjects, context.modulePathKeys,
+                        context.checkRepository, scratch, context.exactScope))
+                {
+                    counts.merge(severity, 1, Integer::sum);
+                }
+            }
+        });
+        return counts;
+    }
+
+    /** Appends the note of {@link MarkerRows#appendOtherSeveritiesNote} for a severity filter that left nothing. */
+    private static void appendOtherSeverities(StringBuilder md, Map<IProject, List<Marker>> markersByProject,
+        IBmModelManager bmModelManager, CollectContext context)
+    {
+        if (context.severityFilter != null)
+        {
+            MarkerRows.appendOtherSeveritiesNote(md, context.severityFilter,
+                countOtherSeverities(markersByProject, bmModelManager, context));
+        }
     }
 
     /**
@@ -2452,12 +2639,26 @@ public class GetProjectErrorsTool implements IMcpTool
         final Map<String, Set<String>> objectsByProject;
         /** The {@code modulePaths} keys ({@link MarkerRows#modulePathKeys}); empty = no module filter. */
         final Set<String> modulePathKeys;
+        /** How many matching problems precede the page ({@code offset}). */
+        final int offset;
+        /** Out-counter: how many problems match the filters, over every page. */
+        final int[] total = new int[1];
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
             ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
             int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
             Map<String, Set<String>> objectsByProject, Set<String> modulePathKeys)
         {
+            this(severityFilter, checkId, objects, checkRepository, fixRepository, limit, unresolvedShown,
+                unresolvedFilteredOut, exactScope, objectsByProject, modulePathKeys, 0);
+        }
+
+        CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
+            ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
+            int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
+            Map<String, Set<String>> objectsByProject, Set<String> modulePathKeys, int offset)
+        {
+            this.offset = Math.max(0, offset);
             this.modulePathKeys = modulePathKeys != null ? modulePathKeys : Collections.<String> emptySet();
             this.severityFilter = severityFilter;
             this.checkId = checkId;
@@ -2482,6 +2683,12 @@ public class GetProjectErrorsTool implements IMcpTool
         Set<String> objectsFor(IProject project)
         {
             return objectsForProject(objectsByProject, objects, project.getName());
+        }
+
+        /** How many problems matched the filters in the last {@link #collectErrors} run, over every page. */
+        int total()
+        {
+            return total[0];
         }
     }
 
@@ -2556,30 +2763,68 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Appends the "Configuration Problems" Markdown section — the found-count header, the
-     * table header and one row per error — to {@code md}.
+     * Appends the "Configuration Problems" Markdown section for ONE page of a result: the found line with
+     * the total and the page window, the table, and - when problems remain beyond the page - how to get
+     * them.
+     *
+     * <p>The rows stop at a ROW boundary once the table would pass {@code budgetChars}, so the output cap
+     * ({@link OutputSizeGuard}) never cuts the table mid-list; the rows that did not fit start the next
+     * page, and the report says so and names its offset. At least one row is always rendered.</p>
+     *
+     * <p>Never reads like a clean scope when problems exist: an {@code offset} past the last problem is
+     * reported as such, with the total.</p>
      *
      * @param md the Markdown builder to append to
-     * @param errors the collected errors (must be non-empty)
-     * @param limit the result limit (drives the "limit reached" notice)
+     * @param errors the rows of this page, in order
+     * @param offset how many matching problems precede this page
+     * @param total how many problems match, over every page (at least 1)
      * @param detailed when {@code true} include saved ranges and {@code Has docs}
+     * @param budgetChars the character budget of the table rows
+     * @return how many of {@code errors} were rendered
      */
-    private static void appendProblemsTable(StringBuilder md, List<ErrorInfo> errors, int limit,
-        boolean detailed)
+    static int appendProblemsPage(StringBuilder md, List<ErrorInfo> errors, int offset, int total,
+        boolean detailed, int budgetChars)
     {
         md.append("# Configuration Problems\n\n"); //$NON-NLS-1$
-        md.append("**Found:** ").append(errors.size()); //$NON-NLS-1$
-        if (errors.size() >= limit)
+        if (errors.isEmpty())
         {
-            md.append(Pagination.limitReachedNotice(limit));
+            md.append("**Found:** ").append(total).append(" (offset ").append(offset) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" is past the last problem; pass an offset below ").append(total).append(")\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            return 0;
         }
-        md.append("\n\n"); //$NON-NLS-1$
 
-        appendProblemsTableHeader(md, detailed);
+        StringBuilder rows = new StringBuilder();
+        appendProblemsTableHeader(rows, detailed);
+        int shown = 0;
         for (ErrorInfo error : errors)
         {
-            appendProblemRow(md, error, detailed);
+            int before = rows.length();
+            appendProblemRow(rows, error, detailed);
+            if (shown > 0 && rows.length() > budgetChars)
+            {
+                rows.setLength(before);
+                break;
+            }
+            shown++;
         }
+
+        md.append("**Found:** ").append(total).append(Pagination.pageNotice(offset, shown, total)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        md.append(rows);
+        if (shown < errors.size())
+        {
+            md.append("\n> ⚠️ Only ").append(shown).append(" of the ").append(errors.size()) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" rows of this page fit the response size limit; the rest start the next page") //$NON-NLS-1$
+                .append(" (offset=").append(offset + shown).append(").\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (offset + shown < total)
+        {
+            md.append("\n> More problems match than this page shows: call again with offset=") //$NON-NLS-1$
+                .append(offset + shown)
+                .append(", or narrow the call. For the overview first - which checks fire and in which modules,") //$NON-NLS-1$
+                .append(" with counts - call get_problem_summary with groupBy check or module and the same") //$NON-NLS-1$
+                .append(" projectName / severity / checkId / modulePaths.\n"); //$NON-NLS-1$
+        }
+        return shown;
     }
 
     /**

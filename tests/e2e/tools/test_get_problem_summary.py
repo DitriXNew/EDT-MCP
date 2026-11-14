@@ -181,6 +181,32 @@ def test_group_by_check_counts_the_seeded_syntax_error():
             _fail("every check here lives in exactly one module (the filtered one): %r" % row)
 
 
+@e2e_test(tool="get_problem_summary", kind="write-metadata")
+def test_severity_that_leaves_nothing_names_the_other_levels():
+    """severity=NONE on a module WITH problems must not read like a clean module (#918).
+
+    NONE is the platform's level for a marker without a severity, not "all levels"; the seeded syntax
+    error is at another level, so the count is 0 - and the report must name how many problems the same
+    filters hold at the other levels, on both the grouped and the totals report.
+    """
+    _seed_and_wait_for_module_group()
+    whole = call("get_problem_summary", {"projectName": PROJECT, "groupBy": "check",
+                                         "modulePaths": [SEEDED_MODULE_PATH]})
+    assert_ok(whole, "the seeded module without a severity filter")
+    m = TOTAL_RE.search(whole.text)
+    if not m or int(m.group(1)) < 1:
+        _fail("the seeded marker must be counted: %s" % whole.text[:600])
+    count = int(m.group(1))
+
+    for args in ({"groupBy": "check"}, {}):
+        args = dict(args, projectName=PROJECT, modulePaths=[SEEDED_MODULE_PATH], severity="NONE")
+        r = call("get_problem_summary", args)
+        assert_ok(r, "severity NONE on the seeded module (%r)" % args)
+        assert_contains(r.text, "Nothing has severity NONE, but %d problem(s)" % count,
+                        "the empty count names the problems at the other levels")
+        assert_contains(r.text, "omit severity", "the remedy is named")
+
+
 @e2e_test(tool="get_problem_summary", kind="read")
 def test_top_one_folds_the_rest_and_totals_add_up():
     """top=1 shows one group and folds the rest into a single other-row; whatever the live

@@ -131,6 +131,146 @@ public final class MarkerRows
         IFixRepository fixRepository, int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
         boolean resolvePresentation, Supplier<R> newRow)
     {
+        Match match = match(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
+            unresolvedFilteredOut, exactScope, resolvePresentation);
+        if (match == null)
+        {
+            return null;
+        }
+
+        // Resolve the check UID once; reused for the symbolic check id (display) AND for the
+        // hasQuickFix flag (does this check have a registered EDT auto-fix?). The checkId filter
+        // already resolved it when it needed it.
+        CheckUid checkUid = match.checkUidResolved ? match.checkUid
+            : resolveCheckUid(marker, match.shortUid, checkRepository);
+        String symbolicCheckId = checkUid != null ? checkUid.getCheckId() : null;
+        // Best-effort, like the object-presentation resolution: a repository hiccup on ONE
+        // marker (stale registration, transient service state) must not abort the whole listing -
+        // just leave this row's flag unset.
+        boolean hasQuickFix = false;
+        if (checkUid != null && fixRepository != null)
+        {
+            try
+            {
+                hasQuickFix = fixRepository.hasFixes(checkUid);
+            }
+            catch (Exception e)
+            {
+                hasQuickFix = false;
+            }
+        }
+
+        // Build the row, reusing the already resolved symbolic check id and presentation.
+        R error = newRow.get();
+        IProject project = marker.getProject();
+        error.project = project != null ? project.getName() : null;
+        error.checkCode = match.shortUid;
+        error.checkId = symbolicCheckId;
+        error.contributorId = checkUid != null ? checkUid.getContributorId() : null;
+        error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
+            && CheckDescriptionLoader.has(symbolicCheckId);
+        error.hasQuickFix = hasQuickFix;
+        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
+
+        // Copy saved text coordinates inside the same read boundary as the rest of the row.
+        populateModuleLocation(marker, error);
+        if (match.presentationResolved)
+        {
+            error.objectPresentation = match.objectPresentation;
+        }
+        else
+        {
+            // No objects filter was active (otherwise we would have returned above): keep the
+            // marker with a placeholder location instead of dropping it, and count it.
+            unresolvedShown[0]++;
+            error.objectPresentation = unresolvedPlaceholder(marker);
+        }
+        return error;
+    }
+
+    /**
+     * Whether one marker passes the severity / module-path / checkId / objects filters - the SAME
+     * decision {@link #buildIfMatches} makes, without building the row. A caller that only COUNTS
+     * the matching markers (a total next to a page of rows) uses this, so the count and the rows
+     * can never disagree about what matches.
+     *
+     * <p>The object presentation - the one model read of a marker - is read only when an objects
+     * filter needs it; without one this is a handful of map reads. Call inside the marker's BM
+     * read boundary when {@code objects} is not empty. A marker excluded because its location
+     * could not be resolved advances {@code unresolvedFilteredOut}, as in {@link #buildIfMatches}.</p>
+     *
+     * @param modulePathKeys the module-path keys to keep; empty keeps every marker
+     * @return {@code true} when the marker matches every filter
+     */
+    public static boolean matches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        int[] unresolvedFilteredOut, boolean exactScope)
+    {
+        boolean needsPresentation = objects != null && !objects.isEmpty();
+        return match(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
+            unresolvedFilteredOut, exactScope, needsPresentation) != null;
+    }
+
+    /**
+     * Appends the note for a {@code severity} filter that left NOTHING while the same scope holds problems
+     * at other severities, so an empty answer cannot read like a clean scope (#918): it names the count per
+     * severity and says that the filter keeps one exact level - {@code NONE} being the level EDT gives a
+     * marker without a severity, not "all levels". Nothing is appended when no other severity matches
+     * either: then the scope really is clean for these filters.
+     *
+     * @param md the Markdown builder to append to
+     * @param severityFilter the severity the call asked for
+     * @param otherSeverities severity -&gt; count of the problems the severity filter alone excluded
+     */
+    public static void appendOtherSeveritiesNote(StringBuilder md, MarkerSeverity severityFilter,
+        Map<MarkerSeverity, Integer> otherSeverities)
+    {
+        if (severityFilter == null || otherSeverities == null || otherSeverities.isEmpty())
+        {
+            return;
+        }
+        int total = 0;
+        List<String> parts = new ArrayList<>();
+        for (MarkerSeverity severity : MarkerSeverity.values())
+        {
+            Integer count = otherSeverities.get(severity);
+            if (count != null && count > 0)
+            {
+                total += count;
+                parts.add(severity.name() + " " + count); //$NON-NLS-1$
+            }
+        }
+        if (total == 0)
+        {
+            return;
+        }
+        md.append("\n> ⚠️ Nothing has severity ").append(severityFilter.name()) //$NON-NLS-1$
+            .append(", but ").append(total).append(" problem(s) here match every other filter at another severity: ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(String.join(", ", parts)) //$NON-NLS-1$
+            .append(". severity keeps one exact level (NONE is the level of a marker EDT stores without a") //$NON-NLS-1$
+            .append(" severity, not 'all levels'); omit severity to list every level.\n"); //$NON-NLS-1$
+    }
+
+    /** What the filters learnt about a marker that passed them, reused when its row is built. */
+    private static final class Match
+    {
+        String shortUid;
+        /** Whether {@link #checkUid} was looked up (only the checkId filter needs it). */
+        boolean checkUidResolved;
+        CheckUid checkUid;
+        String objectPresentation;
+        boolean presentationResolved;
+    }
+
+    /**
+     * The one filter decision shared by {@link #buildIfMatches} and {@link #matches}: severity,
+     * then module paths, then checkId, then objects - the order the {@code unresolvedFilteredOut}
+     * counter depends on. Returns {@code null} when the marker is filtered out.
+     */
+    private static Match match(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        int[] unresolvedFilteredOut, boolean exactScope, boolean resolvePresentation)
+    {
         if (!resolvePresentation && objects != null && !objects.isEmpty())
         {
             throw new IllegalArgumentException("The objects filter needs the object presentation"); //$NON-NLS-1$
@@ -149,90 +289,50 @@ public final class MarkerRows
             return null;
         }
 
-        // Resolve the check UID once; reused for the symbolic check id (display + checkId filter)
-        // AND for the hasQuickFix flag (does this check have a registered EDT auto-fix?).
-        String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-        CheckUid checkUid = resolveCheckUid(marker, shortUid, checkRepository);
-        String symbolicCheckId = checkUid != null ? checkUid.getCheckId() : null;
-        // Best-effort, like the object-presentation resolution below: a repository hiccup on ONE
-        // marker (stale registration, transient service state) must not abort the whole listing -
-        // just leave this row's flag unset.
-        boolean hasQuickFix = false;
-        if (checkUid != null && fixRepository != null)
-        {
-            try
-            {
-                hasQuickFix = fixRepository.hasFixes(checkUid);
-            }
-            catch (Exception e)
-            {
-                hasQuickFix = false;
-            }
-        }
+        Match match = new Match();
+        match.shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
 
         // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
         // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
-        if (checkId != null && !checkId.isEmpty() && !checkIdMatches(shortUid, symbolicCheckId, checkId))
+        if (checkId != null && !checkId.isEmpty())
         {
-            return null;
+            match.checkUid = resolveCheckUid(marker, match.shortUid, checkRepository);
+            match.checkUidResolved = true;
+            String symbolicCheckId = match.checkUid != null ? match.checkUid.getCheckId() : null;
+            if (!checkIdMatches(match.shortUid, symbolicCheckId, checkId))
+            {
+                return null;
+            }
         }
 
         // Resolve the object presentation once; reused for the objects filter and the row.
-        // Failure handling differs by context (see below), so we only record the outcome here.
-        String objectPresentation = null;
-        boolean presentationResolved;
+        // Failure handling differs by context (see buildIfMatches), so we only record the outcome here.
         if (!resolvePresentation)
         {
             // Not asked for: no model read, no placeholder, no unresolved count (objectPresentation stays null).
-            presentationResolved = true;
+            match.presentationResolved = true;
         }
         else
         {
             try
             {
                 String p = marker.getObjectPresentation();
-                objectPresentation = p != null ? p : ""; //$NON-NLS-1$
-                presentationResolved = true;
+                match.objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+                match.presentationResolved = true;
             }
             catch (Exception e)
             {
-                presentationResolved = false;
+                match.presentationResolved = false;
             }
         }
 
         // Objects filter (FQN matching against the resolved object presentation)
-        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut,
-            exactScope))
+        if (excludedByObjectsFilter(objects != null ? objects : Collections.<String> emptySet(),
+            match.presentationResolved, match.objectPresentation, unresolvedFilteredOut, exactScope))
         {
             return null;
         }
-
-        // Build the row, reusing the already resolved symbolic check id and presentation.
-        R error = newRow.get();
-        IProject project = marker.getProject();
-        error.project = project != null ? project.getName() : null;
-        error.checkCode = shortUid;
-        error.checkId = symbolicCheckId;
-        error.contributorId = checkUid != null ? checkUid.getContributorId() : null;
-        error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
-            && CheckDescriptionLoader.has(symbolicCheckId);
-        error.hasQuickFix = hasQuickFix;
-        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-
-        // Copy saved text coordinates inside the same read boundary as the rest of the row.
-        populateModuleLocation(marker, error);
-        if (presentationResolved)
-        {
-            error.objectPresentation = objectPresentation;
-        }
-        else
-        {
-            // No objects filter was active (otherwise we would have returned above): keep the
-            // marker with a placeholder location instead of dropping it, and count it.
-            unresolvedShown[0]++;
-            error.objectPresentation = unresolvedPlaceholder(marker);
-        }
-        return error;
+        return match;
     }
 
     /**
