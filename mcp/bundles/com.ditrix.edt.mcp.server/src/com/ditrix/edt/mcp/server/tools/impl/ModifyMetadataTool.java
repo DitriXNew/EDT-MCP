@@ -773,6 +773,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         args.projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         args.fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
+        // A 'properties' of another shape is refused, never read as "no properties": that read answered
+        // "properties is required" for an object, and dropped it silently beside another payload (#930).
+        String propertiesShape = JsonUtils.objectArrayShapeError(params, "properties"); //$NON-NLS-1$
+        if (propertiesShape != null)
+        {
+            args.error = ToolResult.error(propertiesShape + NOTHING_CHANGED).toJson();
+            return args;
+        }
         args.properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
 
         // Role payload (rights[] / templates[] / roleProperties): dispatched when the resolved FQN is a
@@ -1884,6 +1892,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + (normFqn != null && normFqn.startsWith("ExternalDataSource.") //$NON-NLS-1$
                 ? " External data source members use 'ExternalDataSource.<X>.Table.<T>(.Field.<F>)' " //$NON-NLS-1$
                     + "or 'ExternalDataSource.<X>.Function.<F>'." : "") //$NON-NLS-1$ //$NON-NLS-2$
+            // A short 'Subsystem.<Child>' of a subsystem that exists only nested (issue #929).
+            + SubsystemUtils.nestedNamesakesHint(scope, normFqn)
             + MetadataNodeResolver.yoNotFoundHint(normFqn)
             + scope.addressingHint(normFqn);
     }
@@ -4378,6 +4388,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         String valueError = memberValueTypeError(target, changes);
         return valueError == null ? null : ToolResult.error(valueError).toJson();
+    }
+
+    /**
+     * {@code create_metadata}'s seam (issue #930): validates and prepares {@code properties} for an object of
+     * {@code prototype}'s kind by THIS tool's rules - {@link #validateAndPrepare}, the same names, value kinds,
+     * allowed values and refusals - so a property create accepts at creation is the one this tool would set,
+     * never a second vocabulary. The prepared changes are written with {@link #applyChanges} inside the
+     * creating transaction.
+     *
+     * <p>{@code prototype} is a detached object of the kind being created, never attached to a model: the
+     * preparation reads only its class and its own values, and every reference it prepares is captured by
+     * BM id, re-fetched inside the transaction.</p>
+     *
+     * @return the refusal JSON of the first property that does not validate, or {@code null}
+     */
+    static String prepareForCreate(IProject project, MetadataScope scope, Configuration config, Version version, // NOSONAR the modify preparation's context, passed through as is
+        MdObject prototype, List<JsonObject> properties, List<PreparedChange> changes,
+        MdNameNormalizer.Report normReport, boolean isExtensionProject)
+    {
+        return new ModifyMetadataTool((tool, preview) -> ConsentDecision.REJECT).validateAndPrepare(project, scope,
+            config, version, prototype, properties, changes, normReport, isExtensionProject);
     }
 
     /** Checks against the batch's final type, regardless of the JSON property order. */

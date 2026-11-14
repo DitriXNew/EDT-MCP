@@ -10,6 +10,7 @@ import com.ditrix.edt.mcp.server.HostKind;
 
 import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -43,6 +44,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
@@ -225,7 +227,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). Templates also accept " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). A Subsystem (top-level or " //$NON-NLS-1$
+                + "nested) also takes what modify_metadata sets on it, e.g. includeInCommandInterface. Templates also accept " //$NON-NLS-1$
                 + "'templateType': TextDocument, SpreadsheetDocument or DataCompositionSchema (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
                 + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
                 + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
@@ -478,6 +481,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        String shapeErr = propertiesShapeRefusal(params);
+        if (shapeErr != null)
+        {
+            return shapeErr;
+        }
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
@@ -565,7 +573,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // The owned-form branch above already consumed setAsDefault; here it means "make the new report
         // template the main data composition schema" (issue #919) and stays ignored for other kinds.
         props.setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
-        String propErr = parseProperties(properties, props, normReport);
+        // A subsystem - top-level or nested, either language - takes modify_metadata's properties at
+        // creation (issue #930); every other kind refuses them by name.
+        String propErr = parseProperties(properties, props, normReport,
+            SubsystemUtils.parseSubsystemPath(normFqn) != null);
         if (propErr != null)
         {
             return propErr;
@@ -582,6 +593,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (ctx.hasError()) return () -> ctx.error;
             IProject project = ctx.project;
             Configuration config = ctx.config;
+
+            // A subsystem's properties beyond synonym / comment are validated by modify_metadata's rules
+            // before anything is created, and written in the creating transaction (issue #930).
+            String writerErr = prepareWriterChanges(project, ctx.scope, config, projectVersion(project),
+                MdClassPackage.Literals.SUBSYSTEM, props, normReport, ExtensionOriginUtils.isExtensionProject(project));
+            if (writerErr != null)
+            {
+                return () -> writerErr;
+            }
 
             // A NESTED subsystem ('Subsystem.Sales.Subsystem.Orders', any depth, either language) takes
             // a dedicated branch, and deliberately NOT the generic member path: 'Subsystem.subsystems'
@@ -1434,6 +1454,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                             (BasicForm)newObject, formFactory, fqnGenerator, version, russianAutoNames);
                     }
                     factory.fillDefaultReferences(newObject);
+                    // A subsystem's properties beyond synonym / comment, by modify_metadata's own writer,
+                    // after the factory defaults they replace (issue #930); empty for every other kind.
+                    ModifyMetadataTool.applyChanges(newObject, req.props.writerChanges, tx, req.normFqn);
                     if (newObject instanceof BasicTemplate)
                     {
                         templateContentFqnHolder[0] = templates.initialize((BasicTemplate)newObject,
@@ -1675,6 +1698,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     }
                     newObject.setParentSubsystem(owner);
                     factory.fillDefaultReferences(newObject);
+                    // The properties beyond synonym / comment, by modify_metadata's own writer, after the
+                    // factory defaults they replace (issue #930).
+                    ModifyMetadataTool.applyChanges(newObject, props.writerChanges, tx, childFqn);
                     parentFqnHolder[0] = ownerFqn;
                     createdFqnHolder[0] = childFqn;
                     return null;
@@ -3684,6 +3710,87 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Integer insertPosition;
         /** A new Report / ExternalReport template becomes the report's main data composition schema. */
         boolean setAsDefault;
+        /**
+         * The properties of a SUBSYSTEM create beyond synonym / comment, set by modify_metadata's own rules
+         * at creation (issue #930); empty for every other kind, which refuses them by name.
+         */
+        final List<JsonObject> writerProperties = new ArrayList<>();
+        /** {@link #writerProperties} as modify_metadata prepared them, applied in the creating transaction. */
+        final List<ModifyMetadataTool.PreparedChange> writerChanges = new ArrayList<>();
+    }
+
+    /**
+     * The properties a create decides itself, so the {@code properties} of a create never set them: the Name
+     * is the address's last segment, the parent is the address's chain, and identity and belonging are the
+     * new object's own (issue #930).
+     */
+    private static final List<EStructuralFeature> CREATE_DECIDES = List.of(MdClassPackage.Literals.MD_OBJECT__NAME,
+        MdClassPackage.Literals.MD_OBJECT__UUID, MdClassPackage.Literals.MD_OBJECT__OBJECT_BELONGING,
+        MdClassPackage.Literals.MD_OBJECT__EXTENDED_CONFIGURATION_OBJECT, MdClassPackage.Literals.SUBSYSTEM__SUBSYSTEMS,
+        MdClassPackage.Literals.SUBSYSTEM__PARENT_SUBSYSTEM);
+
+    /**
+     * The refusal of a {@code properties} argument that is present but not an array of {name, value} objects
+     * ({@link JsonUtils#objectArrayShapeError}), or {@code null}: such an argument was read as "no properties",
+     * and the object was created without them (issue #930). Package-visible for tests.
+     *
+     * @param params the raw arguments
+     * @return the refusal JSON, or {@code null}
+     */
+    static String propertiesShapeRefusal(Map<String, String> params)
+    {
+        String shape = JsonUtils.objectArrayShapeError(params, "properties"); //$NON-NLS-1$
+        return shape == null ? null : ToolResult.error(shape + " Nothing was created.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Prepares the properties a SUBSYSTEM takes at creation beyond synonym / comment
+     * ({@link Props#writerProperties}) by modify_metadata's own rules ({@link ModifyMetadataTool#prepareForCreate}),
+     * into {@link Props#writerChanges}, which the creating transaction applies after the factory defaults - so
+     * a new subsystem gets, for instance, {@code includeInCommandInterface=false} in the same write that
+     * creates it (issue #930). What the create decides itself ({@link #CREATE_DECIDES}) is refused. Runs in
+     * the create preparation, before anything is written. Package-visible for tests.
+     *
+     * @param project the project (may be {@code null} in tests)
+     * @param scope its resolution root
+     * @param config its configuration
+     * @param version its platform version, or {@code null}
+     * @param eClass the kind being created
+     * @param props the parsed properties; {@link Props#writerChanges} is refilled
+     * @param normReport the yo-normalization report of the call
+     * @param isExtensionProject whether the project is an extension
+     * @return the refusal JSON, or {@code null} when every property validated
+     */
+    static String prepareWriterChanges(IProject project, MetadataScope scope, Configuration config, Version version, // NOSONAR the modify preparation's context, passed through as is
+        EClass eClass, Props props, MdNameNormalizer.Report normReport, boolean isExtensionProject)
+    {
+        props.writerChanges.clear();
+        if (props.writerProperties.isEmpty())
+        {
+            return null;
+        }
+        for (JsonObject prop : props.writerProperties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            for (EStructuralFeature decided : CREATE_DECIDES)
+            {
+                if (decided.getEContainingClass().isSuperTypeOf(eClass) && decided.getName().equalsIgnoreCase(name))
+                {
+                    return ToolResult.error("Property '" + name + "' cannot be set at creation: create_metadata " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "decides it - the Name is the FQN's last segment, a nested subsystem's parent is " //$NON-NLS-1$
+                        + "its chain, and the identity and belonging are the new object's own. Remove it. " //$NON-NLS-1$
+                        + "Nothing was created.").toJson(); //$NON-NLS-1$
+                }
+            }
+        }
+        MdObject prototype = (MdObject)MdClassFactory.eINSTANCE.create(eClass);
+        String error = ModifyMetadataTool.prepareForCreate(project, scope, config, version, prototype,
+            props.writerProperties, props.writerChanges, normReport, isExtensionProject);
+        if (error != null)
+        {
+            props.writerChanges.clear();
+        }
+        return error;
     }
 
     /**
@@ -3736,11 +3843,23 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Parses the {@code properties} array into the supported {@link Props}, refusing any other name -
+     * the parse of every kind but a subsystem.
+     */
+    private String parseProperties(List<JsonObject> properties, Props out, MdNameNormalizer.Report normReport)
+    {
+        return parseProperties(properties, out, normReport, false);
+    }
+
+    /**
      * Parses the {@code properties} array into the supported {@link Props}. Returns a JSON error
-     * string when a property is malformed or unsupported, or {@code null} on success.
+     * string when a property is malformed or unsupported, or {@code null} on success. With
+     * {@code writerAccepted} - a subsystem create - a property create_metadata does not apply itself is
+     * kept for modify_metadata's rules ({@link Props#writerProperties}, {@link #prepareWriterChanges});
+     * otherwise it is refused by name (issue #930).
      */
     private String parseProperties(List<JsonObject> properties, Props out,
-        MdNameNormalizer.Report normReport)
+        MdNameNormalizer.Report normReport, boolean writerAccepted)
     {
         for (JsonObject prop : properties)
         {
@@ -3768,6 +3887,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     }
                     break;
                 default:
+                    if (writerAccepted)
+                    {
+                        out.writerProperties.add(prop);
+                        break;
+                    }
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
                         + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
                         + "properties (including type) via modify_metadata." + templateTypeHint(name)).toJson(); //$NON-NLS-1$
@@ -3924,7 +4048,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         info.normReport.addTo(result);
         String created = MetadataTypeUtils.toCanonicalEnglishFqn(info.fqn);
-        String message = "Created " + created + templateNote(info.kind, info.props, created); //$NON-NLS-1$
+        String message = "Created " + created + templateNote(info.kind, info.props, created) //$NON-NLS-1$
+            + writerNote(info.props);
         if (info.props.setAsDefault && info.kind != null && MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(info.kind))
         {
             result.put(KEY_SET_AS_DEFAULT, true);
@@ -3932,6 +4057,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return result
             .put(McpKeys.MESSAGE, message)
             .toJson();
+    }
+
+    /** Names the properties a subsystem create set by modify_metadata's rules (issue #930); empty when none. */
+    static String writerNote(Props props)
+    {
+        List<String> names = new ArrayList<>();
+        for (ModifyMetadataTool.PreparedChange change : props.writerChanges)
+        {
+            String name = change.feature().getName();
+            if (!names.contains(name))
+            {
+                names.add(name);
+            }
+        }
+        return names.isEmpty() ? "" : "; set " + String.join(", ", names); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**

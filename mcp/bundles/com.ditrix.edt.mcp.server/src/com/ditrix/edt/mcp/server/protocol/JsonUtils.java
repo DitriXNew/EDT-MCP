@@ -375,6 +375,76 @@ public final class JsonUtils
     }
 
     /**
+     * The refusal of an array-of-{name, value}-objects argument that is PRESENT but has another shape -
+     * a JSON object, a single value, text that is not JSON, or an array with an item that is not an
+     * object - or {@code null} when the argument is absent, blank, JSON {@code null} or well-formed.
+     *
+     * <p>{@link #extractObjectArray} reads every other shape as "no items" and skips a non-object item,
+     * which is right for a reader that must not throw, but a tool that writes what the list asks for
+     * would then report success without having applied it (issue #930). A writing tool asks this first
+     * and refuses the call instead. The message has no final verdict: the tool appends what it did not
+     * do.</p>
+     *
+     * @param params the params map (may be {@code null})
+     * @param argumentName the argument name (may be {@code null})
+     * @return the refusal sentence, or {@code null} when there is nothing to refuse
+     */
+    public static String objectArrayShapeError(Map<String, String> params, String argumentName)
+    {
+        if (params == null || argumentName == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String value = params.get(argumentName);
+        String trimmed = value == null ? "" : value.trim(); //$NON-NLS-1$
+        if (trimmed.isEmpty() || "null".equals(trimmed)) //$NON-NLS-1$
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String got;
+        try
+        {
+            got = shapeOf(JsonParser.parseString(trimmed));
+        }
+        catch (RuntimeException e)
+        {
+            got = "text that is not JSON"; //$NON-NLS-1$
+        }
+        if (got == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        return "'" + argumentName + "' must be an array of {name, value} objects, e.g. [{name: " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'comment', value: 'Goods'}]; it was " + got + ", so none of it can be applied."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** What an array-of-objects argument is instead, or {@code null} when it is one (or JSON null). */
+    private static String shapeOf(JsonElement element)
+    {
+        if (element == null || element.isJsonNull())
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        if (element.isJsonObject())
+        {
+            return "a JSON object - wrap each property as one {name, value} item of an array"; //$NON-NLS-1$
+        }
+        if (!element.isJsonArray())
+        {
+            return "a single value"; //$NON-NLS-1$
+        }
+        JsonArray array = element.getAsJsonArray();
+        for (int i = 0; i < array.size(); i++)
+        {
+            if (!array.get(i).isJsonObject())
+            {
+                return "an array whose item " + (i + 1) + " is not an object"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+    }
+
+    /**
      * Extracts an array-of-objects argument from the params map. A complex argument arrives here as
      * its JSON text (the protocol layer re-serializes nested JSON values into the string map), so a
      * {@code properties} array like {@code [{"name":"synonym","value":"X","language":"ru"}]} is
