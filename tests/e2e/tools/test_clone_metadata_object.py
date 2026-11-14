@@ -1,4 +1,4 @@
-"""Native clone contract: preview/drift, all four top types, resources and explicit transfers.
+"""Native clone contract: preview/drift, every supported top kind, resources and explicit transfers.
 
 The orchestrator owns fixture resets. Every apply checks disk before another MCP call.
 """
@@ -146,6 +146,190 @@ def test_clone_report_roundtrip():
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
 def test_clone_data_processor_roundtrip():
     _top_roundtrip("DataProcessor", "DataProcessors")
+
+
+def _seed(*steps):
+    for tool, arguments, ctx in steps:
+        assert_ok(call(tool, {"projectName": PROJECT, **arguments}), ctx)
+    wait_for_project_ready()
+
+
+def _write_module(path, source, ctx):
+    return ("write_module_source", {"modulePath": path, "mode": "replace", "source": source, "overwrite": True}, ctx)
+
+
+def _registered(fqn):
+    collection = _CONFIGURATION_TAG[fqn.split(".")[0]]
+    return fqn in [node.text for node in _xml("src/Configuration/Configuration.mdo").findall(collection)]
+
+
+# Configuration.mdo element per kind; Role also has defaultRoles, which a clone must never join.
+_CONFIGURATION_TAG = {"Constant": "constants", "Enum": "enums", "InformationRegister": "informationRegisters",
+                   "ScheduledJob": "scheduledJobs", "CommonModule": "commonModules", "Role": "roles"}
+
+
+def _uuids(root):
+    return [node.attrib["uuid"] for node in root.iter() if "uuid" in node.attrib]
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_constant_copies_type_and_value_manager_module():
+    module = "Procedure BeforeWrite(Cancel)\n    Value = Constants.E2ECloneConst.Get();\nEndProcedure\n"
+    _seed(("create_metadata", {"fqn": "Constant.E2ECloneConst"}, "seed constant"),
+          ("modify_metadata", {"fqn": "Constant.E2ECloneConst", "properties": [
+              {"name": "type", "value": {"types": [{"kind": "Number", "precision": 12, "scale": 3}]}}]}, "seed type"),
+          _write_module("Constants/E2ECloneConst/ValueManagerModule.bsl", module, "seed value manager module"))
+    source = _xml("src/Constants/E2ECloneConst/E2ECloneConst.mdo")
+    module_bytes = _read_bytes("src/Constants/E2ECloneConst/ValueManagerModule.bsl")
+    preview = _preview(fqn="Constant.E2ECloneConst", newName="E2ECloneConstCopy")
+    assert ("src/Constants/E2ECloneConst/ValueManagerModule.bsl", 2) in {
+        (hit["file"], hit["line"]) for hit in preview["codeReferences"]}, preview
+    data = _apply(preview, fqn="Constant.E2ECloneConst", newName="E2ECloneConstCopy")
+    root = _xml("src/Constants/E2ECloneConstCopy/E2ECloneConstCopy.mdo")
+    assert root.findtext("name") == "E2ECloneConstCopy" and root.attrib["uuid"] != source.attrib["uuid"]
+    assert ET.tostring(root.find("type"), encoding="unicode") == ET.tostring(source.find("type"), encoding="unicode")
+    assert root.findtext("type/numberQualifiers/precision") == "12", ET.tostring(root, encoding="unicode")
+    _assert_module_copy("src/Constants/E2ECloneConst/ValueManagerModule.bsl",
+                        "src/Constants/E2ECloneConstCopy/ValueManagerModule.bsl", module_bytes)
+    assert ("src/Constants/E2ECloneConstCopy/ValueManagerModule.bsl", 2) in {
+        (hit["file"], hit["line"]) for hit in data["codeReferences"]}, data
+    assert _registered("Constant.E2ECloneConstCopy")
+    assert_contains(_details("Constant.E2ECloneConstCopy"), "E2ECloneConstCopy", "clone model read-back")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_enum_gives_values_new_identities():
+    _seed(("create_metadata", {"fqn": "Enum.E2ECloneEnum"}, "seed enum"),
+          ("create_metadata", {"fqn": "Enum.E2ECloneEnum.EnumValue.First"}, "seed first value"),
+          ("create_metadata", {"fqn": "Enum.E2ECloneEnum.EnumValue.Second"}, "seed second value"))
+    source = _xml("src/Enums/E2ECloneEnum/E2ECloneEnum.mdo")
+    data = _apply(_preview(fqn="Enum.E2ECloneEnum", newName="E2ECloneEnumCopy"),
+                  fqn="Enum.E2ECloneEnum", newName="E2ECloneEnumCopy")
+    root = _xml("src/Enums/E2ECloneEnumCopy/E2ECloneEnumCopy.mdo")
+    assert [node.findtext("name") for node in root.findall("enumValues")] == ["First", "Second"]
+    source_values = {node.attrib["uuid"] for node in source.findall("enumValues")}
+    clone_values = [node.attrib["uuid"] for node in root.findall("enumValues")]
+    assert len(set(clone_values)) == 2 and not source_values & set(clone_values), (source_values, clone_values)
+    assert not set(_uuids(source)) & set(_uuids(root)), "no identity may be shared with the source"
+    assert _xml("src/Enums/E2ECloneEnum/E2ECloneEnum.mdo").attrib == source.attrib, "source must stay unchanged"
+    assert _registered("Enum.E2ECloneEnumCopy")
+    assert_contains(_details(data["fqn"]), "Second", "cloned values read-back")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_information_register_reports_recorders_left_on_the_source():
+    register = "InformationRegister.E2ECloneRegister"
+    module = "Procedure BeforeWrite(Cancel, Replacing)\n    // InformationRegisters.E2ECloneRegister\nEndProcedure\n"
+    _seed(("create_metadata", {"fqn": register}, "seed register"),
+          ("create_metadata", {"fqn": register + ".Dimension.Item"}, "seed dimension"),
+          ("create_metadata", {"fqn": register + ".Resource.Amount"}, "seed resource"),
+          ("create_metadata", {"fqn": register + ".Attribute.Note"}, "seed attribute"),
+          ("create_metadata", {"fqn": register + ".Form.RecordForm"}, "seed form"),
+          ("modify_metadata", {"fqn": register, "properties": [{"name": "writeMode", "value": "RecorderSubordinate"}]},
+           "seed recorder-subordinate mode"),
+          ("modify_metadata", {"fqn": "Document.QueryOrder", "properties": [
+              {"name": "registerRecords", "value": ["AccumulationRegister.QueryStock", register]}]}, "seed recorder"),
+          _write_module("InformationRegisters/E2ECloneRegister/RecordSetModule.bsl", module, "seed record set module"))
+    source = _xml("src/InformationRegisters/E2ECloneRegister/E2ECloneRegister.mdo")
+    recorder = _hash_file("src/Documents/QueryOrder/QueryOrder.mdo")
+    preview = _preview(fqn=register, newName="E2ECloneRegisterCopy")
+    assert any(row["owner"].startswith("Document.QueryOrder") for row in preview["notCopied"]), preview
+    assert "RecorderSubordinate" in preview["warning"] and "registerRecords" in preview["warning"], preview
+    data = _apply(preview, fqn=register, newName="E2ECloneRegisterCopy")
+    assert "RecorderSubordinate" in data["warning"], data
+    assert any(row["owner"].startswith("Document.QueryOrder") for row in data["notCopied"]), data
+    folder = "src/InformationRegisters/E2ECloneRegisterCopy"
+    root = _xml(folder + "/E2ECloneRegisterCopy.mdo")
+    for member, name in (("dimensions", "Item"), ("resources", "Amount"), ("attributes", "Note")):
+        assert root.find(member + "/name").text == name, member
+        assert root.find(member).attrib["uuid"] != source.find(member).attrib["uuid"], member
+    assert root.findtext("writeMode") == "RecorderSubordinate"
+    assert root.find("forms/name").text == "RecordForm"
+    assert _xml(folder + "/Forms/RecordForm/Form.form").tag == "{http://g5.1c.ru/v8/dt/form}Form"
+    assert _read_bytes(folder + "/RecordSetModule.bsl") == _read_bytes(
+        "src/InformationRegisters/E2ECloneRegister/RecordSetModule.bsl")
+    assert _hash_file("src/Documents/QueryOrder/QueryOrder.mdo") == recorder, "recorders must not be redirected"
+    assert _registered(data["fqn"])
+    assert_contains(_details(data["fqn"]), "Amount", "cloned register fields read-back")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_enabled_scheduled_job_warns_that_both_jobs_run():
+    _seed(("create_metadata", {"fqn": "ScheduledJob.E2ECloneJob"}, "seed job"),
+          ("modify_metadata", {"fqn": "ScheduledJob.E2ECloneJob", "properties": [
+              {"name": "methodName", "value": "CommonModule.Calc.Add"}, {"name": "use", "value": True}]},
+           "seed method and use"))
+    preview = _preview(fqn="ScheduledJob.E2ECloneJob", newName="E2ECloneJobCopy")
+    assert "both jobs will run the same method" in preview["warning"], preview
+    assert "CommonModule.Calc.Add" in preview["warning"], preview
+    data = _apply(preview, fqn="ScheduledJob.E2ECloneJob", newName="E2ECloneJobCopy")
+    assert "both jobs will run the same method" in data["warning"], data
+    root = _xml("src/ScheduledJobs/E2ECloneJobCopy/E2ECloneJobCopy.mdo")
+    assert root.findtext("methodName") == "CommonModule.Calc.Add"
+    assert root.findtext("use") == "true"
+    assert _registered(data["fqn"])
+    quiet = _preview(fqn="Catalog.Catalog", newName="E2ECloneQuietJob")
+    assert "both jobs" not in quiet["warning"], quiet
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_common_module_reports_bare_name_calls_and_refuses_a_global_module():
+    code = ("Function Twice(Value) Export\n    Return Value * 2;\nEndFunction\n\n"
+            "Function Quad(Value) Export\n    Return E2ECloneModule.Twice(E2ECloneModule.Twice(Value));\nEndFunction\n")
+    _seed(("create_metadata", {"fqn": "CommonModule.E2ECloneModule"}, "seed module"),
+          ("modify_metadata", {"fqn": "CommonModule.E2ECloneModule", "properties": [{"name": "server", "value": True}]},
+           "seed server flag"),
+          _write_module("CommonModules/E2ECloneModule/Module.bsl", code, "seed module text"))
+    source_path = "src/CommonModules/E2ECloneModule/Module.bsl"
+    module_bytes = _read_bytes(source_path)
+    preview = _preview(fqn="CommonModule.E2ECloneModule", newName="E2ECloneModuleCopy")
+    assert (source_path, 6) in {(hit["file"], hit["line"]) for hit in preview["codeReferences"]}, preview
+    data = _apply(preview, fqn="CommonModule.E2ECloneModule", newName="E2ECloneModuleCopy")
+    clone_path = "src/CommonModules/E2ECloneModuleCopy/Module.bsl"
+    _assert_module_copy(source_path, clone_path, module_bytes)
+    hits = {(hit["file"], hit["line"]) for hit in data["codeReferences"]}
+    assert (clone_path, 6) in hits and (clone_path, 1) not in hits, data
+    root = _xml("src/CommonModules/E2ECloneModuleCopy/E2ECloneModuleCopy.mdo")
+    assert root.findtext("server") == "true"
+    assert _registered(data["fqn"])
+    _seed(("create_metadata", {"fqn": "CommonModule.E2ECloneGlobal"}, "seed global module"),
+          ("modify_metadata", {"fqn": "CommonModule.E2ECloneGlobal", "properties": [
+              {"name": "global", "value": True}, {"name": "server", "value": True}]}, "seed global flag"))
+    before = tree_snapshot()
+    message = assert_error(_clone(fqn="CommonModule.E2ECloneGlobal", newName="E2ECloneGlobalCopy"), "global module")
+    assert_error_quality(message, names=["CommonModule.E2ECloneGlobal", "global=true"], suggests=["non-global"])
+    assert "resync_to_disk" not in message, "a kind refusal is not a stale-source problem: " + message
+    assert_tree_unchanged(before, "a refused global module clone writes nothing")
+    _absent("CommonModule.E2ECloneGlobalCopy")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_role_copies_its_rights_model_rls_and_templates():
+    condition = "WHERE Description = &Name"
+    _seed(("create_metadata", {"fqn": "Role.E2ECloneRoleSource"}, "seed role"),
+          ("modify_metadata", {"fqn": "Role.E2ECloneRoleSource",
+                               "rights": [{"object": "Catalog.Catalog", "right": "Read", "value": "set",
+                                           "rls": condition, "rlsFields": ["Description"]}],
+                               "templates": [{"op": "add", "name": "ByName", "condition": condition}]},
+           "seed rights, RLS and template"))
+    source_rights = _read_bytes("src/Roles/E2ECloneRoleSource/Rights.rights")
+    preview = _preview(fqn="Role.E2ECloneRoleSource", newName="E2ECloneRoleCopy")
+    assert any(row["file"].endswith("/Rights.rights") for row in preview["resources"]), preview
+    data = _apply(preview, fqn="Role.E2ECloneRoleSource", newName="E2ECloneRoleCopy")
+    rights_path = "src/Roles/E2ECloneRoleCopy/Rights.rights"
+    assert any(row["file"] == rights_path and row["verified"] for row in data["resources"]), data
+    rights = _xml(rights_path)
+    source = ET.fromstring(source_rights)
+    assert ET.tostring(rights, encoding="unicode") == ET.tostring(source, encoding="unicode"), \
+        "the clone's rights model must carry the same rows, RLS and templates"
+    row = next(node for node in rights.findall("{*}object") if node.findtext("{*}name") == "Catalog.Catalog")
+    assert row.findtext("{*}right/{*}restrictionByCondition/{*}condition") == condition
+    assert rights.findtext("{*}restrictionTemplate/{*}name") == "ByName"
+    assert _read_bytes("src/Roles/E2ECloneRoleSource/Rights.rights") == source_rights, "source rights unchanged"
+    configuration = _xml("src/Configuration/Configuration.mdo")
+    assert data["fqn"] in [node.text for node in configuration.findall("roles")]
+    assert data["fqn"] not in [node.text for node in configuration.findall("defaultRoles")]
+    assert_contains(_details("Role.E2ECloneRoleCopy"), "Catalog.Catalog", "cloned rights model read-back")
 
 
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
@@ -343,7 +527,7 @@ def test_clone_source_module_drift_refuses_before_copy():
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
 def test_clone_negative_contract():
     cases = [
-        ({"fqn": "Role.X"}, ["Role.X"], ["Catalog", "Document"]),
+        ({"fqn": "ExchangePlan.X"}, ["ExchangePlan.X"], ["Catalog", "Role"]),
         ({"fqn": "Catalog.Catalog.Form.ItemForm"}, ["ItemForm"], ["top object"]),
         ({"fqn": "Catalog.Catalog", "confirm": True}, ["expectedHash"], ["without confirm"]),
         ({"fqn": "Catalog.Catalog", "newName": "1bad"}, ["1bad"], ["identifier"]),

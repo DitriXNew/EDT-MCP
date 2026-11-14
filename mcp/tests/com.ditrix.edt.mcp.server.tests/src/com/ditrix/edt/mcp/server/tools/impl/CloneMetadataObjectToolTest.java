@@ -177,7 +177,7 @@ public class CloneMetadataObjectToolTest
     @Test
     public void rejectsUnsupportedSourceBeforeWorkbench()
     {
-        for (String fqn : new String[] {"Role.Source", "Configuration", "Catalog.Source.Attribute.X"})
+        for (String fqn : new String[] {"AccumulationRegister.Source", "Configuration", "Catalog.Source.Attribute.X"})
         {
             String result = new CloneMetadataObjectTool().execute(Map.of("projectName", "NoProject", "fqn", fqn));
             assertTrue(result, ToolResult.isErrorPayload(result));

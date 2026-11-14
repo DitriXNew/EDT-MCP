@@ -41,7 +41,11 @@ import com._1c.g5.v8.dt.form.pictures.PictureFqnUtil;
 import com._1c.g5.v8.dt.htmldocument.model.HtmlDocumentPage;
 import com._1c.g5.v8.dt.mcore.HelpPage;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.RegisterWriteMode;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -63,7 +67,12 @@ import com.google.gson.JsonParser;
 /** Detached preview and native-copy postconditions. Model-taking methods require a BM boundary. */
 public final class MetadataClonePlan
 {
-    public static final Set<String> SUPPORTED = Set.of("Catalog", "Document", "Report", "DataProcessor");
+    /** Each kind is enabled only together with its own live acceptance (fixture + e2e). */
+    private static final List<String> KINDS = List.of("Catalog", "Document", "Report", "DataProcessor",
+        "Constant", "Enum", "InformationRegister", "ScheduledJob", "CommonModule", "Role");
+    public static final Set<String> SUPPORTED = Set.copyOf(KINDS);
+    private static final String KIND_LIST = String.join(", ", KINDS.subList(0, KINDS.size() - 1))
+        + " or " + KINDS.get(KINDS.size() - 1);
     private static final String EXTERNAL_PROPERTY = "http://www.1c.ru/v8/dt/common/ExternalProperty";
 
     public final String sourceFqn;
@@ -76,10 +85,11 @@ public final class MetadataClonePlan
     public final String sourceFile;
     public final String uuid;
     public final int modelObjects;
+    public final List<String> kindWarnings;
 
     private MetadataClonePlan(String sourceFqn, String fingerprint, JsonArray incoming,
         boolean referenceScanComplete, Map<String, String> files, List<String> topFqns,
-        String folder, String sourceFile, String uuid, int modelObjects)
+        String folder, String sourceFile, String uuid, int modelObjects, List<String> kindWarnings)
     {
         this.sourceFqn = sourceFqn;
         this.fingerprint = fingerprint;
@@ -91,6 +101,7 @@ public final class MetadataClonePlan
         this.sourceFile = sourceFile;
         this.uuid = uuid;
         this.modelObjects = modelObjects;
+        this.kindWarnings = List.copyOf(kindWarnings);
     }
 
     public String hash()
@@ -106,8 +117,8 @@ public final class MetadataClonePlan
         String[] parts = normalized.split("\\.", -1);
         if (parts.length != 2 || !SUPPORTED.contains(parts[0]) || parts[1].isBlank())
         {
-            return "Unsupported source '" + fqn + "'. Pass one top object: Catalog.Name, Document.Name, "
-                + "Report.Name or DataProcessor.Name in a plain configuration project.";
+            return "Unsupported source '" + fqn + "'. Pass one top object as Type.Name (e.g. Catalog.Name) "
+                + "in a plain configuration project; Type is one of " + KIND_LIST + ".";
         }
         if (newName != null && (newName.isBlank() || !StringUtils.isValidName(newName)))
         {
@@ -182,21 +193,80 @@ public final class MetadataClonePlan
         if (!SUPPORTED.contains(object.eClass().getName()))
         {
             throw new IllegalArgumentException("Unsupported source '" + fqn
-                + "'. Use Catalog, Document, Report or DataProcessor.");
+                + "'. Use " + KIND_LIST + ".");
+        }
+        if (object instanceof CommonModule && ((CommonModule)object).isGlobal())
+        {
+            throw new Refusal("CommonModule." + object.getName() + " is global (global=true): "
+                + "a clone would publish the same exported methods into the global context, which the configuration "
+                + "does not allow. Clone a non-global common module instead, or create a new module and copy only "
+                + "the needed methods with write_module_source.");
         }
         return object;
     }
 
+    /** A source this tool never clones; retrying after a resync cannot change the answer. */
+    public static final class Refusal extends IllegalArgumentException
+    {
+        private static final long serialVersionUID = 1L;
+
+        public Refusal(String message)
+        {
+            super(message);
+        }
+
+        /** The refusal in a cause chain (BM boundaries wrap exceptions), or null. */
+        public static Refusal in(Throwable error)
+        {
+            java.util.Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Throwable current = error; current != null && seen.add(current); current = current.getCause())
+            {
+                if (current instanceof Refusal)
+                {
+                    return (Refusal)current;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * The Configuration list that owns objects of the source's kind. Matched by name, not by element type:
+     * Configuration declares other Role lists (defaultRoles, standaloneConfigurationRestrictionRoles) before roles.
+     */
     public static EReference collection(Configuration config, MdObject source)
     {
+        String name = MetadataTypeUtils.getConfigReferenceName(source.eClass().getName());
         for (EReference ref : config.eClass().getEAllReferences())
         {
-            if (ref.isMany() && !ref.isDerived() && ref.getEReferenceType() == source.eClass())
+            if (ref.getName().equals(name) && ref.isMany() && !ref.isDerived()
+                && ref.getEReferenceType() == source.eClass())
             {
                 return ref;
             }
         }
         throw new IllegalArgumentException("The source has no configuration collection. Use a plain configuration project.");
+    }
+
+    /** Kind-specific consequences of a native copy the caller must act on; empty when there are none. */
+    public static List<String> kindWarnings(MdObject source)
+    {
+        List<String> warnings = new ArrayList<>();
+        if (source instanceof ScheduledJob && ((ScheduledJob)source).isUse())
+        {
+            warnings.add("ScheduledJob." + source.getName() + " is enabled (use=true) and the clone keeps "
+                + "methodName '" + ((ScheduledJob)source).getMethodName() + "' and use=true: both jobs will run the "
+                + "same method. Set use=false on one of them with modify_metadata.");
+        }
+        if (source instanceof InformationRegister
+            && ((InformationRegister)source).getWriteMode() == RegisterWriteMode.RECORDER_SUBORDINATE)
+        {
+            warnings.add("InformationRegister." + source.getName() + " is subordinate to a recorder "
+                + "(writeMode=RecorderSubordinate), but documents' registerRecords stay on the source (see notCopied), "
+                + "so the clone has no recorder. Add the clone to a document's registerRecords with modify_metadata, "
+                + "or set the clone's writeMode to Independent.");
+        }
+        return warnings;
     }
 
     public static void checkName(Configuration config, MdObject source, String newName)
@@ -314,7 +384,7 @@ public final class MetadataClonePlan
         return new MetadataClonePlan(fqn, content.toString(), incoming, complete, files, topFqns,
             rootFile.getParent().getProjectRelativePath().toPortableString(),
             rootFile.getProjectRelativePath().toPortableString(), String.valueOf(source.getUuid()),
-            graph.size());
+            graph.size(), kindWarnings(source));
     }
 
     private static boolean sourcePath(String path, String folder)
@@ -831,7 +901,12 @@ public final class MetadataClonePlan
         }
     }
 
-    /** Explicit textual occurrences only; dynamic names are outside this report's scope. */
+    /**
+     * Explicit textual occurrences only; dynamic names are outside this report's scope. A common module is
+     * also called by its bare name ({@code Name.Method(}); that form counts only when the name is not part of a
+     * longer identifier and not a member of another expression ({@code Object.Name.Method(}), however much
+     * whitespace or how many line breaks separate the qualifying dot from the name.
+     */
     public static JsonArray textReferences(String path, String text, String sourceFqn)
     {
         String[] parts = sourceFqn.split("\\.", 2);
@@ -841,20 +916,78 @@ public final class MetadataClonePlan
         {
             tokens.add(Pattern.quote(alias));
         }
+        String name = Pattern.quote(parts[1]);
         Pattern reference = Pattern.compile("(?iu)(?<![\\p{L}\\p{N}_])(?:" + String.join("|", tokens)
-            + ")\\s*\\.\\s*" + Pattern.quote(parts[1]) + "(?![\\p{L}\\p{N}_])");
+            + ")\\s*\\.\\s*" + name + "(?![\\p{L}\\p{N}_])");
+        Pattern call = "CommonModule".equals(parts[0])
+            ? Pattern.compile("(?iu)(?<![\\p{L}\\p{N}_])" + name + "\\s*\\.\\s*[\\p{L}_][\\p{L}\\p{N}_]*\\s*\\(")
+            : null;
         JsonArray result = new JsonArray();
         String[] lines = text.split("\\R", -1);
         for (int i = 0; i < lines.length; i++)
         {
-            if (reference.matcher(lines[i]).find())
+            boolean hit = reference.matcher(lines[i]).find();
+            if (!hit && call != null)
             {
-                JsonObject hit = new JsonObject();
-                hit.addProperty("file", path);
-                hit.addProperty("line", i + 1);
-                result.add(hit);
+                java.util.regex.Matcher matcher = call.matcher(lines[i]);
+                while (!hit && matcher.find())
+                {
+                    hit = !qualified(lines, i, matcher.start());
+                }
+            }
+            if (hit)
+            {
+                JsonObject found = new JsonObject();
+                found.addProperty("file", path);
+                found.addProperty("line", i + 1);
+                result.add(found);
             }
         }
         return result;
+    }
+
+    /**
+     * Whether the first code character before {@code column}, across earlier lines too, is a dot. On earlier
+     * lines a {@code //} comment is skipped, so a comment ending with a full stop does not qualify the next
+     * line's call. Best effort, not a lexer: see {@link #codeBeforeComment(String)}.
+     */
+    private static boolean qualified(String[] lines, int line, int column)
+    {
+        for (int i = line; i >= 0; i--)
+        {
+            String code = i == line ? lines[i].substring(0, column) : codeBeforeComment(lines[i]);
+            for (int j = code.length() - 1; j >= 0; j--)
+            {
+                char c = code.charAt(j);
+                if (!Character.isWhitespace(c))
+                {
+                    return c == '.';
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The part of one BSL line before its {@code //} comment. A {@code //} inside a {@code "..."} literal is not a
+     * comment ({@code ""} escapes toggle twice); a line starting with {@code |} continues a multi-line literal.
+     * Strings are judged per line only, so an unusual layout can still be misread.
+     */
+    static String codeBeforeComment(String line)
+    {
+        boolean inString = line.stripLeading().startsWith("|");
+        for (int i = 0; i + 1 < line.length(); i++)
+        {
+            char c = line.charAt(i);
+            if (c == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && c == '/' && line.charAt(i + 1) == '/')
+            {
+                return line.substring(0, i);
+            }
+        }
+        return line;
     }
 }

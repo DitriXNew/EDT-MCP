@@ -84,8 +84,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     {
         JsonObject schema = JsonParser.parseString(JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "Plain configuration project; source and clone stay in this project", true)
-            .stringProperty("fqn", "Top Catalog, Document, Report or DataProcessor FQN. Only the TYPE token may "
-                + "be Russian/English; Name is a programmatic identifier, not a synonym", true)
+            .stringProperty("fqn", "Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, "
+                + "ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; "
+                + "Name is a programmatic identifier, not a synonym", true)
             .stringProperty("newName", "Unused 1C identifier; omit for EDT's automatic free name")
             .booleanProperty("confirm", "Default false: preview only. True requires expectedHash from the same preview scope")
             .stringProperty("expectedHash", "contentHash from preview; required with confirm=true")
@@ -221,8 +222,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
         catch (RuntimeException e)
         {
-            return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
-                + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
+            return previewError(fqn, e);
         }
         if (!confirm)
         {
@@ -231,9 +231,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 .put("resources", sourceResources(preview)).put("transferred", List.of())
                 .put("selectedTransfers", transfer).put("notCopied", notCopied(preview.incoming, transfer))
                 .put("codeReferences", sourceTextReferences(ctx.project, preview))
-                .put("warning", "No name is reserved. Code, queries and DCS text stay unchanged; role defaults "
-                    + "may grant rights. The indexed reference scan is best effort; dynamic code references "
-                    + "and binary template text may not be discoverable.").toJson();
+                .put("warning", withKindWarnings("No name is reserved. Code, queries and DCS text stay unchanged; "
+                    + "role defaults may grant rights. The indexed reference scan is best effort; dynamic code "
+                    + "references and binary template text may not be discoverable.", preview)).toJson();
         }
         if (!ContentHash.matches(preview.fingerprint, expectedHash))
         {
@@ -252,6 +252,10 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         AtomicReference<List<String>> dirty = new AtomicReference<>(List.of());
         AtomicReference<String> result = new AtomicReference<>();
         java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+        // A partial result still describes a clone that may exist, so it keeps the same warning.
+        String applyWarning = withKindWarnings("Texts are preserved. Do not retry this non-idempotent "
+            + "operation after a timeout or partial error; inspect the returned FQN first. Predefined "
+            + "item ids follow EDT native paste semantics.", preview);
         try
         {
             result.set(WorkspaceModelWrite.run(ctx.project.getWorkspace(), model, NAME,
@@ -321,20 +325,18 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                     .put("configurationFile", fs.getFile(config).getProjectRelativePath().toPortableString())
                     .put("collection", MetadataClonePlan.collection(config, source).getName())
                     .put("resources", resources).put("transferred", transfer).put("persisted", false)
-                    .put("warning", "Texts are preserved. Do not retry this non-idempotent operation after a "
-                        + "timeout or partial error; inspect the returned FQN first. Predefined item ids follow "
-                        + "EDT native paste semantics.").toJson();
+                    .put("warning", applyWarning).toJson();
             })));
             WriteScope.recordWrite(ctx.project);
             if (!BmTransactions.forceExportToDisk(ctx.project, dirty.get()))
             {
-                return partial(actualFqn.get(), "EDT did not accept all export requests");
+                return partial(actualFqn.get(), "EDT did not accept all export requests", applyWarning);
             }
             return result.get();
         }
         catch (Exception e)
         {
-            return started.get() ? partial(actualFqn.get(), unwrapCauseMessage(e))
+            return started.get() ? partial(actualFqn.get(), unwrapCauseMessage(e), applyWarning)
                 : ToolResult.error(unwrapCauseMessage(e)).toJson();
         }
     }
@@ -500,6 +502,24 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             .put("subsystemMembershipPolicy", "selectedOnly");
     }
 
+    /** A kind refusal is final; any other preview failure may be a stale source worth a resync. */
+    static String previewError(String fqn, RuntimeException e)
+    {
+        MetadataClonePlan.Refusal refusal = MetadataClonePlan.Refusal.in(e);
+        if (refusal != null)
+        {
+            return ToolResult.error("Cannot clone '" + fqn + "': " + refusal.getMessage()).toJson();
+        }
+        return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
+            + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
+    }
+
+    static String withKindWarnings(String warning, MetadataClonePlan preview)
+    {
+        return preview.kindWarnings.isEmpty() ? warning
+            : warning + " " + String.join(" ", preview.kindWarnings);
+    }
+
     private static JsonArray sourceResources(MetadataClonePlan preview)
     {
         JsonArray result = new JsonArray();
@@ -565,12 +585,24 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
 
     static String partial(String fqn, String reason)
     {
-        return ToolResult.error("Clone apply did not complete verification: " + reason.replaceFirst("[.!?]+$", "") + ". "
+        return partial(fqn, reason, null);
+    }
+
+    /** The apply warning (with its kind warnings) stays on a partial result: the clone may already exist. */
+    static String partial(String fqn, String reason, String warning)
+    {
+        ToolResult result = ToolResult.error("Clone apply did not complete verification: "
+            + reason.replaceFirst("[.!?]+$", "") + ". "
             + (fqn == null ? "No created FQN was established; inspect get_metadata_objects and project files. "
                 : "Inspect clone '" + fqn + "' with get_metadata_details and its project files. ")
             + "External files may have been written even if BM rolled back. Nothing was cleaned up automatically. "
             + "Do not repeat confirm; use resync_to_disk or delete_metadata on the verified clone FQN to recover.")
-            .put("fqn", fqn).put("mutationOutcomeUnknown", true).toJson();
+            .put("fqn", fqn).put("mutationOutcomeUnknown", true);
+        if (warning != null && !warning.isBlank())
+        {
+            result.put("warning", warning);
+        }
+        return result.toJson();
     }
 
     @Override
@@ -582,9 +614,10 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             return result;
         }
         String fqn = resultString(response, "fqn");
+        String warning = resultString(response, "warning");
         if (!drainEstablished)
         {
-            return partial(fqn, "export completion is unobservable");
+            return partial(fqn, "export completion is unobservable", warning);
         }
         IProject project = com.ditrix.edt.mcp.server.utils.ProjectContext.of(
             JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME)).project();
@@ -594,7 +627,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             BmModelResolver.Resolution model = BmModelResolver.resolve(project);
             if (!model.isAvailable())
             {
-                return partial(fqn, "the model became unavailable during export");
+                return partial(fqn, "the model became unavailable during export", warning);
             }
             String currentHash = BmTransactions.read(model.getModel(), NAME + ": verify committed clone",
                 (tx, monitor) -> {
@@ -603,7 +636,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 });
             if (!currentHash.equals(resultString(response, "cloneModelHash")))
             {
-                return partial(fqn, "the clone model changed while export was finishing");
+                return partial(fqn, "the clone model changed while export was finishing", warning);
             }
             com._1c.g5.v8.dt.core.platform.IDtProject dtProject =
                 Activator.getDefault().getDtProjectManager().getDtProject(project);
@@ -613,7 +646,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 ServiceAccess.get(com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport.class);
             if (dtProject == null || names == null || versions == null)
             {
-                return partial(fqn, "EDT's exported-model verification services became unavailable");
+                return partial(fqn, "EDT's exported-model verification services became unavailable", warning);
             }
             BmTransactions.read(model.getModel(), NAME + ": verify exported models", (tx, monitor) -> {
                 for (JsonElement element : response.getAsJsonArray("resources"))
@@ -648,7 +681,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                         || !root.getElementsByTagName("name").item(0).getTextContent()
                             .equals(resource.get("name").getAsString()))
                     {
-                        return partial(fqn, "exported root identity/name differ from the clone model");
+                        return partial(fqn, "exported root identity/name differ from the clone model", warning);
                     }
                 }
                 String text = new String(bytes, StandardCharsets.UTF_8);
@@ -673,7 +706,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 resultString(response, "configurationFile"), "Configuration", fqn)
                 != MetadataRegistration.State.PRESENT)
             {
-                return partial(fqn, "Configuration.mdo does not register the clone");
+                return partial(fqn, "Configuration.mdo does not register the clone", warning);
             }
             response.remove("cloneModelHash");
             response.remove("configurationFile");
@@ -684,7 +717,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
-            return partial(fqn, unwrapCauseMessage(e));
+            return partial(fqn, unwrapCauseMessage(e), warning);
         }
     }
 }
