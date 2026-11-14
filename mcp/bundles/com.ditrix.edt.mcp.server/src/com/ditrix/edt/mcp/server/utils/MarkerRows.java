@@ -133,11 +133,34 @@ public final class MarkerRows
     {
         Match match = match(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
             unresolvedFilteredOut, exactScope, resolvePresentation);
-        if (match == null)
-        {
-            return null;
-        }
+        return match == null ? null
+            : buildRow(marker, match, checkRepository, fixRepository, unresolvedShown, resolvePresentation, newRow);
+    }
 
+    /**
+     * Builds the row of a marker that ALREADY matched ({@link #matchOf}), reusing everything that decision
+     * learnt - the check UID and the object presentation - instead of running the filters again. A second
+     * filter pass could disagree with the first (the presentation and the check-repository lookup are
+     * best-effort and may fail independently from one call to the next), and a caller that already counted
+     * the marker and gave it a page position would then lose it while a later marker took its place. This
+     * never returns {@code null}: what could not be resolved now is shown as such (the unresolved location
+     * placeholder, no symbolic id), exactly as for a marker that never had it.
+     *
+     * <p>The object presentation is read here only when {@code resolvePresentation} asks for it and the
+     * match did not already read it (a match without an objects filter skips that model read). Call inside
+     * the marker's BM read boundary when it may be read.</p>
+     *
+     * @param match the decision of {@link #matchOf} for this marker
+     * @param checkRepository resolves the check UID when the match did not need it, may be {@code null}
+     * @param fixRepository answers whether the check has a registered fix, may be {@code null}
+     * @param unresolvedShown out-counter of rows shown with a placeholder location
+     * @param resolvePresentation whether the row shows the object presentation
+     * @param newRow creates the row to fill
+     * @return the row (never {@code null})
+     */
+    public static <R extends Row> R buildRow(Marker marker, Match match, ICheckRepository checkRepository,
+        IFixRepository fixRepository, int[] unresolvedShown, boolean resolvePresentation, Supplier<R> newRow)
+    {
         // Resolve the check UID once; reused for the symbolic check id (display) AND for the
         // hasQuickFix flag (does this check have a registered EDT auto-fix?). The checkId filter
         // already resolved it when it needed it.
@@ -158,6 +181,10 @@ public final class MarkerRows
             {
                 hasQuickFix = false;
             }
+        }
+        if (resolvePresentation && !match.presentationRead)
+        {
+            readPresentation(marker, match);
         }
 
         // Build the row, reusing the already resolved symbolic check id and presentation.
@@ -180,8 +207,8 @@ public final class MarkerRows
         }
         else
         {
-            // No objects filter was active (otherwise we would have returned above): keep the
-            // marker with a placeholder location instead of dropping it, and count it.
+            // No objects filter excluded it (otherwise there would be no match): keep the marker with a
+            // placeholder location instead of dropping it, and count it.
             unresolvedShown[0]++;
             error.objectPresentation = unresolvedPlaceholder(marker);
         }
@@ -190,14 +217,7 @@ public final class MarkerRows
 
     /**
      * Whether one marker passes the severity / module-path / checkId / objects filters - the SAME
-     * decision {@link #buildIfMatches} makes, without building the row. A caller that only COUNTS
-     * the matching markers (a total next to a page of rows) uses this, so the count and the rows
-     * can never disagree about what matches.
-     *
-     * <p>The object presentation - the one model read of a marker - is read only when an objects
-     * filter needs it; without one this is a handful of map reads. Call inside the marker's BM
-     * read boundary when {@code objects} is not empty. A marker excluded because its location
-     * could not be resolved advances {@code unresolvedFilteredOut}, as in {@link #buildIfMatches}.</p>
+     * decision {@link #buildIfMatches} makes, without building the row. See {@link #matchOf}.
      *
      * @param modulePathKeys the module-path keys to keep; empty keeps every marker
      * @return {@code true} when the marker matches every filter
@@ -206,9 +226,31 @@ public final class MarkerRows
         Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
         int[] unresolvedFilteredOut, boolean exactScope)
     {
+        return matchOf(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
+            unresolvedFilteredOut, exactScope) != null;
+    }
+
+    /**
+     * The filter decision for one marker - the SAME decision {@link #buildIfMatches} makes - without building
+     * the row; {@code null} when the marker is filtered out. A caller that COUNTS the matching markers (a total
+     * next to a page of rows) uses this, and builds the rows of its page from the returned decision with
+     * {@link #buildRow}, so the count and the rows can never disagree about what matches.
+     *
+     * <p>The object presentation - the one model read of a marker - is read only when an objects
+     * filter needs it; without one this is a handful of map reads. Call inside the marker's BM
+     * read boundary when {@code objects} is not empty. A marker excluded because its location
+     * could not be resolved advances {@code unresolvedFilteredOut}, as in {@link #buildIfMatches}.</p>
+     *
+     * @param modulePathKeys the module-path keys to keep; empty keeps every marker
+     * @return the decision, or {@code null} when the marker does not match
+     */
+    public static Match matchOf(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, Set<String> modulePathKeys, ICheckRepository checkRepository,
+        int[] unresolvedFilteredOut, boolean exactScope)
+    {
         boolean needsPresentation = objects != null && !objects.isEmpty();
         return match(marker, severityFilter, checkId, objects, modulePathKeys, checkRepository,
-            unresolvedFilteredOut, exactScope, needsPresentation) != null;
+            unresolvedFilteredOut, exactScope, needsPresentation);
     }
 
     /**
@@ -251,19 +293,44 @@ public final class MarkerRows
             .append(" severity, not 'all levels'); omit severity to list every level.\n"); //$NON-NLS-1$
     }
 
-    /** What the filters learnt about a marker that passed them, reused when its row is built. */
-    private static final class Match
+    /**
+     * What the filters learnt about a marker that passed them ({@link #matchOf}), handed back to
+     * {@link #buildRow} so the row is built from the same decision instead of a second filter pass.
+     */
+    public static final class Match
     {
-        String shortUid;
+        private String shortUid;
         /** Whether {@link #checkUid} was looked up (only the checkId filter needs it). */
-        boolean checkUidResolved;
-        CheckUid checkUid;
-        String objectPresentation;
-        boolean presentationResolved;
+        private boolean checkUidResolved;
+        private CheckUid checkUid;
+        /** Whether the object presentation was read (only the objects filter needs it before the row). */
+        private boolean presentationRead;
+        private String objectPresentation;
+        private boolean presentationResolved;
+
+        private Match()
+        {
+        }
+    }
+
+    /** Reads the object presentation into {@code match}; a failure is recorded, never thrown. */
+    private static void readPresentation(Marker marker, Match match)
+    {
+        match.presentationRead = true;
+        try
+        {
+            String p = marker.getObjectPresentation();
+            match.objectPresentation = p != null ? p : ""; //$NON-NLS-1$
+            match.presentationResolved = true;
+        }
+        catch (Exception e)
+        {
+            match.presentationResolved = false;
+        }
     }
 
     /**
-     * The one filter decision shared by {@link #buildIfMatches} and {@link #matches}: severity,
+     * The one filter decision shared by {@link #buildIfMatches} and {@link #matchOf}: severity,
      * then module paths, then checkId, then objects - the order the {@code unresolvedFilteredOut}
      * counter depends on. Returns {@code null} when the marker is filtered out.
      */
@@ -306,24 +373,15 @@ public final class MarkerRows
         }
 
         // Resolve the object presentation once; reused for the objects filter and the row.
-        // Failure handling differs by context (see buildIfMatches), so we only record the outcome here.
-        if (!resolvePresentation)
+        // Failure handling differs by context (see buildRow), so we only record the outcome here.
+        if (resolvePresentation)
         {
-            // Not asked for: no model read, no placeholder, no unresolved count (objectPresentation stays null).
-            match.presentationResolved = true;
+            readPresentation(marker, match);
         }
         else
         {
-            try
-            {
-                String p = marker.getObjectPresentation();
-                match.objectPresentation = p != null ? p : ""; //$NON-NLS-1$
-                match.presentationResolved = true;
-            }
-            catch (Exception e)
-            {
-                match.presentationResolved = false;
-            }
+            // Not asked for (yet): no model read, no placeholder, no unresolved count.
+            match.presentationResolved = true;
         }
 
         // Objects filter (FQN matching against the resolved object presentation)

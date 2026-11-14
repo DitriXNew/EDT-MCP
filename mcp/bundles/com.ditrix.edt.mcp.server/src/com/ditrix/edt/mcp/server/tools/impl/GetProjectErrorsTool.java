@@ -2499,9 +2499,10 @@ public class GetProjectErrorsTool implements IMcpTool
             for (Marker marker : projectMarkers)
             {
                 // The modulePaths filter is part of the match, so it narrows the stream BEFORE the page.
-                if (!MarkerRows.matches(marker, context.severityFilter, context.checkId, projectObjects,
-                    context.modulePathKeys, context.checkRepository, context.unresolvedFilteredOut,
-                    context.exactScope))
+                MarkerRows.Match match = MarkerRows.matchOf(marker, context.severityFilter, context.checkId,
+                    projectObjects, context.modulePathKeys, context.checkRepository, context.unresolvedFilteredOut,
+                    context.exactScope);
+                if (match == null)
                 {
                     continue;
                 }
@@ -2510,15 +2511,11 @@ public class GetProjectErrorsTool implements IMcpTool
                 {
                     continue;
                 }
-                // The marker already matched, so the row filters cannot exclude it again; a scratch counter
-                // keeps a second look at an unresolved location from being counted twice.
-                ErrorInfo row = MarkerRows.buildIfMatches(marker, context.severityFilter, context.checkId,
-                    projectObjects, context.modulePathKeys, context.checkRepository, context.fixRepository,
-                    context.unresolvedShown, new int[1], context.exactScope, ErrorInfo::new);
-                if (row != null)
-                {
-                    errors.add(row);
-                }
+                // The row is built from THIS decision, never from a second filter pass: the presentation and
+                // the check-repository lookup are best-effort, so a rerun could reject the marker that was just
+                // counted and given this page position, and the next marker would take its place.
+                errors.add(MarkerRows.buildRow(marker, match, context.checkRepository, context.fixRepository,
+                    context.unresolvedShown, true, ErrorInfo::new));
             }
         });
         return errors;
@@ -2769,7 +2766,8 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * <p>The rows stop at a ROW boundary once the table would pass {@code budgetChars}, so the output cap
      * ({@link OutputSizeGuard}) never cuts the table mid-list; the rows that did not fit start the next
-     * page, and the report says so and names its offset. At least one row is always rendered.</p>
+     * page, and the report says so and names its offset. At least one row is always rendered; that is safe
+     * because every free-text cell is bounded ({@link #boundedCell}), so one row is always far below the budget.</p>
      *
      * <p>Never reads like a clean scope when problems exist: an {@code offset} past the last problem is
      * reported as such, with the total.</p>
@@ -2881,7 +2879,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
         if (detailed)
         {
-            md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+            md.append(MarkdownUtils.tableRow(boundedCell(error.message), boundedCell(error.objectPresentation),
                 modulePathCell, lineCell,
                 error.offset != null ? error.offset.toString() : "", //$NON-NLS-1$
                 error.length != null ? error.length.toString() : "", //$NON-NLS-1$
@@ -2890,11 +2888,36 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         else
         {
-            md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
+            md.append(MarkdownUtils.tableRow(boundedCell(error.message), boundedCell(error.objectPresentation),
                 modulePathCell, lineCell, checkCell, fixCell));
         }
     }
 
+    /**
+     * How many characters of one free-text cell (message, location) a problem row shows. A validation
+     * message can be arbitrarily long, and the page always renders its first row whole, so without a
+     * bound one huge message would pass the output cap and be cut mid-row - and stay the first row of
+     * every continuation page. The machine payload of an {@code objectFqns} call keeps the full text.
+     */
+    static final int MAX_CELL_CHARS = 2_000;
+
+    /**
+     * {@code text} bounded at {@link #MAX_CELL_CHARS}, with a visible note of how much was left out;
+     * {@code null} stays {@code null}. A surrogate pair is never split.
+     */
+    static String boundedCell(String text)
+    {
+        if (text == null || text.length() <= MAX_CELL_CHARS)
+        {
+            return text;
+        }
+        int keep = MAX_CELL_CHARS;
+        if (Character.isHighSurrogate(text.charAt(keep - 1)))
+        {
+            keep--;
+        }
+        return text.substring(0, keep) + " ... [cut: " + keep + " of " + text.length() + " characters shown]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
     /**
      * Appends the human-readable {@code objectsNotFound} block to {@code md} when at least one
      * requested {@code objectFqns} address was PROVEN to resolve to nothing (see

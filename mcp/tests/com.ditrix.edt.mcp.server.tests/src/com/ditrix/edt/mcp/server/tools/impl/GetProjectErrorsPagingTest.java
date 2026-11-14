@@ -9,6 +9,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -25,6 +27,8 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
+import com.e1c.g5.v8.dt.check.settings.CheckUid;
+import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.MarkerRows;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -292,6 +296,93 @@ public class GetProjectErrorsPagingTest
             Collections.<String> emptySet(), null, new int[1], false));
         assertFalse(MarkerRows.matches(minor, null, "nope", Collections.<String> emptySet(), //$NON-NLS-1$
             Collections.<String> emptySet(), null, new int[1], false));
+    }
+
+    // ========== review of #924: a counted marker keeps its page position; one row stays bounded ==========
+
+    @Test
+    public void testAPresentationThatFailsOnASecondReadDoesNotLoseTheCountedMarker()
+    {
+        // The objects filter read the location once and counted the marker at index 0. Building its row must
+        // reuse that decision: a second read can fail on its own, and a rerun of the filters would then drop
+        // the counted marker and let the next one take its place (and appear again on the next page).
+        Marker flaky = marker(MarkerSeverity.MAJOR, "SU1"); //$NON-NLS-1$
+        when(flaky.getObjectPresentation()).thenReturn("CommonModule.X.Module") //$NON-NLS-1$
+            .thenThrow(new IllegalStateException("model gone")); //$NON-NLS-1$
+        Marker steady = marker(MarkerSeverity.MAJOR, "SU2"); //$NON-NLS-1$
+        GetProjectErrorsTool.CollectContext context = new GetProjectErrorsTool.CollectContext(null, null,
+            GetProjectErrorsTool.scanFilterVariants(Collections.singletonList("CommonModule.X"), false), null, null, //$NON-NLS-1$
+            1, new int[1], new int[1], false, null, Collections.<String> emptySet(), 0);
+
+        List<ErrorInfo> rows = GetProjectErrorsTool.collectErrors(byProject(Arrays.asList(flaky, steady)), null,
+            context);
+
+        assertEquals("the marker counted at index 0 is the one on the page", //$NON-NLS-1$
+            Collections.singletonList("SU1"), codes(rows)); //$NON-NLS-1$
+        assertEquals(2, context.total());
+        assertEquals("CommonModule.X.Module", rows.get(0).objectPresentation); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACheckLookupThatFailsOnASecondCallDoesNotLoseTheCountedMarker()
+    {
+        // The checkId filter matched the SYMBOLIC id through the repository; a second lookup may fail on its own.
+        CheckUid uid = mock(CheckUid.class);
+        when(uid.getCheckId()).thenReturn("my-check"); //$NON-NLS-1$
+        ICheckRepository repository = mock(ICheckRepository.class);
+        when(repository.getUidForShortUid(eq("SU1"), any(IProject.class))).thenReturn(uid) //$NON-NLS-1$
+            .thenThrow(new IllegalStateException("repository gone")); //$NON-NLS-1$
+        when(repository.getUidForShortUid(eq("SU2"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        GetProjectErrorsTool.CollectContext context = new GetProjectErrorsTool.CollectContext(null, "my-check", //$NON-NLS-1$
+            Collections.<String> emptySet(), repository, null, 1, new int[1], new int[1], false, null,
+            Collections.<String> emptySet(), 0);
+
+        List<ErrorInfo> rows = GetProjectErrorsTool.collectErrors(
+            byProject(Arrays.asList(marker(MarkerSeverity.MAJOR, "SU1"), marker(MarkerSeverity.MAJOR, "SU2"))), //$NON-NLS-1$ //$NON-NLS-2$
+            null, context);
+
+        assertEquals(Collections.singletonList("SU1"), codes(rows)); //$NON-NLS-1$
+        assertEquals("my-check", rows.get(0).checkId); //$NON-NLS-1$
+        assertEquals(2, context.total());
+    }
+
+    @Test
+    public void testOneHugeMessageCannotPushTheFirstRowPastTheBudget()
+    {
+        // The first row is always rendered; a message of 200,000 characters must not carry it past the budget
+        // (the output cap would then cut the row, and the same row is first again on every continuation page).
+        char[] huge = new char[200_000];
+        Arrays.fill(huge, 'x');
+        List<ErrorInfo> page = rows(2, new String(huge));
+        StringBuilder md = new StringBuilder();
+        int shown = GetProjectErrorsTool.appendProblemsPage(md, page, 0, 2, false,
+            GetProjectErrorsTool.REPORT_TABLE_BUDGET_CHARS);
+        String out = md.toString();
+
+        assertEquals("both bounded rows fit", 2, shown); //$NON-NLS-1$
+        assertTrue("the page stays below the budget: " + out.length(), //$NON-NLS-1$
+            out.length() < GetProjectErrorsTool.REPORT_TABLE_BUDGET_CHARS);
+        assertTrue("the cut is visible", out.contains("... [cut: 2000 of 200000 characters shown]")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String line : tableLines(out))
+        {
+            assertTrue("every row stays whole: " + line.length(), line.endsWith("|")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testBoundedCellKeepsShortTextAndNeverSplitsASurrogatePair()
+    {
+        assertEquals("short", GetProjectErrorsTool.boundedCell("short")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(null, GetProjectErrorsTool.boundedCell(null));
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < GetProjectErrorsTool.MAX_CELL_CHARS - 1; i++)
+        {
+            text.append('a');
+        }
+        text.append("😀tail"); //$NON-NLS-1$ (a pair straddling the bound)
+        String cut = GetProjectErrorsTool.boundedCell(text.toString());
+        assertTrue(cut, cut.startsWith(text.substring(0, GetProjectErrorsTool.MAX_CELL_CHARS - 1) + " ... [cut: ")); //$NON-NLS-1$
+        assertFalse("no lone high surrogate", cut.contains("\uD83D ")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ========== helpers ==========
