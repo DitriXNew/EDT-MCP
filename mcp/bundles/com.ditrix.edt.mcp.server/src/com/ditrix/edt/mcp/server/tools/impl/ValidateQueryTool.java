@@ -169,9 +169,16 @@ public class ValidateQueryTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return ToolResult.error("Could not read query literals from modulePath '" + modulePath + "': "
-                + e.getMessage() + ". Check read_module_source or pass queryText directly.").toJson();
+            return ToolResult.error(moduleReadError(modulePath, e)).toJson();
         }
+    }
+
+    /** The extractor's refusals already name the queryText fallback; name it once, not twice. */
+    static String moduleReadError(String modulePath, Exception e)
+    {
+        String message = "Could not read query literals from modulePath '" + modulePath + "': " + e.getMessage();
+        return e.getMessage() != null && e.getMessage().contains(QUERY_TEXT) ? message
+            : message + ". Check read_module_source or pass queryText directly.";
     }
 
     String validateModuleText(IProject project, String modulePath, String source, String method, boolean dcsMode)

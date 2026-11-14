@@ -1,4 +1,4 @@
-Lists EDT configuration problems (validation markers: the same set EDT shows in its *Configuration Problems* view) as a Markdown table, with optional filters. All parameters are optional; with none, every problem across every project is returned (up to `limit`).
+Lists EDT configuration problems (validation markers: the same set EDT shows in its *Configuration Problems* view) as a Markdown table, with optional filters. All parameters are optional; with none, every problem across every project is listed, one page of `limit` rows at a time: the report always says how many problems match in total and which `offset` fetches the next page.
 
 ## When to use
 - Triage validation errors/warnings after editing code or metadata.
@@ -6,15 +6,17 @@ Lists EDT configuration problems (validation markers: the same set EDT shows in 
 - Narrow to one object (`objects` for a loose fragment, `objectFqns` for an exact address), one check (`checkId`) or one severity band (`severity`) while iterating on a fix.
 - Verify that the objects you are about to filter on actually exist: `objectFqns` reports every address that resolves to nothing.
 - For just the totals (counts per severity, no detail) prefer `get_problem_summary`; it also counts by check, module or object (`groupBy`).
+- On a large project, start from the overview and then ask precisely: `get_problem_summary` with `groupBy: "check"` lists every check code with its count and how many modules it hits; `groupBy: "module"` lists the modules with their counts and top checks (add `checkId` to see the modules of ONE check, `modulePaths` to see the checks of chosen modules); then call this tool with that `checkId` and `modulePaths`.
 
 ## Parameter details
 - `projectName` - EDT project name. Omit to scan all projects. An unknown project returns an error; a project still indexing returns a not-ready error.
-- `severity` - one of `ERRORS`, `BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `TRIVIAL`, `NONE` (case-insensitive). An out-of-set value is rejected (the filter is never silently widened to "all"). Matches that exact severity only (it is not a >= threshold).
+- `severity` - one of `ERRORS`, `BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `TRIVIAL`, `NONE` (case-insensitive). An out-of-set value is rejected (the filter is never silently widened to "all"). Matches that exact severity only (it is not a >= threshold). `NONE` is a level of its own - the one EDT gives a marker stored without a severity - NOT "all levels": omit `severity` for every level. When the severity filter leaves nothing but the same filters match problems at other levels, the report says so with a count per level instead of reading like a clean scope.
 - `checkId` - case-insensitive substring matched against EITHER the symbolic check id (e.g. `ql-temp-table-index`) OR the short UID (e.g. `SU23`). The short UID alone is rarely what you want, so the symbolic id is matched too.
 - `objects` - LOOSE filter: an array of object FQN fragments, nested ones included (`Catalog.Products.Form.ItemForm`, `Catalog.Products.TabularSection.Goods.Attribute.Price`). Matching is a case-insensitive SUBSTRING test against the reported object location, after every structural token this filter knows has been normalized to both languages (see the bilingual note below for the catalogue and its one exception). Deliberate fragments are supported (`Catalog.Prod` selects `Catalog.Products`' problems), so an entry that matched nothing is NOT reported back - a fragment and a typo are indistinguishable here. Mutually exclusive with `objectFqns`.
 - `objectFqns` - EXACT filter: an array of full model addresses, each resolved against the model before the marker scan. Mutually exclusive with `objects`. The response is a machine-readable payload in `structuredContent` (see *Exact addressing* below).
 - `modulePaths` - an array of EXACT module paths, as shown in the `Module path` column (`CommonModules/Sales/Module.bsl`, the path `read_module_source` takes). A leading `src/`, backslashes and letter case are normalised; anything else must match the whole path. An entry that normalisation leaves empty (`src/`, `/`) is refused, not dropped. AND-ed with every other filter and applied before `limit`. A problem without a BSL module never matches. With `projectName`, a path that names no module is reported as not found instead of reading like a clean module.
-- `limit` - max rows; default 100, max 1000. When reached, the output appends a limit-reached notice; narrow the filters to see the rest.
+- `limit` - max rows per page; default 100, max 1000. It counts problems, not characters.
+- `offset` - how many matching problems to skip: the page starts at the next one (default 0). Every matching problem is counted, so the `**Found:**` line carries the TOTAL and, when the page is not the whole result, the window and the next offset: `**Found:** 245 (showing 101-200 of 245; next page: offset=200)`. A page is never cut mid-list: if its rows would pass the response size limit (~100,000 characters), the table stops at a row boundary and says that the rest start at the named offset. An offset past the last problem is reported with the total, not as "No Errors Found". Pages follow EDT's marker order; if EDT re-validates between two calls, rows can shift - restart from offset 0 when that matters.
 - `responseFormat` - `concise` (default) or `detailed`. `concise` trims tokens by dropping the secondary `Has docs` column; every actionable column (`Description`, `Location`, `Module path`, `Line`, `Check code`, `Fix registered`) and the unresolved-marker warnings are kept. `detailed` adds `Has docs` (true when `get_check_description` has detail for that check). An absent/unrecognized value defaults to `concise`.
 
 ## Output columns
@@ -34,6 +36,7 @@ Supported address families:
 The response carries, next to the Markdown `report`:
 - `objectsResolved` - the addresses that resolved and therefore scoped the scan;
 - `objectsNotFound` - the addresses that resolve to nothing. A partial miss is normal and is reported next to the results: two addresses, one good and one misspelt, return the good one's problems AND name the misspelt one.
+- `problemsFound` / `problemsTotal` / `hasMore` / `nextOffset` - the rows of this page, the matches over every page, whether more remain, and the `offset` that fetches them;
 - `objectsUnsupported` - `{fqn, reason}` for an address this filter cannot scope at all. Today that is exactly the XDTO MEMBER shapes (`XDTOPackage.P.ObjectType.T`, `XDTOPackage.P.Property.N`, `XDTOPackage.P.ObjectType.T.Property.N`): EDT reports every problem of a package on the package itself (`XDTOPackage.P.Package`), so a member address can never match a marker. That is a different fact from "this member does not exist", so it is never reported as `objectsNotFound` - scope to `XDTOPackage.P`, or call `validate_xdto_package`.
 
 Matching is segment-boundary scoped: a problem belongs to a resolved address when its location IS that address or something strictly under it (so `CommonModule.Calc` also catches the `CommonModule.Calc.Module` problems, and a form catches its whole content).
@@ -69,6 +72,7 @@ For a LOOSE `objects` fragment the offset is NOT known - the entry may start on 
 - Exact form member: `{objectFqns: ["Catalog.Products.Form.ItemForm.Attribute.Object"]}`.
 - XDTO package (member addresses are rejected as unsupported): `{objectFqns: ["XDTOPackage.Exchange"]}`.
 - One module you just edited: `{projectName: "MyConfig", modulePaths: ["CommonModules/Sales/Module.bsl"]}`.
+- The next page of a long result: `{projectName: "MyConfig", limit: 100, offset: 100}`.
 
 ## Gotchas
 - Markers whose location cannot be resolved are NOT dropped: without an `objects` filter they appear with a `<unresolved: project>` placeholder (a trailing warning counts them); with an `objects` filter they are excluded (membership cannot be tested) and a separate warning counts them. Run `clean_project` / `revalidate_objects` to refresh stale markers.

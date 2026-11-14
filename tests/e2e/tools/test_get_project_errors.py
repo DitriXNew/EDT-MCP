@@ -54,6 +54,7 @@ ProjectStateChecker):
   - objects + objectFqns    -> refused (the two filters have different semantics)
 """
 
+import re
 import time
 
 from harness import (
@@ -286,6 +287,12 @@ def test_saved_text_ranges_in_structured_rows_and_detailed_table():
     assert_ok(limited, "limiting the structured marker report")
     if len((limited.structured or {}).get("problems", [])) != 1 or limited.structured.get("problemsFound") != 1:
         _fail("limit=1 must cap the structured rows and count together: %r" % limited.structured)
+    # The page says how much there is and how to get it (#917): the total is the unlimited row count.
+    paged = limited.structured
+    if paged.get("problemsTotal") != len(problems) or paged.get("nextOffset") != 1 \
+            or paged.get("hasMore") != (len(problems) > 1):
+        _fail("a limited page must carry problemsTotal=%d, nextOffset=1 and hasMore: %r"
+              % (len(problems), paged))
     if diff() != before:
         _fail("reading saved marker ranges must not change the already seeded source")
 
@@ -883,6 +890,94 @@ def test_module_paths_combines_with_check_id():
     assert_not_contains(r.text, "modulePaths not found",
                         "an existing module must not be reported as missing")
     assert_no_diff("reading project errors must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Paging (#917) and severity honesty (#918)
+# ──────────────────────────────────────────────────────────────────────────────
+
+FOUND_RE = re.compile(r"\*\*Found:\*\* (\d+)")
+
+
+def _found_total(text):
+    m = FOUND_RE.search(text or "")
+    if not m:
+        _fail("the report must carry a '**Found:** N' line:\n%s" % (text or "")[:600])
+    return int(m.group(1))
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_paging_states_the_total_and_walks_the_whole_list():
+    """A page names the TOTAL and the offset of the next page, and offset really walks the list.
+
+    #917: a long answer used to end at the limit (or at the 100k output cap) with no total and no way
+    to continue, so the problems of later modules read as absent. The seeded marker plus the fixture's
+    own broken module guarantee at least two problems, so the paging is never vacuous.
+    """
+    _seed_bsl_error_and_wait()
+    # Pages follow EDT's marker order, so compare them only once validation has settled: two equal
+    # full listings in a row.
+    full = call("get_project_errors", {"projectName": PROJECT, "limit": 1000})
+    deadline = time.time() + MARKER_POLL_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(3)
+        again = call("get_project_errors", {"projectName": PROJECT, "limit": 1000})
+        if again.text == full.text:
+            break
+        full = again
+    assert_ok(full, "the whole problem list")
+    total = _found_total(full.text)
+    all_rows = _rows(full.text)[2:]
+    if total < 2 or len(all_rows) != total:
+        _fail("need at least two problems listed in full (total=%d, rows=%d):\n%s"
+              % (total, len(all_rows), full.text[:600]))
+
+    first = call("get_project_errors", {"projectName": PROJECT, "limit": 1})
+    assert_ok(first, "page 1 of size 1")
+    assert_contains(first.text, "**Found:** %d (showing 1-1 of %d; next page: offset=1)" % (total, total),
+                    "the first page states the total and the next offset")
+    assert_contains(first.text, "get_problem_summary", "a partial page points to the overview tool")
+    if _rows(first.text)[2:] != all_rows[:1]:
+        _fail("page 1 must hold the first problem: %r vs %r" % (_rows(first.text)[2:], all_rows[:1]))
+
+    second = call("get_project_errors", {"projectName": PROJECT, "limit": 1, "offset": 1})
+    assert_ok(second, "page 2 of size 1")
+    assert_contains(second.text, "(showing 2-2 of %d" % total, "the second page names its window")
+    if _rows(second.text)[2:] != all_rows[1:2]:
+        _fail("offset=1 must hold the second problem: %r vs %r" % (_rows(second.text)[2:], all_rows[1:2]))
+
+    last = call("get_project_errors", {"projectName": PROJECT, "limit": 1, "offset": total - 1})
+    assert_ok(last, "the last page")
+    assert_not_contains(last.text, "next page", "the last page names no next one")
+    if _rows(last.text)[2:] != all_rows[-1:]:
+        _fail("the last offset must hold the last problem")
+
+    past = call("get_project_errors", {"projectName": PROJECT, "offset": total})
+    assert_ok(past, "an offset past the end")
+    assert_not_contains(past.text, "No Errors Found", "problems exist: an empty page is not a clean project")
+    assert_contains(past.text, "**Found:** %d (offset %d is past the last problem" % (total, total),
+                    "an offset past the end keeps the total")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_severity_that_leaves_nothing_names_the_other_levels():
+    """severity=NONE on a module WITH problems must not read like a clean module (#918).
+
+    NONE is the platform's level for a marker without a severity, not "all levels": the seeded syntax
+    error is not at that level, so the page is empty - and must say how many problems the same filters
+    hold at the other levels, and that omitting severity lists them.
+    """
+    _seed_bsl_error_and_wait()
+    unfiltered = call("get_project_errors", {"projectName": PROJECT, "modulePaths": [SEEDED_MODULE_PATH]})
+    assert_ok(unfiltered, "the seeded module without a severity filter")
+    count = _found_total(unfiltered.text)
+
+    r = call("get_project_errors", {"projectName": PROJECT, "modulePaths": [SEEDED_MODULE_PATH],
+                                    "severity": "NONE"})
+    assert_ok(r, "the seeded module at severity NONE")
+    assert_contains(r.text, "Nothing has severity NONE, but %d problem(s)" % count,
+                    "the empty answer names the problems at the other levels")
+    assert_contains(r.text, "omit severity", "the remedy is named")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
