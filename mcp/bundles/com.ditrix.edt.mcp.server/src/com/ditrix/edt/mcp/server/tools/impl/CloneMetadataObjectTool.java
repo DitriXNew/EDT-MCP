@@ -84,8 +84,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     {
         JsonObject schema = JsonParser.parseString(JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "Plain configuration project; source and clone stay in this project", true)
-            .stringProperty("fqn", "Top Catalog, Document, Report or DataProcessor FQN. Only the TYPE token may "
-                + "be Russian/English; Name is a programmatic identifier, not a synonym", true)
+            .stringProperty("fqn", "Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, "
+                + "ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; "
+                + "Name is a programmatic identifier, not a synonym", true)
             .stringProperty("newName", "Unused 1C identifier; omit for EDT's automatic free name")
             .booleanProperty("confirm", "Default false: preview only. True requires expectedHash from the same preview scope")
             .stringProperty("expectedHash", "contentHash from preview; required with confirm=true")
@@ -221,8 +222,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
         catch (RuntimeException e)
         {
-            return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
-                + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
+            return previewError(fqn, e);
         }
         if (!confirm)
         {
@@ -231,9 +231,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 .put("resources", sourceResources(preview)).put("transferred", List.of())
                 .put("selectedTransfers", transfer).put("notCopied", notCopied(preview.incoming, transfer))
                 .put("codeReferences", sourceTextReferences(ctx.project, preview))
-                .put("warning", "No name is reserved. Code, queries and DCS text stay unchanged; role defaults "
-                    + "may grant rights. The indexed reference scan is best effort; dynamic code references "
-                    + "and binary template text may not be discoverable.").toJson();
+                .put("warning", withKindWarnings("No name is reserved. Code, queries and DCS text stay unchanged; "
+                    + "role defaults may grant rights. The indexed reference scan is best effort; dynamic code "
+                    + "references and binary template text may not be discoverable.", preview)).toJson();
         }
         if (!ContentHash.matches(preview.fingerprint, expectedHash))
         {
@@ -321,9 +321,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                     .put("configurationFile", fs.getFile(config).getProjectRelativePath().toPortableString())
                     .put("collection", MetadataClonePlan.collection(config, source).getName())
                     .put("resources", resources).put("transferred", transfer).put("persisted", false)
-                    .put("warning", "Texts are preserved. Do not retry this non-idempotent operation after a "
-                        + "timeout or partial error; inspect the returned FQN first. Predefined item ids follow "
-                        + "EDT native paste semantics.").toJson();
+                    .put("warning", withKindWarnings("Texts are preserved. Do not retry this non-idempotent "
+                        + "operation after a timeout or partial error; inspect the returned FQN first. Predefined "
+                        + "item ids follow EDT native paste semantics.", preview)).toJson();
             })));
             WriteScope.recordWrite(ctx.project);
             if (!BmTransactions.forceExportToDisk(ctx.project, dirty.get()))
@@ -498,6 +498,24 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             .put("codeReferencePolicy", "preserveText").put("incomingReferencePolicy", "explicitSelection")
             .put("roleMembershipPolicy", "platformDefaultsExceptSelectedRows")
             .put("subsystemMembershipPolicy", "selectedOnly");
+    }
+
+    /** A kind refusal is final; any other preview failure may be a stale source worth a resync. */
+    static String previewError(String fqn, RuntimeException e)
+    {
+        MetadataClonePlan.Refusal refusal = MetadataClonePlan.Refusal.in(e);
+        if (refusal != null)
+        {
+            return ToolResult.error("Cannot clone '" + fqn + "': " + refusal.getMessage()).toJson();
+        }
+        return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
+            + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
+    }
+
+    static String withKindWarnings(String warning, MetadataClonePlan preview)
+    {
+        return preview.kindWarnings.isEmpty() ? warning
+            : warning + " " + String.join(" ", preview.kindWarnings);
     }
 
     private static JsonArray sourceResources(MetadataClonePlan preview)
