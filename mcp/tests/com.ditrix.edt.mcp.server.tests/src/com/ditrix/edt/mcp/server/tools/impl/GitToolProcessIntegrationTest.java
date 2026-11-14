@@ -669,6 +669,71 @@ public class GitToolProcessIntegrationTest
         git("worktree", "remove", "--force", linked.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    /**
+     * The machine can make a plain {@code init} create what the grammar refuses: {@code GIT_DEFAULT_HASH}
+     * in EDT's environment a SHA-256 repository (unreadable for the bundled JGit), and
+     * {@code core.sharedRepository} in the user's configuration a shared one. Real git, both ways: the
+     * hostile setup really does it without the pins (positive control), and does not with them.
+     */
+    @Test(timeout = 60_000)
+    public void testTheInitPinsDefeatAHostileEnvironmentAndConfiguration() throws Exception
+    {
+        Path home = scratchFolder();
+        Path hostileConfig = home.resolve("hostile.gitconfig"); //$NON-NLS-1$
+        Files.write(hostileConfig, ("[core]\n\tsharedRepository = group\n" //$NON-NLS-1$
+            + "[init]\n\tdefaultObjectFormat = sha256\n\tdefaultRefFormat = reftable\n") //$NON-NLS-1$
+            .getBytes(StandardCharsets.UTF_8));
+        Map<String, String> hostile = new java.util.HashMap<>();
+        hostile.put("GIT_CONFIG_GLOBAL", hostileConfig.toString()); //$NON-NLS-1$
+        hostile.put("GIT_DEFAULT_HASH", "sha256"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Path unpinned = Files.createDirectories(home.resolve("unpinned")); //$NON-NLS-1$
+        HelperResult control = runHelperWithEnv(unpinned,
+            new ArrayList<>(Arrays.asList(gitExecutable, "init", "-q")), new java.util.HashMap<>(hostile)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(control.output, 0, control.exitCode);
+        String controlConfig = new String(Files.readAllBytes(unpinned.resolve(".git").resolve("config")), //$NON-NLS-1$ //$NON-NLS-2$
+            StandardCharsets.UTF_8);
+        assertTrue("positive control: the hostile setup makes a SHA-256 repository: " + controlConfig, //$NON-NLS-1$
+            controlConfig.contains("objectformat = sha256")); //$NON-NLS-1$
+        assertTrue("positive control: ... and a shared one: " + controlConfig, //$NON-NLS-1$
+            controlConfig.contains("sharedrepository")); //$NON-NLS-1$
+
+        Path pinned = Files.createDirectories(home.resolve("pinned")); //$NON-NLS-1$
+        List<String> command = new ArrayList<>(Arrays.asList(gitExecutable, "init", "-q")); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, String> env = new java.util.HashMap<>(hostile);
+        GitTool.applyInitDefaults(command, env);
+        HelperResult result = runHelperWithEnv(pinned, command, env);
+        assertEquals(result.output, 0, result.exitCode);
+        String config = new String(Files.readAllBytes(pinned.resolve(".git").resolve("config")), //$NON-NLS-1$ //$NON-NLS-2$
+            StandardCharsets.UTF_8);
+        assertFalse("the pinned init must create a SHA-1 repository: " + config, config.contains("objectformat")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the pinned init must not create a shared repository: " + config, //$NON-NLS-1$
+            config.contains("sharedrepository")); //$NON-NLS-1$
+    }
+
+    /** {@link #runHelper} with extra environment variables applied after the scrub. */
+    private static HelperResult runHelperWithEnv(Path workingDirectory, List<String> command,
+        Map<String, String> extra) throws IOException, InterruptedException
+    {
+        ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+        builder.directory(workingDirectory.toFile());
+        scrubGitEnvironment(builder.environment());
+        builder.environment().putAll(extra);
+        Process process = builder.start();
+        process.getOutputStream().close();
+        AtomicReference<String> captured = new AtomicReference<>(""); //$NON-NLS-1$
+        Thread drain = new Thread(() -> captured.set(readAllQuietly(process)), "git-helper-drain"); //$NON-NLS-1$
+        drain.setDaemon(true);
+        drain.start();
+        if (!process.waitFor(HELPER_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        {
+            killAndAwait(process);
+            fail("helper git hung: " + command); //$NON-NLS-1$
+        }
+        drain.join(TimeUnit.SECONDS.toMillis(5));
+        return new HelperResult(process.exitValue(), captured.get());
+    }
+
     /** A temporary folder outside every repository, deleted after the test. */
     private Path scratchFolder() throws IOException
     {

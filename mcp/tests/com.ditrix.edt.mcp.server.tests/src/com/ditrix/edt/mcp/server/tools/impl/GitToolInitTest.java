@@ -270,6 +270,44 @@ public class GitToolInitTest
         assertTrue(refusal, refusal.contains("already holds a '.git' entry")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testAMalformedDotGitFileInAnAncestorIsRefusedNamingThatFolder() throws Exception
+    {
+        // JGit's upward search skips a '.git' file it cannot follow; git stops at it ('invalid gitfile
+        // format'). Initialising below it would nest a repository under a broken one.
+        Path outer = freeFolder();
+        Files.write(outer.resolve(".git"), "garbage\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Path nested = Files.createDirectories(outer.resolve("projects").resolve("Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String refusal = GitRepositoryResolver.existingRepositoryRefusal(nested.toFile(), "Sales"); //$NON-NLS-1$
+
+        assertNotNull("a '.git' above the folder must refuse, even one JGit cannot follow", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("repository at '" + outer.toFile().getAbsoluteFile() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(refusal, refusal.contains("lies inside that repository")); //$NON-NLS-1$
+    }
+
+    // ---- the process init runs as ----
+
+    @Test
+    public void testInitRunsWithTheRepositoryFormatPinned() throws Exception
+    {
+        Path folder = freeFolder();
+        ProcessBuilder init = GitTool.processFor(GitTool.parseCommand("init -b main"), folder.toFile()); //$NON-NLS-1$
+
+        List<String> command = init.command();
+        assertEquals("the pins follow the executable, before the subcommand: " + command, 1, //$NON-NLS-1$
+            java.util.Collections.indexOfSubList(command, List.of("-c", "core.sharedRepository=false", //$NON-NLS-1$ //$NON-NLS-2$
+                "-c", "init.defaultObjectFormat=sha1", "-c", "init.defaultRefFormat=files"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals(List.of("init", "-b", "main"), command.subList(command.size() - 3, command.size())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("sha1", init.environment().get("GIT_DEFAULT_HASH")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("files", init.environment().get("GIT_DEFAULT_REF_FORMAT")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(folder.toFile(), init.directory());
+
+        ProcessBuilder status = GitTool.processFor(GitTool.parseCommand("status"), folder.toFile()); //$NON-NLS-1$
+        assertFalse("only init carries the pins: " + status.command(), //$NON-NLS-1$
+            status.command().contains("core.sharedRepository=false")); //$NON-NLS-1$
+    }
+
     // ---- execute(): the order of the checks ----
 
     @Test

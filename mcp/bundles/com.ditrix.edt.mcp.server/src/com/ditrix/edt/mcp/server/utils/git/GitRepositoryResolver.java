@@ -10,7 +10,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
-import java.nio.file.Path;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.egit.core.project.RepositoryMapping;
@@ -222,13 +221,14 @@ public final class GitRepositoryResolver
      * Why {@code git init} must not run in {@code folder}, judged from the file system alone, or
      * {@code null} when no repository is there or above it.
      * <p>
-     * Three answers refuse. A {@code .git} entry IN the folder - a directory, a file, or a link,
-     * even a broken one - because JGit's upward search skips a {@code .git} file it cannot follow
-     * and would otherwise report "nothing here" for a folder git itself treats as a repository. A
-     * repository found up the tree, named by its root, because initialising inside it nests one
-     * repository in another. And a repository up the tree that could not be OPENED: that is not
-     * "no repository", so it fails closed rather than nesting under a repository nobody could
-     * inspect.
+     * Three answers refuse. A {@code .git} entry in the folder OR IN ANY FOLDER ABOVE IT - a
+     * directory, a file, or a link, even a broken one - named by the folder that holds it: JGit's
+     * upward search skips a {@code .git} file it cannot follow and would report "nothing here", while
+     * git itself stops at that file ({@code fatal: invalid gitfile format}, measured on git 2.35), so
+     * the walk runs before JGit is asked. A repository JGit finds up the tree without a {@code .git}
+     * entry (a bare one), because initialising inside it nests one repository in another. And a
+     * repository up the tree that could not be OPENED: that is not "no repository", so it fails closed
+     * rather than nesting under a repository nobody could inspect.
      * <p>
      * Not atomic with the {@code git init} that follows: a repository created in between is not
      * seen. Public so {@code GitTool}'s tests can drive it against a real directory.
@@ -239,11 +239,12 @@ public final class GitRepositoryResolver
      */
     public static String existingRepositoryRefusal(File folder, String projectName)
     {
-        Path dotGit = folder.toPath().resolve(Constants.DOT_GIT);
-        if (Files.exists(dotGit, LinkOption.NOFOLLOW_LINKS))
+        File holder = nearestDotGitHolder(folder);
+        if (holder != null)
         {
-            return nestedRepositoryMessage(projectName, folder,
-                "the project folder already holds a '.git' entry"); //$NON-NLS-1$
+            return nestedRepositoryMessage(projectName, holder,
+                holder.equals(folder.getAbsoluteFile()) ? "the project folder already holds a '.git' entry" //$NON-NLS-1$
+                    : "the project folder lies inside that repository"); //$NON-NLS-1$
         }
         Discovery discovery = discoverFromLocation(folder, projectName);
         if (discovery.configUnreadable())
@@ -294,6 +295,20 @@ public final class GitRepositoryResolver
      */
     private static File repositoryRoot(File start, Repository repository)
     {
+        File holder = nearestDotGitHolder(start);
+        if (holder != null)
+        {
+            return holder;
+        }
+        return repository.isBare() ? repository.getDirectory() : repository.getWorkTree();
+    }
+
+    /**
+     * The nearest folder at or above {@code start} holding a {@code .git} entry of any kind (not
+     * followed), or {@code null} when there is none.
+     */
+    private static File nearestDotGitHolder(File start)
+    {
         for (File dir = start == null ? null : start.getAbsoluteFile(); dir != null; dir = dir.getParentFile())
         {
             if (Files.exists(dir.toPath().resolve(Constants.DOT_GIT), LinkOption.NOFOLLOW_LINKS))
@@ -301,7 +316,7 @@ public final class GitRepositoryResolver
                 return dir;
             }
         }
-        return repository.isBare() ? repository.getDirectory() : repository.getWorkTree();
+        return null;
     }
 
     /**

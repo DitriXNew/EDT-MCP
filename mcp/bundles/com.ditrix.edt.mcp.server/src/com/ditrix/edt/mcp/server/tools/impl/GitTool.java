@@ -1042,6 +1042,71 @@ public class GitTool implements IMcpTool
             + "the git integration in EDT cannot read."); //$NON-NLS-1$
     }
 
+    /**
+     * The process a validated command runs as: the command with the non-interactive config, run in
+     * {@code workTree}, stderr merged, the hardened environment - and, for {@code init}, the
+     * repository-format pins of {@link #applyInitDefaults}. Package-visible so a test can see what
+     * the process would get without running it.
+     *
+     * @param argv the validated argument vector ({@code git} first)
+     * @param workTree the directory git runs in
+     * @return the configured, not yet started process builder
+     */
+    static ProcessBuilder processFor(List<String> argv, File workTree)
+    {
+        ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
+        builder.directory(workTree);
+        builder.redirectErrorStream(true);
+        hardenEnv(builder.environment(), workTree, argv.get(0));
+        if (argv.size() > 1 && INIT.equals(argv.get(1)))
+        {
+            applyInitDefaults(builder.command(), builder.environment());
+        }
+        return builder;
+    }
+
+    /**
+     * The {@code -c} pins {@code init} runs with (#934), each a setting of the MACHINE that would make
+     * {@code init} create what its grammar refuses on the command line:
+     * <ul>
+     * <li>{@code core.sharedRepository=false} - a {@code core.sharedRepository} in the user's or the
+     * system configuration makes a plain {@code init} a shared one (measured on git 2.35:
+     * {@code group} writes {@code sharedrepository = 1} and {@code receive.denyNonFastforwards}), the
+     * same as the refused {@code --shared};</li>
+     * <li>{@code init.defaultObjectFormat=sha1} and {@code init.defaultRefFormat=files} - the
+     * configuration spellings of {@code --object-format} / {@code --ref-format}; git versions that
+     * do not know them ignore them.</li>
+     * </ul>
+     * Command-line configuration overrides every configuration file. The other defaults stay the
+     * user's, as in their terminal: {@code init.defaultBranch}, {@code init.templateDir} (the hooks
+     * a template installs run with the user's authority anyway, like every repository hook here).
+     */
+    private static final List<String> INIT_CONFIG_PINS = List.of(
+        "-c", "core.sharedRepository=false", //$NON-NLS-1$ //$NON-NLS-2$
+        "-c", "init.defaultObjectFormat=sha1", //$NON-NLS-1$ //$NON-NLS-2$
+        "-c", "init.defaultRefFormat=files"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Pins the format of the repository {@code init} creates, whatever the machine's environment and
+     * configuration say: the {@link #INIT_CONFIG_PINS} after the executable, and the environment
+     * variables that choose the format ({@code GIT_DEFAULT_HASH}, {@code GIT_DEFAULT_REF_FORMAT}) set
+     * to the defaults. The hash matters most: a SHA-256 repository is one the bundled JGit 6.8 opens but
+     * cannot read a single object of (measured), and {@code GIT_DEFAULT_HASH=sha256} in EDT's
+     * environment produced exactly that from a plain {@code init} (measured on git 2.35). The variables
+     * are SET rather than removed: in git's own precedence a variable wins over its configuration key
+     * ({@code init.defaultObjectFormat} / {@code init.defaultRefFormat}), so setting both leaves the
+     * same answer whichever of the two a given git version consults.
+     *
+     * @param command the command to run ({@code git} first), modified in place
+     * @param env the process environment, modified in place
+     */
+    static void applyInitDefaults(List<String> command, Map<String, String> env)
+    {
+        command.addAll(1, INIT_CONFIG_PINS);
+        env.put("GIT_DEFAULT_HASH", "sha1"); //$NON-NLS-1$ //$NON-NLS-2$
+        env.put("GIT_DEFAULT_REF_FORMAT", "files"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ==================== parser (security-critical) ====================
 
     /**
@@ -3474,14 +3539,11 @@ public class GitTool implements IMcpTool
     /** {@link #runGit}'s process, under {@link BranchBindingLock} when the subcommand needs it. */
     private String runGitProcess(List<String> argv, File workTree, Consumer<ToolResult> onSuccess)
     {
-        ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
-        builder.directory(workTree);
-        builder.redirectErrorStream(true);
-        // Started BEFORE hardenEnv: that call may run the core.sshCommand probe, whose own timeout
-        // would otherwise be added to the command's - a stalled config would push a fetch past the
-        // 120 s the guide promises.
+        // Started BEFORE hardenEnv (inside processFor): that call may run the core.sshCommand probe,
+        // whose own timeout would otherwise be added to the command's - a stalled config would push a
+        // fetch past the 120 s the guide promises.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-        hardenEnv(builder.environment(), workTree, argv.get(0));
+        ProcessBuilder builder = processFor(argv, workTree);
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
         // Echoed back in every result and error: redacted like the output, so a credential that
