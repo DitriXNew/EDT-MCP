@@ -320,6 +320,72 @@ def test_stored_module_queries_map_diagnostics_and_skip_dynamic_in_both_language
             assert read_disk("src/" + path) == saved, "validation must leave the saved module unchanged"
 
 
+@e2e_test(tool="validate_query", kind="write-metadata")
+def test_stored_module_with_regions_is_scanned_where_edt_accepts_a_missing_semicolon():
+    # #921: the last statement of a block may omit ';' before #КонецОбласти/#EndRegion/#КонецЕсли. EDT accepts
+    # it; the raw grammar does not, and modulePath used to refuse such a module "at the #КонецОбласти line".
+    cases = [
+        ("E2EОбласти921", "Запросы921", 5, [5, 15],
+         '#Область ПрограммныйИнтерфейс\n\n'
+         'Процедура Запросы921() Экспорт\n'
+         '\t#Область ТекстЗапроса\n'
+         '\tТекст = "ВЫБРАТЬ\n\t|\tC.Ссылка КАК Ссылка\n\t|ИЗ Справочник.Catalog КАК C"\n'
+         '\t#КонецОбласти\n'
+         'КонецПроцедуры\n\n'
+         '#КонецОбласти\n\n'
+         'Процедура Условная921()\n'
+         '\t#Если Сервер Тогда\n'
+         '\tТ = "ВЫБРАТЬ 2 КАК Ч"\n'
+         '\t#КонецЕсли\n'
+         'КонецПроцедуры\n'),
+        ("E2ERegions921", "Queries921", 4, [4],
+         '#Region Public\n'
+         'Procedure Queries921() Export\n'
+         '\t#Region QueryText\n'
+         '\tText = "SELECT\n\t|\tC.Ref AS Ref\n\t|FROM Catalog.Catalog AS C"\n'
+         '\t#EndRegion\n'
+         'EndProcedure\n'
+         '#EndRegion\n'),
+    ]
+    for module, method, first_line, lines, source in cases:
+        path = "CommonModules/%s/Module.bsl" % module
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "CommonModule." + module}),
+                  "seed dedicated region module")
+        assert_diff_contains("<name>%s</name>" % module, "the dedicated module must be exported")
+        assert_ok(call("write_module_source", {"projectName": PROJECT, "modulePath": path,
+                  "mode": "replace", "source": source, "overwrite": True}), "write the region fixture")
+        saved = read_disk("src/" + path)
+        assert saved.lstrip("﻿").replace("\r\n", "\n") == source, "the exact region fixture must reach disk"
+        for scope in [{}, {"method": method.upper()}]:
+            r = call("validate_query", {"projectName": PROJECT, "modulePath": path, **scope})
+            assert_ok(r, "a module EDT accepts must be scanned, not refused at the region line")
+            payload = r.structured
+            expected = lines if not scope else [first_line]
+            assert payload["foundCount"] == len(expected) and payload["skippedCount"] == 0, payload
+            assert [q["line"] for q in payload["queries"]] == expected, payload
+            for query in payload["queries"]:
+                assert query["validationState"] == "VALID" and query["valid"] is True, query
+            assert payload["queries"][0]["method"] == method, payload
+        assert read_disk("src/" + path) == saved, "validation must leave the saved module unchanged"
+
+    # Control: a statement AFTER the region still needs the ';' (EDT reports it too), and the refusal says it is
+    # the module's BSL, not a query, at the region line.
+    path = "CommonModules/E2EОбласти921/Module.bsl"
+    broken = ('Процедура Запросы921() Экспорт\n'
+              '\t#Область ТекстЗапроса\n'
+              '\tТекст = "ВЫБРАТЬ 1 КАК Ч"\n'
+              '\t#КонецОбласти\n'
+              '\tСообщить(Текст);\n'
+              'КонецПроцедуры\n')
+    assert_ok(call("write_module_source", {"projectName": PROJECT, "modulePath": path,
+              "mode": "replace", "source": broken, "overwrite": True, "skipSyntaxCheck": True}),
+              "write the broken control")
+    err = assert_error(call("validate_query", {"projectName": PROJECT, "modulePath": path}),
+                       "a syntax error EDT reports must still refuse the module")
+    assert_error_quality(err, names=["syntax error at line 4", "not a query"], suggests=["queryText"])
+    assert err.count("queryText") == 1 and ".." not in err, "the fallback must be named once: %s" % err
+
+
 @e2e_test(tool="validate_query", kind="read")
 def test_module_input_contract_and_resolution_errors_are_actionable():
     path = "CommonModules/Calc/Module.bsl"

@@ -1,7 +1,9 @@
 /** Copyright (c) 2026 DitriX */
 package com.ditrix.edt.mcp.server.utils;
 
-import java.io.StringReader;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -10,11 +12,15 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.xtext.EcoreUtil2;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
-import org.eclipse.xtext.parser.IParser;
+import org.eclipse.xtext.parser.IParseResult;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
+import org.eclipse.xtext.resource.XtextResource;
+import org.eclipse.xtext.resource.XtextResourceSet;
+import org.eclipse.xtext.resource.XtextSyntaxDiagnostic;
 
 import com._1c.g5.v8.dt.bsl.common.DefaultStringLiteralTextProvider;
 import com._1c.g5.v8.dt.bsl.model.BinaryExpression;
@@ -39,23 +45,34 @@ public final class ModuleQueryExtractor
     {
         IResourceServiceProvider provider = IResourceServiceProvider.Registry.INSTANCE
             .getResourceServiceProvider(BslModuleUtils.BSL_LOOKUP_URI);
-        IParser parser = provider == null ? null : provider.get(IParser.class);
-        if (parser == null)
+        XtextResource resource = provider == null ? null : provider.get(XtextResource.class);
+        XtextResourceSet set = provider == null ? null : provider.get(XtextResourceSet.class);
+        if (resource == null || set == null)
             throw new IllegalStateException("BSL parser is unavailable. Install EDT BSL support or pass queryText.");
-        return extract(source, methodName, parser);
-    }
-
-    static List<Literal> extract(String source, String methodName, IParser parser)
-    {
-        // A detached parse never reads the editor document or the live BM model.
-        var parsed = parser.parse(new StringReader(source));
-        if (!(parsed.getRootASTElement() instanceof Module module))
-            throw new IllegalArgumentException("Could not parse stored BSL. Check read_module_source or pass queryText.");
-        if (parsed.hasSyntaxErrors())
+        // A detached resource never reads the editor document or the live BM model.
+        resource.setURI(BslModuleUtils.BSL_LOOKUP_URI);
+        set.getResources().add(resource);
+        try (var input = new ByteArrayInputStream(source.getBytes(StandardCharsets.UTF_8)))
         {
-            INode error = parsed.getSyntaxErrors().iterator().next();
-            throw new IllegalArgumentException("Stored BSL has a syntax error at line " + error.getStartLine()
-                + ". Fix it using read_module_source or pass queryText directly.");
+            resource.load(input, Map.of(XtextResource.OPTION_ENCODING, StandardCharsets.UTF_8.name()));
+        }
+        catch (IOException e)
+        {
+            throw new IllegalArgumentException("Could not parse stored BSL: " + e.getMessage()
+                + ". Check read_module_source or pass queryText.", e);
+        }
+        IParseResult parsed = resource.getParseResult();
+        if (parsed == null || !(parsed.getRootASTElement() instanceof Module module))
+            throw new IllegalArgumentException("Could not parse stored BSL. Check read_module_source or pass queryText.");
+        // The EDT resource's syntax diagnostics, not the raw grammar's: EDT drops the grammar's "expected ';'"
+        // after the last statement of a block before a preprocessor end (#EndRegion/#КонецОбласти, #EndIf, ...),
+        // as the platform does. Refusing on raw errors rejected modules EDT itself accepts (#921).
+        for (Resource.Diagnostic error : resource.getErrors())
+        {
+            if (error instanceof XtextSyntaxDiagnostic)
+                throw new IllegalArgumentException("Stored BSL has a syntax error at line " + error.getLine()
+                    + " (" + error.getMessage() + "). This is the module's BSL, not a query; fix it using "
+                    + "read_module_source or pass queryText directly.");
         }
         EObject scope = module;
         if (methodName != null)

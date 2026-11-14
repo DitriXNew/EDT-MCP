@@ -6,7 +6,6 @@ import static org.junit.Assert.*;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.xtext.parser.IParser;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -15,17 +14,16 @@ import com._1c.g5.v8.dt.bsl.BslStandaloneSetup;
 /** Exercises real BSL string nodes, not a regex substitute for the parser. */
 public class ModuleQueryExtractorTest
 {
-    private static IParser parser;
-
     @BeforeClass
     public static void setupParser()
     {
-        parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
+        // Registers the BSL resource service provider that ModuleQueryExtractor resolves.
+        new BslStandaloneSetup().createInjectorAndDoEMFRegistration();
     }
 
     private static List<ModuleQueryExtractor.Literal> extract(String source, String method)
     {
-        return ModuleQueryExtractor.extract(source, method, parser);
+        return ModuleQueryExtractor.extract(source, method);
     }
 
     private static String module(String body)
