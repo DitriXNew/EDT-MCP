@@ -69,6 +69,8 @@ import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataOrdering;
 import com.ditrix.edt.mcp.server.utils.MetadataAutoSort;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
+import com.ditrix.edt.mcp.server.utils.DcsMainSchemaOwner;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -256,9 +258,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input " //$NON-NLS-1$
                 + "stores a compliant name. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
-                "Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the " //$NON-NLS-1$
-                + "new form as the owner's default for formType (default: false). Ignored for other " //$NON-NLS-1$
-                + "create kinds.") //$NON-NLS-1$
+                "Default false. Form OBJECT create (FQN 'Type.Object.Form.FormName'): registers the new " //$NON-NLS-1$
+                + "form as the owner's default for formType. Report / ExternalReport template create " //$NON-NLS-1$
+                + "('Report.R.Template.T'): makes the new template the report's main data composition " //$NON-NLS-1$
+                + "schema; templateType then defaults to DataCompositionSchema. Ignored for other create " //$NON-NLS-1$
+                + "kinds.") //$NON-NLS-1$
             .enumProperty(KEY_FORM_TYPE,
                 "Owned form purpose. Default: LIST for registers, OBJECT for other owners. "
                 + "Use RECORD only for an independent InformationRegister. Names do not determine purpose.",
@@ -357,7 +361,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "XDTO namespace written, when an XDTOPackage was created") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
                 "Whether the new form was registered as the owner's default for its purpose " //$NON-NLS-1$
-                + "(form-object create only)") //$NON-NLS-1$
+                + "(form-object create), or the new report template became the report's main data " //$NON-NLS-1$
+                + "composition schema") //$NON-NLS-1$
             .booleanProperty(KEY_GENERATE_CONTENT,
                 "Whether content was generated for the new form's purpose " //$NON-NLS-1$
                 + "(form-object create only)") //$NON-NLS-1$
@@ -557,6 +562,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // comment values are 'ё'->'е' normalized through the same report as the Name.
         Props props = new Props();
         props.insertPosition = insertPosition;
+        // The owned-form branch above already consumed setAsDefault; here it means "make the new report
+        // template the main data composition schema" (issue #919) and stays ignored for other kinds.
+        props.setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
         String propErr = parseProperties(properties, props, normReport);
         if (propErr != null)
         {
@@ -623,6 +631,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return () -> ToolResult.error("templateType applies only to a CommonTemplate or an owned Template; " //$NON-NLS-1$
                     + "use create_metadata with a template FQN.").toJson(); //$NON-NLS-1$
+            }
+            String mainSchemaError = prepareMainSchema(target.owner, createClass, normFqn, props, project,
+                projectVersion(project));
+            if (mainSchemaError != null)
+            {
+                return () -> mainSchemaError;
             }
             if (!isValidIdentifier(target.childName))
             {
@@ -2137,6 +2151,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     static MdObject createMemberChild(MemberChildSpec spec)
     {
+        // prepareMainSchema judged an adopted report's main-DCS state in the preparation read; it can become None
+        // before this transaction, and EDT's .mdo writer would then drop the reference (issue #919). Recheck the
+        // transaction-local owner before anything is created, so a refusal rolls back a clean no-op.
+        if (spec.props.setAsDefault && MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(spec.elementType))
+        {
+            AdoptedPropertyRouter.requireStillWritten(spec.owner, DcsMainSchemaOwner.feature(spec.owner), null, null);
+        }
         return isFactoryInitializedChild(spec.elementType) ? createFactoryInitializedChild(spec)
             : createPlainChild(spec);
     }
@@ -2172,6 +2193,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         ensureMandatoryType(child, spec.typeProvider);
         applyScalarProps(child, spec.props, spec.synonymLanguage);
         addToFeature(spec.owner, spec.feature, child);
+        // setAsDefault was validated by prepareMainSchema (issue #919): the report now points at its new DCS.
+        if (spec.props.setAsDefault && child instanceof BasicTemplate)
+        {
+            DcsMainSchemaOwner.setMain(spec.owner, (BasicTemplate)child);
+        }
         spec.factory.fillDefaultReferences(child);
         return child;
     }
@@ -3656,6 +3682,57 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         String comment;
         TemplateType templateType;
         Integer insertPosition;
+        /** A new Report / ExternalReport template becomes the report's main data composition schema. */
+        boolean setAsDefault;
+    }
+
+    /**
+     * Validates {@code setAsDefault} on a template create (issue #919) before any BM work and implies its
+     * type: the new template becomes the main data composition schema of its Report / ExternalReport, as
+     * EDT's report DCS wizard does, so it must be a DataCompositionSchema template ({@code templateType}
+     * defaults to it). An adopted report keeps its main DCS out of the extension's {@code .mdo} unless the
+     * extension marks the property, and that refusal is EDT's own rule ({@link AdoptedPropertyRouter}).
+     * Non-template creates ignore {@code setAsDefault}. Runs in the create preparation read.
+     *
+     * @return the refusal JSON, or {@code null} when the create may proceed
+     */
+    static String prepareMainSchema(EObject owner, EClass createClass, String normFqn, Props props,
+        IProject project, Version version)
+    {
+        if (!props.setAsDefault || createClass == null
+            || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(createClass))
+        {
+            return null;
+        }
+        if (!DcsMainSchemaOwner.supports(owner))
+        {
+            return ToolResult.error("setAsDefault on a template makes it the main data composition schema of " //$NON-NLS-1$
+                + "its report, so it applies only to 'Report.<Name>.Template.<Template>' or " //$NON-NLS-1$
+                + "'ExternalReport.<Name>.Template.<Template>'; '" + normFqn + "' is not one. Omit setAsDefault. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Nothing was created.").toJson(); //$NON-NLS-1$
+        }
+        if (props.templateType == null)
+        {
+            props.templateType = TemplateType.DATA_COMPOSITION_SCHEMA;
+        }
+        else if (props.templateType != TemplateType.DATA_COMPOSITION_SCHEMA)
+        {
+            return ToolResult.error("setAsDefault makes '" + normFqn + "' the report's main data composition " //$NON-NLS-1$ //$NON-NLS-2$
+                + "schema, which must be a DataCompositionSchema template, not " + props.templateType.getLiteral() //$NON-NLS-1$
+                + ". Pass templateType DataCompositionSchema (or omit it), or omit setAsDefault. Nothing was " //$NON-NLS-1$
+                + "created.").toJson(); //$NON-NLS-1$
+        }
+        String ownerFqn = normFqn.substring(0, normFqn.lastIndexOf('.', normFqn.lastIndexOf('.') - 1));
+        return AdoptedPropertyRouter.refusalIfDropped((MdObject)owner, DcsMainSchemaOwner.feature(owner),
+            MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn), project, version);
+    }
+
+    /** The project's platform version best-effort, or {@code null} when EDT cannot tell yet. */
+    private static Version projectVersion(IProject project)
+    {
+        IV8ProjectManager manager = Activator.getDefault() == null ? null : Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = manager == null ? null : manager.getProject(project);
+        return v8Project == null ? null : v8Project.getVersion();
     }
 
     /**
@@ -3693,10 +3770,23 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 default:
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
                         + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
-                        + "properties (including type) via modify_metadata.").toJson(); //$NON-NLS-1$
+                        + "properties (including type) via modify_metadata." + templateTypeHint(name)).toJson(); //$NON-NLS-1$
             }
         }
         return null;
+    }
+
+    /**
+     * For a refused 'type': a TEMPLATE's content type is not set afterwards but at creation, through
+     * 'templateType' (issue #919: following "set type via modify_metadata" cost a second call).
+     */
+    static String templateTypeHint(String refusedName)
+    {
+        return "type".equalsIgnoreCase(refusedName) //$NON-NLS-1$
+            ? " A template's content type is not 'type': create it with properties:[{name:'templateType', " //$NON-NLS-1$
+                + "value:'DataCompositionSchema'}] (or TextDocument / SpreadsheetDocument), and add setAsDefault=true " //$NON-NLS-1$
+                + "to make a report template the report's main data composition schema." //$NON-NLS-1$
+            : ""; //$NON-NLS-1$
     }
 
     private static String asString(JsonElement el)
@@ -3833,9 +3923,35 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
         }
         info.normReport.addTo(result);
+        String created = MetadataTypeUtils.toCanonicalEnglishFqn(info.fqn);
+        String message = "Created " + created + templateNote(info.kind, info.props, created); //$NON-NLS-1$
+        if (info.props.setAsDefault && info.kind != null && MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(info.kind))
+        {
+            result.put(KEY_SET_AS_DEFAULT, true);
+        }
         return result
-            .put(McpKeys.MESSAGE, "Created " + MetadataTypeUtils.toCanonicalEnglishFqn(info.fqn)) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, message)
             .toJson();
+    }
+
+    /**
+     * Names the content type a new template got - the type is not echoed elsewhere, and an omitted
+     * templateType silently means SpreadsheetDocument - and the main-schema assignment (issue #919).
+     */
+    static String templateNote(EClass kind, Props props, String createdFqn)
+    {
+        if (kind == null || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(kind))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        TemplateType type = props.templateType == null ? TemplateType.SPREADSHEET_DOCUMENT : props.templateType;
+        String note = " (templateType " + type.getLiteral() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (props.setAsDefault)
+        {
+            String owner = createdFqn.substring(0, createdFqn.lastIndexOf('.', createdFqn.lastIndexOf('.') - 1));
+            note += ", set as the main data composition schema of " + owner; //$NON-NLS-1$
+        }
+        return note;
     }
 
     /**

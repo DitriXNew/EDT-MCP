@@ -20,6 +20,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CharacteristicsDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeContentItem;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
@@ -32,6 +33,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.PaletteColor;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -942,6 +944,12 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
      */
     private String getTypeFromMdObject(MdObject mdObj)
     {
+        // A template has no value type; its Type is the content type (issue #919: a DCS template read as '-').
+        if (mdObj instanceof BasicTemplate)
+        {
+            TemplateType templateType = ((BasicTemplate) mdObj).getTemplateType();
+            return templateType == null ? DASH : templateType.getLiteral();
+        }
         // Try to find a "type" feature
         EStructuralFeature typeFeature = mdObj.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
         if (typeFeature != null)
