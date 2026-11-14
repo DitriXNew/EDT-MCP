@@ -31,14 +31,30 @@ public final class InfobaseExtensionLifecycle
     {
     }
 
+    /**
+     * {@code version} is null when the Designer agent did not report it (#916); it is never guessed. The
+     * wire omits null fields, so such a record says {@code versionReported:false} instead of a version.
+     */
     public record Extension(String name, String version, boolean active, boolean safeMode,
         boolean protectionFromDangerousActions, String hash)
     {
         public Map<String, Object> details()
         {
-            return Map.of("name", name, "version", version, "active", active,
-                "safeMode", safeMode, "protectionFromDangerousActions", protectionFromDangerousActions,
-                "hash", hash);
+            Map<String, Object> details = new java.util.LinkedHashMap<>();
+            details.put("name", name);
+            if (version != null)
+            {
+                details.put("version", version);
+            }
+            else
+            {
+                details.put("versionReported", false);
+            }
+            details.put("active", active);
+            details.put("safeMode", safeMode);
+            details.put("protectionFromDangerousActions", protectionFromDangerousActions);
+            details.put("hash", hash);
+            return details;
         }
     }
 
@@ -62,6 +78,9 @@ public final class InfobaseExtensionLifecycle
     {
         Path directory() throws java.io.IOException;
     }
+
+    static final String VERSION_UNREPORTED = "The infobase's Designer agent did not report extension versions "
+        + "(the standalone server's agent puts the active flag in place of the version), so expectedVersion was not read back.";
 
     private InfobaseExtensionLifecycle()
     {
@@ -231,16 +250,25 @@ public final class InfobaseExtensionLifecycle
                 }
                 List<Extension> after = checked(backend.read());
                 Extension actual = find(after, request.extensionName());
+                // A version the agent did not report is unknown: it neither matches nor contradicts expectedVersion.
+                boolean versionUnreported = !uninstall && request.expectedVersion() != null && actual != null
+                    && (actual.version() == null || !install && previous.version() == null);
                 boolean matches = uninstall ? actual == null : actual != null && actual.safeMode() == safe
                     && actual.protectionFromDangerousActions() == protection
                     && (previous == null || previous.active() == actual.active())
-                    && (request.expectedVersion() == null || request.expectedVersion().equals(actual.version()));
+                    && (request.expectedVersion() == null || versionUnreported
+                        || request.expectedVersion().equals(actual.version()));
                 boolean othersUnchanged = before.stream().filter(e -> !e.name().equals(request.extensionName())).toList()
                     .equals(after.stream().filter(e -> !e.name().equals(request.extensionName())).toList());
                 boolean updateEvidence = install || uninstall || request.expectedVersion() != null
                     && !request.expectedVersion().equals(previous.version());
-                boolean verified = matches && othersUnchanged && updateEvidence;
+                boolean verified = matches && othersUnchanged && updateEvidence && !versionUnreported;
                 ToolResult result = verified ? ToolResult.success()
+                    : matches && othersUnchanged && versionUnreported ? ToolResult.error("The Designer operation returned, "
+                        + "but expectedVersion cannot be checked: the infobase's Designer agent did not report extension "
+                        + "versions (versionReported:false). Check the version in the infobase before relying on this operation; "
+                        + "the infobase may already have changed.")
+                        .put("verificationReason", VERSION_UNREPORTED)
                     : matches && othersUnchanged ? ToolResult.error("The Designer operation returned, but the update cannot be verified "
                         + "without an expectedVersion different from the installed version. Inspect action=list before retrying; "
                         + "the infobase may already have changed.")
@@ -346,7 +374,7 @@ public final class InfobaseExtensionLifecycle
     private static List<Extension> checked(List<Extension> states)
     {
         if (states == null || states.stream().anyMatch(e -> e == null || e.name() == null || e.name().isBlank()
-            || e.version() == null || e.hash() == null)
+            || e.hash() == null)
             || states.stream().map(Extension::name).distinct().count() != states.size())
         {
             throw new IllegalStateException("Designer returned an unreadable extension inventory; inspect the EDT Error Log and retry action=list.");

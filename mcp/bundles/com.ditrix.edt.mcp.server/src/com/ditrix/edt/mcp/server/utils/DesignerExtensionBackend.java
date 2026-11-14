@@ -17,6 +17,7 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.OperationCanceledException;
 
 import com._1c.g5.designer.ssh.client.IDesignerSession;
+import com._1c.g5.designer.ssh.client.operation.IExtensionProperties;
 import com._1c.g5.designer.ssh.client.operation.IUpdateConfigurationStep.SessionTermination;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.RuntimeExecutionArguments;
@@ -145,8 +146,26 @@ public final class DesignerExtensionBackend implements Backend
         {
             throw new IllegalStateException("Designer did not return an extension inventory; retry action=list.");
         }
-        return states.stream().map(e -> new Extension(e.getName(), Objects.toString(e.getVersion(), ""),
-            e.isActive(), e.isSafeMode(), e.isUnsafeActionProtected(), Objects.toString(e.getHashSum(), ""))).toList();
+        boolean swapped = activeReportedAsVersion(states);
+        return states.stream().map(e -> new Extension(e.getName(),
+            swapped ? null : Objects.toString(e.getVersion(), ""),
+            swapped ? Boolean.parseBoolean(e.getVersion()) : e.isActive(),
+            e.isSafeMode(), e.isUnsafeActionProtected(), Objects.toString(e.getHashSum(), ""))).toList();
+    }
+
+    /**
+     * Whether the answer has the standalone server's swapped shape (#916). The Designer agent built into
+     * {@code ibsrv} (8.3.27, 8.5) writes the active flag as JSON {@code "version": true|false} and the
+     * version text as {@code "active"}; EDT's client reads both leniently, so every record arrives with the
+     * version {@code "true"} or {@code "false"} and an active flag parsed from the version text, which is
+     * {@code false}. The version itself is lost before it reaches this plugin. The shape is judged on the
+     * whole answer, because the agent writes every record alike: an answer of the documented shape keeps its
+     * values, even with an odd version text, as soon as one record has a real version or an active flag.
+     */
+    static boolean activeReportedAsVersion(List<? extends IExtensionProperties> states)
+    {
+        return !states.isEmpty() && states.stream().allMatch(e -> e != null && !e.isActive()
+            && ("true".equals(e.getVersion()) || "false".equals(e.getVersion())));
     }
 
     @Override
