@@ -657,7 +657,8 @@ public final class ProjectStateChecker
         if (ddManager == null)
         {
             // Cannot ask: fall back to the strict gate rather than inventing readiness.
-            return buildingErrorOrNull(project);
+            String reload = checkoutReloadErrorOrNull(project);
+            return reload != null ? reload : buildingErrorOrNull(project);
         }
         return modelBuildingErrorOrNull(ddManager, project.getName(), ProjectStateChecker::isWorkspaceRefreshPending);
     }
@@ -723,19 +724,73 @@ public final class ProjectStateChecker
     static String modelBuildingErrorOrNull(IDerivedDataManager ddManager, String projectName,
         BooleanSupplier workspaceRefreshPending)
     {
-        if (CheckoutReloads.isPending(projectName))
+        String reload = checkoutReloadErrorOrNull(projectName, ddManager, workspaceRefreshPending);
+        if (reload != null)
         {
-            boolean loading = workspaceRefreshPending.getAsBoolean() || isLoadingChangedFiles(ddManager);
-            if (CheckoutReloads.observe(projectName, loading) != CheckoutReloads.State.SETTLED)
-            {
-                return LOADING_FROM_DISK_ERROR;
-            }
+            return reload;
         }
         if (isModelDataComputed(ddManager))
         {
             return null;
         }
         return MODEL_COMPUTING_ERROR;
+    }
+
+    /**
+     * The checkout-reload half of the write gates: {@link #LOADING_FROM_DISK_ERROR} while a project this server just
+     * switched ({@link CheckoutReloads}) has not been seen finished loading the checked-out branch, {@code null}
+     * otherwise - always {@code null} for any other project. Shared by the model gate
+     * ({@link #modelBuildingErrorOrNull(IProject)}) and by the writers that use the strict gate or a cascade
+     * pre-flight, which do not go through the model gate (#922).
+     *
+     * @param projectName the project the caller wants to write (null/empty skips the check)
+     * @return the refusal, or {@code null}
+     */
+    public static String checkoutReloadErrorOrNull(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty() || !CheckoutReloads.isPending(projectName))
+        {
+            return null;
+        }
+        return checkoutReloadErrorOrNull(org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProject(projectName));
+    }
+
+    /**
+     * Project-addressed {@link #checkoutReloadErrorOrNull(String)}. A project without a started EDT context is left
+     * to the caller's other checks; a context whose derived-data manager cannot be asked counts as loading.
+     *
+     * @param project the project (may be {@code null})
+     * @return the refusal, or {@code null}
+     */
+    public static String checkoutReloadErrorOrNull(IProject project)
+    {
+        if (project == null || !CheckoutReloads.isPending(project.getName()))
+        {
+            return null;
+        }
+        IDtProject dtProject = resolveDtProject(project);
+        if (dtProject == null)
+        {
+            return null;
+        }
+        IDerivedDataManagerProvider ddProvider = Activator.getDefault().getDerivedDataManagerProvider();
+        IDerivedDataManager ddManager = ddProvider == null ? null : ddProvider.get(dtProject);
+        return checkoutReloadErrorOrNull(project.getName(), ddManager, ProjectStateChecker::isWorkspaceRefreshPending);
+    }
+
+    /** Seam of {@link #checkoutReloadErrorOrNull(IProject)}; a {@code null} manager counts as loading. */
+    static String checkoutReloadErrorOrNull(String projectName, IDerivedDataManager ddManager,
+        BooleanSupplier workspaceRefreshPending)
+    {
+        if (!CheckoutReloads.isPending(projectName))
+        {
+            return null;
+        }
+        boolean loading = workspaceRefreshPending.getAsBoolean() || ddManager == null
+            || isLoadingChangedFiles(ddManager);
+        return CheckoutReloads.observe(projectName, loading) == CheckoutReloads.State.SETTLED ? null
+            : LOADING_FROM_DISK_ERROR;
     }
 
     /**
@@ -1157,6 +1212,12 @@ public final class ProjectStateChecker
         if (cannotSettle(project, env))
         {
             return null;
+        }
+        // A cascade into a project this server just switched would run against the previous branch's model (#922).
+        String reload = env.checkoutReloadErrorOrNull(project);
+        if (reload != null)
+        {
+            return reload;
         }
         long deadline = System.currentTimeMillis() + settleTimeoutMs;
         // A cascade is not confined to the named project: a rename builds one refactoring per
@@ -1990,6 +2051,15 @@ public final class ProjectStateChecker
 
         /** Waits before another BM-model resolution attempt; {@code false} means the wait was interrupted. */
         boolean waitBeforeModelRetry(long timeoutMs);
+
+        /**
+         * The checkout-reload refusal for {@code project} ({@link ProjectStateChecker#checkoutReloadErrorOrNull(IProject)}),
+         * or {@code null}.
+         */
+        default String checkoutReloadErrorOrNull(IProject project)
+        {
+            return ProjectStateChecker.checkoutReloadErrorOrNull(project);
+        }
 
         /** Delegates to the live, {@code Activator}-backed EDT services. */
         CascadeEnvironment DEFAULT = new CascadeEnvironment()

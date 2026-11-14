@@ -75,7 +75,7 @@ public class ModelReloadGateTest
     @Test
     public void aWriteIntoAJustCheckedOutProjectIsRefusedWhileTheRefreshTakesUpItsFiles()
     {
-        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("Switched"), NO_REFRESH); //$NON-NLS-1$
         IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
 
         assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
@@ -86,7 +86,7 @@ public class ModelReloadGateTest
     @Test
     public void aWriteIntoAJustCheckedOutProjectIsRefusedWhileItsImportIsQueued()
     {
-        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("Switched"), NO_REFRESH); //$NON-NLS-1$
         IDerivedDataManager manager = manager(PipelineStatus.READY, DerivedDataSegmentBucket.SYNC);
 
         assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
@@ -97,7 +97,7 @@ public class ModelReloadGateTest
     @Test
     public void oneIdleSampleDoesNotReleaseAJustCheckedOutProject()
     {
-        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("Switched"), NO_REFRESH); //$NON-NLS-1$
         IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
 
         assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
@@ -112,7 +112,7 @@ public class ModelReloadGateTest
     @Test
     public void anUnrelatedRefreshDoesNotRefuseAnOrdinaryWrite()
     {
-        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("Switched"), NO_REFRESH); //$NON-NLS-1$
         IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
 
         assertNull(ProjectStateChecker.modelBuildingErrorOrNull(manager, "Other", REFRESHING)); //$NON-NLS-1$
@@ -145,6 +145,43 @@ public class ModelReloadGateTest
             IDerivedDataManager manager = manager(PipelineStatus.READY, stage);
             assertNull(stage.name(), ProjectStateChecker.modelBuildingErrorOrNull(manager, "Ordinary", NO_REFRESH)); //$NON-NLS-1$
         }
+    }
+
+    /** A just-switched project whose derived-data manager cannot be asked counts as loading. */
+    @Test
+    public void anUnaskableManagerCountsAsLoadingForAJustSwitchedProject()
+    {
+        CheckoutReloads.register(List.of("Switched"), NO_REFRESH); //$NON-NLS-1$
+        // Already idle for longer than the stable span: only the unaskable manager can keep it loading now.
+        CheckoutReloads.observe("Switched", false, //$NON-NLS-1$
+            System.nanoTime() - java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(3 * CheckoutReloads.STABLE_MS));
+
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.checkoutReloadErrorOrNull("Switched", null, NO_REFRESH)); //$NON-NLS-1$
+        assertTrue(CheckoutReloads.isPending("Switched")); //$NON-NLS-1$
+        assertNull(ProjectStateChecker.checkoutReloadErrorOrNull("Other", null, REFRESHING)); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928: a cascade pre-flight (rename, delete) refuses a just-switched project before it starts
+     * settling - the previous branch's model can read fully computed.
+     */
+    @Test
+    public void aCascadeIntoAJustSwitchedProjectIsRefused()
+    {
+        IProject base = mock(IProject.class);
+        when(base.getName()).thenReturn("Switched"); //$NON-NLS-1$
+        when(base.exists()).thenReturn(true);
+        when(base.isOpen()).thenReturn(true);
+        ProjectStateChecker.CascadeEnvironment env = mock(ProjectStateChecker.CascadeEnvironment.class);
+        when(env.hasBmModelProjectNature(base)).thenReturn(Boolean.TRUE);
+        when(env.checkoutReloadErrorOrNull(base)).thenReturn(ProjectStateChecker.LOADING_FROM_DISK_ERROR);
+
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.settleBeforeCascadeOrError(base, 50L, env, "rename_metadata_object", //$NON-NLS-1$
+                "Nothing was renamed.")); //$NON-NLS-1$
+        org.mockito.Mockito.verify(env, org.mockito.Mockito.never()).waitForDerivedData(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     /** The refusal keeps the prefix the e2e harness and agents retry on, and says nothing was changed. */

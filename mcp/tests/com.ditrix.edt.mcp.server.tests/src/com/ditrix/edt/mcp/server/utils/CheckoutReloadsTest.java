@@ -24,6 +24,8 @@ public class CheckoutReloadsTest
 {
     private static final long T0 = 1_000_000_000L;
 
+    private static final java.util.function.BooleanSupplier IDLE = () -> false;
+
     private static long ms(long millis)
     {
         return TimeUnit.MILLISECONDS.toNanos(millis);
@@ -47,7 +49,7 @@ public class CheckoutReloadsTest
     @Test
     public void aReloadEndsOnlyAfterAnUninterruptedIdleSpan()
     {
-        CheckoutReloads.register(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("P"), IDLE, T0); //$NON-NLS-1$
 
         assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0)); //$NON-NLS-1$
         assertEquals(State.LOADING, CheckoutReloads.observe("P", true, T0 + ms(1_000))); //$NON-NLS-1$
@@ -64,7 +66,7 @@ public class CheckoutReloadsTest
     @Test
     public void aRegistrationExpires()
     {
-        CheckoutReloads.register(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("P"), IDLE, T0); //$NON-NLS-1$
 
         assertTrue(CheckoutReloads.isPending("P", T0 + ms(CheckoutReloads.EXPIRY_MS - 1))); //$NON-NLS-1$
         assertFalse(CheckoutReloads.isPending("P", T0 + ms(CheckoutReloads.EXPIRY_MS))); //$NON-NLS-1$
@@ -75,18 +77,70 @@ public class CheckoutReloadsTest
     @Test
     public void aNewCheckoutRestartsTheWait()
     {
-        CheckoutReloads.register(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("P"), IDLE, T0); //$NON-NLS-1$
         CheckoutReloads.observe("P", false, T0); //$NON-NLS-1$
-        CheckoutReloads.register(List.of("P"), T0 + ms(1_900)); //$NON-NLS-1$
+        CheckoutReloads.register(List.of("P"), IDLE, T0 + ms(1_900)); //$NON-NLS-1$
 
         assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0 + ms(2_100))); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928: while this server's own post-checkout refresh still runs, the registration is loading
+     * whatever the other signals say - a refresh still scanning has reported nothing yet.
+     */
+    @Test
+    public void aRegistrationCannotSettleWhileItsRefreshRuns()
+    {
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        CheckoutReloads.register(List.of("P"), running::get, T0); //$NON-NLS-1$
+
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0)); //$NON-NLS-1$
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0 + ms(5 * CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+        assertTrue(CheckoutReloads.isPending("P", T0 + ms(5 * CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+
+        running.set(false);
+        long t = T0 + ms(6 * CheckoutReloads.STABLE_MS);
+        assertEquals("the stable span starts only once the refresh ended", State.SETTLING, //$NON-NLS-1$
+            CheckoutReloads.observe("P", false, t)); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, t + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P2 on #928: a newer checkout that replaces the registration while an observation is about to release the
+     * old one is never reported settled - the newer registration is observed instead.
+     */
+    @Test
+    public void aRegistrationReplacedDuringTheObservationIsNotReportedSettled()
+    {
+        CheckoutReloads.register(List.of("P"), IDLE, T0); //$NON-NLS-1$
+        CheckoutReloads.observe("P", false, T0); //$NON-NLS-1$
+        long settleAt = T0 + ms(CheckoutReloads.STABLE_MS);
+        CheckoutReloads.beforeSettle = () -> {
+            CheckoutReloads.beforeSettle = null;
+            CheckoutReloads.register(List.of("P"), IDLE, settleAt); //$NON-NLS-1$
+        };
+
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, settleAt)); //$NON-NLS-1$
+        assertTrue("the newer registration stays", CheckoutReloads.isPending("P", settleAt)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Codex P3 on #928: expired registrations that nobody asks about are dropped on the next registration. */
+    @Test
+    public void expiredRegistrationsArePurgedOnTheNextRegistration()
+    {
+        CheckoutReloads.register(List.of("NeverAsked1", "NeverAsked2"), IDLE, T0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(2, CheckoutReloads.size());
+
+        CheckoutReloads.register(List.of("Fresh"), IDLE, T0 + ms(CheckoutReloads.EXPIRY_MS)); //$NON-NLS-1$
+
+        assertEquals(1, CheckoutReloads.size());
     }
 
     /** Only the registered projects are pending. */
     @Test
     public void registrationIsPerProject()
     {
-        CheckoutReloads.register(List.of("A", "B"), T0); //$NON-NLS-1$ //$NON-NLS-2$
+        CheckoutReloads.register(List.of("A", "B"), IDLE, T0); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertTrue(CheckoutReloads.isPending("A", T0)); //$NON-NLS-1$
         assertTrue(CheckoutReloads.isPending("B", T0)); //$NON-NLS-1$

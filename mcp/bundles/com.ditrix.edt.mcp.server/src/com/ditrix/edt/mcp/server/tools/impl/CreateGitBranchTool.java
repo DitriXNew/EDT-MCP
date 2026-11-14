@@ -254,7 +254,6 @@ public class CreateGitBranchTool implements IMcpTool
         ToolResult ok = ToolResult.success()
             .put(KEY_BRANCH, branch)
             .put(KEY_CREATED, true)
-            .put(KEY_CHECKED_OUT, checkedOut)
             .put(KEY_START_POINT, hasStartPoint ? startPoint : HEAD_LITERAL);
 
         if (applicationId != null && !applicationId.isEmpty())
@@ -262,7 +261,11 @@ public class CreateGitBranchTool implements IMcpTool
             // The binding goes on the ref JGit actually created (refs/heads/<name>), the key EDT reads.
             String createdRef = created != null ? created.getName() : BranchContexts.REFS_HEADS + branch;
             bindApplication(project, branch, createdRef, applicationId, setDefault, ok, warnings);
+            // The binding may wait for BranchBindingLock while another checkout moves the repository (#922).
+            checkedOut = checkedOut
+                && stillCheckedOut(repo, branch, "while this call attached the application", warnings); //$NON-NLS-1$
         }
+        ok.put(KEY_CHECKED_OUT, checkedOut);
 
         if (!warnings.isEmpty())
         {
@@ -319,18 +322,33 @@ public class CreateGitBranchTool implements IMcpTool
                 warnings.add(note);
             }
             // The reload wait runs outside BranchBindingLock (#922): another checkout may have moved the repository.
-            String now = GitCheckoutSupport.movedAwayFrom(repo, fullRef);
-            if (now != null)
-            {
-                warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' succeeded, but while this call waited for EDT to " //$NON-NLS-1$
-                    + "load it another checkout moved the repository to '" + now + "'; the new branch is not the " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "one checked out now."); //$NON-NLS-1$
-                return false;
-            }
-            return true;
+            return stillCheckedOut(repo, branch, "while this call waited for EDT to load it", warnings); //$NON-NLS-1$
         }
         warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' did not complete cleanly " //$NON-NLS-1$
             + "(status: " + status + "); the branch was created but is not checked out."); //$NON-NLS-1$ //$NON-NLS-2$
+        return false;
+    }
+
+    /**
+     * Whether the new branch is still the one checked out, re-read after work that ran outside
+     * {@link BranchBindingLock}; when another checkout has moved the repository, a warning names where it is now
+     * (#922). Package-visible for tests.
+     *
+     * @param repo the repository
+     * @param branch the new branch's short name
+     * @param during what this call was doing meanwhile, for the warning
+     * @param warnings receives the warning
+     * @return {@code false} when the repository has moved away from the new branch
+     */
+    static boolean stillCheckedOut(Repository repo, String branch, String during, List<String> warnings)
+    {
+        String now = GitCheckoutSupport.movedAwayFrom(repo, BranchContexts.REFS_HEADS + branch);
+        if (now == null)
+        {
+            return true;
+        }
+        warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' succeeded, but " + during + " another checkout moved " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the repository to '" + now + "'; the new branch is not the one checked out now."); //$NON-NLS-1$ //$NON-NLS-2$
         return false;
     }
 

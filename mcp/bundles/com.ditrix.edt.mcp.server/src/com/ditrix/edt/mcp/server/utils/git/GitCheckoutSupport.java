@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -19,7 +20,9 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.egit.core.op.BranchOperation;
 import org.eclipse.jgit.api.CheckoutResult;
 import org.eclipse.jgit.lib.Repository;
@@ -292,7 +295,6 @@ public final class GitCheckoutSupport
         // (#922): a slow refresh must not turn a checkout that already succeeded into a timed-out one. A refresh that
         // fails or outlives its wait is a note on the successful outcome, never a failure of it.
         List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
-        CheckoutReloads.register(WorkTreeProjects.names(projects));
         String refreshWarning = refreshAfterCheckout(projects,
             TimeUnit.SECONDS.toMillis(REFRESH_TIMEOUT_SECONDS));
         return new CheckoutOutcome(result, refreshWarning, false, false, null, false)
@@ -451,6 +453,18 @@ public final class GitCheckoutSupport
         };
         refresh.setUser(false);
         refresh.setSystem(true);
+        // The projects count as reloading until this refresh has ENDED, not merely until its wait ran out: a refresh
+        // that is still scanning has not reported the rewritten files yet, so no other signal shows the reload (#922).
+        AtomicBoolean ended = new AtomicBoolean();
+        refresh.addJobChangeListener(new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                ended.set(true);
+            }
+        });
+        CheckoutReloads.register(WorkTreeProjects.names(projects), () -> !ended.get());
         McpJobs.schedule(refresh);
         return awaitRefresh(refresh, timeoutMillis, () -> WorkTreeProjects.names(projects), failure);
     }

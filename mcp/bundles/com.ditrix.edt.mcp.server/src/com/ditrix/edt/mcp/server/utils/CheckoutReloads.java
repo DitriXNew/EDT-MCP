@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 /**
  * The projects whose model must still take in a checkout THIS server performed (#922).
@@ -26,7 +27,8 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * A registration ends when the project has been seen idle for {@link #STABLE_MS} without interruption - a single
  * idle sample proves nothing, the import may not have started yet - or after {@link #EXPIRY_MS} at the latest, so a
- * reload that never shows its end cannot hold writes back indefinitely.
+ * reload that never shows its end cannot hold writes back indefinitely. While this server's own post-checkout work on
+ * the projects (the explicit refresh) still runs, the registration counts as loading whatever the signals say.
  */
 public final class CheckoutReloads
 {
@@ -50,15 +52,21 @@ public final class CheckoutReloads
     private static final class Entry
     {
         final long expiresAtNanos;
+        /** Answers {@code true} while work that will still rewrite the model (the post-checkout refresh) runs. */
+        final BooleanSupplier busy;
         long idleSinceNanos;
 
-        Entry(long expiresAtNanos)
+        Entry(long expiresAtNanos, BooleanSupplier busy)
         {
             this.expiresAtNanos = expiresAtNanos;
+            this.busy = busy;
         }
     }
 
     private static final Map<String, Entry> PENDING = new ConcurrentHashMap<>();
+
+    /** Test hook run just before an idle registration is removed; {@code null} in production. */
+    static volatile Runnable beforeSettle;
 
     private CheckoutReloads()
     {
@@ -70,22 +78,35 @@ public final class CheckoutReloads
      * checkout starts the projects' wait afresh.
      *
      * @param projectNames the projects of the checked-out work tree
+     * @param busy answers {@code true} while this server's own post-checkout work on those projects (the explicit
+     *     refresh) is still running; the registration cannot end before it answers {@code false} (or expires)
      */
-    public static void register(Collection<String> projectNames)
+    public static void register(Collection<String> projectNames, BooleanSupplier busy)
     {
-        register(projectNames, System.nanoTime());
+        register(projectNames, busy, System.nanoTime());
     }
 
-    static void register(Collection<String> projectNames, long nowNanos)
+    static void register(Collection<String> projectNames, BooleanSupplier busy, long nowNanos)
     {
+        purgeExpired(nowNanos);
         long expires = nowNanos + TimeUnit.MILLISECONDS.toNanos(EXPIRY_MS);
+        BooleanSupplier running = busy == null ? () -> false : busy;
         for (String name : projectNames)
         {
             if (name != null)
             {
-                PENDING.put(name, new Entry(expires));
+                PENDING.put(name, new Entry(expires, running));
             }
         }
+    }
+
+    /**
+     * Drops every expired registration. Run on each registration, so names that are never asked about again (a
+     * non-EDT project of the work tree, a project deleted since) cannot accumulate past {@link #EXPIRY_MS}.
+     */
+    private static void purgeExpired(long nowNanos)
+    {
+        PENDING.entrySet().removeIf(e -> nowNanos - e.getValue().expiresAtNanos >= 0);
     }
 
     /**
@@ -120,7 +141,9 @@ public final class CheckoutReloads
 
     /**
      * Records one observation of a registered project and answers its state; a project idle for {@link #STABLE_MS}
-     * without interruption is unregistered. An unregistered (or expired) project is {@link State#SETTLED}.
+     * without interruption is unregistered. An unregistered (or expired) project is {@link State#SETTLED}. The
+     * registration's own work ({@code busy}) still running counts as loading. A registration replaced by a newer
+     * checkout while this observation ran is never reported settled: the observation is made again on the newer one.
      *
      * @param projectName the project
      * @param loadingNow whether the reload is visibly running at this observation
@@ -133,38 +156,56 @@ public final class CheckoutReloads
 
     static State observe(String projectName, boolean loadingNow, long nowNanos)
     {
-        if (!isPending(projectName, nowNanos))
+        while (true)
         {
-            return State.SETTLED;
-        }
-        Entry entry = PENDING.get(projectName);
-        if (entry == null)
-        {
-            return State.SETTLED;
-        }
-        synchronized (entry)
-        {
-            if (loadingNow)
+            if (!isPending(projectName, nowNanos))
             {
-                entry.idleSinceNanos = 0L;
-                return State.LOADING;
+                return State.SETTLED;
             }
-            if (entry.idleSinceNanos == 0L)
+            Entry entry = PENDING.get(projectName);
+            if (entry == null)
             {
-                entry.idleSinceNanos = nowNanos == 0L ? 1L : nowNanos;
+                return State.SETTLED;
             }
-            if (nowNanos - entry.idleSinceNanos < TimeUnit.MILLISECONDS.toNanos(STABLE_MS))
+            synchronized (entry)
             {
-                return State.SETTLING;
+                if (loadingNow || entry.busy.getAsBoolean())
+                {
+                    entry.idleSinceNanos = 0L;
+                    return State.LOADING;
+                }
+                if (entry.idleSinceNanos == 0L)
+                {
+                    entry.idleSinceNanos = nowNanos == 0L ? 1L : nowNanos;
+                }
+                if (nowNanos - entry.idleSinceNanos < TimeUnit.MILLISECONDS.toNanos(STABLE_MS))
+                {
+                    return State.SETTLING;
+                }
             }
+            Runnable hook = beforeSettle;
+            if (hook != null)
+            {
+                hook.run();
+            }
+            if (PENDING.remove(projectName, entry))
+            {
+                return State.SETTLED;
+            }
+            // A newer checkout replaced the registration meanwhile: observe that one instead.
         }
-        PENDING.remove(projectName, entry);
-        return State.SETTLED;
+    }
+
+    /** Test hook: how many registrations are held. */
+    static int size()
+    {
+        return PENDING.size();
     }
 
     /** Test hook: forget every registration. */
     static void clear()
     {
         PENDING.clear();
+        beforeSettle = null;
     }
 }
