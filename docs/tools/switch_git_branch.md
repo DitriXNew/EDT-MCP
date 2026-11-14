@@ -28,6 +28,8 @@ The checkout runs in a bounded background Job (up to 120 seconds) - never on the
 ```
 `bindings` is a **best-effort** read-back of the CURRENT application/infobase association after the switch - proof that the 1C application context followed the checkout automatically (EDT derives it live from the checked-out branch). It is omitted when no binding manager/association is available; a missing `bindings` key does not mean the switch failed.
 
+After the checkout, every open project inside the repository's work tree is refreshed - not just `projectName` - and the call waits (up to 60 s) until EDT has loaded the checked-out files into each of those projects' models. Until EDT has, a metadata write into such a project is refused as `Project is building` (nothing changed - retry), because the reload would overwrite it. When the wait runs out first, the switch still succeeds and `message` names the projects still loading; retry their writes once `list_projects` shows them ready.
+
 ## Checkout failure modes
 - **CONFLICTS** - your uncommitted local changes would be overwritten by the target branch; the working tree is left on the **ORIGINAL** branch (JGit's checkout semantics), and the error lists the conflicting paths (bounded to ~20).
 - **NONDELETED** - the checkout logically succeeded but some files could not be removed (typically locked or otherwise in-use); the error lists them (bounded to ~20).

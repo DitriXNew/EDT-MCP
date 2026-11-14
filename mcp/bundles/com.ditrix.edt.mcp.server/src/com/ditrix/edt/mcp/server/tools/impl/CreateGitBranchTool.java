@@ -153,8 +153,9 @@ public class CreateGitBranchTool implements IMcpTool
                 "Branch-infobase binding read-back: {infobases: [...], defaultInfobase}. Present " //$NON-NLS-1$
                 + "only when applicationId was given and the binding succeeded.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE,
-                "Present only when checkout or the infobase binding did not fully succeed: a short " //$NON-NLS-1$
-                + "warning. The branch itself was still created (success stays true).") //$NON-NLS-1$
+                "Present only when checkout or the infobase binding did not fully succeed, or EDT had " //$NON-NLS-1$
+                + "not finished loading the checked-out branch into a project's model within the wait: a " //$NON-NLS-1$
+                + "short warning. The branch itself was still created (success stays true).") //$NON-NLS-1$
             .build();
     }
 
@@ -311,9 +312,11 @@ public class CreateGitBranchTool implements IMcpTool
         CheckoutResult.Status status = result != null ? result.getStatus() : CheckoutResult.Status.ERROR;
         if (status == CheckoutResult.Status.OK)
         {
-            if (outcome.refreshWarning() != null)
+            String note = GitCheckoutSupport.joinNotes(outcome.refreshWarning(),
+                GitCheckoutSupport.awaitModelReload(outcome));
+            if (note != null)
             {
-                warnings.add(outcome.refreshWarning());
+                warnings.add(note);
             }
             return true;
         }

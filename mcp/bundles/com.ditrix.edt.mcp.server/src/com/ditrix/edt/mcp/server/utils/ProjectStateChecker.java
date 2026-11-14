@@ -659,12 +659,119 @@ public final class ProjectStateChecker
             // Cannot ask: fall back to the strict gate rather than inventing readiness.
             return buildingErrorOrNull(project);
         }
+        return modelBuildingErrorOrNull(ddManager, ProjectStateChecker::isWorkspaceRefreshPending);
+    }
+
+    /**
+     * Whether Eclipse's automatic workspace refresh has a job running or queued
+     * ({@link org.eclipse.core.resources.ResourcesPlugin#FAMILY_AUTO_REFRESH}).
+     * <p>
+     * Issue #922, measured on the stand with thread dumps: after a branch switch the auto-refresh job takes up the
+     * files the checkout rewrote, and EDT registers their import into the model INSIDE that job's change
+     * notification - for a large change that takes seconds, during which the derived-data pipeline is still empty
+     * and the model still holds the previous branch. EDT's own import job waits for this family before importing
+     * ({@code SynchronizationManager$ImportChangesJob.waitAutoRefreshJobComplete}, EDT 2026.2); the gate asks the
+     * same question. The refresh job is workspace-wide and names no project, so the answer is too.
+     * <p>
+     * Fail closed: a job manager that cannot be asked counts as a refresh pending.
+     *
+     * @return {@code true} while an automatic refresh job is running, waiting or sleeping
+     */
+    static boolean isWorkspaceRefreshPending()
+    {
+        try
+        {
+            return org.eclipse.core.runtime.jobs.Job.getJobManager()
+                .find(org.eclipse.core.resources.ResourcesPlugin.FAMILY_AUTO_REFRESH).length > 0;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Cannot read the workspace refresh jobs; treating a refresh as pending", e); //$NON-NLS-1$
+            return true;
+        }
+    }
+
+    /** What a write is refused with while EDT loads changed files from disk into the model (#922). */
+    static final String LOADING_FROM_DISK_ERROR =
+        "Project is building: EDT is loading files changed on disk (for example by a git branch switch) " //$NON-NLS-1$
+            + "into the model, and a write now could be overwritten by that reload. Nothing was changed. " //$NON-NLS-1$
+            + "Please wait and retry."; //$NON-NLS-1$
+
+    /** What a write is refused with while the model or the reference index is computed. */
+    static final String MODEL_COMPUTING_ERROR =
+        "Project is building: the model or the reference index is still being computed. " //$NON-NLS-1$
+            + "Please wait and retry."; //$NON-NLS-1$
+
+    /**
+     * The derived-data half of {@link #modelBuildingErrorOrNull(IProject)}: {@code null} when the model may be
+     * edited, otherwise the refusal - {@link #LOADING_FROM_DISK_ERROR} while a workspace refresh is taking up
+     * changed files ({@link #isWorkspaceRefreshPending()}) or EDT is still importing them
+     * ({@link #isLoadingChangedFiles(IDerivedDataManager)}), {@link #MODEL_COMPUTING_ERROR} while the model
+     * segments are not computed.
+     *
+     * @param ddManager the project's derived-data manager, never {@code null}
+     * @param workspaceRefreshPending answers {@link #isWorkspaceRefreshPending()}
+     * @return the refusal, or {@code null}
+     */
+    static String modelBuildingErrorOrNull(IDerivedDataManager ddManager, BooleanSupplier workspaceRefreshPending)
+    {
+        if (workspaceRefreshPending.getAsBoolean() || isLoadingChangedFiles(ddManager))
+        {
+            return LOADING_FROM_DISK_ERROR;
+        }
         if (isModelDataComputed(ddManager))
         {
             return null;
         }
-        return "Project is building: the model or the reference index is still being computed. " //$NON-NLS-1$
-            + "Please wait and retry."; //$NON-NLS-1$
+        return MODEL_COMPUTING_ERROR;
+    }
+
+    /**
+     * Whether EDT is still importing files changed on disk into the BM model: work is queued in the derived-data
+     * pipeline AND its active stage is {@code STARTING} or {@code SYNC}.
+     * <p>
+     * Issue #922: EDT does not import a changed {@code .mdo} inside the workspace refresh that noticed it. The
+     * refresh's resource listener only schedules the import into the {@code SYNC} stage of the derived-data
+     * pipeline; the import itself replaces the top object in the model later. A write admitted in between lands in
+     * the model the import is about to replace: its export then races the reload, and the reload puts the file's
+     * value back after the write has already answered {@code persisted: true}. The model-segment probe of
+     * {@link #isModelDataComputed(IDerivedDataManager)} cannot see this - the {@code MD} and {@code FORM} segments
+     * still read as computed for the model being replaced - and the cached sync flag is deliberately not trusted
+     * alone (#699).
+     * <p>
+     * The predicate is EDT's own: {@code SynchronizationManager$ImportChangesJob.waitChanges} (EDT 2026.2) treats
+     * the import of a change batch as finished exactly when the pipeline status is {@code EMPTY} or the active stage
+     * is past {@code SYNC}. A stage past {@code SYNC} (the post-build validation of #495 included) is therefore never
+     * refused here.
+     * <p>
+     * Fail closed like the rest of the gate: a {@code null} status or a status read that throws counts as loading.
+     * A status that names no pipeline status or no stage names no import either and counts as not loading.
+     *
+     * @param ddManager the project's derived-data manager
+     * @return {@code true} while an import of changed files is queued or running, or when that cannot be read
+     */
+    static boolean isLoadingChangedFiles(IDerivedDataManager ddManager)
+    {
+        try
+        {
+            DerivedDataStatus status = ddManager.getDerivedDataStatus();
+            if (status == null)
+            {
+                return true;
+            }
+            PipelineStatus pipeline = status.getPipelineStatus();
+            DerivedDataSegmentBucket stage = status.getActiveStage();
+            if (pipeline == null || pipeline == PipelineStatus.EMPTY || stage == null)
+            {
+                return false;
+            }
+            return stage.ordinal() <= DerivedDataSegmentBucket.SYNC.ordinal();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Cannot read the derived-data status; treating the model as loading", e); //$NON-NLS-1$
+            return true;
+        }
     }
 
     /**
@@ -681,6 +788,74 @@ public final class ProjectStateChecker
         }
         return modelBuildingErrorOrNull(org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
             .getRoot().getProject(projectName));
+    }
+
+    /** Poll interval of {@link #awaitModelReload(Collection, long)}. */
+    private static final long MODEL_RELOAD_POLL_MS = 100L;
+
+    /**
+     * Waits, bounded by {@code timeoutMs}, until the metadata-write gate ({@link #modelBuildingErrorOrNull(IProject)})
+     * admits every one of {@code projects} - that is, until EDT has loaded the files a checkout changed into each
+     * project's model (#922).
+     * <p>
+     * A project is settled the first time the gate admits it; the wait never runs past {@code timeoutMs}, and a
+     * project that is not an EDT project (the gate admits it) settles at once. The caller decides what an
+     * unsettled project means: the write gate keeps refusing writes into it until it settles, so the wait exists
+     * to let the caller report the state honestly rather than to protect the model.
+     *
+     * @param projects the projects to wait for
+     * @param timeoutMs the bound of the whole wait
+     * @return the names of the projects the gate still refused when the time ran out or the wait was interrupted;
+     *     empty when all settled
+     */
+    public static List<String> awaitModelReload(java.util.Collection<IProject> projects, long timeoutMs)
+    {
+        return awaitModelReload(projects, timeoutMs, ProjectStateChecker::modelBuildingErrorOrNull,
+            ProjectStateChecker::pauseQuietly);
+    }
+
+    /**
+     * Seam of {@link #awaitModelReload(java.util.Collection, long)}: {@code gate} answers the refusal for a project
+     * ({@code null} = settled), {@code pause} sleeps for the given milliseconds and answers {@code false} when it
+     * was interrupted.
+     */
+    static List<String> awaitModelReload(java.util.Collection<IProject> projects, long timeoutMs,
+        java.util.function.Function<IProject, String> gate, java.util.function.LongPredicate pause)
+    {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+        List<IProject> pending = new ArrayList<>(projects);
+        while (true)
+        {
+            pending.removeIf(project -> gate.apply(project) == null);
+            if (pending.isEmpty())
+            {
+                return Collections.emptyList();
+            }
+            long leftMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (leftMs <= 0 || !pause.test(Math.min(MODEL_RELOAD_POLL_MS, leftMs)))
+            {
+                List<String> names = new ArrayList<>();
+                for (IProject project : pending)
+                {
+                    names.add(project.getName());
+                }
+                return names;
+            }
+        }
+    }
+
+    private static boolean pauseQuietly(long millis)
+    {
+        try
+        {
+            Thread.sleep(millis);
+            return true;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /**

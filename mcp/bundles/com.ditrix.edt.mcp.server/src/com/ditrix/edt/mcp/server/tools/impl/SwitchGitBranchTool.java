@@ -57,7 +57,8 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * - a bounded (120 s) background {@code Job}, never on the UI thread (issue #281
  * phase 2 extracted the Job/refresh mechanics there so {@code create_git_branch}'s
  * optional checkout can share it). After a successful checkout, the SAME Job
- * unconditionally refreshes the project
+ * unconditionally refreshes the project and every other project in the repository's
+ * work tree (#922)
  * ({@link IResource#refreshLocal(int, org.eclipse.core.runtime.IProgressMonitor)},
  * {@code DEPTH_INFINITE}) so the Eclipse workspace - and the EDT model built on it -
  * picks up the checkout's file changes: on the EGit-mapped resolution path
@@ -67,7 +68,11 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * the checkout at all - native-hook workspace auto-refresh defaults OFF - so this
  * refresh is what keeps the model from going stale. A refresh failure is caught,
  * logged, and surfaced as a short note in the result {@code message}; it never
- * fails the already-successful switch.
+ * fails the already-successful switch. The call then waits, bounded, until EDT has
+ * loaded the checked-out files into those projects' models
+ * ({@link GitCheckoutSupport#awaitModelReload}); a project still loading when the wait
+ * ends is named in {@code message} - the metadata-write gate refuses writes into it
+ * meanwhile, so a write cannot land in the model the reload is about to replace (#922).
  */
 public class SwitchGitBranchTool implements IMcpTool
 {
@@ -131,8 +136,9 @@ public class SwitchGitBranchTool implements IMcpTool
                 "Best-effort application-binding read-back for the new branch context: " //$NON-NLS-1$
                 + "{infobases: [...], defaultInfobase}. Absent when unavailable.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE,
-                "Present only when the post-checkout workspace refresh failed: a short warning " //$NON-NLS-1$
-                + "noting the EDT model may be stale until a manual refresh. The switch itself still " //$NON-NLS-1$
+                "Present only when the post-checkout workspace refresh failed, or EDT had not finished " //$NON-NLS-1$
+                + "loading the new branch into a project's model within the wait: a short warning naming " //$NON-NLS-1$
+                + "the projects whose model may still show the previous branch. The switch itself still " //$NON-NLS-1$
                 + "succeeded (success stays true).") //$NON-NLS-1$
             .build();
     }
@@ -251,7 +257,14 @@ public class SwitchGitBranchTool implements IMcpTool
             return ToolResult.error("Checkout failed: " + outcome.jobError().getMessage()).toJson(); //$NON-NLS-1$
         }
 
-        return mapCheckoutResult(outcome.result(), project, previousShort, targetShort, outcome.refreshWarning());
+        // #922: answer only once EDT has loaded the new branch into the models of the refreshed projects (bounded),
+        // or say which ones are still loading - a write sent in that window is refused by the write gate.
+        String note = outcome.refreshWarning();
+        if (outcome.result() != null && outcome.result().getStatus() == CheckoutResult.Status.OK)
+        {
+            note = GitCheckoutSupport.joinNotes(note, GitCheckoutSupport.awaitModelReload(outcome));
+        }
+        return mapCheckoutResult(outcome.result(), project, previousShort, targetShort, note);
     }
 
     private String mapCheckoutResult(CheckoutResult result, IProject project, String previousShort,
