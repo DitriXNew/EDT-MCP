@@ -1,6 +1,6 @@
 """Non-mutating wire checks; lifecycle writes are accepted separately on a disposable infobase.
 
-The last test is attended (EDT_MCP_LIVE_INFOBASE=1): it reads the extensions of every standalone-server
+The last test is attended (EDT_MCP_LIVE_INFOBASE=1): it reads the extensions of every STARTED standalone-server
 application of the project and needs at least one installed extension. The standalone server's own Designer
 agent puts the active flag in place of the version (#916); the list must never echo that flag as a version.
 """
@@ -60,32 +60,38 @@ def test_unknown_application_never_becomes_empty_inventory():
 
 @e2e_test(tool="infobase_extensions", kind="action")
 def test_live_standalone_server_list_never_reports_the_active_flag_as_version():
-    """REQUIRES: EDT_MCP_LIVE_INFOBASE=1 and a standalone-server application with an installed extension.
+    """REQUIRES: EDT_MCP_LIVE_INFOBASE=1 and a STARTED standalone-server application with an extension.
 
-    A stopped server is started for the read and stopped again afterwards.
+    Only servers that are already started are read: stopping a server again after the read would leave
+    it held stopped (standalone_server's hold), so the test never starts or stops one. A failed status or
+    inventory call fails the test; only successful but empty inventories lead to a skip.
     """
     requires_live_infobase("standalone-server extension inventory")
     apps = call("get_applications", {"projectName": PROJECT})
     assert_ok(apps, "discover applications")
     servers = [a for a in (apps.structured or {}).get("applications", [])
                if a.get("type") == WST_SERVER_TYPE and a.get("id")]
-    records = []
+    records, errors, not_started = [], [], []
     for app in servers:
         target = {"projectName": PROJECT, "applicationId": app["id"]}
         status = call("standalone_server", target)
-        started_here = False
-        if status.structured and status.structured.get("state") != "STARTED":
-            started = call("standalone_server", dict(target, action="start"))
-            started_here = bool(started.structured and started.structured.get("state") == "STARTED")
-        try:
-            listed = call("infobase_extensions", target)
-            if listed.structured and listed.structured.get("success"):
-                records.extend(listed.structured.get("extensions") or [])
-        finally:
-            if started_here:
-                call("standalone_server", dict(target, action="stop", confirm=True))
+        if status.is_error or not status.structured:
+            errors.append("%s status: %s" % (app["id"], status.text))
+            continue
+        if status.structured.get("state") != "STARTED":
+            not_started.append("%s (%s)" % (app["id"], status.structured.get("state")))
+            continue
+        listed = call("infobase_extensions", target)
+        if listed.is_error or not (listed.structured and listed.structured.get("success")):
+            errors.append("%s list: %s" % (app["id"], listed.text))
+            continue
+        records.extend(listed.structured.get("extensions") or [])
+    if errors:
+        raise AssertionError("standalone-server inventory calls failed: %s" % "; ".join(errors))
     if not records:
-        raise E2ESkip("no standalone-server application of %s has an installed extension" % PROJECT)
+        raise E2ESkip("no STARTED standalone-server application of %s has an installed extension "
+                      "(not started: %s); start one with standalone_server(action='start') first"
+                      % (PROJECT, ", ".join(not_started) or "none"))
     for record in records:
         if not isinstance(record.get("active"), bool):
             raise AssertionError("active must be a JSON boolean: %r" % record)

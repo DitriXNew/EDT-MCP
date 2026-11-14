@@ -258,9 +258,11 @@ public final class InfobaseExtensionLifecycle
                 }
                 List<Extension> after = checked(backend.read());
                 Extension actual = find(after, request.extensionName());
-                // A version the agent did not report is unknown: it neither matches nor contradicts expectedVersion.
-                boolean versionUnreported = !uninstall && request.expectedVersion() != null && actual != null
+                // The scope follows what was readable: a version the agent did not report proves nothing.
+                boolean versionUnavailable = !uninstall && actual != null
                     && (actual.version() == null || !install && previous.version() == null);
+                // An unknown version neither matches nor contradicts expectedVersion: the verdict is notVerified.
+                boolean versionUnreported = versionUnavailable && request.expectedVersion() != null;
                 boolean matches = uninstall ? actual == null : actual != null && actual.safeMode() == safe
                     && actual.protectionFromDangerousActions() == protection
                     && (previous == null || previous.active() == actual.active())
@@ -285,7 +287,7 @@ public final class InfobaseExtensionLifecycle
                 return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", versionUnreported ? SCOPE_WITHOUT_VERSION : SCOPE);
+                    .put("verificationScope", versionUnavailable ? SCOPE_WITHOUT_VERSION : SCOPE);
             }
             catch (Exception failure)
             {

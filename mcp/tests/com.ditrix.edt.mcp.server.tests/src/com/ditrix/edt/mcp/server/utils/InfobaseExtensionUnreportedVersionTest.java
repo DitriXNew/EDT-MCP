@@ -119,6 +119,20 @@ public class InfobaseExtensionUnreportedVersionTest
         JsonObject result = run(install(null), backend);
         assertTrue(result.toString(), result.get("success").getAsBoolean());
         assertEquals("verified", result.get("verification").getAsString());
+        assertFalse(result.toString(), result.has("verificationReason"));
+        assertScopeLeavesOutTheVersion(result);
+    }
+
+    @Test public void updateWithoutExpectedVersionOverUnreportedVersionsClaimsNoVersionCheck() throws Exception
+    {
+        UnreportedVersions backend = new UnreportedVersions();
+        backend.states = List.of(ACTIVE, OTHER);
+        JsonObject result = run(update(null), backend);
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("notVerified", result.get("verification").getAsString());
+        assertTrue(result.toString(), result.get("error").getAsString().contains("without an expectedVersion"));
+        assertFalse(result.toString(), result.has("verificationReason"));
+        assertScopeLeavesOutTheVersion(result);
     }
 
     @Test public void installWithExpectedVersionIsNotVerifiedRatherThanMismatched() throws Exception
