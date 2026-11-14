@@ -90,6 +90,14 @@ public final class InfobaseExtensionLifecycle
         + "expectedVersion and the version transition were not checked because the Designer agent did not report "
         + "versions; not binary file identity.";
 
+    static final String TRANSITION_UNREPORTED = "The Designer agent did not report the extension version before the "
+        + "update, so the transition to expectedVersion was not observed; the version after the update was read back.";
+
+    /** An update whose previous version is unknown: expectedVersion was read back, the transition was not observed. */
+    static final String SCOPE_WITHOUT_TRANSITION = "Presence, runtime flags, preserved active state, other extensions and "
+        + "expectedVersion when supplied; the version transition was not checked because the Designer agent did not "
+        + "report the previous version; not binary file identity.";
+
     private InfobaseExtensionLifecycle()
     {
     }
@@ -258,20 +266,21 @@ public final class InfobaseExtensionLifecycle
                 }
                 List<Extension> after = checked(backend.read());
                 Extension actual = find(after, request.extensionName());
-                // The scope follows what was readable: a version the agent did not report proves nothing.
-                boolean versionUnavailable = !uninstall && actual != null
-                    && (actual.version() == null || !install && previous.version() == null);
-                // An unknown version neither matches nor contradicts expectedVersion: the verdict is notVerified.
-                boolean versionUnreported = versionUnavailable && request.expectedVersion() != null;
+                // The version after the write is unknown: it neither matches nor contradicts expectedVersion.
+                boolean afterUnknown = !uninstall && actual != null && actual.version() == null;
+                // The version before the write is unknown: an update's transition cannot be observed.
+                boolean beforeUnknown = !install && previous != null && previous.version() == null;
                 boolean matches = uninstall ? actual == null : actual != null && actual.safeMode() == safe
                     && actual.protectionFromDangerousActions() == protection
                     && (previous == null || previous.active() == actual.active())
-                    && (request.expectedVersion() == null || versionUnreported
+                    && (request.expectedVersion() == null || afterUnknown
                         || request.expectedVersion().equals(actual.version()));
                 boolean othersUnchanged = before.stream().filter(e -> !e.name().equals(request.extensionName())).toList()
                     .equals(after.stream().filter(e -> !e.name().equals(request.extensionName())).toList());
+                boolean versionUnreported = afterUnknown && request.expectedVersion() != null;
+                boolean transitionUnreported = !install && !uninstall && beforeUnknown && request.expectedVersion() != null;
                 boolean updateEvidence = install || uninstall || request.expectedVersion() != null
-                    && !request.expectedVersion().equals(previous.version());
+                    && previous.version() != null && !request.expectedVersion().equals(previous.version());
                 boolean verified = matches && othersUnchanged && updateEvidence && !versionUnreported;
                 ToolResult result = verified ? ToolResult.success()
                     : matches && othersUnchanged && versionUnreported ? ToolResult.error("The Designer operation returned, "
@@ -279,6 +288,11 @@ public final class InfobaseExtensionLifecycle
                         + "versions (versionReported:false). Check the version in the infobase before relying on this operation; "
                         + "the infobase may already have changed.")
                         .put("verificationReason", VERSION_UNREPORTED)
+                    : matches && othersUnchanged && transitionUnreported ? ToolResult.error("The Designer operation returned "
+                        + "and the extension reports expectedVersion, but the update cannot be verified: the version before the "
+                        + "update was not reported (versionReported:false), so the transition to expectedVersion was not observed. "
+                        + "Check the infobase before relying on this operation; the infobase may already have changed.")
+                        .put("verificationReason", TRANSITION_UNREPORTED)
                     : matches && othersUnchanged ? ToolResult.error("The Designer operation returned, but the update cannot be verified "
                         + "without an expectedVersion different from the installed version. Inspect action=list before retrying; "
                         + "the infobase may already have changed.")
@@ -287,7 +301,8 @@ public final class InfobaseExtensionLifecycle
                 return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", versionUnavailable ? SCOPE_WITHOUT_VERSION : SCOPE);
+                    .put("verificationScope", afterUnknown || uninstall && beforeUnknown ? SCOPE_WITHOUT_VERSION
+                        : beforeUnknown ? SCOPE_WITHOUT_TRANSITION : SCOPE);
             }
             catch (Exception failure)
             {

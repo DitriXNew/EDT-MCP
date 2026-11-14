@@ -207,6 +207,59 @@ public class InfobaseExtensionUnreportedVersionTest
         assertFalse(guide, guide.contains("every record contains the actual name, version,"));
         assertTrue(guide, guide.contains("and version, or `versionReported:false` when the agent did not report it"));
     }
+    /** The agent did not report the version before the write but reports it afterwards. */
+    private static UnreportedVersions reportingAfterLoad(String version)
+    {
+        UnreportedVersions backend = new UnreportedVersions()
+        {
+            @Override public void load(Path file, String name)
+            {
+                super.load(file, name);
+                states = states.stream().map(e -> !e.name().equals(name) ? e
+                    : new Extension(name, version, e.active(), e.safeMode(), e.protectionFromDangerousActions(), e.hash()))
+                    .toList();
+            }
+        };
+        backend.states = List.of(ACTIVE, OTHER);
+        return backend;
+    }
+
+    @Test public void aReportedVersionDifferentFromExpectedIsAMismatchEvenWhenThePreviousWasUnreported() throws Exception
+    {
+        JsonObject result = run(update("2"), reportingAfterLoad("3"));
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("mismatched", result.get("verification").getAsString());
+        assertEquals("3", result.getAsJsonObject("actualState").get("version").getAsString());
+        assertFalse(result.toString(), result.has("verificationReason"));
+    }
+
+    @Test public void reachingExpectedVersionFromAnUnreportedOneLacksOnlyTheTransition() throws Exception
+    {
+        JsonObject result = run(update("2"), reportingAfterLoad("2"));
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("notVerified", result.get("verification").getAsString());
+        assertEquals(InfobaseExtensionLifecycle.TRANSITION_UNREPORTED, result.get("verificationReason").getAsString());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION, result.get("verificationScope").getAsString());
+    }
+
+    @Test public void anUninstallOfAnUnreportedVersionUsesTheVersionlessScope() throws Exception
+    {
+        UnreportedVersions backend = new UnreportedVersions();
+        backend.states = List.of(ACTIVE, OTHER);
+        JsonObject result = run(new Request("uninstall", "Runtime", null, null, null, null, true, null), backend);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals("verified", result.get("verification").getAsString());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION, result.get("verificationScope").getAsString());
+    }
+
+    @Test public void anUninstallOfAReportedVersionKeepsTheFullScope() throws Exception
+    {
+        UnreportedVersions backend = new UnreportedVersions();
+        backend.states = List.of(new Extension("Runtime", "1", true, false, false, "old"), OTHER);
+        JsonObject result = run(new Request("uninstall", "Runtime", null, null, null, null, true, null), backend);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE, result.get("verificationScope").getAsString());
+    }
     private Request update(String expectedVersion) throws Exception
     {
         return new Request("update", "Runtime", cfe(), null, null, expectedVersion, true, null);
