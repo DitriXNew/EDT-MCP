@@ -3089,6 +3089,9 @@
           "description": "Case-insensitive substring matched against Name only (not Synonym)",
           "type": "string"
         },
+        "offset": {
+          "type": "integer"
+        },
         "projectName": {
           "type": "string"
         },
