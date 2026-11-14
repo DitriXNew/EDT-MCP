@@ -139,7 +139,8 @@ public class TranslateConfigurationTool implements IMcpTool
 
             // The project is resolved and open above; refuse only the transient
             // BUILDING state here (a missing/closed name was already named above).
-            String building = ProjectStateChecker.buildingErrorOrNull(project);
+            // A project this server just switched still holds the previous branch's model (#922).
+            String building = ProjectStateChecker.strictWriteErrorOrNull(project);
             if (building != null)
             {
                 return ToolResult.error(building).toJson();

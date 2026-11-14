@@ -274,7 +274,9 @@ public class UpdateDatabaseTool implements IMcpTool
 
         // Refuse only the transient BUILDING state; a missing/closed project falls through
         // to the value-naming "Project not found" below.
-        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        // A project this server just switched still holds the previous branch's model; an update now would load that
+        // model into the infobase (#922).
+        String building = ProjectStateChecker.strictWriteErrorOrNull(projectName);
         if (building != null)
         {
             return ToolResult.error(building).toJson();

@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -19,17 +20,22 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.egit.core.op.BranchOperation;
 import org.eclipse.jgit.api.CheckoutResult;
 import org.eclipse.jgit.lib.Repository;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.CheckoutReloads;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
  * Runs a headless EGit checkout ({@link BranchOperation}) on a bounded background
- * {@link Job}, then unconditionally refreshes the project - the shared mechanics
+ * {@link Job}, then, in a second bounded Job, unconditionally refreshes the project and the
+ * other projects checked out with the repository's work tree ({@link #projectsToRefresh}) - the shared mechanics
  * behind {@code switch_git_branch} and {@code create_git_branch}'s optional
  * checkout (issue #281 phase 2). Extracted from the original {@code
  * SwitchGitBranchTool} implementation so both callers run the SAME Job /
@@ -60,6 +66,18 @@ public final class GitCheckoutSupport
 {
     /** Background-Job timeout for the checkout (mirrors {@code CreateInfobaseTool}). */
     public static final long CHECKOUT_TIMEOUT_SECONDS = 120;
+
+    /** What {@link #movedAwayFrom} answers when the repository's current branch cannot be read (#922). */
+    public static final String UNREADABLE = "(unreadable)"; //$NON-NLS-1$
+
+    /** How long the post-checkout workspace refresh is waited for before it becomes a note (#922). */
+    public static final long REFRESH_TIMEOUT_SECONDS = 120;
+
+    /**
+     * How long a successful checkout waits for EDT to load the checked-out files into the refreshed projects'
+     * models before it answers (#922) - the export barrier's own budget ({@code WriteExportBarrier.DEADLINE_MS}).
+     */
+    public static final long MODEL_RELOAD_WAIT_SECONDS = 60;
 
     private GitCheckoutSupport()
     {
@@ -97,6 +115,9 @@ public final class GitCheckoutSupport
         private final Exception jobError;
 
         private final boolean busy;
+
+        /** The projects the post-checkout refresh covered (empty unless the checkout ran and was OK). */
+        private List<IProject> refreshedProjects = List.of();
 
         private CheckoutOutcome(CheckoutResult result, String refreshWarning, boolean timedOut,
             boolean interrupted, Exception jobError, boolean busy)
@@ -145,6 +166,21 @@ public final class GitCheckoutSupport
             return refreshWarning;
         }
 
+        private CheckoutOutcome withRefreshedProjects(List<IProject> projects)
+        {
+            this.refreshedProjects = projects == null ? List.of() : List.copyOf(projects);
+            return this;
+        }
+
+        /**
+         * @return the projects the post-checkout refresh covered - the addressed one and every other project in the
+         *         repository's work tree ({@link GitCheckoutSupport#projectsToRefresh}); empty when no refresh ran
+         */
+        public List<IProject> refreshedProjects()
+        {
+            return refreshedProjects;
+        }
+
         /** @return {@code true} if the Job did not finish within {@link #CHECKOUT_TIMEOUT_SECONDS}. */
         public boolean timedOut()
         {
@@ -178,11 +214,13 @@ public final class GitCheckoutSupport
      * Runs {@code new BranchOperation(repo, fullRef).execute(monitor)} on a bounded
      * background {@link Job} and joins it - exactly what {@code SwitchGitBranchTool}
      * did inline before this extraction. On a successful
-     * ({@link CheckoutResult.Status#OK}) checkout, the SAME Job unconditionally
-     * refreshes {@code project} ({@link IResource#DEPTH_INFINITE}); a refresh
-     * failure is caught, logged, and surfaced via
-     * {@link CheckoutOutcome#refreshWarning()} rather than failing the
-     * already-successful checkout.
+     * ({@link CheckoutResult.Status#OK}) checkout, a SEPARATE bounded Job
+     * ({@link #REFRESH_TIMEOUT_SECONDS}) unconditionally refreshes {@code project} and every
+     * other project checked out with the repository's work tree ({@link #projectsToRefresh},
+     * {@link WorkTreeProjects#checkedOutWith}, {@link IResource#DEPTH_INFINITE}), after those
+     * projects are registered as reloading ({@link CheckoutReloads}); a refresh failure, or a
+     * refresh that outlives its wait, is surfaced via {@link CheckoutOutcome#refreshWarning()}
+     * rather than failing the already-successful checkout.
      *
      * <p>
      * Runs under {@link BranchBindingLock} (see the class javadoc), taken before anything is built and released
@@ -217,8 +255,36 @@ public final class GitCheckoutSupport
     {
         BranchOperation op = new BranchOperation(repo, fullRef);
         AtomicReference<Exception> jobError = new AtomicReference<>();
-        AtomicReference<String> refreshWarning = new AtomicReference<>();
+        // Registered BEFORE the checkout starts (#922): metadata writers do not take BranchBindingLock, so a write that
+        // arrived between the checkout's end and a later registration would land in the previous branch's model.
+        List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(WorkTreeProjects.names(projects));
+        return pinOnFailure(reload, () -> checkoutRegistered(op, jobError, project, repo, fullRef, projects, reload));
+    }
 
+    /**
+     * Runs {@code body}; when it throws, pins {@code reload} first: whatever the checkout did before it threw is
+     * unknown, so the projects are held until the expiry rather than left with a registration no verdict will ever
+     * reach (#922). Package-visible for tests.
+     */
+    static <T> T pinOnFailure(CheckoutReloads.Registration reload, Supplier<T> body)
+    {
+        try
+        {
+            return body.get();
+        }
+        catch (RuntimeException | Error e)
+        {
+            reload.pin();
+            throw e;
+        }
+    }
+
+    /** {@link #checkoutLocked} once its projects are registered; every path ends with one verdict on {@code reload}. */
+    private static CheckoutOutcome checkoutRegistered(BranchOperation op, AtomicReference<Exception> jobError,
+        IProject project, Repository repo, String fullRef, List<IProject> projects,
+        CheckoutReloads.Registration reload)
+    {
         Job checkoutJob = new Job("Checkout git branch: " + fullRef) //$NON-NLS-1$
         {
             @Override
@@ -227,17 +293,6 @@ public final class GitCheckoutSupport
                 try
                 {
                     op.execute(monitor);
-                    // Unconditional, same-Job refresh (see class javadoc): on the EGit-mapped
-                    // path BranchOperation already refreshed affected projects, so this is a
-                    // cheap near no-op; on the discovery-fallback path it is the ONLY thing
-                    // that keeps the EDT model from going stale. A failure here must not fail
-                    // the already-successful checkout - it is caught, logged, and surfaced as
-                    // a CheckoutOutcome note instead.
-                    CheckoutResult checkoutResult = op.getResult(repo);
-                    if (checkoutResult != null && checkoutResult.getStatus() == CheckoutResult.Status.OK)
-                    {
-                        refreshAfterCheckout(project, monitor, refreshWarning);
-                    }
                 }
                 catch (CoreException e)
                 {
@@ -254,14 +309,39 @@ public final class GitCheckoutSupport
             () -> affectedProjects(project, repo));
         if (unfinished != null)
         {
+            // The checkout may still be rewriting the tree: keep the projects registered until the expiry.
+            reload.pin();
             return unfinished;
         }
 
         if (jobError.get() != null)
         {
+            reload.pin();
             return new CheckoutOutcome(null, null, false, false, jobError.get(), false);
         }
-        return new CheckoutOutcome(op.getResult(repo), refreshWarning.get(), false, false, null, false);
+        CheckoutResult result = op.getResult(repo);
+        CheckoutResult.Status status = result == null ? null : result.getStatus();
+        if (!changesBranch(status))
+        {
+            if (leavesTreeUntouched(status))
+            {
+                reload.release();
+            }
+            else
+            {
+                reload.pin();
+            }
+            return new CheckoutOutcome(result, null, false, false, null, false);
+        }
+        // Unconditional refresh (see class javadoc): on the EGit-mapped path BranchOperation already refreshed the
+        // projects it maps, so this is a cheap near no-op; on the discovery-fallback path it is the ONLY thing that
+        // keeps the EDT model from going stale. It runs in its OWN bounded Job after the checkout Job has ended
+        // (#922): a slow refresh must not turn a checkout that already succeeded into a timed-out one. A refresh that
+        // fails or outlives its wait is a note on the successful outcome, never a failure of it.
+        String refreshWarning = refreshAfterCheckout(projects,
+            TimeUnit.SECONDS.toMillis(REFRESH_TIMEOUT_SECONDS), reload);
+        return new CheckoutOutcome(result, refreshWarning, false, false, null, false)
+            .withRefreshedProjects(projects);
     }
 
     /**
@@ -305,29 +385,275 @@ public final class GitCheckoutSupport
     }
 
     /**
-     * Refreshes {@code project} ({@code IResource.DEPTH_INFINITE}) after a successful
-     * checkout, inside the SAME bounded Job. A refresh failure is caught and logged,
-     * and a short warning is stashed into {@code refreshWarning} for the caller to
-     * surface via {@link CheckoutOutcome#refreshWarning()} - it never fails the
-     * already-successful checkout.
+     * After a successful checkout: waits, bounded by {@link #MODEL_RELOAD_WAIT_SECONDS}, until EDT has loaded the
+     * checked-out files into the model of every refreshed project ({@link ProjectStateChecker#awaitModelReload}),
+     * and words what is still loading.
+     * <p>
+     * Issue #922: the checkout returned while Eclipse's automatic refresh was still taking up the rewritten files -
+     * EDT registers their import inside that refresh, and imports them after it - so a metadata write sent right
+     * after the switch landed in the previous branch's model, answered {@code persisted: true}, and its export wrote
+     * that model back over the checked-out file. The write gate now refuses until the import is done; this wait
+     * makes the switch itself answer only once the new branch is in the model, or say plainly that it is not yet.
+     * Runs outside {@link BranchBindingLock}.
      *
-     * @param project the project to refresh
-     * @param monitor the Job's progress monitor
-     * @param refreshWarning set to a short warning note on failure, left {@code null} on success
+     * @param outcome the checkout outcome ({@link CheckoutOutcome#refreshedProjects()} names the projects)
+     * @return a short note naming the projects still loading, or {@code null} when every project settled
      */
-    private static void refreshAfterCheckout(IProject project, IProgressMonitor monitor,
-        AtomicReference<String> refreshWarning)
+    public static String awaitModelReload(CheckoutOutcome outcome)
+    {
+        return modelReloadNote(ProjectStateChecker.awaitModelReload(outcome.refreshedProjects(),
+            TimeUnit.SECONDS.toMillis(MODEL_RELOAD_WAIT_SECONDS)));
+    }
+
+    /**
+     * The note for projects whose model had not taken in the checkout when the wait ended.
+     *
+     * @param stillLoading the names of those projects
+     * @return the note, or {@code null} when there are none
+     */
+    static String modelReloadNote(List<String> stillLoading)
+    {
+        if (stillLoading == null || stillLoading.isEmpty())
+        {
+            return null;
+        }
+        return "EDT had not finished loading the checked-out files into the model of " //$NON-NLS-1$
+            + String.join(", ", stillLoading) + " within " + MODEL_RELOAD_WAIT_SECONDS //$NON-NLS-1$ //$NON-NLS-2$
+            + " seconds: until it has, reads may still show the previous branch and metadata writes are " //$NON-NLS-1$
+            + "refused as 'Project is building'. Retry when list_projects shows the project ready."; //$NON-NLS-1$
+    }
+
+    /**
+     * Joins two optional notes with a space.
+     *
+     * @return {@code null} when both are {@code null}
+     */
+    public static String joinNotes(String first, String second)
+    {
+        if (first == null)
+        {
+            return second;
+        }
+        return second == null ? first : first + " " + second; //$NON-NLS-1$
+    }
+
+    /**
+     * The projects a successful checkout must refresh: the addressed {@code project} first, then every other
+     * project in the repository's work tree, each once.
+     * <p>
+     * Issue #922: a checkout runs from the work tree's ROOT, so it rewrites the files of every project in it. Only
+     * the addressed project used to be refreshed. A sibling that is not shared with EGit (its
+     * {@link BranchOperation} then refreshes nothing) depended on Eclipse's automatic refresh to notice the
+     * change at all - which EDT turns on but a bare Eclipse leaves off - and kept the previous branch in its model
+     * until then; the write gate cannot see a change no refresh has reported. The {@code git} tool refreshes the
+     * same set after its own branch-changing commands ({@link WorkTreeProjects}).
+     *
+     * @param addressed the project the checkout was requested for
+     * @param inWorkTree the open projects inside the repository's work tree
+     * @return the projects to refresh, the addressed one first, without duplicates (never {@code null})
+     */
+    static List<IProject> projectsToRefresh(IProject addressed, Collection<IProject> inWorkTree)
+    {
+        List<IProject> projects = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        if (addressed != null)
+        {
+            projects.add(addressed);
+            names.add(addressed.getName());
+        }
+        for (IProject project : inWorkTree)
+        {
+            if (project != null && !names.contains(project.getName()))
+            {
+                projects.add(project);
+                names.add(project.getName());
+            }
+        }
+        return projects;
+    }
+
+    /**
+     * Refreshes {@code projects} ({@code IResource.DEPTH_INFINITE}) after a successful checkout, in its own Job that
+     * the caller - holding {@link BranchBindingLock} - waits for at most {@code timeoutMillis}. Never fails the
+     * checkout: a refresh failure is caught, logged and worded; a refresh that outlives the wait is recorded as a
+     * branch change still running ({@link BranchBindingLock#awaitOrTrack}) and worded as well.
+     *
+     * @param projects the projects to refresh ({@link #projectsToRefresh})
+     * @param timeoutMillis how long to wait for the refresh
+     * @return a short note for {@link CheckoutOutcome#refreshWarning()}, or {@code null} when the refresh ended cleanly
+     */
+    private static String refreshAfterCheckout(List<IProject> projects, long timeoutMillis,
+        CheckoutReloads.Registration reload)
+    {
+        AtomicReference<String> failure = new AtomicReference<>();
+        AtomicBoolean ran = new AtomicBoolean();
+        Job refresh = new Job("Refresh projects after a git checkout") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                failure.set(refreshAll(projects, monitor));
+                ran.set(true);
+                return Status.OK_STATUS;
+            }
+        };
+        refresh.setUser(false);
+        refresh.setSystem(true);
+        // The projects count as reloading until this refresh has ENDED, not merely until its wait ran out: a refresh
+        // that is still scanning has not reported the rewritten files yet, so no other signal shows the reload (#922).
+        refresh.addJobChangeListener(new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                concludeRefresh(reload, ran.get(), failure.get());
+            }
+        });
+        McpJobs.schedule(refresh);
+        return awaitRefresh(refresh, timeoutMillis, () -> WorkTreeProjects.names(projects), failure);
+    }
+
+    /**
+     * What the end of the post-checkout refresh means for the reload registration (#922). A refresh that ran and
+     * refreshed every project lets the projects settle once they are seen idle; a refresh that failed for a project,
+     * or never ran (cancelled), told EDT nothing about the rewritten files, so no later signal would show the stale
+     * model - the projects stay registered until the expiry. Package-visible for tests.
+     *
+     * @param reload the checkout's registration
+     * @param ran whether the refresh ran to its end
+     * @param failure the refresh's failure note, or {@code null}
+     */
+    static void concludeRefresh(CheckoutReloads.Registration reload, boolean ran, String failure)
+    {
+        if (ran && failure == null)
+        {
+            reload.done();
+        }
+        else
+        {
+            reload.pin();
+        }
+    }
+
+    /**
+     * Whether a JGit checkout status means HEAD moved to the new branch: {@code OK}, and {@code NONDELETED} (switched,
+     * but some paths could not be removed). Package-visible for tests.
+     *
+     * @param status the status, or {@code null}
+     * @return {@code true} for a branch-changing outcome
+     */
+    public static boolean changesBranch(CheckoutResult.Status status)
+    {
+        return status == CheckoutResult.Status.OK || status == CheckoutResult.Status.NONDELETED;
+    }
+
+    /**
+     * Whether a JGit checkout status guarantees the work tree was not touched: {@code NOT_TRIED} and {@code CONFLICTS}
+     * (JGit checks for conflicts before writing anything). {@code ERROR} and an absent status are not known to have
+     * left the tree alone. Package-visible for tests.
+     *
+     * @param status the status, or {@code null}
+     * @return {@code true} when nothing was rewritten
+     */
+    static boolean leavesTreeUntouched(CheckoutResult.Status status)
+    {
+        return status == CheckoutResult.Status.NOT_TRIED || status == CheckoutResult.Status.CONFLICTS;
+    }
+
+    /**
+     * Waits for the post-checkout refresh Job and words its end (#922). Package-visible for tests.
+     *
+     * @param refresh the scheduled refresh Job
+     * @param timeoutMillis how long to wait for it
+     * @param projects names the projects it refreshes, recorded while it outlives the wait
+     * @param failure the refresh's own failure note, read once it has ended
+     * @return the note, or {@code null} when the refresh ended within the wait without a failure
+     */
+    static String awaitRefresh(Job refresh, long timeoutMillis, Supplier<? extends Collection<String>> projects,
+        AtomicReference<String> failure)
     {
         try
         {
-            project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
+            if (BranchBindingLock.awaitOrTrack(refresh, timeoutMillis, projects))
+            {
+                return failure.get();
+            }
+            return "The workspace refresh after the checkout did not finish within " //$NON-NLS-1$
+                + TimeUnit.MILLISECONDS.toSeconds(timeoutMillis) + " seconds and is still running; until it ends " //$NON-NLS-1$
+                + "the EDT model may still show the previous branch. The checkout itself succeeded."; //$NON-NLS-1$
         }
-        catch (CoreException e)
+        catch (InterruptedException e)
         {
-            Activator.logError("git checkout: post-checkout workspace refresh failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
-            refreshWarning.set("Workspace refresh after the checkout failed (" + e.getMessage() //$NON-NLS-1$
-                + "); the EDT model may be stale until a manual refresh."); //$NON-NLS-1$
+            Thread.currentThread().interrupt();
+            return "Waiting for the workspace refresh after the checkout was interrupted; it is still running, " //$NON-NLS-1$
+                + "and until it ends the EDT model may still show the previous branch. The checkout itself " //$NON-NLS-1$
+                + "succeeded."; //$NON-NLS-1$
         }
+    }
+
+    /** Refreshes each existing project; returns a failure note or {@code null}. */
+    private static String refreshAll(List<IProject> projects, IProgressMonitor monitor)
+    {
+        List<String> failed = new ArrayList<>();
+        String firstFailure = null;
+        for (IProject project : projects)
+        {
+            if (!project.exists())
+            {
+                continue;
+            }
+            try
+            {
+                project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
+            }
+            catch (CoreException | RuntimeException e) // NOSONAR logged here, or it is lost in the Job
+            {
+                Activator.logError("git checkout: post-checkout workspace refresh failed for project '" //$NON-NLS-1$
+                    + project.getName() + "'", e); //$NON-NLS-1$
+                failed.add(project.getName());
+                if (firstFailure == null)
+                {
+                    firstFailure = e.getMessage();
+                }
+            }
+        }
+        if (failed.isEmpty())
+        {
+            return null;
+        }
+        return "Workspace refresh after the checkout failed for " + String.join(", ", failed) //$NON-NLS-1$ //$NON-NLS-2$
+            + " (" + firstFailure + "); the EDT model may be stale until a manual refresh."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Whether the repository has moved away from {@code fullRef} - read again after the unlocked reload wait, during
+     * which another branch change of this server may have checked out something else (#922).
+     *
+     * @param repo the repository
+     * @param fullRef the ref the checkout put the repository on
+     * @return {@code null} when it is still checked out, {@link #UNREADABLE} when the state cannot be read (never taken
+     *         for "still checked out"), otherwise what is checked out now: a short branch name, or the commit of a
+     *         detached HEAD
+     */
+    public static String movedAwayFrom(Repository repo, String fullRef)
+    {
+        String now;
+        try
+        {
+            now = repo.getFullBranch();
+        }
+        catch (java.io.IOException | RuntimeException e)
+        {
+            return UNREADABLE;
+        }
+        if (now == null)
+        {
+            return UNREADABLE;
+        }
+        if (now.equals(fullRef))
+        {
+            return null;
+        }
+        return now.startsWith("refs/heads/") ? now.substring("refs/heads/".length()) : now; //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

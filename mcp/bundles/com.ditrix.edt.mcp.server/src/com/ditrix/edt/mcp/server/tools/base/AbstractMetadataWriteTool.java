@@ -256,9 +256,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         // lookup. Only the transient BUILDING state is refused here; a missing/closed
         // project falls through to resolveProjectAndConfig's value-naming error. Checked
         // on the calling thread before marshalling onto the UI thread.
-        String building = requiresFullDerivedData()
-            ? ProjectStateChecker.buildingErrorOrNull(params.get("projectName")) //$NON-NLS-1$
-            : ProjectStateChecker.modelBuildingErrorOrNull(params.get("projectName")); //$NON-NLS-1$
+        String projectName = params.get("projectName"); //$NON-NLS-1$
+        String building = writeGateError(requiresFullDerivedData(),
+            () -> ProjectStateChecker.checkoutReloadErrorOrNull(projectName),
+            () -> ProjectStateChecker.buildingErrorOrNull(projectName),
+            () -> ProjectStateChecker.modelBuildingErrorOrNull(projectName));
         if (building != null)
         {
             return ToolResult.error(building).toJson();
@@ -324,6 +326,29 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             logExecutionFailure("Error finishing " + getName(), e); //$NON-NLS-1$
             return scope.markErrorAfterRecordedWrite(ToolResult.error(e.getMessage()).toJson());
         }
+    }
+
+    /**
+     * The pre-write refusal. The model gate already includes the checkout-reload check; the STRICT gate does not, so
+     * a strict writer ({@code delete_metadata}, {@code apply_quick_fix}) asks it first - right after this server's
+     * branch switch the previous branch's model can read fully computed while its reload has not been scheduled yet
+     * (#922). Package-visible for tests.
+     *
+     * @param strict whether the tool uses the strict gate ({@link #requiresFullDerivedData()})
+     * @param checkoutReload the checkout-reload refusal
+     * @param strictGate the strict gate
+     * @param modelGate the model gate
+     * @return the refusal, or {@code null}
+     */
+    static String writeGateError(boolean strict, java.util.function.Supplier<String> checkoutReload,
+        java.util.function.Supplier<String> strictGate, java.util.function.Supplier<String> modelGate)
+    {
+        if (!strict)
+        {
+            return modelGate.get();
+        }
+        String reload = checkoutReload.get();
+        return reload != null ? reload : strictGate.get();
     }
 
     /**
