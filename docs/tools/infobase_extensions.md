@@ -69,8 +69,13 @@ refuses to create an absent name. Uninstall also requires a preview and consent:
 
 ## Verification and failures
 
-List returns `extensions` and `count`; every record contains the actual name, version, active state,
-safeMode and protectionFromDangerousActions. Empty is a measured inventory, never a connection failure.
+List returns `extensions` and `count`; every record contains the actual name, active state, safeMode,
+protectionFromDangerousActions and version, or `versionReported:false` when the agent did not report it. Empty is a measured inventory, never a connection failure.
+The Designer agent built into a standalone server (8.3.27, 8.5) answers with the active flag in place of
+the version, and the version is lost. The tool restores `active` from that answer and returns
+`versionReported:false` instead of a version; it never guesses one. On such an application
+`expectedVersion` cannot be read back, so a write that supplies it ends `notVerified` with
+`verificationReason`; check the version in the infobase.
 
 Writes reread the inventory after consent and after the Designer operation. `verification:"verified"`
 means presence/absence, requested runtime flags, preserved active state, unchanged other extensions,
