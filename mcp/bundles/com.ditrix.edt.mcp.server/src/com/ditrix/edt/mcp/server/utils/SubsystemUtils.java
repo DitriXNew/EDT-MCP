@@ -81,6 +81,88 @@ public final class SubsystemUtils
         return "Subsystem not found: " + fqn + ". " + addressingHint() + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    /** How many same-named nested subsystems {@link #nestedNamesakesHint} spells out; the rest is counted. */
+    static final int MAX_NAMESAKES_LISTED = 5;
+
+    /**
+     * The sentence to append to a "not found" of a SHORT subsystem address ({@code Subsystem.<Name>}, either
+     * language) when no top-level subsystem carries the name but nested ones do: their whole chains, so the
+     * caller learns that the subsystem exists and how it is addressed (issue #929). The short address is
+     * never resolved to one of them - same-named subsystems can live under different parents, and a bare
+     * child name is not guessed ({@link #resolveInScope}).
+     *
+     * <p>Empty (never {@code null}) for anything else - an address that is not a short subsystem address,
+     * one that names a top-level subsystem, a root with no subsystem of that name, an external-objects
+     * project - so a caller appends it unconditionally. Names match by the descent's rule
+     * ({@link #nameMatches}); the walk follows each subsystem's {@code subsystems} list, stops at a proxy and
+     * at a repeat, so a broken, cyclic model cannot keep it going.</p>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized address that did not resolve (may be {@code null})
+     * @return the hint with a leading space, or an empty string
+     */
+    public static String nestedNamesakesHint(MetadataScope scope, String fqn)
+    {
+        String[] names = parseSubsystemPath(fqn);
+        if (names == null || names.length != 1 || scope == null || scope.isExternalObjects()
+            || scope.configuration() == null || resolveInScope(scope, names) != null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        List<String> chains = new ArrayList<>();
+        Set<Subsystem> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        int[] found = { 0 };
+        for (Subsystem top : scope.configuration().getSubsystems())
+        {
+            if (top != null && !top.eIsProxy() && seen.add(top))
+            {
+                List<String> path = new ArrayList<>();
+                path.add(top.getName());
+                collectNamesakes(top.getSubsystems(), names[0], path, seen, chains, found);
+            }
+        }
+        if (found[0] == 0)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder(" No top-level subsystem is named '").append(names[0]) //$NON-NLS-1$
+            .append(found[0] == 1 ? "', but a nested one is: " : "', but nested ones are: ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(String.join(", ", chains)); //$NON-NLS-1$
+        if (found[0] > chains.size())
+        {
+            sb.append(" and ").append(found[0] - chains.size()).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.append(". Address a nested subsystem by its whole chain.").toString(); //$NON-NLS-1$
+    }
+
+    /** Depth-first: the chains of the subsystems below {@code path} named {@code name}, the first few spelled. */
+    private static void collectNamesakes(Iterable<Subsystem> level, String name, List<String> path,
+        Set<Subsystem> seen, List<String> chains, int[] found)
+    {
+        if (level == null)
+        {
+            return;
+        }
+        for (Subsystem candidate : level)
+        {
+            if (candidate == null || candidate.eIsProxy() || !seen.add(candidate))
+            {
+                continue;
+            }
+            path.add(candidate.getName());
+            if (nameMatches(name, candidate.getName()))
+            {
+                found[0]++;
+                if (chains.size() < MAX_NAMESAKES_LISTED)
+                {
+                    chains.add(chainFqn(path.toArray(new String[0]), path.size()));
+                }
+            }
+            collectNamesakes(candidate.getSubsystems(), name, path, seen, chains, found);
+            path.remove(path.size() - 1);
+        }
+    }
+
     /**
      * Resolves the language code for synonyms using the explicit value if provided,
      * otherwise the configuration default language. Returns {@code null} when no
