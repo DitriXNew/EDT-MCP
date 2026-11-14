@@ -385,6 +385,42 @@ public class GetProjectErrorsPagingTest
         assertFalse("no lone high surrogate", cut.contains("\uD83D ")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testOnlyRenderedPlaceholderRowsAreCountedAsShown()
+    {
+        // Five markers whose location cannot be resolved, each with a long message: the page holds all five,
+        // the size budget renders only the first few. The "shown with a placeholder location" warning must
+        // count the rows really shown, not the ones moved to the next page.
+        char[] text = new char[1500];
+        Arrays.fill(text, 'x');
+        List<Marker> markers = new ArrayList<>();
+        for (int i = 1; i <= 5; i++)
+        {
+            Marker marker = marker(MarkerSeverity.MAJOR, "SU" + i); //$NON-NLS-1$
+            when(marker.getMessage()).thenReturn(new String(text));
+            when(marker.getObjectPresentation()).thenThrow(new IllegalStateException("unresolvable")); //$NON-NLS-1$
+            markers.add(marker);
+        }
+        GetProjectErrorsTool.CollectContext context = context(null, 5, 0);
+        List<ErrorInfo> page = GetProjectErrorsTool.collectErrors(byProject(markers), null, context);
+        assertEquals(5, page.size());
+
+        int shown = GetProjectErrorsTool.appendProblemsPage(new StringBuilder(), page, 0, 5, false, 3_500,
+            context.unresolvedShown);
+
+        assertTrue("the budget must cut the page: " + shown, shown > 0 && shown < 5); //$NON-NLS-1$
+        assertEquals("only the rendered placeholder rows count", shown, context.unresolvedShown[0]); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePlaceholderFlagStaysOutOfTheStructuredPayload()
+    {
+        List<ErrorInfo> rows = rows(1, "m"); //$NON-NLS-1$
+        rows.get(0).presentationUnresolved = true;
+        String json = GetProjectErrorsTool.addressPayload("report", rows, new GetProjectErrorsTool.AddressResolution()); //$NON-NLS-1$
+        assertFalse(json, json.contains("presentationUnresolved")); //$NON-NLS-1$
+    }
+
     // ========== helpers ==========
 
     private static GetProjectErrorsTool.CollectContext context(MarkerSeverity severity, int limit, int offset)

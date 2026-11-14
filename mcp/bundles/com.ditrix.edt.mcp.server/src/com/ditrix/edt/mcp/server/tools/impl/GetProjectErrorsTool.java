@@ -469,7 +469,7 @@ public class GetProjectErrorsTool implements IMcpTool
             else
             {
                 appendProblemsPage(md, errors, offset, collectContext.total(), detailed,
-                    REPORT_TABLE_BUDGET_CHARS);
+                    REPORT_TABLE_BUDGET_CHARS, unresolvedShown);
             }
 
             // NOTE: no objectsNotFound here, on purpose. This filter is a documented SUBSTRING
@@ -710,7 +710,8 @@ public class GetProjectErrorsTool implements IMcpTool
             int shown = 0;
             if (total > 0)
             {
-                shown = appendProblemsPage(table, errors, offset, total, detailed, ADDRESS_TABLE_BUDGET_CHARS);
+                shown = appendProblemsPage(table, errors, offset, total, detailed, ADDRESS_TABLE_BUDGET_CHARS,
+                    unresolvedShown);
             }
             String report = assembleAddressReport(table.length() > 0 ? table.toString() : null, projectName,
                 severity, objectFqns, resolution, unresolvedShown, unresolvedFilteredOut, modulePaths);
@@ -2514,8 +2515,13 @@ public class GetProjectErrorsTool implements IMcpTool
                 // The row is built from THIS decision, never from a second filter pass: the presentation and
                 // the check-repository lookup are best-effort, so a rerun could reject the marker that was just
                 // counted and given this page position, and the next marker would take its place.
-                errors.add(MarkerRows.buildRow(marker, match, context.checkRepository, context.fixRepository,
-                    context.unresolvedShown, true, ErrorInfo::new));
+                // A placeholder location is only COUNTED once the row is really rendered: the size budget may move
+                // the tail of this page to the next one (see appendProblemsPage), so the row carries the flag.
+                int[] placeholder = new int[1];
+                ErrorInfo row = MarkerRows.buildRow(marker, match, context.checkRepository, context.fixRepository,
+                    placeholder, true, ErrorInfo::new);
+                row.presentationUnresolved = placeholder[0] > 0;
+                errors.add(row);
             }
         });
         return errors;
@@ -2781,6 +2787,38 @@ public class GetProjectErrorsTool implements IMcpTool
      * @return how many of {@code errors} were rendered
      */
     static int appendProblemsPage(StringBuilder md, List<ErrorInfo> errors, int offset, int total,
+        boolean detailed, int budgetChars)
+    {
+        return appendProblemsPage(md, errors, offset, total, detailed, budgetChars, null);
+    }
+
+    /**
+     * As {@link #appendProblemsPage(StringBuilder, List, int, int, boolean, int)}, also setting
+     * {@code unresolvedShown[0]} to the number of RENDERED rows that carry the unresolved-location
+     * placeholder - not the rows the size budget moved to the next page, which are not shown here.
+     *
+     * @param unresolvedShown out-counter for the "shown with a placeholder location" warning, may be {@code null}
+     */
+    static int appendProblemsPage(StringBuilder md, List<ErrorInfo> errors, int offset, int total,
+        boolean detailed, int budgetChars, int[] unresolvedShown)
+    {
+        int shown = renderProblemsPage(md, errors, offset, total, detailed, budgetChars);
+        if (unresolvedShown != null)
+        {
+            int placeholders = 0;
+            for (ErrorInfo row : errors.subList(0, shown))
+            {
+                if (row.presentationUnresolved)
+                {
+                    placeholders++;
+                }
+            }
+            unresolvedShown[0] = placeholders;
+        }
+        return shown;
+    }
+
+    private static int renderProblemsPage(StringBuilder md, List<ErrorInfo> errors, int offset, int total,
         boolean detailed, int budgetChars)
     {
         md.append("# Configuration Problems\n\n"); //$NON-NLS-1$
@@ -3127,5 +3165,10 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static class ErrorInfo extends MarkerRows.Row
     {
+        /**
+         * Whether this row carries the unresolved-location placeholder; counted only among the rows a page
+         * really renders. {@code transient}: internal, never part of the structured {@code problems} payload.
+         */
+        transient boolean presentationUnresolved;
     }
 }
