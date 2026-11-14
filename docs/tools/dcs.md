@@ -299,7 +299,7 @@ before the first mutation, then committed in one BM write transaction and force-
 The body shapes below define the current authoring contract. Optional members are
 marked with `?`; omitted members have the action semantics from the table above.
 
-Schema parameter `valueType:{types:[{kind:"StandardPeriod"}]}` (or `СтандартныйПериод`) accepts `standardPeriod` values in `values` and variant `dataParameters`.
+Schema parameter `valueType:{types:[{kind:"StandardPeriod"}]}` (or `СтандартныйПериод`) accepts `standardPeriod` values in `values` and variant `dataParameters`; the type kind is matched in any case, so `{kind:"standardPeriod"}` works too.
 
 Shared localized text and value shapes:
 
@@ -332,7 +332,7 @@ AvailableValueSpec = {"value":ValueSpec, "presentation"?:PresentationSpec}
 InputParametersSpec = {"items":[{"parameter":ValueSpec(kind=parameter),
                                   "values"?:ValueSpec[], "use"?:bool}]}
 OrderExpressionSpec = {"expression":string, "orderType"?:"Asc|Desc", "autoOrder"?:bool}
-ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind":"Number","precision"?:int,"scale"?:int,"nonNegative"?:bool} | {"kind":"Date","fractions"?:"DateTime|Date|Time"} | {"kind":"Boolean"} | {"kind":"Ref|...Ref","ref":string} | {"kind":"ValueStorage|UUID|..."}]}
+ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind":"Number","precision"?:int,"scale"?:int,"nonNegative"?:bool} | {"kind":"Date","fractions"?:"DateTime|Date|Time"} | {"kind":"Boolean"} | {"kind":"Ref","ref":"Catalog.Name"|"CatalogRef.Name"} | {"kind":"CatalogRef","ref":"Name"} | {"kind":"ValueStorage|UUID|..."}]}
 ```
 
 | `type` | Target / body shape |

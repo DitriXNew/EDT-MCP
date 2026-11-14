@@ -421,6 +421,17 @@ public final class DcsWriter
      */
     public static TypeResolver typeResolver(Configuration configuration, Version version)
     {
+        return typeResolver(configuration, version, false);
+    }
+
+    /**
+     * {@link #typeResolver(Configuration, Version)} for a project that may be a configuration EXTENSION:
+     * there an unresolved reference also suggests adopting the base object, as {@code modify_metadata}
+     * does (issue #920) - an extension sees a base object only once it is adopted.
+     */
+    public static TypeResolver typeResolver(Configuration configuration, Version version,
+        boolean isExtensionProject)
+    {
         return valueTypeSpec -> {
             if (version == null)
             {
@@ -428,7 +439,7 @@ public final class DcsWriter
                     "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
             }
             MetadataTypeBuilder.Result result = MetadataTypeBuilder.build(valueTypeSpec, configuration,
-                version, false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+                version, isExtensionProject, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
             if (result.platformFailure)
             {
                 throw result.asException("Cannot build the parameter type: " + result.error); //$NON-NLS-1$
