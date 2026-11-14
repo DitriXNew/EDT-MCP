@@ -331,6 +331,8 @@ public final class MetadataClonePlan
         String fqn = source.eClass().getName() + "." + source.getName();
         Map<String, EObject> graph = graph(source);
         StringBuilder content = new StringBuilder(fqn).append('\n').append(newName).append('\n');
+        // The destination's project kind decides whether the copy keeps extension properties.
+        content.append("extensionProject=").append(extensionProject).append('\n');
         appendModel(content, graph);
         appendModel(content, Collections.singletonMap("configuration", config));
         IFile rootFile = fs.getFile(source);

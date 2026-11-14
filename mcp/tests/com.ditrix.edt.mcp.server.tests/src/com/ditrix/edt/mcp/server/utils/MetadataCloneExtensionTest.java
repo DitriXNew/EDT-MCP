@@ -117,6 +117,24 @@ public class MetadataCloneExtensionTest
         assertEquals(List.of(), fixture.preview().kindWarnings);
     }
 
+    /** Review #943: the project kind changes the copier's semantics, so a confirm across a change must drift. */
+    @Test
+    public void fingerprintBindsTheDestinationProjectKind() throws Exception
+    {
+        MetadataCloneFilesFixture fixture = new MetadataCloneFilesFixture();
+        MetadataClonePlan extension = MetadataClonePlan.capture(fixture.project, fixture.model, fixture.config,
+            fixture.source, "Copy", List.of(), fixture.fs, false, true);
+        MetadataClonePlan configuration = MetadataClonePlan.capture(fixture.project, fixture.model, fixture.config,
+            fixture.source, "Copy", List.of(), fixture.fs, false, false);
+        assertNotEquals("Identical inputs in an extension and a configuration project must not share a hash",
+            configuration.fingerprint, extension.fingerprint);
+        assertFalse(com.ditrix.edt.mcp.server.utils.ContentHash.matches(extension.fingerprint, configuration.hash()));
+        assertEquals("The 8-argument capture is the configuration-project capture", configuration.fingerprint,
+            fixture.preview().fingerprint);
+        assertEquals(extension.fingerprint, MetadataClonePlan.capture(fixture.project, fixture.model, fixture.config,
+            fixture.source, "Copy", List.of(), fixture.fs, false, true).fingerprint);
+    }
+
     @Test
     public void adoptedSubsystemAndRoleOwnersAreReportedOnly()
     {
