@@ -11,6 +11,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -237,13 +238,65 @@ public class RenameMetadataObjectTool implements IMcpTool
         String settle(String projectName, long timeoutMs);
     }
 
+    /** Bounded wait for the workspace build; the seam {@link #indexedThenSettled} composes. */
+    @FunctionalInterface
+    interface BuildWaiter
+    {
+        boolean await(long timeoutMs);
+    }
+
     private final CascadeSettler cascadeSettler;
 
     /** Production instance: settle through the live EDT-backed project-state checker. */
     public RenameMetadataObjectTool()
     {
-        this((projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
-            timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
+        this(productionSettler());
+    }
+
+    /**
+     * The settle the production tool runs before every preview and confirm: the workspace build
+     * first, then the derived-data and BM-model settle. Package-visible so a test can prove the
+     * production wiring waits for a pending build.
+     */
+    static CascadeSettler productionSettler()
+    {
+        return indexedThenSettled(BuildUtils::awaitWorkspaceBuild,
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
+    }
+
+    /**
+     * Composes the pre-flight of a rename (#935): wait for the workspace build, then run
+     * {@code cascade} with what is left of the SAME budget.
+     * <p>
+     * The build comes first because it is what makes a just-written module visible to the rename at
+     * all: {@code write_module_source} answers once the file is written, the workspace build that
+     * indexes it starts up to a second later, and the reference finder of EDT's rename reads that
+     * index. Without this wait a rename issued right after the write collected its change points
+     * from the index of the OLD module text and answered {@code executed} with the new reference
+     * still naming the old element. The derived-data settle cannot see that window: the pipeline is
+     * idle until the build has run, so it is asked only afterwards. A build still pending at the
+     * deadline refuses the rename - running it would leave references behind, and the condition
+     * clears on its own.
+     *
+     * @param build the bounded build wait
+     * @param cascade the derived-data / BM-model settle run after it
+     * @return the composed settler
+     */
+    static CascadeSettler indexedThenSettled(BuildWaiter build, CascadeSettler cascade)
+    {
+        return (projectName, timeoutMs) -> {
+            long start = System.nanoTime();
+            if (!build.await(timeoutMs))
+            {
+                return "Project is building: the workspace build that indexes the BSL modules did not " //$NON-NLS-1$
+                    + "finish within " + (timeoutMs / 1000) + "s, so references written since the last " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "build (for example by write_module_source) would be missed by the rename. " //$NON-NLS-1$
+                    + "Nothing was renamed. Please wait and retry."; //$NON-NLS-1$
+            }
+            long spent = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            return cascade.settle(projectName, Math.max(0L, timeoutMs - spent));
+        };
     }
 
     /** Package-visible test seam for settling before the UI-thread hand-off. */
