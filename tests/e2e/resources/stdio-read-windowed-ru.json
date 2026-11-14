@@ -1,0 +1,36 @@
+{
+  "platform": "EDT 2026.2.2+21",
+  "hostKind": "WINDOWED",
+  "language": "ru",
+  "reason": "EDT renders the editor hover in its UI language; these are the Russian-UI pins of the get_symbol_info cases of stdio-read-windowed.json.",
+  "cases": {
+    "symbol-Calc": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Calc/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Calc/Module.bsl\nline: 1\ncolumn: 2\n---\nФункция <[Число](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\* Add([A](^/param0), [B](^/param1))\n\nПараметры:\n\nA <[Число](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\*\n\nB <[Число](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\*\n\n\\[Сервер, мобильное приложение (сервер), мобильный автономный сервер\\]\n\n\\* — рассчитано системой типов встроенного языка.",
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    "symbol-Вычисление": {
+      "tool": "get_symbol_info",
+      "arguments": {
+        "projectName": "TestConfiguration",
+        "modulePath": "CommonModules/Вычисление/Module.bsl",
+        "line": 1,
+        "column": 2
+      },
+      "response": {
+        "text": "---\nprojectName: TestConfiguration\nmodule: CommonModules/Вычисление/Module.bsl\nline: 1\ncolumn: 2\n---\nФункция <[Число](v8help:/8.5.1/SyntaxHelperLanguage/def_Number)\\>\\* Маркер()\n\n\\[Сервер, мобильное приложение (сервер), мобильный автономный сервер\\]\n\n\\* — рассчитано системой типов встроенного языка.",
+        "structuredContent": null,
+        "isError": false
+      }
+    }
+  }
+}

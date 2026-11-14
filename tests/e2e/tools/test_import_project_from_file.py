@@ -19,6 +19,8 @@ The conversion needs a registered 1C:Enterprise platform with the thick client, 
 CI does not have. The happy paths and the damaged-file case therefore run only with
 EDT_MCP_LIVE_INFOBASE=1 (the stand), and skip otherwise; without a platform the tool must
 instead refuse at once, which test_without_a_platform_the_call_is_refused_at_once pins on CI.
+On an EDT that HAS a platform that test is admitted to the conversion of a damaged probe file,
+checks that nothing was created and skips, naming the reason (issue #935).
 
 execute() validation, each a ToolResult.error BEFORE any job starts (CI-safe):
   1. filePath / projectName required
@@ -102,7 +104,11 @@ def _import_to_completion(arguments):
     Returns (finished, text): finished is True for a successful import and the text is its
     Markdown answer; False with the error text otherwise.
     """
-    r = call(TOOL, arguments)
+    return _import_to_completion_from(call(TOOL, arguments))
+
+
+def _import_to_completion_from(r):
+    """Follow the import whose first answer is `r` to the end; see _import_to_completion."""
     if r.is_error:
         return False, r.error_text()
     text = r.text or ""
@@ -271,19 +277,68 @@ def test_a_platform_version_that_matches_nothing_is_refused_naming_it():
     _assert_fixtures_untouched("a refused call touches nothing")
 
 
+_NO_PLATFORM_REFUSAL = "No installed 1C:Enterprise platform"
+# The conversion's own failure: only an installed platform that actually ran can produce it.
+_PLATFORM_RAN = "The 1C:Enterprise platform failed while"
+
+
+def platform_precondition(first_answer_is_error, first_answer_text):
+    """Which side of the platform precondition the first answer to a platform-free probe shows.
+
+    "refused" - EDT has no installed platform: the tool refused before any job (the CI case);
+    "admitted" - EDT resolved an installed platform and the call reached the conversion (a job is
+    running or done, or the platform itself failed on the file), so this EDT cannot show the
+    refusal; "other" - an error that is neither, which the caller must fail on.
+    The tool's own resolution decides it - the same one every real import goes through."""
+    if not first_answer_is_error:
+        return "admitted"
+    text = first_answer_text or ""
+    if _NO_PLATFORM_REFUSAL in text:
+        return "refused"
+    return "admitted" if _PLATFORM_RAN in text else "other"
+
+
 @e2e_test(tool=TOOL, kind="action")
 def test_without_a_platform_the_call_is_refused_at_once():
     """Headless CI has no 1C platform: the call must be refused before any job, naming the
-    missing platform and the XML route instead of hanging or creating anything."""
+    missing platform and the XML route instead of hanging or creating anything.
+
+    The probe file is DAMAGED on purpose. Whether a platform is installed is the tool's own
+    answer, not a guess: without one the call is refused at once; with one it is admitted and the
+    damaged file then fails in the conversion, so a stand that has a platform creates nothing and
+    reports a skip instead of importing a project under the refusal's name."""
     if LIVE_INFOBASE:
         raise E2ESkip("a platform IS registered on the live stand; the happy paths cover it")
-    r = call(TOOL, {"filePath": _CF, "projectName": _REFUSED_PROJECT})
-    e = assert_error(r, "no installed platform")
-    assert_error_quality(e, names=["platform"], suggests=["import_configuration_from_xml"],
-                         ctx="the refusal names what is missing and the route without it")
-    assert_contains(e, "No project was created", "the refusal says nothing was created")
-    lp = call("list_projects", {})
-    assert _project_state(lp.text, _REFUSED_PROJECT) is None, "a refusal creates nothing"
+    _ensure_absent(_REFUSED_PROJECT)
+    fd, damaged = tempfile.mkstemp(prefix="edt_import_e2e_", suffix=".cf")
+    side = None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(b"this is not a 1C configuration file")
+        r = call(TOOL, {"filePath": damaged, "projectName": _REFUSED_PROJECT})
+        side = platform_precondition(r.is_error, r.error_text() if r.is_error else r.text)
+        if side == "admitted":
+            finished, text = _import_to_completion_from(r)
+            assert not finished, "a damaged file must not import:\n" + text
+            assert_contains(text, "No project was created", "the failure says nothing was left behind")
+            lp = call("list_projects", {})
+            assert _project_state(lp.text, _REFUSED_PROJECT) is None, \
+                "the admitted damaged file must not leave a project:\n" + lp.text
+            _assert_fixtures_untouched("an admitted damaged file touches nothing")
+            raise E2ESkip("this EDT has an installed 1C:Enterprise platform (the call was admitted "
+                          "to the conversion), so the no-platform refusal cannot be shown here; it "
+                          "is pinned on CI, which has no platform")
+        e = assert_error(r, "no installed platform")
+        assert side == "refused", "expected the no-platform refusal, got:\n" + e
+        assert_error_quality(e, names=["platform"], suggests=["import_configuration_from_xml"],
+                             ctx="the refusal names what is missing and the route without it")
+        assert_contains(e, "No project was created", "the refusal says nothing was created")
+        lp = call("list_projects", {})
+        assert _project_state(lp.text, _REFUSED_PROJECT) is None, "a refusal creates nothing"
+    finally:
+        os.remove(damaged)
+        if side == "admitted":
+            _ensure_absent(_REFUSED_PROJECT)
     _assert_fixtures_untouched("a refused call touches nothing")
 
 
