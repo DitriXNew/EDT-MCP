@@ -31,14 +31,30 @@ public final class InfobaseExtensionLifecycle
     {
     }
 
+    /**
+     * {@code version} is null when the Designer agent did not report it (#916); it is never guessed. The
+     * wire omits null fields, so such a record says {@code versionReported:false} instead of a version.
+     */
     public record Extension(String name, String version, boolean active, boolean safeMode,
         boolean protectionFromDangerousActions, String hash)
     {
         public Map<String, Object> details()
         {
-            return Map.of("name", name, "version", version, "active", active,
-                "safeMode", safeMode, "protectionFromDangerousActions", protectionFromDangerousActions,
-                "hash", hash);
+            Map<String, Object> details = new java.util.LinkedHashMap<>();
+            details.put("name", name);
+            if (version != null)
+            {
+                details.put("version", version);
+            }
+            else
+            {
+                details.put("versionReported", false);
+            }
+            details.put("active", active);
+            details.put("safeMode", safeMode);
+            details.put("protectionFromDangerousActions", protectionFromDangerousActions);
+            details.put("hash", hash);
+            return details;
         }
     }
 
@@ -62,6 +78,38 @@ public final class InfobaseExtensionLifecycle
     {
         Path directory() throws java.io.IOException;
     }
+
+    static final String VERSION_UNREPORTED = "The infobase's Designer agent did not report extension versions "
+        + "(the standalone server's agent puts the active flag in place of the version), so expectedVersion was not read back.";
+
+    /*
+     * Each scope names exactly the checks of the branch that publishes it. Install and update check presence,
+     * the requested runtime flags and the other extensions; only an update has an active state to preserve
+     * and a version transition to observe. Uninstall checks prior presence, resulting absence and the other
+     * extensions, and accepts no expectedVersion or runtime flags.
+     */
+
+    /** Install/update with readable versions. */
+    static final String SCOPE = "Presence, runtime flags, other extensions, the preserved active state on update "
+        + "and expectedVersion when supplied; an update additionally requires an observed transition to "
+        + "expectedVersion; not binary file identity.";
+
+    /** Install/update whose version after the write was not reported. */
+    static final String SCOPE_WITHOUT_VERSION = "Presence, runtime flags, other extensions and the preserved active "
+        + "state on update; the Designer agent did not report the extension version, so no version check "
+        + "(expectedVersion or an update transition) was possible; not binary file identity.";
+
+    static final String TRANSITION_UNREPORTED = "The Designer agent did not report the extension version before the "
+        + "update, so the transition to expectedVersion was not observed; the version after the update was read back.";
+
+    /** Update whose previous version was not reported: expectedVersion was read back, the transition was not observed. */
+    static final String SCOPE_WITHOUT_TRANSITION = "Presence, runtime flags, preserved active state, other extensions and "
+        + "expectedVersion when supplied; the Designer agent did not report the previous version, so no update "
+        + "transition could be observed; not binary file identity.";
+
+    /** Every uninstall, whatever the agent reported about versions. */
+    static final String SCOPE_UNINSTALL = "Prior presence, resulting absence and unchanged other extensions; "
+        + "not binary file identity.";
 
     private InfobaseExtensionLifecycle()
     {
@@ -231,16 +279,33 @@ public final class InfobaseExtensionLifecycle
                 }
                 List<Extension> after = checked(backend.read());
                 Extension actual = find(after, request.extensionName());
+                // The version after the write is unknown: it neither matches nor contradicts expectedVersion.
+                boolean afterUnknown = !uninstall && actual != null && actual.version() == null;
+                // The version before the write is unknown: an update's transition cannot be observed.
+                boolean beforeUnknown = !install && previous != null && previous.version() == null;
                 boolean matches = uninstall ? actual == null : actual != null && actual.safeMode() == safe
                     && actual.protectionFromDangerousActions() == protection
                     && (previous == null || previous.active() == actual.active())
-                    && (request.expectedVersion() == null || request.expectedVersion().equals(actual.version()));
+                    && (request.expectedVersion() == null || afterUnknown
+                        || request.expectedVersion().equals(actual.version()));
                 boolean othersUnchanged = before.stream().filter(e -> !e.name().equals(request.extensionName())).toList()
                     .equals(after.stream().filter(e -> !e.name().equals(request.extensionName())).toList());
+                boolean versionUnreported = afterUnknown && request.expectedVersion() != null;
+                boolean transitionUnreported = !install && !uninstall && beforeUnknown && request.expectedVersion() != null;
                 boolean updateEvidence = install || uninstall || request.expectedVersion() != null
-                    && !request.expectedVersion().equals(previous.version());
-                boolean verified = matches && othersUnchanged && updateEvidence;
+                    && previous.version() != null && !request.expectedVersion().equals(previous.version());
+                boolean verified = matches && othersUnchanged && updateEvidence && !versionUnreported;
                 ToolResult result = verified ? ToolResult.success()
+                    : matches && othersUnchanged && versionUnreported ? ToolResult.error("The Designer operation returned, "
+                        + "but expectedVersion cannot be checked: the infobase's Designer agent did not report extension "
+                        + "versions (versionReported:false). Check the version in the infobase before relying on this operation; "
+                        + "the infobase may already have changed.")
+                        .put("verificationReason", VERSION_UNREPORTED)
+                    : matches && othersUnchanged && transitionUnreported ? ToolResult.error("The Designer operation returned "
+                        + "and the extension reports expectedVersion, but the update cannot be verified: the version before the "
+                        + "update was not reported (versionReported:false), so the transition to expectedVersion was not observed. "
+                        + "Check the infobase before relying on this operation; the infobase may already have changed.")
+                        .put("verificationReason", TRANSITION_UNREPORTED)
                     : matches && othersUnchanged ? ToolResult.error("The Designer operation returned, but the update cannot be verified "
                         + "without an expectedVersion different from the installed version. Inspect action=list before retrying; "
                         + "the infobase may already have changed.")
@@ -249,8 +314,8 @@ public final class InfobaseExtensionLifecycle
                 return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", "Presence, runtime flags, preserved active state, other extensions and expectedVersion when supplied; "
-                        + "updates require an observed transition to expectedVersion; not binary file identity.");
+                    .put("verificationScope", uninstall ? SCOPE_UNINSTALL : afterUnknown ? SCOPE_WITHOUT_VERSION
+                        : beforeUnknown ? SCOPE_WITHOUT_TRANSITION : SCOPE);
             }
             catch (Exception failure)
             {
@@ -346,7 +411,7 @@ public final class InfobaseExtensionLifecycle
     private static List<Extension> checked(List<Extension> states)
     {
         if (states == null || states.stream().anyMatch(e -> e == null || e.name() == null || e.name().isBlank()
-            || e.version() == null || e.hash() == null)
+            || e.hash() == null)
             || states.stream().map(Extension::name).distinct().count() != states.size())
         {
             throw new IllegalStateException("Designer returned an unreadable extension inventory; inspect the EDT Error Log and retry action=list.");
