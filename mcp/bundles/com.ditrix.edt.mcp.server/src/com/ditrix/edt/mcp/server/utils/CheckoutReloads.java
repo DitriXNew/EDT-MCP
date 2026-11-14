@@ -29,6 +29,10 @@ import java.util.function.BooleanSupplier;
  * idle sample proves nothing, the import may not have started yet - or after {@link #EXPIRY_MS} at the latest, so a
  * reload that never shows its end cannot hold writes back indefinitely. While this server's own post-checkout work on
  * the projects (the explicit refresh) still runs, the registration counts as loading whatever the signals say.
+ * <p>
+ * No transition drops a hold it does not own: a registration takes one verdict ({@link Registration}); a newer checkout
+ * of the same project keeps an older registration that still holds it as its predecessor, and the project goes back
+ * to that predecessor - never to "settled" - when the newer one is withdrawn or expires first.
  */
 public final class CheckoutReloads
 {
@@ -54,12 +58,37 @@ public final class CheckoutReloads
         final long expiresAtNanos;
         /** Answers {@code true} while work that will still rewrite the model (the post-checkout refresh) runs. */
         final BooleanSupplier busy;
+        /**
+         * The registration this one replaced while that one still held the project (its own work still running, or
+         * pinned): a newer checkout of the same project must not end the older one's hold before the older one ends.
+         */
+        final Entry previous;
         long idleSinceNanos;
 
-        Entry(long expiresAtNanos, BooleanSupplier busy)
+        Entry(long expiresAtNanos, BooleanSupplier busy, Entry previous)
         {
             this.expiresAtNanos = expiresAtNanos;
             this.busy = busy;
+            this.previous = previous;
+        }
+
+        /** Whether this registration, or one it replaced that has not expired, still holds the project. */
+        boolean holds(long nowNanos)
+        {
+            for (Entry e = this; e != null; e = e.previous)
+            {
+                if (nowNanos - e.expiresAtNanos < 0 && e.busy.getAsBoolean())
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** {@code candidate} when it still holds the project at {@code nowNanos}, otherwise {@code null}. */
+        static Entry ifHolding(Entry candidate, long nowNanos)
+        {
+            return candidate != null && candidate.holds(nowNanos) ? candidate : null;
         }
     }
 
@@ -76,19 +105,23 @@ public final class CheckoutReloads
         // Utility class
     }
 
-    /**
-     * Registers projects whose files a checkout just rewrote. A new registration replaces an older one, so a second
-     * checkout starts the projects' wait afresh.
-     *
-     * @param projectNames the projects of the checked-out work tree
-     * @param busy answers {@code true} while this server's own post-checkout work on those projects (the explicit
-     *     refresh) is still running; the registration cannot end before it answers {@code false} (or expires)
-     */
-    public static void register(Collection<String> projectNames, BooleanSupplier busy)
+    /** {@link #register(Collection, BooleanSupplier, long)} now; production registers through {@link #begin}. */
+    static void register(Collection<String> projectNames, BooleanSupplier busy)
     {
         register(projectNames, busy, System.nanoTime());
     }
 
+    /**
+     * Registers projects whose files a checkout just rewrote. A new registration replaces an older one, so a second
+     * checkout starts the projects' idle wait afresh; an older one that still holds the project (its own work still
+     * running, or pinned) keeps holding it through the newer one until it ends or expires.
+     *
+     * @param projectNames the projects of the checked-out work tree
+     * @param busy answers {@code true} while this server's own post-checkout work on those projects (the explicit
+     *     refresh) is still running; the registration cannot end before it answers {@code false} (or expires)
+     * @param nowNanos the current {@link System#nanoTime()}
+     * @return the entries put, by project name
+     */
     static Map<String, Object> register(Collection<String> projectNames, BooleanSupplier busy, long nowNanos)
     {
         purgeExpired(nowNanos);
@@ -99,12 +132,23 @@ public final class CheckoutReloads
         {
             if (name != null)
             {
-                Entry entry = new Entry(expires, running);
-                PENDING.put(name, entry);
+                Entry entry = PENDING.compute(name,
+                    (key, current) -> new Entry(expires, running, Entry.ifHolding(current, nowNanos)));
                 put.put(name, entry);
             }
         }
         return put;
+    }
+
+    /**
+     * Ends {@code entry}'s own hold on {@code name}: the registration it replaced takes the project back when that
+     * one still holds it, otherwise the project is unregistered. An entry a newer checkout has replaced meanwhile is
+     * left alone - the newer one carries it as its {@code previous}, and asks it whether it still holds.
+     */
+    private static void withdraw(String name, Entry entry, long nowNanos)
+    {
+        PENDING.computeIfPresent(name, (key, current) -> current != entry ? current
+            : Entry.ifHolding(entry.previous, nowNanos));
     }
 
     /**
@@ -128,12 +172,26 @@ public final class CheckoutReloads
         return registration;
     }
 
-    /** A checkout's own registration, from before the checkout to the end of its post-checkout refresh. */
+    /**
+     * A checkout's own registration, from before the checkout to the end of its post-checkout refresh.
+     * <p>
+     * It starts {@code RUNNING} (holding the projects) and takes exactly one verdict. {@link #pin()} is the strongest
+     * and wins over any other: once pinned, the projects stay held until the expiry, whatever is reported next.
+     * {@link #done()} and {@link #release()} take effect only from {@code RUNNING}, so neither can end a pinned hold,
+     * and a late {@code done} cannot revive a released one.
+     */
     public static final class Registration
     {
         private enum Phase
         {
-            RUNNING, DONE, PINNED
+            /** The checkout or its refresh still runs: the projects are held. */
+            RUNNING,
+            /** The checkout and its refresh ended cleanly: the projects settle once seen idle. */
+            DONE,
+            /** The effect is not known to have completed: the projects are held until the expiry. */
+            PINNED,
+            /** The checkout rewrote nothing: the registration is withdrawn. */
+            RELEASED
         }
 
         private final java.util.concurrent.atomic.AtomicReference<Phase> phase =
@@ -147,7 +205,8 @@ public final class CheckoutReloads
 
         private boolean busy()
         {
-            return phase.get() != Phase.DONE;
+            Phase now = phase.get();
+            return now == Phase.RUNNING || now == Phase.PINNED;
         }
 
         /** The checkout and its refresh ended cleanly: the projects settle once they are seen idle. */
@@ -158,19 +217,47 @@ public final class CheckoutReloads
 
         /**
          * The checkout's effect on disk, or the refresh that tells EDT about it, is not known to have completed (a
-         * timed-out or failed checkout, a failed refresh): the projects stay registered until the expiry.
+         * timed-out or failed checkout, a failed refresh): the projects stay registered until the expiry. Wins over an
+         * earlier verdict; after a {@link #release()} it puts the withdrawn registration back.
          */
         public void pin()
         {
-            phase.set(Phase.PINNED);
+            pin(System.nanoTime());
         }
 
-        /** The checkout rewrote nothing (it did not run, or JGit left the tree as it was): drop this registration. */
+        void pin(long nowNanos)
+        {
+            Phase before = phase.getAndSet(Phase.PINNED);
+            if (before == Phase.RELEASED)
+            {
+                for (Map.Entry<String, Object> e : entries.entrySet())
+                {
+                    Entry own = (Entry) e.getValue();
+                    Entry restored = PENDING.compute(e.getKey(), (key, current) -> current == null ? own
+                        : new Entry(own.expiresAtNanos, own.busy, Entry.ifHolding(current, nowNanos)));
+                    e.setValue(restored);
+                }
+            }
+        }
+
+        /**
+         * The checkout rewrote nothing (it did not run, or JGit left the tree as it was): withdraw this registration.
+         * Has no effect once the registration is pinned or done - neither verdict may be undone by a later one.
+         */
         public void release()
         {
+            release(System.nanoTime());
+        }
+
+        void release(long nowNanos)
+        {
+            if (!phase.compareAndSet(Phase.RUNNING, Phase.RELEASED))
+            {
+                return;
+            }
             for (Map.Entry<String, Object> e : entries.entrySet())
             {
-                PENDING.remove(e.getKey(), e.getValue());
+                withdraw(e.getKey(), (Entry) e.getValue(), nowNanos);
             }
         }
     }
@@ -181,7 +268,11 @@ public final class CheckoutReloads
      */
     private static void purgeExpired(long nowNanos)
     {
-        PENDING.entrySet().removeIf(e -> nowNanos - e.getValue().expiresAtNanos >= 0);
+        for (String name : PENDING.keySet())
+        {
+            PENDING.computeIfPresent(name, (key, current) -> nowNanos - current.expiresAtNanos < 0 ? current
+                : Entry.ifHolding(current.previous, nowNanos));
+        }
     }
 
     /**
@@ -217,9 +308,16 @@ public final class CheckoutReloads
             {
                 hook.run();
             }
-            if (PENDING.remove(projectName, entry))
+            // An expired registration hands the project back to one it replaced that still holds it (#922).
+            Entry successor = Entry.ifHolding(entry.previous, nowNanos);
+            if (successor == null ? PENDING.remove(projectName, entry)
+                : PENDING.replace(projectName, entry, successor))
             {
-                return false;
+                if (successor == null)
+                {
+                    return false;
+                }
+                continue;
             }
             // A newer checkout replaced the expired registration meanwhile: ask about that one instead.
         }
@@ -255,7 +353,7 @@ public final class CheckoutReloads
             }
             synchronized (entry)
             {
-                if (loadingNow || entry.busy.getAsBoolean())
+                if (loadingNow || entry.holds(nowNanos))
                 {
                     entry.idleSinceNanos = 0L;
                     return State.LOADING;

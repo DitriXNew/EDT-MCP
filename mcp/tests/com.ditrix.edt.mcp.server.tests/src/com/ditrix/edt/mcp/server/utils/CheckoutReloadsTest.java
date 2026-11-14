@@ -194,6 +194,131 @@ public class CheckoutReloadsTest
         assertTrue(CheckoutReloads.isPending("P", at)); //$NON-NLS-1$
     }
 
+    // ==================== Codex round 4 on #928: one verdict per registration ====================
+
+    /** Codex P1 on #928: a release after a pin does not end the pinned hold. */
+    @Test
+    public void aReleaseAfterAPinKeepsTheHold()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        reload.pin(T0);
+        reload.release(T0 + 1);
+
+        assertTrue(CheckoutReloads.isPending("P", T0 + 2)); //$NON-NLS-1$
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0 + ms(CheckoutReloads.EXPIRY_MS - 1))); //$NON-NLS-1$
+    }
+
+    /** A release after a clean done does not skip the idle span the done started. */
+    @Test
+    public void aReleaseAfterDoneIsIgnored()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        reload.done();
+        reload.release(T0 + 1);
+
+        assertTrue(CheckoutReloads.isPending("P", T0 + 2)); //$NON-NLS-1$
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0 + 2)); //$NON-NLS-1$
+    }
+
+    /** A late done after a release cannot revive the withdrawn registration. */
+    @Test
+    public void aDoneAfterAReleaseRevivesNothing()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        reload.release(T0 + 1);
+        reload.done();
+
+        assertFalse(CheckoutReloads.isPending("P", T0 + 2)); //$NON-NLS-1$
+    }
+
+    /** A pin after a release puts the registration back: the strongest verdict wins. */
+    @Test
+    public void aPinAfterAReleasePutsTheHoldBack()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        reload.release(T0 + 1);
+        reload.pin(T0 + 2);
+
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0 + ms(CheckoutReloads.EXPIRY_MS - 1))); //$NON-NLS-1$
+    }
+
+    /** A newer checkout of a project does not end an older pinned registration's hold. */
+    @Test
+    public void aNewerCheckoutKeepsAnOlderPinnedHold()
+    {
+        CheckoutReloads.Registration older = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        older.pin(T0);
+        CheckoutReloads.Registration newer = CheckoutReloads.begin(List.of("P"), T0 + ms(60_000)); //$NON-NLS-1$
+        newer.done();
+
+        long t = T0 + ms(60_000 + 10 * CheckoutReloads.STABLE_MS);
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, t)); //$NON-NLS-1$
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, t + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+        // Once the older hold expires, the newer registration settles on its own.
+        long afterOlder = T0 + ms(CheckoutReloads.EXPIRY_MS);
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, afterOlder)); //$NON-NLS-1$
+        assertEquals(State.SETTLED,
+            CheckoutReloads.observe("P", false, afterOlder + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
+    /** A newer checkout that rewrote nothing hands the project back to the older one still running. */
+    @Test
+    public void aReleasedNewerCheckoutHandsBackToTheOlderRunningOne()
+    {
+        CheckoutReloads.Registration older = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.Registration newer = CheckoutReloads.begin(List.of("P"), T0 + 1); //$NON-NLS-1$
+        newer.release(T0 + 2);
+
+        assertTrue(CheckoutReloads.isPending("P", T0 + 3)); //$NON-NLS-1$
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0 + ms(10 * CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+        older.done();
+        long t = T0 + ms(11 * CheckoutReloads.STABLE_MS);
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, t)); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, t + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
+    /** An expiring registration hands the project to one it replaced that still holds it and expires later. */
+    @Test
+    public void anExpiringRegistrationHandsBackToALaterHold()
+    {
+        CheckoutReloads.Registration first = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        first.release(T0 + 1);
+        CheckoutReloads.begin(List.of("P"), T0 + ms(300_000)); //$NON-NLS-1$ // still running
+        first.pin(T0 + ms(300_001));
+
+        long afterFirst = T0 + ms(CheckoutReloads.EXPIRY_MS + 1);
+        assertTrue("the running later registration still holds P", CheckoutReloads.isPending("P", afterFirst)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, afterFirst)); //$NON-NLS-1$
+    }
+
+    /** ...and the purge run by the next registration hands it back the same way. */
+    @Test
+    public void aPurgeHandsBackToALaterHold()
+    {
+        CheckoutReloads.Registration first = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        first.release(T0 + 1);
+        CheckoutReloads.begin(List.of("P"), T0 + ms(300_000)); //$NON-NLS-1$ // still running
+        first.pin(T0 + ms(300_001));
+
+        long afterFirst = T0 + ms(CheckoutReloads.EXPIRY_MS + 1);
+        CheckoutReloads.register(List.of("Other"), IDLE, afterFirst); //$NON-NLS-1$
+        assertEquals(2, CheckoutReloads.size());
+        assertTrue(CheckoutReloads.isPending("P", afterFirst)); //$NON-NLS-1$
+    }
+
+    /** An older registration released after a newer one replaced it does not hold the newer one back. */
+    @Test
+    public void aReleasedOlderRegistrationDoesNotHoldANewerOne()
+    {
+        CheckoutReloads.Registration older = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.Registration newer = CheckoutReloads.begin(List.of("P"), T0 + 1); //$NON-NLS-1$
+        older.release(T0 + 2);
+        newer.done();
+
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0 + 3)); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, T0 + 3 + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
     /** Only the registered projects are pending. */
     @Test
     public void registrationIsPerProject()

@@ -779,6 +779,32 @@ public final class ProjectStateChecker
         return checkoutReloadErrorOrNull(project.getName(), ddManager, ProjectStateChecker::isWorkspaceRefreshPending);
     }
 
+    /**
+     * The strict gate of a tool that WRITES into the project's model outside the metadata write tools (it builds
+     * from or writes into the model): the checkout-reload refusal first ({@link #checkoutReloadErrorOrNull(IProject)}),
+     * then {@link #buildingErrorOrNull(IProject)} (#922).
+     *
+     * @param project the project
+     * @return the refusal, or {@code null}
+     */
+    public static String strictWriteErrorOrNull(IProject project)
+    {
+        String reload = checkoutReloadErrorOrNull(project);
+        return reload != null ? reload : buildingErrorOrNull(project);
+    }
+
+    /**
+     * Name-addressed {@link #strictWriteErrorOrNull(IProject)}; a null/empty name skips the check.
+     *
+     * @param projectName the project
+     * @return the refusal, or {@code null}
+     */
+    public static String strictWriteErrorOrNull(String projectName)
+    {
+        String reload = checkoutReloadErrorOrNull(projectName);
+        return reload != null ? reload : buildingErrorOrNull(projectName);
+    }
+
     /** Seam of {@link #checkoutReloadErrorOrNull(IProject)}; a {@code null} manager counts as loading. */
     static String checkoutReloadErrorOrNull(String projectName, IDerivedDataManager ddManager,
         BooleanSupplier workspaceRefreshPending)
@@ -1318,8 +1344,13 @@ public final class ProjectStateChecker
             }
             List<IProject> unserved = findUnsettledParticipants(participants,
                 settledParticipantNames);
-            // The participant set is read again here; one just switched by this server must not join the cascade.
-            String refreshedReload = participantReloadError(participants, env);
+            // The admission re-reads the reload state of the base AND of every participant: the base check before the
+            // loop is minutes old by now, and a switch of the base by this server meanwhile must not be admitted.
+            String refreshedReload = env.checkoutReloadErrorOrNull(project);
+            if (refreshedReload == null)
+            {
+                refreshedReload = participantReloadError(participants, env);
+            }
             if (refreshedReload != null)
             {
                 return refreshedReload;

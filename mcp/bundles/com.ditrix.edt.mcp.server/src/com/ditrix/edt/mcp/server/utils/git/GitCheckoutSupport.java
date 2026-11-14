@@ -259,7 +259,32 @@ public final class GitCheckoutSupport
         // arrived between the checkout's end and a later registration would land in the previous branch's model.
         List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
         CheckoutReloads.Registration reload = CheckoutReloads.begin(WorkTreeProjects.names(projects));
+        return pinOnFailure(reload, () -> checkoutRegistered(op, jobError, project, repo, fullRef, projects, reload));
+    }
 
+    /**
+     * Runs {@code body}; when it throws, pins {@code reload} first: whatever the checkout did before it threw is
+     * unknown, so the projects are held until the expiry rather than left with a registration no verdict will ever
+     * reach (#922). Package-visible for tests.
+     */
+    static <T> T pinOnFailure(CheckoutReloads.Registration reload, Supplier<T> body)
+    {
+        try
+        {
+            return body.get();
+        }
+        catch (RuntimeException | Error e)
+        {
+            reload.pin();
+            throw e;
+        }
+    }
+
+    /** {@link #checkoutLocked} once its projects are registered; every path ends with one verdict on {@code reload}. */
+    private static CheckoutOutcome checkoutRegistered(BranchOperation op, AtomicReference<Exception> jobError,
+        IProject project, Repository repo, String fullRef, List<IProject> projects,
+        CheckoutReloads.Registration reload)
+    {
         Job checkoutJob = new Job("Checkout git branch: " + fullRef) //$NON-NLS-1$
         {
             @Override

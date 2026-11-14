@@ -211,6 +211,54 @@ public class ModelReloadGateTest
             && error.contains(ProjectStateChecker.LOADING_FROM_DISK_ERROR));
     }
 
+    private static ProjectStateChecker.CascadeEnvironment settledBaseEnv(IProject base)
+    {
+        ProjectStateChecker.CascadeEnvironment env = mock(ProjectStateChecker.CascadeEnvironment.class);
+        when(env.hasBmModelProjectNature(base)).thenReturn(Boolean.TRUE);
+        com._1c.g5.v8.dt.core.platform.IBmModelManager modelManager =
+            mock(com._1c.g5.v8.dt.core.platform.IBmModelManager.class);
+        when(modelManager.getModel(base)).thenReturn(mock(com._1c.g5.v8.bm.integration.IBmModel.class));
+        BmModelResolver.Resolution available = BmModelResolver.resolve(base, modelManager);
+        when(env.resolveModelsForRefactoring(base)).thenReturn(available);
+        return env;
+    }
+
+    private static IProject openBase()
+    {
+        IProject base = mock(IProject.class);
+        when(base.getName()).thenReturn("Base"); //$NON-NLS-1$
+        when(base.exists()).thenReturn(true);
+        when(base.isOpen()).thenReturn(true);
+        return base;
+    }
+
+    /** Control for the next test: a base that is never switched is admitted by the cascade pre-flight. */
+    @Test
+    public void aSettledBaseIsAdmittedByTheCascade()
+    {
+        IProject base = openBase();
+        ProjectStateChecker.CascadeEnvironment env = settledBaseEnv(base);
+
+        assertNull(ProjectStateChecker.settleBeforeCascadeOrError(base, 50L, env, "rename_metadata_object", //$NON-NLS-1$
+            "Nothing was renamed.")); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928 (round 4): the base passed the reload check at the start, then this server switched it while
+     * the pre-flight drained and waited for models - the admission must ask again.
+     */
+    @Test
+    public void aBaseSwitchedDuringThePreFlightIsRefusedAtTheAdmission()
+    {
+        IProject base = openBase();
+        ProjectStateChecker.CascadeEnvironment env = settledBaseEnv(base);
+        when(env.checkoutReloadErrorOrNull(base)).thenReturn(null, ProjectStateChecker.LOADING_FROM_DISK_ERROR);
+
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.settleBeforeCascadeOrError(base, 50L, env, "rename_metadata_object", //$NON-NLS-1$
+                "Nothing was renamed.")); //$NON-NLS-1$
+    }
+
     /** The refusal keeps the prefix the e2e harness and agents retry on, and says nothing was changed. */
     @Test
     public void theLoadingRefusalIsRetryableAndSaysNothingChanged()

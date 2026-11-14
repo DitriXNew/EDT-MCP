@@ -275,6 +275,34 @@ public class GitCheckoutReloadTest
         }
     }
 
+    /**
+     * Codex round 4 on #928 (self-audit): a checkout that throws after its projects were registered leaves them pinned,
+     * not RUNNING with no verdict to come - and a later clean verdict cannot undo that.
+     */
+    @Test
+    public void aCheckoutThatThrowsPinsItsRegistration()
+    {
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration reload =
+            com.ditrix.edt.mcp.server.utils.CheckoutReloads.begin(List.of("Throws922")); //$NON-NLS-1$
+        IllegalStateException thrown = new IllegalStateException("checkout broke"); //$NON-NLS-1$
+        try
+        {
+            GitCheckoutSupport.pinOnFailure(reload, () -> {
+                throw thrown;
+            });
+            throw new AssertionError("the failure must propagate"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e == thrown);
+        }
+        reload.done();
+
+        assertFalse("a pinned registration stays loading after a late done", isNotHeldBusy("Throws922")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a body that returns is passed through", "ok", //$NON-NLS-1$ //$NON-NLS-2$
+            GitCheckoutSupport.pinOnFailure(reload, () -> "ok")); //$NON-NLS-1$
+    }
+
     /** Whether an idle observation of {@code name} is not held as loading by its own registration. */
     private static boolean isNotHeldBusy(String name)
     {
