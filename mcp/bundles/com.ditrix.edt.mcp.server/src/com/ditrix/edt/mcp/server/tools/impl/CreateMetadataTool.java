@@ -3869,7 +3869,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
             String value = asString(prop.get(KEY_VALUE));
-            switch (name.toLowerCase())
+            String lower = name.toLowerCase();
+            if ((KEY_SYNONYM.equals(lower) || "comment".equals(lower)) && value == null) //$NON-NLS-1$
+            {
+                // An absent, null, object or array value reads as no text at all, and the object was created
+                // without the synonym / comment the call asked for - refused instead (#930 review).
+                return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' needs a text value, e.g. {name: '" + name //$NON-NLS-1$
+                    + "', value: 'Goods'}; an absent, null, object or array value has no text to write. " //$NON-NLS-1$
+                    + "Nothing was created.").toJson(); //$NON-NLS-1$
+            }
+            switch (lower)
             {
                 case KEY_SYNONYM:
                     out.synonym = normReport.apply(KEY_SYNONYM, value);

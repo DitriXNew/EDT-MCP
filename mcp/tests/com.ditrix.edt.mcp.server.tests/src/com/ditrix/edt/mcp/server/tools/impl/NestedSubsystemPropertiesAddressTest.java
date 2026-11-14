@@ -187,6 +187,35 @@ public class NestedSubsystemPropertiesAddressTest
     }
 
     @Test
+    public void testAYoSpelledShortAddressFindsTheNamesakeStoredWithYe()
+    {
+        // create_metadata stores 'ye' for 'yo' by default; the nested writes resolve that spelling, so the
+        // hint must name the chain too (#929 review). Every chain that matches either reading is listed.
+        orders.setName("Елка");
+        Subsystem purchases = subsystem("Purchases", null);
+        configuration.getSubsystems().add(purchases);
+        subsystem("Ёлка", purchases);
+        String error = modifyRefusal("Subsystem.Ёлка");
+        assertNotNull(error);
+        assertTrue(error, error.contains("Subsystem.Sales.Subsystem.Елка"));
+        assertTrue(error, error.contains("Subsystem.Purchases.Subsystem.Ёлка"));
+        Rendered result = render("Subsystem.Ёлка", false);
+        assertTrue(result.reason(), result.reason().contains("Subsystem.Sales.Subsystem.Елка"));
+    }
+
+    @Test
+    public void testAYoReadingThatNamesATopLevelSubsystemIsNoMiss()
+    {
+        // modify resolves the yo address to the top-level ye subsystem (resolveExistingWithYoFallback), so a
+        // nested namesake spelled exactly with yo must not be offered instead.
+        Subsystem top = subsystem("Елка", null);
+        configuration.getSubsystems().add(top);
+        subsystem("Ёлка", sales);
+        assertEquals("the yo address names the top-level subsystem, not a nested namesake", "",
+            nestedHint("Subsystem.Ёлка"));
+    }
+
+    @Test
     public void testNoChainIsSuggestedWhenNoSubsystemHasTheName()
     {
         String error = modifyRefusal("Subsystem.Nowhere");

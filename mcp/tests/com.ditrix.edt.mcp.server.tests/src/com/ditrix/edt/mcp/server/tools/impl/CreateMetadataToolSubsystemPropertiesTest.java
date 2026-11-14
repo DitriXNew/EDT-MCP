@@ -77,6 +77,36 @@ public class CreateMetadataToolSubsystemPropertiesTest
         assertTrue(error, error.contains("modify_metadata"));
     }
 
+    @Test
+    public void testASynonymOrCommentWithoutTextIsRefusedNotDropped()
+    {
+        // #930 review: a non-primitive value read as "no text" and the object was created without it.
+        for (boolean subsystem : new boolean[] {true, false})
+        {
+            for (String entry : new String[] {"{name:'comment', value:{}}", "{name:'comment', value:[]}",
+                "{name:'synonym', value:null}", "{name:'Synonym'}"})
+            {
+                String error = (String)invoke(new CreateMetadataTool(), "parseProperties", PARSE_TYPES,
+                    list(entry), new CreateMetadataTool.Props(), new MdNameNormalizer.Report(true), subsystem);
+                assertNotNull(entry + " must be refused, not created without it", error);
+                assertTrue(error, error.contains("needs a text value"));
+                assertTrue(error, error.contains("Nothing was created"));
+            }
+        }
+    }
+
+    @Test
+    public void testATextSynonymAndCommentStillParse()
+    {
+        CreateMetadataTool.Props props = new CreateMetadataTool.Props();
+        Object error = invoke(new CreateMetadataTool(), "parseProperties", PARSE_TYPES,
+            list("{name:'synonym', value:'Orders'}", "{name:'comment', value:''}"), props,
+            new MdNameNormalizer.Report(true), false);
+        assertNull(error);
+        assertEquals("Orders", props.synonym);
+        assertEquals("an explicitly empty comment stays accepted", "", props.comment);
+    }
+
     // ---- prepare: modify_metadata's own rules ------------------------------------------------------
 
     @Test

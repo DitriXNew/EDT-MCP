@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -109,6 +109,13 @@ public final class SubsystemUtils
         {
             return ""; //$NON-NLS-1$
         }
+        // The yo-normalized (ye) reading too: create_metadata stores ye for yo by default, and the nested
+        // writes resolve that spelling (#929 review). A top-level subsystem it names is no miss to explain.
+        String yoName = MetadataNodeResolver.yoRetryFqn(names[0]);
+        if (yoName != null && resolveInScope(scope, new String[] { yoName }) != null)
+        {
+            return ""; //$NON-NLS-1$
+        }
         List<String> chains = new ArrayList<>();
         Set<Subsystem> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         int[] found = { 0 };
@@ -118,7 +125,7 @@ public final class SubsystemUtils
             {
                 List<String> path = new ArrayList<>();
                 path.add(top.getName());
-                collectNamesakes(top.getSubsystems(), names[0], path, seen, chains, found);
+                collectNamesakes(top.getSubsystems(), names[0], yoName, path, seen, chains, found);
             }
         }
         if (found[0] == 0)
@@ -135,8 +142,12 @@ public final class SubsystemUtils
         return sb.append(". Address a nested subsystem by its whole chain.").toString(); //$NON-NLS-1$
     }
 
-    /** Depth-first: the chains of the subsystems below {@code path} named {@code name}, the first few spelled. */
-    private static void collectNamesakes(Iterable<Subsystem> level, String name, List<String> path,
+    /**
+     * Depth-first: the chains of the subsystems below {@code path} named {@code name} - or its yo-normalized
+     * reading {@code yoName}, when there is one - the first few spelled. Every matching chain is counted;
+     * none is chosen.
+     */
+    private static void collectNamesakes(Iterable<Subsystem> level, String name, String yoName, List<String> path,
         Set<Subsystem> seen, List<String> chains, int[] found)
     {
         if (level == null)
@@ -150,7 +161,7 @@ public final class SubsystemUtils
                 continue;
             }
             path.add(candidate.getName());
-            if (nameMatches(name, candidate.getName()))
+            if (nameMatches(name, candidate.getName()) || nameMatches(yoName, candidate.getName()))
             {
                 found[0]++;
                 if (chains.size() < MAX_NAMESAKES_LISTED)
@@ -158,7 +169,7 @@ public final class SubsystemUtils
                     chains.add(chainFqn(path.toArray(new String[0]), path.size()));
                 }
             }
-            collectNamesakes(candidate.getSubsystems(), name, path, seen, chains, found);
+            collectNamesakes(candidate.getSubsystems(), name, yoName, path, seen, chains, found);
             path.remove(path.size() - 1);
         }
     }
