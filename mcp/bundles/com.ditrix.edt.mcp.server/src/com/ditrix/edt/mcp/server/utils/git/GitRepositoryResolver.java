@@ -8,9 +8,13 @@ package com.ditrix.edt.mcp.server.utils.git;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.egit.core.project.RepositoryMapping;
+import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 
@@ -126,14 +130,10 @@ public final class GitRepositoryResolver
     public static Resolution resolve(String projectName)
     {
         ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.exists())
+        String projectError = projectError(ctx, projectName);
+        if (projectError != null)
         {
-            return failed(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
-        }
-        if (!ctx.isOpen())
-        {
-            return failed(ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
-                + ". Open the project in EDT first.").toJson()); //$NON-NLS-1$
+            return failed(projectError);
         }
         IProject project = ctx.project();
 
@@ -144,6 +144,203 @@ public final class GitRepositoryResolver
         }
 
         return resolutionOf(project, projectName, discoverRepository(project));
+    }
+
+    /**
+     * The error JSON for a project that does not exist or is closed - the checks every git tool
+     * runs before it looks for a repository - or {@code null} when the project is usable.
+     */
+    private static String projectError(ProjectContext ctx, String projectName)
+    {
+        if (!ctx.exists())
+        {
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+        }
+        if (!ctx.isOpen())
+        {
+            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project in EDT first.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Where {@code git init} may create a repository for a project: the project's own folder, or an
+     * actionable error JSON. The inverse of {@link #resolve}: that one needs a repository and this
+     * one refuses when there already is one, because {@code git init} inside an existing work tree
+     * creates a NESTED repository - the outer one then sees the project as an untracked directory
+     * and its history stops following the project's files.
+     * <p>
+     * "Already a repository" is asked of the same two sources {@link #resolve} uses - the EGit
+     * mapping and a {@code .git} found up the tree - so a project the other git tools can run in
+     * is exactly a project {@code init} refuses. The filesystem half is
+     * {@link #existingRepositoryRefusal}.
+     *
+     * @param projectName the MCP {@code projectName} argument
+     * @return the folder to initialise, or the refusal
+     */
+    public static InitTarget resolveInitTarget(String projectName)
+    {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        String projectError = projectError(ctx, projectName);
+        if (projectError != null)
+        {
+            return InitTarget.refused(projectError);
+        }
+        IProject project = ctx.project();
+
+        Repository mapped = mappingRepository(project);
+        if (mapped != null)
+        {
+            // Borrowed from EGit: read, never closed here (see Resolution#closeIfOwned).
+            return InitTarget.refused(ToolResult.error(nestedRepositoryMessage(projectName,
+                repositoryRoot(project.getLocation() == null ? null : project.getLocation().toFile(), mapped),
+                "the project is shared with Git (EGit) in that repository")).toJson()); //$NON-NLS-1$
+        }
+        if (project.getLocation() == null)
+        {
+            return InitTarget.refused(ToolResult.error("Project '" + projectName //$NON-NLS-1$
+                + "' has no folder on the local file system, so there is nowhere to create a git " //$NON-NLS-1$
+                + "repository for it.").toJson()); //$NON-NLS-1$
+        }
+        File folder = project.getLocation().toFile();
+        if (!folder.isDirectory())
+        {
+            return InitTarget.refused(ToolResult.error("The folder of project '" + projectName + "' (" //$NON-NLS-1$ //$NON-NLS-2$
+                + folder + ") does not exist on disk. Refresh or re-import the project in EDT, then " //$NON-NLS-1$
+                + "retry.").toJson()); //$NON-NLS-1$
+        }
+        String refusal = existingRepositoryRefusal(folder, projectName);
+        if (refusal != null)
+        {
+            return InitTarget.refused(ToolResult.error(refusal).toJson());
+        }
+        return new InitTarget(folder, null);
+    }
+
+    /**
+     * Why {@code git init} must not run in {@code folder}, judged from the file system alone, or
+     * {@code null} when no repository is there or above it.
+     * <p>
+     * Three answers refuse. A {@code .git} entry IN the folder - a directory, a file, or a link,
+     * even a broken one - because JGit's upward search skips a {@code .git} file it cannot follow
+     * and would otherwise report "nothing here" for a folder git itself treats as a repository. A
+     * repository found up the tree, named by its root, because initialising inside it nests one
+     * repository in another. And a repository up the tree that could not be OPENED: that is not
+     * "no repository", so it fails closed rather than nesting under a repository nobody could
+     * inspect.
+     * <p>
+     * Not atomic with the {@code git init} that follows: a repository created in between is not
+     * seen. Public so {@code GitTool}'s tests can drive it against a real directory.
+     *
+     * @param folder the project folder {@code git init} would run in
+     * @param projectName the project's name, for the message and the log line
+     * @return the refusal text, or {@code null} when the folder may be initialised
+     */
+    public static String existingRepositoryRefusal(File folder, String projectName)
+    {
+        Path dotGit = folder.toPath().resolve(Constants.DOT_GIT);
+        if (Files.exists(dotGit, LinkOption.NOFOLLOW_LINKS))
+        {
+            return nestedRepositoryMessage(projectName, folder,
+                "the project folder already holds a '.git' entry"); //$NON-NLS-1$
+        }
+        Discovery discovery = discoverFromLocation(folder, projectName);
+        if (discovery.configUnreadable())
+        {
+            return "A git repository was found above the folder of project '" + projectName //$NON-NLS-1$
+                + "' (" + folder + "), but it could not be opened, so this tool cannot tell whether " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the project already belongs to it. 'git init' is refused rather than run blind: " //$NON-NLS-1$
+                + "check that repository and the git configuration in a terminal."; //$NON-NLS-1$
+        }
+        Repository found = discovery.repository();
+        if (found == null)
+        {
+            return null;
+        }
+        try
+        {
+            return nestedRepositoryMessage(projectName, repositoryRoot(folder, found),
+                "the project folder lies inside that repository"); //$NON-NLS-1$
+        }
+        finally
+        {
+            found.close();
+        }
+    }
+
+    /**
+     * The refusal for a project that already belongs to a repository: it names the repository's
+     * root, so the caller can run its commands there instead.
+     */
+    private static String nestedRepositoryMessage(String projectName, File root, String why)
+    {
+        return "Project '" + projectName + "' already belongs to the git repository at '" + root //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (" + why + "). 'git init' here would create a repository nested inside it, so it " //$NON-NLS-1$ //$NON-NLS-2$
+            + "is refused. Run git commands for this project without 'init' - they use that " //$NON-NLS-1$
+            + "repository."; //$NON-NLS-1$
+    }
+
+    /**
+     * The folder to name as the root of the repository {@code start} belongs to: the nearest folder at
+     * or above {@code start} that holds a {@code .git} entry - which is what git itself walks to - or,
+     * when there is none, what JGit reports. The walk comes first because the bundled JGit 6.8 reports
+     * a LINKED worktree ({@code git worktree add}) as bare, and its git directory
+     * ({@code <main>/.git/worktrees/<name>}) is not where the project's files are.
+     *
+     * @param start the folder the search started from ({@code null} when there is none)
+     * @param repository the repository that was found
+     * @return the work tree root to name
+     */
+    private static File repositoryRoot(File start, Repository repository)
+    {
+        for (File dir = start == null ? null : start.getAbsoluteFile(); dir != null; dir = dir.getParentFile())
+        {
+            if (Files.exists(dir.toPath().resolve(Constants.DOT_GIT), LinkOption.NOFOLLOW_LINKS))
+            {
+                return dir;
+            }
+        }
+        return repository.isBare() ? repository.getDirectory() : repository.getWorkTree();
+    }
+
+    /**
+     * The outcome of {@link #resolveInitTarget}: the project folder to initialise, or a ready
+     * error JSON.
+     */
+    public static final class InitTarget
+    {
+        private final File folder;
+        private final String errorJson;
+
+        private InitTarget(File folder, String errorJson)
+        {
+            this.folder = folder;
+            this.errorJson = errorJson;
+        }
+
+        private static InitTarget refused(String errorJson)
+        {
+            return new InitTarget(null, errorJson);
+        }
+
+        /** @return {@code true} when the folder may be initialised (no error). */
+        public boolean ok()
+        {
+            return errorJson == null;
+        }
+
+        /** @return the project folder (absent on error). */
+        public File folder()
+        {
+            return folder;
+        }
+
+        /** @return the error JSON to return from {@code execute}, or {@code null} on success. */
+        public String errorJson()
+        {
+            return errorJson;
+        }
     }
 
     /**

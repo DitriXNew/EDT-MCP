@@ -38,6 +38,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
+import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -76,6 +77,9 @@ public class GitToolProcessIntegrationTest
     private static String gitUnavailableReason;
 
     private Path repository;
+
+    /** Extra temporary folders a test created outside {@link #repository} (the {@code init} tests). */
+    private final List<Path> scratch = new ArrayList<>();
 
     @BeforeClass
     public static void resolveGit()
@@ -124,12 +128,21 @@ public class GitToolProcessIntegrationTest
     @After
     public void deleteRepository() throws IOException
     {
-        if (repository == null || !Files.exists(repository))
+        deleteTree(repository);
+        for (Path folder : scratch)
+        {
+            deleteTree(folder);
+        }
+    }
+
+    private static void deleteTree(Path root) throws IOException
+    {
+        if (root == null || !Files.exists(root))
         {
             return;
         }
         List<String> undeleted = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(repository))
+        try (Stream<Path> paths = Files.walk(root))
         {
             Iterator<Path> deepestFirst = paths.sorted(Comparator.reverseOrder()).iterator();
             while (deepestFirst.hasNext())
@@ -551,6 +564,119 @@ public class GitToolProcessIntegrationTest
         new GitTool().runGit(GitTool.parseCommand("status --short"), repository.toFile(), //$NON-NLS-1$
             () -> heldAfterStatus.set(BranchBindingLock.isHeldByCurrentThread()));
         assertEquals("the step after a status runs, without the lock", Boolean.FALSE, heldAfterStatus.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * {@code git init} (#934) creates the repository in the folder, with the initial branch asked for,
+     * leaves the files already there untouched and untracked, runs the refresh step, and tells the
+     * caller what is left to do in EDT.
+     */
+    @Test(timeout = 60_000)
+    public void testInitCreatesARepositoryInTheFolderOnTheRequestedBranch() throws Exception
+    {
+        Path folder = scratchFolder();
+        Files.write(folder.resolve("Configuration.mdo"), "<mdclass/>\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicReference<Boolean> refreshed = new AtomicReference<>(Boolean.FALSE);
+
+        String json = new GitTool().runInit(GitTool.parseCommand("init -b trunk"), folder.toFile(), //$NON-NLS-1$
+            () -> refreshed.set(Boolean.TRUE));
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+
+        assertTrue(json, result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(GitTool.INIT_NEXT_STEP, result.get("nextStep").getAsString()); //$NON-NLS-1$
+        assertEquals("the workspace refresh runs after the process", Boolean.TRUE, refreshed.get()); //$NON-NLS-1$
+        assertTrue("the repository is the folder's own", Files.isDirectory(folder.resolve(".git"))); //$NON-NLS-1$
+        try (Repository created = new FileRepositoryBuilder().setGitDir(folder.resolve(".git").toFile()).build()) //$NON-NLS-1$
+        {
+            assertEquals("refs/heads/trunk", created.getFullBranch()); //$NON-NLS-1$
+            assertEquals(folder.toFile().getCanonicalFile(), created.getWorkTree().getCanonicalFile());
+        }
+        assertEquals("an existing file is left as it was", "<mdclass/>\n", //$NON-NLS-1$ //$NON-NLS-2$
+            new String(Files.readAllBytes(folder.resolve("Configuration.mdo")), StandardCharsets.UTF_8)); //$NON-NLS-1$
+        HelperResult status = runHelper(folder, Arrays.asList(gitExecutable, "status", "--porcelain")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(status.output, 0, status.exitCode);
+        assertTrue("and is untracked - init stages nothing: " + status.output, //$NON-NLS-1$
+            status.output.contains("?? Configuration.mdo")); //$NON-NLS-1$
+    }
+
+    /** Real git reads the accepted cluster {@code -qb<name>} exactly as the grammar does: quiet, branch main. */
+    @Test(timeout = 60_000)
+    public void testInitClusterIsReadByGitAsTheGrammarReadsIt() throws Exception
+    {
+        Path folder = scratchFolder();
+        JsonObject result = JsonParser.parseString(
+            new GitTool().runInit(GitTool.parseCommand("init -qbmain"), folder.toFile(), null)).getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("quiet: git printed nothing", "", result.get("output").getAsString().trim()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        try (Repository created = new FileRepositoryBuilder().setGitDir(folder.resolve(".git").toFile()).build()) //$NON-NLS-1$
+        {
+            assertEquals("refs/heads/main", created.getFullBranch()); //$NON-NLS-1$
+        }
+    }
+
+    /** A failed init is a failure with git's message and no next step to follow. */
+    @Test(timeout = 60_000)
+    public void testAFailedInitCarriesNoNextStep() throws Exception
+    {
+        Path folder = scratchFolder();
+        // A '.git' file git cannot follow makes it fail; the tool's own refusal is bypassed on purpose
+        // by driving the run seam directly.
+        Files.write(folder.resolve(".git"), "not a gitfile\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = JsonParser.parseString(
+            new GitTool().runInit(GitTool.parseCommand("init"), folder.toFile(), null)).getAsJsonObject(); //$NON-NLS-1$
+        assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.toString(), result.get("exitCode").getAsInt() != 0); //$NON-NLS-1$
+        assertFalse("no next step after a failure: " + result, result.has("nextStep")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * git itself DOES create a repository nested inside another (positive control), which is exactly
+     * why the tool's refusal is needed: for a folder inside this test's repository it refuses and names
+     * the repository's root.
+     */
+    @Test(timeout = 60_000)
+    public void testANestedInitIsRefusedAlthoughGitWouldRunIt() throws Exception
+    {
+        Path nested = Files.createDirectories(repository.resolve("projects").resolve("Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = GitRepositoryResolver.existingRepositoryRefusal(nested.toFile(), "Sales"); //$NON-NLS-1$
+        assertNotNull("a folder inside a work tree must be refused", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("lies inside that repository")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains(repository.getFileName().toString()));
+
+        Path control = Files.createDirectories(repository.resolve("control")); //$NON-NLS-1$
+        HelperResult nestedByGit = runHelper(control, Arrays.asList(gitExecutable, "init", "-q")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("git nests a repository without complaint: " + nestedByGit.output, 0, nestedByGit.exitCode); //$NON-NLS-1$
+        assertTrue(Files.isDirectory(control.resolve(".git"))); //$NON-NLS-1$
+    }
+
+    /**
+     * In a LINKED worktree ({@code git worktree add}) the refusal names the worktree folder - where the
+     * project's files are - not its git directory under {@code .git/worktrees}, which is what the
+     * bundled JGit reports for one (it sees a linked worktree as bare).
+     */
+    @Test(timeout = 60_000)
+    public void testANestedInitInALinkedWorktreeNamesTheWorktreeFolder() throws Exception
+    {
+        Path linked = scratchFolder().resolve("linked"); //$NON-NLS-1$
+        git("worktree", "add", "-q", "-b", "linked-934", linked.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        Path nested = Files.createDirectories(linked.resolve("projects").resolve("Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String refusal = GitRepositoryResolver.existingRepositoryRefusal(nested.toFile(), "Sales"); //$NON-NLS-1$
+
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("repository at '" + linked.toFile().getAbsoluteFile() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(refusal, refusal.contains("worktrees")); //$NON-NLS-1$
+        git("worktree", "remove", "--force", linked.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** A temporary folder outside every repository, deleted after the test. */
+    private Path scratchFolder() throws IOException
+    {
+        Path folder = Files.createTempDirectory("git-init-exec"); //$NON-NLS-1$
+        scratch.add(folder);
+        Assume.assumeTrue("the temporary directory lies inside a git repository on this machine", //$NON-NLS-1$
+            GitRepositoryResolver.existingRepositoryRefusal(folder.toFile(), "scratch") == null); //$NON-NLS-1$
+        return folder;
     }
 
     /** Parses {@code command} through the production parser and runs it in the test repository. */
