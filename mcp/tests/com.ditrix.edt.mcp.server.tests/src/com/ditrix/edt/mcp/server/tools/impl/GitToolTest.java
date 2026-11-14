@@ -2069,6 +2069,19 @@ public class GitToolTest
         }
     }
 
+    /** #922 round 6: the projects a switch did not register (nested repositories) are refreshed outside it, in order. */
+    @Test
+    public void testTheProjectsOutsideTheChangeAreTheUnregisteredOnes()
+    {
+        org.eclipse.core.resources.IProject outer = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(outer.getName()).thenReturn("Outer"); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject nested = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(nested.getName()).thenReturn("Nested"); //$NON-NLS-1$
+
+        assertEquals(List.of(nested), GitTool.outsideTheChange(List.of(outer, nested), List.of(outer)));
+        assertTrue(GitTool.outsideTheChange(List.of(outer), List.of(outer)).isEmpty());
+    }
+
     /** #922: the commands that switch the work tree to another branch - the ones registered as a model reload. */
     @Test
     public void testOnlyTheCommandsThatSwitchTheWorkTreeAreRegisteredAsAReload() throws Exception

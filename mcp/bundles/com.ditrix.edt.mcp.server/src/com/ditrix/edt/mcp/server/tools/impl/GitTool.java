@@ -3090,9 +3090,13 @@ public class GitTool implements IMcpTool
                 // A branch change of this server (#922): the shared refresh refreshes the projects checked out with
                 // the work tree and concludes the reload registration made before the command ran.
                 change.refresh(Math.min(REFRESH_WAIT_SECONDS * 1000L, remainingBudgetMillis(startedAt)));
+                // The projects of nested repositories are refreshed as before, outside the registration: their
+                // files belong to another repository, and a failed refresh of one must not pin the switch's own.
+                refreshProjects(outsideTheChange(WorkTreeProjects.inside(workTree), change.projects()), startedAt,
+                    true);
                 return;
             }
-            refreshWorkTreeUnguarded(workTree, startedAt, false);
+            refreshProjects(WorkTreeProjects.inside(workTree), startedAt, false);
         }
         catch (RuntimeException e) // NOSONAR the git command already succeeded; a refresh never fails it
         {
@@ -3109,9 +3113,30 @@ public class GitTool implements IMcpTool
         return TIMEOUT_SECONDS * 1000L - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
-    private static void refreshWorkTreeUnguarded(File workTree, long startedAt, boolean branchChanging)
+    /**
+     * The projects of {@code inside} that the branch change did not register - those of nested repositories, whose
+     * files the outer command does not check out (#922). Package-visible for tests.
+     *
+     * @param inside every workspace project inside the work tree
+     * @param registered the projects the change registered ({@link WorkTreeProjects#checkedOutWith})
+     * @return the rest, in order
+     */
+    static List<IProject> outsideTheChange(List<IProject> inside, List<IProject> registered)
     {
-        List<IProject> projects = WorkTreeProjects.inside(workTree);
+        List<String> names = WorkTreeProjects.names(registered);
+        List<IProject> rest = new ArrayList<>();
+        for (IProject project : inside)
+        {
+            if (project != null && !names.contains(project.getName()))
+            {
+                rest.add(project);
+            }
+        }
+        return rest;
+    }
+
+    private static void refreshProjects(List<IProject> projects, long startedAt, boolean branchChanging)
+    {
         if (projects.isEmpty())
         {
             return;
@@ -3266,8 +3291,10 @@ public class GitTool implements IMcpTool
                 afterProcess.accept(null);
                 return output;
             }
+            // Only the projects this repository checks out: a nested clone or submodule is another repository,
+            // whose files the command does not rewrite (#922).
             GitCheckoutSupport.BranchChange change =
-                GitCheckoutSupport.BranchChange.begin(WorkTreeProjects.inside(workTree));
+                GitCheckoutSupport.BranchChange.begin(WorkTreeProjects.checkedOutWith(workTree));
             return change.run(() -> {
                 String output = runGitProcess(argv, workTree);
                 afterProcess.accept(change);

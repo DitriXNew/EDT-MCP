@@ -589,6 +589,49 @@ public class GitToolProcessIntegrationTest
         assertNull(afterStatus.get());
     }
 
+    /**
+     * Codex P2 on #928 (round 6): the project of a nested repository is not part of the outer repository's branch
+     * switch - the switch registers only the projects that repository checks out.
+     */
+    @Test(timeout = 120_000)
+    public void testANestedRepositorysProjectIsNotRegisteredWithTheSwitch() throws Exception
+    {
+        Path outerDir = Files.createDirectories(repository.resolve("Outer922")); //$NON-NLS-1$
+        Path nestedRepo = Files.createDirectories(repository.resolve("nested922")); //$NON-NLS-1$
+        Files.createDirectories(nestedRepo.resolve(".git")); //$NON-NLS-1$
+        Path innerDir = Files.createDirectories(nestedRepo.resolve("Inner922")); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject outer = createProjectAt("GitOuter922r6", outerDir); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject inner = createProjectAt("GitInner922r6", innerDir); //$NON-NLS-1$
+        try
+        {
+            AtomicReference<GitCheckoutSupport.BranchChange> change = new AtomicReference<>();
+            String switched = new GitTool().runGitWith(GitTool.parseCommand("switch -c nested-922"), //$NON-NLS-1$
+                repository.toFile(), change::set);
+            assertTrue(switched, JsonParser.parseString(switched).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+            List<String> registered = com.ditrix.edt.mcp.server.utils.git.WorkTreeProjects.names(change.get().projects());
+            assertTrue(String.valueOf(registered), registered.contains("GitOuter922r6")); //$NON-NLS-1$
+            assertFalse("a nested repository's project is not part of the switch: " + registered, //$NON-NLS-1$
+                registered.contains("GitInner922r6")); //$NON-NLS-1$
+        }
+        finally
+        {
+            outer.delete(false, true, new org.eclipse.core.runtime.NullProgressMonitor());
+            inner.delete(false, true, new org.eclipse.core.runtime.NullProgressMonitor());
+        }
+    }
+
+    /** An open workspace project whose content lives at {@code location}. */
+    private static org.eclipse.core.resources.IProject createProjectAt(String name, Path location) throws Exception
+    {
+        org.eclipse.core.resources.IWorkspace workspace = org.eclipse.core.resources.ResourcesPlugin.getWorkspace();
+        org.eclipse.core.resources.IProject project = workspace.getRoot().getProject(name);
+        org.eclipse.core.resources.IProjectDescription description = workspace.newProjectDescription(name);
+        description.setLocation(org.eclipse.core.runtime.Path.fromOSString(location.toString()));
+        project.create(description, new org.eclipse.core.runtime.NullProgressMonitor());
+        project.open(new org.eclipse.core.runtime.NullProgressMonitor());
+        return project;
+    }
+
     /** Parses {@code command} through the production parser and runs it in the test repository. */
     private JsonObject run(String command) throws Exception
     {
