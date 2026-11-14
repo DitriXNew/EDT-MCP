@@ -96,8 +96,8 @@ public final class InfobaseExtensionLifecycle
 
     /** Install/update whose version after the write was not reported. */
     static final String SCOPE_WITHOUT_VERSION = "Presence, runtime flags, other extensions and the preserved active "
-        + "state on update; expectedVersion and the version transition were not checked because the Designer agent "
-        + "did not report versions; not binary file identity.";
+        + "state on update; the Designer agent did not report the extension version, so expectedVersion (when "
+        + "supplied) and, on update, the version transition were not checked; not binary file identity.";
 
     static final String TRANSITION_UNREPORTED = "The Designer agent did not report the extension version before the "
         + "update, so the transition to expectedVersion was not observed; the version after the update was read back.";

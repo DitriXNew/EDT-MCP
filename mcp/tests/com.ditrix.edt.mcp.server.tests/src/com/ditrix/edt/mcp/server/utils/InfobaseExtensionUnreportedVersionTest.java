@@ -275,7 +275,10 @@ public class InfobaseExtensionUnreportedVersionTest
             assertTrue(scope, scope.contains("preserved active state on update"));
         }
         assertTrue(InfobaseExtensionLifecycle.SCOPE.contains("an update additionally requires an observed transition"));
+        // An install has no transition and may carry no expectedVersion: both skips are conditional (#925).
         assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains(
+            "expectedVersion (when supplied) and, on update, the version transition were not checked"));
+        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains(
             "expectedVersion and the version transition were not checked"));
         assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("the version transition was not checked"));
         assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("expectedVersion and the version transition"));
