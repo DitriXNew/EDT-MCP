@@ -246,7 +246,8 @@ public class BuildExternalObjectsTool implements IMcpTool
 
         // 3. Refuse only the transient BUILDING state; a missing/closed project falls through
         //    to the value-naming "Project not found" below (same idiom as update_database).
-        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        //    A project this server just switched still holds the previous branch's model (#922).
+        String building = ProjectStateChecker.strictWriteErrorOrNull(projectName);
         if (building != null)
         {
             return ToolResult.error(building).toJson();

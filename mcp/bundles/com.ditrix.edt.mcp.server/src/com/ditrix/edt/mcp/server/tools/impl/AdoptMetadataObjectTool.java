@@ -63,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 
@@ -311,6 +312,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         }
 
         String extName = target.getProject().getName();
+        // The write gate asked about projectName - the BASE; the adoption writes into the EXTENSION, and one this server
+        // just switched still holds the previous branch's model (#922).
+        String extensionReload = ProjectStateChecker.checkoutReloadErrorOrNull(target.getProject());
+        if (extensionReload != null)
+        {
+            return ToolResult.error(extensionReload).toJson();
+        }
 
         // The mapping note says what the COPY is - whether it carries the extendedConfigurationObject link to its base
         // object - and the root's flag and the platform version only name the likely reason (#706). The flag is read

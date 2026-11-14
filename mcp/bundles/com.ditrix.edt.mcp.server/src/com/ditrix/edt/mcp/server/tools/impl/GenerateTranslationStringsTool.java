@@ -277,7 +277,8 @@ public class GenerateTranslationStringsTool implements IMcpTool
 
         // Refuse only the transient BUILDING state; a missing/closed project
         // falls through to the value-naming "Project not found" below.
-        String building = ProjectStateChecker.buildingErrorOrNull(project);
+        // A project this server just switched still holds the previous branch's model (#922).
+        String building = ProjectStateChecker.strictWriteErrorOrNull(project);
         if (building != null)
         {
             return Resolved.failed(ToolResult.error(building).toJson());

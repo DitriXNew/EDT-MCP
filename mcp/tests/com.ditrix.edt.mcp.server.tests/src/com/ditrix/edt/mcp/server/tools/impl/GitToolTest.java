@@ -2069,6 +2069,37 @@ public class GitToolTest
         }
     }
 
+    /** #922 round 6: the projects a switch did not register (nested repositories) are refreshed outside it, in order. */
+    @Test
+    public void testTheProjectsOutsideTheChangeAreTheUnregisteredOnes()
+    {
+        org.eclipse.core.resources.IProject outer = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(outer.getName()).thenReturn("Outer"); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject nested = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(nested.getName()).thenReturn("Nested"); //$NON-NLS-1$
+
+        assertEquals(List.of(nested), GitTool.outsideTheChange(List.of(outer, nested), List.of(outer)));
+        assertTrue(GitTool.outsideTheChange(List.of(outer), List.of(outer)).isEmpty());
+    }
+
+    /** #922: the commands that switch the work tree to another branch - the ones registered as a model reload. */
+    @Test
+    public void testOnlyTheCommandsThatSwitchTheWorkTreeAreRegisteredAsAReload() throws Exception
+    {
+        for (String switching : new String[] {"checkout feature/x", "switch -c x", "pull --rebase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "stash branch from-stash"}) //$NON-NLS-1$
+        {
+            assertTrue("'" + switching + "' switches the work tree", //$NON-NLS-1$ //$NON-NLS-2$
+                GitTool.switchesWorkTree(GitTool.parseCommand(switching)));
+        }
+        for (String other : new String[] {"branch -m renamed", "branch -f x HEAD~1", "merge feature/x", "stash pop", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "status", "fetch origin"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertFalse("'" + other + "' is not a branch switch of the work tree", //$NON-NLS-1$ //$NON-NLS-2$
+                GitTool.switchesWorkTree(GitTool.parseCommand(other)));
+        }
+    }
+
     /**
      * The refresh after a branch-changing command is where EDT's workspace catches up with the new branch: one that
      * outlives its bounded wait is recorded as still running for the refreshed projects until it ends, so a detach

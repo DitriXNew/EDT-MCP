@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
@@ -38,6 +40,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
+import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -551,6 +554,82 @@ public class GitToolProcessIntegrationTest
         new GitTool().runGit(GitTool.parseCommand("status --short"), repository.toFile(), //$NON-NLS-1$
             () -> heldAfterStatus.set(BranchBindingLock.isHeldByCurrentThread()));
         assertEquals("the step after a status runs, without the lock", Boolean.FALSE, heldAfterStatus.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928 (round 5): a command of this tool that switches the work tree is a branch change of this
+     * server - the step after it gets the change registered before the process ran, the lifecycle
+     * {@code switch_git_branch} uses (#922). A command that moves only a ref, or none, gets no change.
+     */
+    @Test(timeout = 60_000)
+    public void testASwitchOfTheWorkTreeIsABranchChangeOfThisServer() throws Exception
+    {
+        AtomicReference<GitCheckoutSupport.BranchChange> afterSwitch = new AtomicReference<>();
+        String switched = new GitTool().runGitWith(GitTool.parseCommand("switch -c reload-922"), repository.toFile(), //$NON-NLS-1$
+            afterSwitch::set);
+        assertTrue(switched, JsonParser.parseString(switched).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("a switch reaches its step as a registered branch change", afterSwitch.get() != null); //$NON-NLS-1$
+
+        AtomicReference<GitCheckoutSupport.BranchChange> afterBranch = new AtomicReference<>();
+        AtomicBoolean branchStepRan = new AtomicBoolean();
+        new GitTool().runGitWith(GitTool.parseCommand("branch other-922"), repository.toFile(), change -> { //$NON-NLS-1$
+            branchStepRan.set(true);
+            afterBranch.set(change);
+        });
+        assertTrue(branchStepRan.get());
+        assertNull("a ref-only command rewrites no work tree", afterBranch.get()); //$NON-NLS-1$
+
+        AtomicBoolean statusStepRan = new AtomicBoolean();
+        AtomicReference<GitCheckoutSupport.BranchChange> afterStatus = new AtomicReference<>();
+        new GitTool().runGitWith(GitTool.parseCommand("status --short"), repository.toFile(), change -> { //$NON-NLS-1$
+            statusStepRan.set(true);
+            afterStatus.set(change);
+        });
+        assertTrue(statusStepRan.get());
+        assertNull(afterStatus.get());
+    }
+
+    /**
+     * Codex P2 on #928 (round 6): the project of a nested repository is not part of the outer repository's branch
+     * switch - the switch registers only the projects that repository checks out.
+     */
+    @Test(timeout = 120_000)
+    public void testANestedRepositorysProjectIsNotRegisteredWithTheSwitch() throws Exception
+    {
+        Path outerDir = Files.createDirectories(repository.resolve("Outer922")); //$NON-NLS-1$
+        Path nestedRepo = Files.createDirectories(repository.resolve("nested922")); //$NON-NLS-1$
+        Files.createDirectories(nestedRepo.resolve(".git")); //$NON-NLS-1$
+        Path innerDir = Files.createDirectories(nestedRepo.resolve("Inner922")); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject outer = createProjectAt("GitOuter922r6", outerDir); //$NON-NLS-1$
+        org.eclipse.core.resources.IProject inner = createProjectAt("GitInner922r6", innerDir); //$NON-NLS-1$
+        try
+        {
+            AtomicReference<GitCheckoutSupport.BranchChange> change = new AtomicReference<>();
+            String switched = new GitTool().runGitWith(GitTool.parseCommand("switch -c nested-922"), //$NON-NLS-1$
+                repository.toFile(), change::set);
+            assertTrue(switched, JsonParser.parseString(switched).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+            List<String> registered = com.ditrix.edt.mcp.server.utils.git.WorkTreeProjects.names(change.get().projects());
+            assertTrue(String.valueOf(registered), registered.contains("GitOuter922r6")); //$NON-NLS-1$
+            assertFalse("a nested repository's project is not part of the switch: " + registered, //$NON-NLS-1$
+                registered.contains("GitInner922r6")); //$NON-NLS-1$
+        }
+        finally
+        {
+            outer.delete(false, true, new org.eclipse.core.runtime.NullProgressMonitor());
+            inner.delete(false, true, new org.eclipse.core.runtime.NullProgressMonitor());
+        }
+    }
+
+    /** An open workspace project whose content lives at {@code location}. */
+    private static org.eclipse.core.resources.IProject createProjectAt(String name, Path location) throws Exception
+    {
+        org.eclipse.core.resources.IWorkspace workspace = org.eclipse.core.resources.ResourcesPlugin.getWorkspace();
+        org.eclipse.core.resources.IProject project = workspace.getRoot().getProject(name);
+        org.eclipse.core.resources.IProjectDescription description = workspace.newProjectDescription(name);
+        description.setLocation(org.eclipse.core.runtime.Path.fromOSString(location.toString()));
+        project.create(description, new org.eclipse.core.runtime.NullProgressMonitor());
+        project.open(new org.eclipse.core.runtime.NullProgressMonitor());
+        return project;
     }
 
     /** Parses {@code command} through the production parser and runs it in the test repository. */
