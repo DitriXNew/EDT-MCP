@@ -153,6 +153,25 @@ public class MetadataCloneKindsTest
         assertEquals(List.of(6, 7), lines(MetadataClonePlan.textReferences("Module.bsl", text, "CommonModule.Calc")));
     }
 
+    /** Review #940: a full stop ending a comment is not a qualifier; a code dot before a comment still is. */
+    @Test
+    public void commentPunctuationDoesNotQualifyTheNextCall()
+    {
+        String text = String.join("\n",
+            "// Explanation.",
+            "Calc.Add(1);",
+            "Result = Object. // trailing note.",
+            "    Calc.Add(2);",
+            "Value = Object.Method(\"a//b\").",
+            "    Calc.Add(3);",
+            "X = 1; // Done.",
+            "Calc.Add(4);");
+        assertEquals(List.of(2, 8), lines(MetadataClonePlan.textReferences("Module.bsl", text, "CommonModule.Calc")));
+        assertEquals("Value = \"a//b\" ", MetadataClonePlan.codeBeforeComment("Value = \"a//b\" // note"));
+        assertEquals("|text // inside the literal\";", MetadataClonePlan.codeBeforeComment(
+            "|text // inside the literal\";"));
+    }
+
     @Test
     public void bareNameCallsAreNotReferencesForOtherKinds()
     {

@@ -946,14 +946,19 @@ public final class MetadataClonePlan
         return result;
     }
 
-    /** Whether the first non-whitespace character before {@code column}, across earlier lines too, is a dot. */
+    /**
+     * Whether the first code character before {@code column}, across earlier lines too, is a dot. On earlier
+     * lines a {@code //} comment is skipped, so a comment ending with a full stop does not qualify the next
+     * line's call. Best effort, not a lexer: see {@link #codeBeforeComment(String)}.
+     */
     private static boolean qualified(String[] lines, int line, int column)
     {
-        for (int i = line, end = column; i >= 0; i--, end = i >= 0 ? lines[i].length() : 0)
+        for (int i = line; i >= 0; i--)
         {
-            for (int j = end - 1; j >= 0; j--)
+            String code = i == line ? lines[i].substring(0, column) : codeBeforeComment(lines[i]);
+            for (int j = code.length() - 1; j >= 0; j--)
             {
-                char c = lines[i].charAt(j);
+                char c = code.charAt(j);
                 if (!Character.isWhitespace(c))
                 {
                     return c == '.';
@@ -961,5 +966,28 @@ public final class MetadataClonePlan
             }
         }
         return false;
+    }
+
+    /**
+     * The part of one BSL line before its {@code //} comment. A {@code //} inside a {@code "..."} literal is not a
+     * comment ({@code ""} escapes toggle twice); a line starting with {@code |} continues a multi-line literal.
+     * Strings are judged per line only, so an unusual layout can still be misread.
+     */
+    static String codeBeforeComment(String line)
+    {
+        boolean inString = line.stripLeading().startsWith("|");
+        for (int i = 0; i + 1 < line.length(); i++)
+        {
+            char c = line.charAt(i);
+            if (c == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && c == '/' && line.charAt(i + 1) == '/')
+            {
+                return line.substring(0, i);
+            }
+        }
+        return line;
     }
 }
