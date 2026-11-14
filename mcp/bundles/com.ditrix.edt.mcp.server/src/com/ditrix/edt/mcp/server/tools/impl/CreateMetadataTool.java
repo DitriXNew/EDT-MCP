@@ -2151,6 +2151,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     static MdObject createMemberChild(MemberChildSpec spec)
     {
+        // prepareMainSchema judged an adopted report's main-DCS state in the preparation read; it can become None
+        // before this transaction, and EDT's .mdo writer would then drop the reference (issue #919). Recheck the
+        // transaction-local owner before anything is created, so a refusal rolls back a clean no-op.
+        if (spec.props.setAsDefault && MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(spec.elementType))
+        {
+            AdoptedPropertyRouter.requireStillWritten(spec.owner, DcsMainSchemaOwner.feature(spec.owner), null, null);
+        }
         return isFactoryInitializedChild(spec.elementType) ? createFactoryInitializedChild(spec)
             : createPlainChild(spec);
     }

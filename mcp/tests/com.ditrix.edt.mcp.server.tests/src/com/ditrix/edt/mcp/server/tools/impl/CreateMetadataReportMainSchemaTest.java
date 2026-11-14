@@ -155,6 +155,40 @@ public class CreateMetadataReportMainSchemaTest
         assertSame(created, owner.getMainDataCompositionSchema());
     }
 
+    @Test public void testAnAdoptedStateThatBecameNoneBeforeTheTransactionRefusesWithoutCreating()
+    {
+        // Preparation saw Extended; by the write transaction the extension marks the property None again.
+        Report owner = report();
+        owner.setObjectBelonging(ObjectBelonging.ADOPTED);
+        ReportExtension extension = MdClassExtensionFactory.eINSTANCE.createReportExtension();
+        extension.setMainDataCompositionSchema(MdPropertyState.EXTENDED);
+        owner.setExtension(extension);
+        assertNull(prepare(owner, "Report.Sales919.Template.Main", props(true, null)));
+        extension.setMainDataCompositionSchema(MdPropertyState.NONE);
+        try
+        {
+            createTemplate(owner, props(true, TemplateType.DATA_COMPOSITION_SCHEMA));
+            fail("an adopted main-DCS state of None must refuse inside the transaction");
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("'mainDataCompositionSchema' of Sales919 was not written"));
+        }
+        assertTrue("nothing is created before the refusal", owner.getTemplates().isEmpty());
+        assertNull(owner.getMainDataCompositionSchema());
+    }
+
+    @Test public void testAnAdoptedStateStillExtendedInTheTransactionAssignsTheMainSchema()
+    {
+        Report owner = report();
+        owner.setObjectBelonging(ObjectBelonging.ADOPTED);
+        ReportExtension extension = MdClassExtensionFactory.eINSTANCE.createReportExtension();
+        extension.setMainDataCompositionSchema(MdPropertyState.EXTENDED);
+        owner.setExtension(extension);
+        BasicTemplate created = createTemplate(owner, props(true, TemplateType.DATA_COMPOSITION_SCHEMA));
+        assertSame(created, owner.getMainDataCompositionSchema());
+    }
+
     @Test public void testWithoutSetAsDefaultTheMainSchemaIsUntouched()
     {
         Report owner = report();
