@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.util.List;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.egit.core.project.RepositoryMapping;
@@ -230,6 +231,13 @@ public final class GitRepositoryResolver
      * repository up the tree that could not be OPENED: that is not "no repository", so it fails closed
      * rather than nesting under a repository nobody could inspect.
      * <p>
+     * Every check runs on the folder's REAL path as well as on its spelling: a project folder reached
+     * through a junction or a symbolic link has the ancestors of its target, which are the ones git
+     * walks (measured on git 2.35 / Windows: in a junction to a folder inside a work tree,
+     * {@code rev-parse --show-toplevel} names that work tree and {@code init} nests a repository in
+     * it). The real path is checked first, so a refusal names the physical repository root. A real
+     * path that cannot be resolved refuses (fail closed).
+     * <p>
      * Not atomic with the {@code git init} that follows: a repository created in between is not
      * seen. Public so {@code GitTool}'s tests can drive it against a real directory.
      *
@@ -239,14 +247,32 @@ public final class GitRepositoryResolver
      */
     public static String existingRepositoryRefusal(File folder, String projectName)
     {
-        File holder = nearestDotGitHolder(folder);
-        if (holder != null)
+        File lexical = folder.getAbsoluteFile();
+        File real;
+        try
         {
-            return nestedRepositoryMessage(projectName, holder,
-                holder.equals(folder.getAbsoluteFile()) ? "the project folder already holds a '.git' entry" //$NON-NLS-1$
-                    : "the project folder lies inside that repository"); //$NON-NLS-1$
+            real = lexical.toPath().toRealPath().toFile();
         }
-        Discovery discovery = discoverFromLocation(folder, projectName);
+        catch (IOException | RuntimeException e)
+        {
+            Activator.logError(GitFailureLog.typesOnly(
+                "git init: resolving the real path failed for project '" + projectName + "'", e), null); //$NON-NLS-1$ //$NON-NLS-2$
+            return "The real location of the folder of project '" + projectName + "' (" + folder //$NON-NLS-1$ //$NON-NLS-2$
+                + ") could not be resolved, so this tool cannot tell whether it lies inside a git repository. " //$NON-NLS-1$
+                + "'git init' is refused rather than run blind: check the folder (and any link or junction " //$NON-NLS-1$
+                + "on its path) in a terminal."; //$NON-NLS-1$
+        }
+        for (File start : real.equals(lexical) ? List.of(real) : List.of(real, lexical))
+        {
+            File holder = nearestDotGitHolder(start);
+            if (holder != null)
+            {
+                return nestedRepositoryMessage(projectName, holder,
+                    holder.equals(start) ? "the project folder already holds a '.git' entry" //$NON-NLS-1$
+                        : "the project folder lies inside that repository"); //$NON-NLS-1$
+            }
+        }
+        Discovery discovery = discoverFromLocation(real, projectName);
         if (discovery.configUnreadable())
         {
             return "A git repository was found above the folder of project '" + projectName //$NON-NLS-1$
@@ -261,7 +287,7 @@ public final class GitRepositoryResolver
         }
         try
         {
-            return nestedRepositoryMessage(projectName, repositoryRoot(folder, found),
+            return nestedRepositoryMessage(projectName, repositoryRoot(real, found),
                 "the project folder lies inside that repository"); //$NON-NLS-1$
         }
         finally

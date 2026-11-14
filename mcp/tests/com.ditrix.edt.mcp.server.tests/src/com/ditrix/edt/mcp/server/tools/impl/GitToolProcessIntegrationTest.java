@@ -667,7 +667,7 @@ public class GitToolProcessIntegrationTest
         String refusal = GitRepositoryResolver.existingRepositoryRefusal(nested.toFile(), "Sales"); //$NON-NLS-1$
 
         assertNotNull(refusal);
-        assertTrue(refusal, refusal.contains("repository at '" + linked.toFile().getAbsoluteFile() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(refusal, refusal.contains("repository at '" + linked.toRealPath() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse(refusal, refusal.contains("worktrees")); //$NON-NLS-1$
         git("worktree", "remove", "--force", linked.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }

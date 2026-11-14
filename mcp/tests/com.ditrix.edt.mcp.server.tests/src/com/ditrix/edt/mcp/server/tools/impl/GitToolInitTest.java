@@ -282,8 +282,123 @@ public class GitToolInitTest
         String refusal = GitRepositoryResolver.existingRepositoryRefusal(nested.toFile(), "Sales"); //$NON-NLS-1$
 
         assertNotNull("a '.git' above the folder must refuse, even one JGit cannot follow", refusal); //$NON-NLS-1$
-        assertTrue(refusal, refusal.contains("repository at '" + outer.toFile().getAbsoluteFile() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(refusal, refusal.contains("repository at '" + outer.toRealPath() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(refusal, refusal.contains("lies inside that repository")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFolderReachedThroughALinkIsJudgedByWhereItReallyIs() throws Exception
+    {
+        // git follows the link: in a junction to a folder inside a work tree, 'rev-parse --show-toplevel'
+        // names that work tree and 'init' nests a repository in it (measured on git 2.35 / Windows). The
+        // link's own parents hold no '.git', so a check on the spelling alone would let init through.
+        // The repository is marked by a '.git' FILE JGit cannot follow, so JGit's own discovery (which does
+        // get the real path) finds nothing either: only the walk of the real ancestors can refuse.
+        Path outer = freeFolder();
+        // ('garbage', not 'gitdir: <missing>': JGit follows the latter to a repository it "finds".)
+        Files.write(outer.resolve(".git"), "garbage\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Path target = Files.createDirectories(outer.resolve("Sales")); //$NON-NLS-1$
+        Path link = freeFolder().resolve("SalesLink"); //$NON-NLS-1$
+        String how = createDirectoryLink(link, target);
+        Assume.assumeTrue("this machine can create neither a symbolic link nor a junction", how != null); //$NON-NLS-1$
+        try
+        {
+            // Positive control: the link's own parents hold no '.git', so only the real path can refuse.
+            Assume.assumeTrue("the temporary directory lies inside a git repository on this machine", //$NON-NLS-1$
+                findDotGitAbove(link.toFile().getAbsoluteFile()) == null);
+
+            String refusal = GitRepositoryResolver.existingRepositoryRefusal(link.toFile(), "Sales"); //$NON-NLS-1$
+
+            assertNotNull("a folder reached through a " + how + " into a work tree must be refused", refusal); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(refusal, refusal.contains("repository at '" + outer.toRealPath() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(refusal, refusal.contains("lies inside that repository")); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(link);
+        }
+    }
+
+    @Test
+    public void testAFolderReachedThroughALinkIntoAWorkingRepositoryIsRefused() throws Exception
+    {
+        // The everyday case of the same gap: a normal repository behind the link.
+        Path outer = freeFolder();
+        createRepository(outer);
+        Path target = Files.createDirectories(outer.resolve("Sales")); //$NON-NLS-1$
+        Path link = freeFolder().resolve("SalesLink"); //$NON-NLS-1$
+        String how = createDirectoryLink(link, target);
+        Assume.assumeTrue("this machine can create neither a symbolic link nor a junction", how != null); //$NON-NLS-1$
+        try
+        {
+            Assume.assumeTrue("the temporary directory lies inside a git repository on this machine", //$NON-NLS-1$
+                findDotGitAbove(link.toFile().getAbsoluteFile()) == null);
+            String refusal = GitRepositoryResolver.existingRepositoryRefusal(link.toFile(), "Sales"); //$NON-NLS-1$
+            assertNotNull("a folder reached through a " + how + " into a work tree must be refused", refusal); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(refusal, refusal.contains("repository at '" + outer.toRealPath() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        finally
+        {
+            Files.deleteIfExists(link);
+        }
+    }
+
+    @Test
+    public void testAFolderWhoseRealPathCannotBeResolvedIsRefused() throws Exception
+    {
+        // Fail closed: without the real location there is no telling which repository it lies in.
+        Path missing = freeFolder().resolve("gone"); //$NON-NLS-1$
+        String refusal = GitRepositoryResolver.existingRepositoryRefusal(missing.toFile(), "P"); //$NON-NLS-1$
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("could not be resolved")); //$NON-NLS-1$
+    }
+
+    /** Creates {@code link} pointing at {@code target}: a symbolic link, else a junction; how, or {@code null}. */
+    private static String createDirectoryLink(Path link, Path target)
+    {
+        try
+        {
+            Files.createSymbolicLink(link, target);
+            return "symbolic link"; //$NON-NLS-1$
+        }
+        catch (IOException | UnsupportedOperationException | SecurityException e)
+        {
+            // Windows without the symlink privilege: a junction needs none.
+        }
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            return null;
+        }
+        try
+        {
+            Process mklink = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                .redirectErrorStream(true).start();
+            mklink.getOutputStream().close();
+            mklink.getInputStream().readAllBytes();
+            return mklink.waitFor() == 0 && Files.isDirectory(link) ? "junction" : null; //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            return null;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /** The nearest folder at or above {@code start} (by its spelling) holding a '.git' entry, or null. */
+    private static File findDotGitAbove(File start)
+    {
+        for (File dir = start; dir != null; dir = dir.getParentFile())
+        {
+            if (Files.exists(dir.toPath().resolve(".git"), LinkOption.NOFOLLOW_LINKS)) //$NON-NLS-1$
+            {
+                return dir;
+            }
+        }
+        return null;
     }
 
     // ---- the process init runs as ----
