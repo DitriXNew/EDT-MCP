@@ -380,6 +380,103 @@ def test_russian_token_nonexistent_object_normalizes_value_in_error():
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# THE LIMIT BOUNDS THE SEARCH (#931)
+# ──────────────────────────────────────────────────────────────────────────────
+# `limit` used to be a limit*10 cap on what was kept, inside a walk that always ran to the end, and
+# the report never said that anything was cut. Now the search stops one reference past `limit`
+# (the proof that more exist), shows the first `limit`, and says so instead of claiming a total.
+# The fixture is tiny, so these pin the bound and its marker, not the wall clock.
+
+STOPPED_AT = "**Search stopped early:** more than %d reference(s) exist; the search stopped at limit=%d"
+
+
+def _rows(text):
+    """Every rendered reference row: metadata rows and BSL module rows both start with '- '."""
+    return [line for line in (text or "").splitlines() if line.startswith("- ")]
+
+
+@e2e_test(tool="find_references", kind="read")
+def test_limit_bounds_the_search_and_marks_the_result_incomplete():
+    """Catalog.Catalog has 9 references. limit=1 shows exactly one row, names it as SHOWN rather
+    than as a total, and says the search stopped at the limit with more references left."""
+    r = call("find_references", {"projectName": PROJECT, "objectFqn": "Catalog.Catalog", "limit": 1})
+    assert_ok(r, "find_references with limit=1")
+    assert_contains(r.text,
+                    "**References shown:** 1 (showing first 1, limit reached; pass a higher limit for more)",
+                    "the count line must name what is shown and that the limit was reached")
+    assert_contains(r.text, STOPPED_AT % (1, 1), "the stop paragraph must say more references exist")
+    assert_not_contains(r.text, "**Total references found:**",
+                        "a search stopped at the limit must not claim a total")
+    rows = _rows(r.text)
+    assert len(rows) == 1, "limit=1 must render exactly one reference row: %r" % rows
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="find_references", kind="read")
+def test_limit_one_below_the_total_stops_and_limit_equal_to_it_completes():
+    """The boundary of 'one past the limit': with 9 references, limit=8 finds the 9th and stops,
+    limit=9 finds no 10th and reports the complete total with no stop marker."""
+    below = call("find_references", {"projectName": PROJECT, "objectFqn": "Catalog.Catalog", "limit": 8})
+    assert_ok(below, "find_references with limit=8")
+    assert_contains(below.text, "**References shown:** 8 (", "limit=8 shows 8 of the 9 references")
+    assert_contains(below.text, STOPPED_AT % (8, 8), "the 9th reference proves that more exist")
+    assert len(_rows(below.text)) == 8, _rows(below.text)
+
+    equal = call("find_references", {"projectName": PROJECT, "objectFqn": "Catalog.Catalog", "limit": 9})
+    assert_ok(equal, "find_references with limit=9")
+    assert_contains(equal.text, "**Total references found:** 9",
+                    "a limit equal to the total leaves the search complete")
+    assert_not_contains(equal.text, "**Search stopped early:**",
+                        "a complete search carries no stop marker")
+    assert len(_rows(equal.text)) == 9, _rows(equal.text)
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="find_references", kind="read")
+def test_limit_stops_in_the_bsl_step_before_the_extension_usage():
+    """CommonModule.Calc has two metadata references, then one BSL usage of its adopted copy in the
+    extension. The metadata references are collected first, so limit=2 stops on that extension
+    usage: it proves more exist but is not shown. limit=3 shows it, qualified with its project."""
+    stopped = call("find_references", {"projectName": PROJECT, "objectFqn": "CommonModule.Calc", "limit": 2})
+    assert_ok(stopped, "find_references CommonModule.Calc limit=2")
+    assert_contains(stopped.text, "**References shown:** 2 (", "limit=2 shows the two metadata references")
+    assert_contains(stopped.text, STOPPED_AT % (2, 2), "the extension usage proves that more exist")
+    assert_not_contains(stopped.text, "TestConfiguration.tests/CommonModules/tests_SampleTests/Module.bsl",
+                        "the reference past the limit is not shown")
+
+    complete = call("find_references", {"projectName": PROJECT, "objectFqn": "CommonModule.Calc", "limit": 3})
+    assert_ok(complete, "find_references CommonModule.Calc limit=3")
+    assert_contains(complete.text, "**Total references found:** 3", "limit=3 is the whole set")
+    assert_contains(complete.text, "TestConfiguration.tests/CommonModules/tests_SampleTests/Module.bsl",
+                    "the extension BSL usage is found within the limit")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="find_references", kind="read")
+def test_limit_bounds_a_search_on_the_extension_project_with_a_russian_type_token():
+    """The extension project itself, addressed with the Russian CommonModule token: its own module
+    tests_MathHelper has 3 references: its Configuration containment, its own context definition and
+    a BSL call in tests_SampleTests. limit=1 stops after one row; the default limit shows all three."""
+    stopped = call("find_references", {"projectName": TESTS_PROJECT,
+                                       "objectFqn": "ОбщийМодуль.tests_MathHelper", "limit": 1})
+    assert_ok(stopped, "find_references on the extension project with limit=1")
+    assert_contains(stopped.text, "# References to CommonModule.tests_MathHelper",
+                    "the Russian type token normalizes to the English heading")
+    assert_contains(stopped.text, "**References shown:** 1 (", "limit=1 shows one reference")
+    assert_contains(stopped.text, STOPPED_AT % (1, 1), "the stop paragraph is the same on an extension")
+    assert len(_rows(stopped.text)) == 1, _rows(stopped.text)
+
+    complete = call("find_references", {"projectName": TESTS_PROJECT,
+                                        "objectFqn": "ОбщийМодуль.tests_MathHelper"})
+    assert_ok(complete, "find_references on the extension project with the default limit")
+    assert_contains(complete.text, "**Total references found:** 3", "the extension module has 3 references")
+    assert_contains(complete.text, "CommonModules/tests_SampleTests/Module.bsl",
+                    "the BSL call in tests_SampleTests is listed")
+    assert_not_contains(complete.text, "**Search stopped early:**", "the default limit leaves it complete")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
 @e2e_test(tool="find_references", kind="action")
 def test_scan_right_after_clean_project_is_complete_or_says_so():
     """A clean must not lead to a silent omission of the adopted Calc reference (#800)."""

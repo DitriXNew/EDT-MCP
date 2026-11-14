@@ -71,25 +71,24 @@ public class FindReferencesToolTest
     }
 
     /**
-     * The {@code limit} parameter caps the OVERALL number of collected references
-     * (at limit*10), not a per-category count. The schema description must say so,
-     * matching the actual runtime behavior. Asserts a delimiter-free ASCII substring.
+     * The {@code limit} parameter is an OVERALL bound on the search, not a per-category count
+     * (issue #931: it used to be a {@code limit*10} cap inside a walk that always ran to the end).
      */
     @Test
-    public void testLimitSchemaDescribesOverallCap()
+    public void testLimitSchemaDescribesOverallBoundOnTheSearch()
     {
         String schema = new FindReferencesTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("overall")); //$NON-NLS-1$
         assertTrue(schema.contains("not per category")); //$NON-NLS-1$
+        assertTrue(schema.contains("the search itself stops one past it")); //$NON-NLS-1$
+        assertFalse(schema.contains("limit*10")); //$NON-NLS-1$
     }
 
     /**
-     * The exhaustive detail (limit*10 overall cap, result categories, ru/en type
-     * token, synonym-vs-Name resolution) moved out of the always-loaded
-     * description/schema and into the on-demand guide. Assert the guide is
-     * non-empty and still carries a couple of the migrated keywords, proving the
-     * detail moved rather than vanished.
+     * The exhaustive detail (the bound and its report, result categories, ru/en type token,
+     * synonym-vs-Name resolution) lives in the on-demand guide. The guide must name the two count
+     * lines and the stop paragraph an agent reads, and no longer promise the old {@code limit*10} cap.
      */
     @Test
     public void testGuideNotEmptyAndCarriesMigratedDetail()
@@ -97,8 +96,11 @@ public class FindReferencesToolTest
         String guide = new FindReferencesTool().getGuide();
         assertNotNull(guide);
         assertFalse(guide.isEmpty());
-        assertTrue(guide.contains("limit*10")); //$NON-NLS-1$
         assertTrue(guide.contains("synonym")); //$NON-NLS-1$
+        assertTrue(guide.contains("**References shown:** N")); //$NON-NLS-1$
+        assertTrue(guide.contains("**Search stopped early:**")); //$NON-NLS-1$
+        assertTrue(guide.contains("45 s time budget")); //$NON-NLS-1$
+        assertFalse(guide.contains("limit*10")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no workbench needed) ====================
