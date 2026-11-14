@@ -659,7 +659,7 @@ public final class ProjectStateChecker
             // Cannot ask: fall back to the strict gate rather than inventing readiness.
             return buildingErrorOrNull(project);
         }
-        return modelBuildingErrorOrNull(ddManager, ProjectStateChecker::isWorkspaceRefreshPending);
+        return modelBuildingErrorOrNull(ddManager, project.getName(), ProjectStateChecker::isWorkspaceRefreshPending);
     }
 
     /**
@@ -671,7 +671,9 @@ public final class ProjectStateChecker
      * notification - for a large change that takes seconds, during which the derived-data pipeline is still empty
      * and the model still holds the previous branch. EDT's own import job waits for this family before importing
      * ({@code SynchronizationManager$ImportChangesJob.waitAutoRefreshJobComplete}, EDT 2026.2); the gate asks the
-     * same question. The refresh job is workspace-wide and names no project, so the answer is too.
+     * same question. The refresh job is workspace-wide and names no project, so the answer is too - which is why
+     * it is asked only for a project whose reload this server registered ({@link CheckoutReloads}), never for
+     * every write.
      * <p>
      * Fail closed: a job manager that cannot be asked counts as a refresh pending.
      *
@@ -691,10 +693,10 @@ public final class ProjectStateChecker
         }
     }
 
-    /** What a write is refused with while EDT loads changed files from disk into the model (#922). */
+    /** What a write is refused with while EDT loads a checked-out branch into the model (#922). */
     static final String LOADING_FROM_DISK_ERROR =
-        "Project is building: EDT is loading files changed on disk (for example by a git branch switch) " //$NON-NLS-1$
-            + "into the model, and a write now could be overwritten by that reload. Nothing was changed. " //$NON-NLS-1$
+        "Project is building: EDT is still loading the files a git branch switch rewrote into the model, " //$NON-NLS-1$
+            + "and a write now could be overwritten by that reload. Nothing was changed. " //$NON-NLS-1$
             + "Please wait and retry."; //$NON-NLS-1$
 
     /** What a write is refused with while the model or the reference index is computed. */
@@ -704,20 +706,30 @@ public final class ProjectStateChecker
 
     /**
      * The derived-data half of {@link #modelBuildingErrorOrNull(IProject)}: {@code null} when the model may be
-     * edited, otherwise the refusal - {@link #LOADING_FROM_DISK_ERROR} while a workspace refresh is taking up
-     * changed files ({@link #isWorkspaceRefreshPending()}) or EDT is still importing them
-     * ({@link #isLoadingChangedFiles(IDerivedDataManager)}), {@link #MODEL_COMPUTING_ERROR} while the model
-     * segments are not computed.
+     * edited, otherwise the refusal - {@link #MODEL_COMPUTING_ERROR} while the model segments are not computed, and,
+     * only for a project whose checkout reload this server registered ({@link CheckoutReloads#isPending}),
+     * {@link #LOADING_FROM_DISK_ERROR} until that reload has been seen finished
+     * ({@link CheckoutReloads#observe}): while a workspace refresh is taking up the rewritten files
+     * ({@link #isWorkspaceRefreshPending()}) or EDT is still importing them
+     * ({@link #isLoadingChangedFiles(IDerivedDataManager)}). Neither signal is specific to a disk import, so an
+     * unregistered project never reads them - an ordinary write is not held back by an unrelated refresh or by its
+     * own derived-data work.
      *
      * @param ddManager the project's derived-data manager, never {@code null}
+     * @param projectName the project's name
      * @param workspaceRefreshPending answers {@link #isWorkspaceRefreshPending()}
      * @return the refusal, or {@code null}
      */
-    static String modelBuildingErrorOrNull(IDerivedDataManager ddManager, BooleanSupplier workspaceRefreshPending)
+    static String modelBuildingErrorOrNull(IDerivedDataManager ddManager, String projectName,
+        BooleanSupplier workspaceRefreshPending)
     {
-        if (workspaceRefreshPending.getAsBoolean() || isLoadingChangedFiles(ddManager))
+        if (CheckoutReloads.isPending(projectName))
         {
-            return LOADING_FROM_DISK_ERROR;
+            boolean loading = workspaceRefreshPending.getAsBoolean() || isLoadingChangedFiles(ddManager);
+            if (CheckoutReloads.observe(projectName, loading) != CheckoutReloads.State.SETTLED)
+            {
+                return LOADING_FROM_DISK_ERROR;
+            }
         }
         if (isModelDataComputed(ddManager))
         {
@@ -728,7 +740,8 @@ public final class ProjectStateChecker
 
     /**
      * Whether EDT is still importing files changed on disk into the BM model: work is queued in the derived-data
-     * pipeline AND its active stage is {@code STARTING} or {@code SYNC}.
+     * pipeline AND its active stage is {@code STARTING} or {@code SYNC}. Ordinary derived-data work passes those
+     * stages too, so this is read only for a project whose checkout reload is registered ({@link CheckoutReloads}).
      * <p>
      * Issue #922: EDT does not import a changed {@code .mdo} inside the workspace refresh that noticed it. The
      * refresh's resource listener only schedules the import into the {@code SYNC} stage of the derived-data
@@ -798,10 +811,13 @@ public final class ProjectStateChecker
      * admits every one of {@code projects} - that is, until EDT has loaded the files a checkout changed into each
      * project's model (#922).
      * <p>
-     * A project is settled the first time the gate admits it; the wait never runs past {@code timeoutMs}, and a
-     * project that is not an EDT project (the gate admits it) settles at once. The caller decides what an
-     * unsettled project means: the write gate keeps refusing writes into it until it settles, so the wait exists
-     * to let the caller report the state honestly rather than to protect the model.
+     * Every pass asks the gate about EVERY project, so the answer is always the current state: a project admitted
+     * once and refused again later (its import started after an idle sample) is waited for again and named at the
+     * timeout. A registered checkout reload is admitted only after {@link CheckoutReloads#STABLE_MS} of idle
+     * samples, never on one. The wait never runs past {@code timeoutMs}, and a project that is not an EDT project
+     * (the gate admits it) settles at once. The caller decides what an unsettled project means: the write gate
+     * keeps refusing writes into it until it settles, so the wait exists to let the caller report the state
+     * honestly rather than to protect the model.
      *
      * @param projects the projects to wait for
      * @param timeoutMs the bound of the whole wait
@@ -823,23 +839,25 @@ public final class ProjectStateChecker
         java.util.function.Function<IProject, String> gate, java.util.function.LongPredicate pause)
     {
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
-        List<IProject> pending = new ArrayList<>(projects);
+        List<IProject> all = new ArrayList<>(projects);
         while (true)
         {
-            pending.removeIf(project -> gate.apply(project) == null);
-            if (pending.isEmpty())
+            List<String> refused = new ArrayList<>();
+            for (IProject project : all)
+            {
+                if (gate.apply(project) != null)
+                {
+                    refused.add(project.getName());
+                }
+            }
+            if (refused.isEmpty())
             {
                 return Collections.emptyList();
             }
             long leftMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
             if (leftMs <= 0 || !pause.test(Math.min(MODEL_RELOAD_POLL_MS, leftMs)))
             {
-                List<String> names = new ArrayList<>();
-                for (IProject project : pending)
-                {
-                    names.add(project.getName());
-                }
-                return names;
+                return refused;
             }
         }
     }

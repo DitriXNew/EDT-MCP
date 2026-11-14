@@ -318,6 +318,15 @@ public class CreateGitBranchTool implements IMcpTool
             {
                 warnings.add(note);
             }
+            // The reload wait runs outside BranchBindingLock (#922): another checkout may have moved the repository.
+            String now = GitCheckoutSupport.movedAwayFrom(repo, fullRef);
+            if (now != null)
+            {
+                warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' succeeded, but while this call waited for EDT to " //$NON-NLS-1$
+                    + "load it another checkout moved the repository to '" + now + "'; the new branch is not the " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "one checked out now."); //$NON-NLS-1$
+                return false;
+            }
             return true;
         }
         warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' did not complete cleanly " //$NON-NLS-1$

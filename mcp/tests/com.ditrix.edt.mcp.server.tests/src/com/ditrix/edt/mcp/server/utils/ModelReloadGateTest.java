@@ -18,8 +18,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IProject;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentMatchers;
 
@@ -29,33 +32,26 @@ import com._1c.g5.v8.derived.pipeline.DerivedDataSegmentBucket;
 import com._1c.g5.v8.derived.pipeline.PipelineStatus;
 
 /**
- * Issue #922: right after {@code switch_git_branch}, EDT has only SCHEDULED the import of the changed files into the
- * {@code SYNC} stage; the model segments still read as computed for the model about to be replaced, and the sync
- * flag may not be set. The metadata-write gate must refuse in that window, by EDT's own definition of "the import of
- * a change batch is not finished" (pipeline not empty and the active stage not past {@code SYNC}).
+ * Issue #922: right after this server's checkout, EDT has not loaded the checked-out files into the model yet - the
+ * automatic refresh is still taking them up, or their import is queued in {@code SYNC} - while the model segments
+ * read as computed. The metadata-write gate refuses in that window, but ONLY for a project whose checkout reload is
+ * registered ({@link CheckoutReloads}): the same signals are workspace-wide or shared with ordinary derived-data
+ * work, and must not hold back an ordinary write.
  */
 public class ModelReloadGateTest
 {
-    /** No automatic workspace refresh is running or queued. */
-    private static final java.util.function.BooleanSupplier NO_REFRESH = () -> false;
+    private static final BooleanSupplier NO_REFRESH = () -> false;
 
-    /**
-     * THE #922 pin measured on the stand: the auto-refresh job is still taking up the checked-out files - EDT
-     * registers their import inside it - while the pipeline is still EMPTY and the model segments read as
-     * computed. A write now landed in the previous branch's model and its export put that model back on disk.
-     */
-    @Test
-    public void aWriteIsRefusedWhileTheWorkspaceRefreshIsTakingUpChangedFiles()
+    private static final BooleanSupplier REFRESHING = () -> true;
+
+    @Before
+    @After
+    public void forgetRegistrations()
     {
-        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
-
-        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
-            ProjectStateChecker.modelBuildingErrorOrNull(manager, () -> true));
-        assertNull("the same state without the refresh is admitted, as before",
-            ProjectStateChecker.modelBuildingErrorOrNull(manager, NO_REFRESH));
+        CheckoutReloads.clear();
     }
 
-    /** Model segments computed, sync flag off, nothing in the pipeline at all - the pre-existing admission. */
+    /** Model segments computed, sync flag off, the pipeline in the given state. */
     private static IDerivedDataManager manager(PipelineStatus pipeline, DerivedDataSegmentBucket stage)
     {
         DerivedDataStatus status = mock(DerivedDataStatus.class);
@@ -69,16 +65,86 @@ public class ModelReloadGateTest
         return manager;
     }
 
+    // ==================== the gate: only registered reloads are refused ====================
+
     /**
-     * THE #922 pin: the import of the switched files is queued in SYNC, the model segments still read as computed
-     * and the sync flag is off - exactly the state the gate admitted before, and the write was then overwritten.
+     * THE #922 pin measured on the stand: right after the checkout the auto-refresh job is still taking up the
+     * files - EDT registers their import inside it - while the pipeline is EMPTY and the model segments read as
+     * computed. A write into a project of that checkout landed in the previous branch's model.
      */
     @Test
-    public void aWriteIsRefusedWhileTheImportOfChangedFilesIsQueued()
+    public void aWriteIntoAJustCheckedOutProjectIsRefusedWhileTheRefreshTakesUpItsFiles()
     {
+        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
+
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.modelBuildingErrorOrNull(manager, "Switched", REFRESHING)); //$NON-NLS-1$
+    }
+
+    /** ...and while its import is queued in SYNC. */
+    @Test
+    public void aWriteIntoAJustCheckedOutProjectIsRefusedWhileItsImportIsQueued()
+    {
+        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
         IDerivedDataManager manager = manager(PipelineStatus.READY, DerivedDataSegmentBucket.SYNC);
 
-        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR, ProjectStateChecker.modelBuildingErrorOrNull(manager, NO_REFRESH));
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.modelBuildingErrorOrNull(manager, "Switched", NO_REFRESH)); //$NON-NLS-1$
+    }
+
+    /** One idle sample right after the checkout proves nothing - the import may not have started yet. */
+    @Test
+    public void oneIdleSampleDoesNotReleaseAJustCheckedOutProject()
+    {
+        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
+
+        assertEquals(ProjectStateChecker.LOADING_FROM_DISK_ERROR,
+            ProjectStateChecker.modelBuildingErrorOrNull(manager, "Switched", NO_REFRESH)); //$NON-NLS-1$
+        assertTrue(CheckoutReloads.isPending("Switched")); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928: an automatic refresh anywhere in the workspace must not refuse a write into a project this
+     * server did not just check out.
+     */
+    @Test
+    public void anUnrelatedRefreshDoesNotRefuseAnOrdinaryWrite()
+    {
+        CheckoutReloads.register(List.of("Switched")); //$NON-NLS-1$
+        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
+
+        assertNull(ProjectStateChecker.modelBuildingErrorOrNull(manager, "Other", REFRESHING)); //$NON-NLS-1$
+    }
+
+    /** An ordinary write does not even ask the workspace-wide refresh question (a job-manager scan per write). */
+    @Test
+    public void anOrdinaryWriteDoesNotAskAboutWorkspaceRefreshes()
+    {
+        AtomicInteger asked = new AtomicInteger();
+        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
+
+        assertNull(ProjectStateChecker.modelBuildingErrorOrNull(manager, "Ordinary", () -> { //$NON-NLS-1$
+            asked.incrementAndGet();
+            return true;
+        }));
+        assertEquals(0, asked.get());
+    }
+
+    /**
+     * Codex P1 on #928: ordinary derived-data work at STARTING/SYNC (after a write and its export) is not a disk
+     * import and must not refuse the next write.
+     */
+    @Test
+    public void ordinarySyncStageWorkDoesNotRefuseAnOrdinaryWrite()
+    {
+        for (DerivedDataSegmentBucket stage : new DerivedDataSegmentBucket[] { DerivedDataSegmentBucket.STARTING,
+            DerivedDataSegmentBucket.SYNC })
+        {
+            IDerivedDataManager manager = manager(PipelineStatus.READY, stage);
+            assertNull(stage.name(), ProjectStateChecker.modelBuildingErrorOrNull(manager, "Ordinary", NO_REFRESH)); //$NON-NLS-1$
+        }
     }
 
     /** The refusal keeps the prefix the e2e harness and agents retry on, and says nothing was changed. */
@@ -88,9 +154,23 @@ public class ModelReloadGateTest
         String error = ProjectStateChecker.LOADING_FROM_DISK_ERROR;
 
         assertTrue(error, error.startsWith("Project is building: ")); //$NON-NLS-1$
+        assertTrue(error, error.contains("git branch switch")); //$NON-NLS-1$
         assertTrue(error, error.contains("Nothing was changed")); //$NON-NLS-1$
         assertTrue(error, error.endsWith("Please wait and retry.")); //$NON-NLS-1$
     }
+
+    /** With no reload registered, an uncomputed model segment still refuses with the model message. */
+    @Test
+    public void withoutAReloadTheModelSegmentsStillDecide()
+    {
+        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
+        when(manager.isComputed(ArgumentMatchers.<java.util.Collection<String>> any())).thenReturn(false);
+
+        assertEquals(ProjectStateChecker.MODEL_COMPUTING_ERROR,
+            ProjectStateChecker.modelBuildingErrorOrNull(manager, "Ordinary", NO_REFRESH)); //$NON-NLS-1$
+    }
+
+    // ==================== isLoadingChangedFiles: EDT's own "import not finished" ====================
 
     /** A stage that waits for its processing to end is still the import (EDT's predicate only reads the stage). */
     @Test
@@ -106,10 +186,7 @@ public class ModelReloadGateTest
         }
     }
 
-    /**
-     * Past SYNC the import is finished by EDT's own definition - the post-build validation of #495 in particular
-     * must never hold a write back, and the model segments decide as before.
-     */
+    /** Past SYNC the import is finished by EDT's own definition (the post-build validation of #495 included). */
     @Test
     public void stagesPastSyncAreNotLoading()
     {
@@ -117,9 +194,7 @@ public class ModelReloadGateTest
             DerivedDataSegmentBucket.BEFORE_BUILD, DerivedDataSegmentBucket.NORMAL, DerivedDataSegmentBucket.AFTER_BUILD,
             DerivedDataSegmentBucket.FINISHING })
         {
-            IDerivedDataManager manager = manager(PipelineStatus.READY, stage);
-            assertFalse(stage.name(), ProjectStateChecker.isLoadingChangedFiles(manager));
-            assertNull(stage.name(), ProjectStateChecker.modelBuildingErrorOrNull(manager, NO_REFRESH));
+            assertFalse(stage.name(), ProjectStateChecker.isLoadingChangedFiles(manager(PipelineStatus.READY, stage)));
         }
     }
 
@@ -127,10 +202,7 @@ public class ModelReloadGateTest
     @Test
     public void anEmptyPipelineIsNotLoading()
     {
-        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.SYNC);
-
-        assertFalse(ProjectStateChecker.isLoadingChangedFiles(manager));
-        assertNull(ProjectStateChecker.modelBuildingErrorOrNull(manager, NO_REFRESH));
+        assertFalse(ProjectStateChecker.isLoadingChangedFiles(manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.SYNC)));
     }
 
     /** A status that names no stage or no pipeline status names no import. */
@@ -154,16 +226,6 @@ public class ModelReloadGateTest
         assertTrue(ProjectStateChecker.isLoadingChangedFiles(throwing));
     }
 
-    /** With no import queued, an uncomputed model segment still refuses with the model message. */
-    @Test
-    public void withoutAnImportTheModelSegmentsStillDecide()
-    {
-        IDerivedDataManager manager = manager(PipelineStatus.EMPTY, DerivedDataSegmentBucket.NORMAL);
-        when(manager.isComputed(ArgumentMatchers.<java.util.Collection<String>> any())).thenReturn(false);
-
-        assertEquals(ProjectStateChecker.MODEL_COMPUTING_ERROR, ProjectStateChecker.modelBuildingErrorOrNull(manager, NO_REFRESH));
-    }
-
     // ==================== awaitModelReload ====================
 
     private static IProject project(String name)
@@ -173,47 +235,79 @@ public class ModelReloadGateTest
         return project;
     }
 
+    private static boolean sleep(long ms)
+    {
+        try
+        {
+            Thread.sleep(ms);
+            return true;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     /** Projects whose gate opens within the wait settle; the call answers with nothing pending. */
     @Test
     public void projectsThatSettleWithinTheWaitLeaveNothingPending()
     {
-        IProject a = project("A"); //$NON-NLS-1$
-        IProject b = project("B"); //$NON-NLS-1$
         Map<String, AtomicInteger> polls = new HashMap<>();
-        List<String> pending = ProjectStateChecker.awaitModelReload(List.of(a, b), 10_000L,
+        List<String> pending = ProjectStateChecker.awaitModelReload(List.of(project("A"), project("B")), 10_000L, //$NON-NLS-1$ //$NON-NLS-2$
             p -> polls.computeIfAbsent(p.getName(), k -> new AtomicInteger()).incrementAndGet() < 3
                 ? "Project is building" : null, //$NON-NLS-1$
             ms -> true);
 
         assertTrue(pending.isEmpty());
-        assertEquals("a settled project is not asked again", 3, polls.get("A").get()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** A project still refused when the time runs out is named; a settled one is not. */
+    /**
+     * Codex P2 on #928: a project admitted once can be refused again later (its import started after an idle
+     * sample). The wait must not report completion while it is refused now.
+     */
     @Test
-    public void theWaitEndsAtItsBoundAndNamesTheProjectsStillLoading() throws Exception
+    public void aProjectRefusedAgainAfterOneAdmittedSampleIsWaitedForAgain()
     {
-        IProject settled = project("Settled"); //$NON-NLS-1$
-        IProject loading = project("Loading"); //$NON-NLS-1$
-        long started = System.nanoTime();
-
-        List<String> pending = ProjectStateChecker.awaitModelReload(List.of(settled, loading), 300L,
-            p -> "Loading".equals(p.getName()) ? "Project is building" : null, //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicInteger pass = new AtomicInteger();
+        Map<String, List<Boolean>> asked = new HashMap<>();
+        List<String> pending = ProjectStateChecker.awaitModelReload(List.of(project("Early"), project("Late")), 10_000L, //$NON-NLS-1$ //$NON-NLS-2$
+            p -> {
+                int n = pass.get();
+                asked.computeIfAbsent(p.getName(), k -> new ArrayList<>()).add(Boolean.TRUE);
+                if ("Early".equals(p.getName())) //$NON-NLS-1$
+                {
+                    // admitted on pass 0, refused on passes 1-2, admitted again from pass 3
+                    return n == 1 || n == 2 ? "Project is building" : null; //$NON-NLS-1$
+                }
+                return n == 0 ? "Project is building" : null; //$NON-NLS-1$
+            },
             ms -> {
-                try
-                {
-                    Thread.sleep(ms);
-                    return true;
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
+                pass.incrementAndGet();
+                return true;
+            });
+
+        assertTrue(pending.isEmpty());
+        assertEquals("the wait ended only once both were admitted in the same pass", 3, pass.get()); //$NON-NLS-1$
+        assertEquals("Early is asked on every pass", 4, asked.get("Early").size()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** At the timeout the answer is the CURRENT state: a project refused again is named even if admitted before. */
+    @Test
+    public void theTimeoutNamesEveryProjectRefusedNow()
+    {
+        AtomicInteger pass = new AtomicInteger();
+        long started = System.nanoTime();
+        List<String> pending = ProjectStateChecker.awaitModelReload(List.of(project("Flips"), project("Loading")), //$NON-NLS-1$ //$NON-NLS-2$
+            300L,
+            p -> "Loading".equals(p.getName()) || pass.get() > 0 ? "Project is building" : null, //$NON-NLS-1$ //$NON-NLS-2$
+            ms -> {
+                pass.incrementAndGet();
+                return sleep(ms);
             });
 
         long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
-        assertEquals(List.of("Loading"), pending); //$NON-NLS-1$
+        assertEquals(List.of("Flips", "Loading"), pending); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("bounded by its timeout: " + elapsedMs, elapsedMs >= 250L && elapsedMs < 5_000L); //$NON-NLS-1$
     }
 

@@ -263,8 +263,27 @@ public class SwitchGitBranchTool implements IMcpTool
         if (outcome.result() != null && outcome.result().getStatus() == CheckoutResult.Status.OK)
         {
             note = GitCheckoutSupport.joinNotes(note, GitCheckoutSupport.awaitModelReload(outcome));
+            // The wait runs outside BranchBindingLock: another branch change may have checked out something else
+            // meanwhile, and the answer must not claim a branch the repository is no longer on.
+            String now = GitCheckoutSupport.movedAwayFrom(repo, refName);
+            if (now != null)
+            {
+                return movedAwayError(targetShort, now);
+            }
         }
         return mapCheckoutResult(outcome.result(), project, previousShort, targetShort, note);
+    }
+
+    /**
+     * The answer when the repository left the switched-to branch while the call waited for EDT's reload (#922).
+     * Package-visible for tests.
+     */
+    static String movedAwayError(String targetShort, String now)
+    {
+        return ToolResult.error("Switched to branch '" + targetShort + "', but while this call waited for EDT to " //$NON-NLS-1$ //$NON-NLS-2$
+            + "load it another checkout moved the repository to '" + now + "'; it is on '" + now //$NON-NLS-1$ //$NON-NLS-2$
+            + "' now, not on '" + targetShort + "'. Check list_git_branches and switch again if needed.") //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
     }
 
     private String mapCheckoutResult(CheckoutResult result, IProject project, String previousShort,
