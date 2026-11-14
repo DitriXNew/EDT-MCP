@@ -904,7 +904,8 @@ public final class MetadataClonePlan
     /**
      * Explicit textual occurrences only; dynamic names are outside this report's scope. A common module is
      * also called by its bare name ({@code Name.Method(}); that form counts only when the name is not part of a
-     * longer identifier and not a member of another expression ({@code Object.Name.Method(}).
+     * longer identifier and not a member of another expression ({@code Object.Name.Method(}), however much
+     * whitespace or how many line breaks separate the qualifying dot from the name.
      */
     public static JsonArray textReferences(String path, String text, String sourceFqn)
     {
@@ -916,24 +917,49 @@ public final class MetadataClonePlan
             tokens.add(Pattern.quote(alias));
         }
         String name = Pattern.quote(parts[1]);
-        String typed = "(?<![\\p{L}\\p{N}_])(?:" + String.join("|", tokens) + ")\\s*\\.\\s*" + name
-            + "(?![\\p{L}\\p{N}_])";
-        String call = "CommonModule".equals(parts[0])
-            ? "|(?<![\\p{L}\\p{N}_.])(?<!\\.\\s{1,16})" + name + "\\s*\\.\\s*[\\p{L}_][\\p{L}\\p{N}_]*\\s*\\("
-            : "";
-        Pattern reference = Pattern.compile("(?iu)" + typed + call);
+        Pattern reference = Pattern.compile("(?iu)(?<![\\p{L}\\p{N}_])(?:" + String.join("|", tokens)
+            + ")\\s*\\.\\s*" + name + "(?![\\p{L}\\p{N}_])");
+        Pattern call = "CommonModule".equals(parts[0])
+            ? Pattern.compile("(?iu)(?<![\\p{L}\\p{N}_])" + name + "\\s*\\.\\s*[\\p{L}_][\\p{L}\\p{N}_]*\\s*\\(")
+            : null;
         JsonArray result = new JsonArray();
         String[] lines = text.split("\\R", -1);
         for (int i = 0; i < lines.length; i++)
         {
-            if (reference.matcher(lines[i]).find())
+            boolean hit = reference.matcher(lines[i]).find();
+            if (!hit && call != null)
             {
-                JsonObject hit = new JsonObject();
-                hit.addProperty("file", path);
-                hit.addProperty("line", i + 1);
-                result.add(hit);
+                java.util.regex.Matcher matcher = call.matcher(lines[i]);
+                while (!hit && matcher.find())
+                {
+                    hit = !qualified(lines, i, matcher.start());
+                }
+            }
+            if (hit)
+            {
+                JsonObject found = new JsonObject();
+                found.addProperty("file", path);
+                found.addProperty("line", i + 1);
+                result.add(found);
             }
         }
         return result;
+    }
+
+    /** Whether the first non-whitespace character before {@code column}, across earlier lines too, is a dot. */
+    private static boolean qualified(String[] lines, int line, int column)
+    {
+        for (int i = line, end = column; i >= 0; i--, end = i >= 0 ? lines[i].length() : 0)
+        {
+            for (int j = end - 1; j >= 0; j--)
+            {
+                char c = lines[i].charAt(j);
+                if (!Character.isWhitespace(c))
+                {
+                    return c == '.';
+                }
+            }
+        }
+        return false;
     }
 }

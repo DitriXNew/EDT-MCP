@@ -59,6 +59,30 @@ public class CloneMetadataObjectKindWarningsTest
         assertEquals("Base warning.", CloneMetadataObjectTool.withKindWarnings("Base warning.", quiet));
     }
 
+    /** Review #940: a partial apply may leave the clone in place, so its kind warning must survive. */
+    @Test
+    public void partialApplyAfterCommitKeepsTheApplyWarning()
+    {
+        String warning = "Texts are preserved. ScheduledJob.Nightly is enabled (use=true) ... both jobs will run "
+            + "the same method.";
+        com.google.gson.JsonObject applied = new com.google.gson.JsonObject();
+        applied.addProperty("success", true);
+        applied.addProperty("action", "cloned");
+        applied.addProperty("fqn", "ScheduledJob.NightlyCopy");
+        applied.addProperty("warning", warning);
+        String partial = new CloneMetadataObjectTool().refreshAfterExportAwait(
+            java.util.Map.of("projectName", "NoProject"), applied.toString(), false);
+        com.google.gson.JsonObject response = com.google.gson.JsonParser.parseString(partial).getAsJsonObject();
+        assertFalse(partial, response.get("success").getAsBoolean());
+        assertTrue(partial, response.get("mutationOutcomeUnknown").getAsBoolean());
+        assertEquals(partial, warning, response.get("warning").getAsString());
+
+        String direct = CloneMetadataObjectTool.partial("ScheduledJob.NightlyCopy", "export refused.", warning);
+        assertEquals(warning, com.google.gson.JsonParser.parseString(direct).getAsJsonObject()
+            .get("warning").getAsString());
+        assertFalse(CloneMetadataObjectTool.partial("Catalog.Copy", "export refused.").contains("\"warning\""));
+    }
+
     @Test
     public void kindRefusalIsNotPresentedAsAStaleSource()
     {

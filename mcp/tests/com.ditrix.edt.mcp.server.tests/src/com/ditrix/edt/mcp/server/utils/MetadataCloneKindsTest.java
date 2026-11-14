@@ -138,6 +138,21 @@ public class MetadataCloneKindsTest
         assertEquals(List.of(2), lines(russian));
     }
 
+    /** Review #940: a qualifying dot is a qualifier however much whitespace or how many line breaks follow it. */
+    @Test
+    public void qualifiedCallsStayQualifiedHoweverFarTheDotIs()
+    {
+        String text = String.join("\n",
+            "Value = Object." + " ".repeat(17) + "Calc.Add(1);",
+            "Value = Object.\t\t  Calc.Add(1);",
+            "Value = Object.",
+            "",
+            "    Calc.Add(1);",
+            "Calc.Add(1);",
+            "X = Object. Calc.Add(1); Calc.Add(2);");
+        assertEquals(List.of(6, 7), lines(MetadataClonePlan.textReferences("Module.bsl", text, "CommonModule.Calc")));
+    }
+
     @Test
     public void bareNameCallsAreNotReferencesForOtherKinds()
     {
