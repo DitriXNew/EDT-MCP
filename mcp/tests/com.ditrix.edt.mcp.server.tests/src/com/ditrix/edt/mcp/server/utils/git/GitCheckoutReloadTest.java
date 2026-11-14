@@ -303,6 +303,201 @@ public class GitCheckoutReloadTest
             GitCheckoutSupport.pinOnFailure(reload, () -> "ok")); //$NON-NLS-1$
     }
 
+    // ==================== Codex round 5 on #928 ====================
+
+    private static com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration registration(String name)
+    {
+        return com.ditrix.edt.mcp.server.utils.CheckoutReloads.begin(List.of(name));
+    }
+
+    private static boolean isPending(String name)
+    {
+        return com.ditrix.edt.mcp.server.utils.CheckoutReloads.isPending(name);
+    }
+
+    /** One verdict for every ended checkout that needs no refresh; only a moved HEAD asks for one. */
+    @Test
+    public void theVerdictOfAnEndedCheckout()
+    {
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration notRun = registration("NotRun922r5"); //$NON-NLS-1$
+        assertFalse(GitCheckoutSupport.refreshNeeded(false, null, null, notRun));
+        assertFalse("a checkout that never ran rewrote nothing", isPending("NotRun922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration threw = registration("Threw922r5"); //$NON-NLS-1$
+        assertFalse(GitCheckoutSupport.refreshNeeded(true, new IllegalStateException("x"), null, threw)); //$NON-NLS-1$
+        threw.done();
+        assertFalse("a checkout that threw stays held", isNotHeldBusy("Threw922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration conflicts = registration("Conflicts922r5"); //$NON-NLS-1$
+        assertFalse(GitCheckoutSupport.refreshNeeded(true, null, CheckoutResult.Status.CONFLICTS, conflicts));
+        assertFalse(isPending("Conflicts922r5")); //$NON-NLS-1$
+
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration error = registration("Error922r5"); //$NON-NLS-1$
+        assertFalse(GitCheckoutSupport.refreshNeeded(true, null, CheckoutResult.Status.ERROR, error));
+        error.done();
+        assertFalse("an ERROR status may have touched the tree", isNotHeldBusy("Error922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration moved = registration("Moved922r5"); //$NON-NLS-1$
+        assertTrue(GitCheckoutSupport.refreshNeeded(true, null, CheckoutResult.Status.OK, moved));
+        assertFalse("still held until the refresh concludes it", isNotHeldBusy("Moved922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+        moved.done();
+    }
+
+    /**
+     * Codex P1 on #928 (round 5): a checkout that succeeds after its wait ran out is refreshed - the refresh is what
+     * tells EDT about it - and the refresh concludes the registration.
+     */
+    @Test(timeout = 60_000)
+    public void aLateSuccessIsRefreshedAndConcluded() throws Exception
+    {
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration late = registration("Late922r5"); //$NON-NLS-1$
+        org.eclipse.core.runtime.jobs.Job refresh =
+            GitCheckoutSupport.concludeLateCheckout(true, null, CheckoutResult.Status.OK, List.of(), late);
+
+        assertTrue("a late success schedules the refresh", refresh != null); //$NON-NLS-1$
+        refresh.join();
+        assertTrue("the refresh's end lets the registration settle", becomesNotHeld("Late922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration lateConflict = registration("LateConflict922r5"); //$NON-NLS-1$
+        assertTrue(GitCheckoutSupport.concludeLateCheckout(true, null, CheckoutResult.Status.CONFLICTS, List.of(),
+            lateConflict) == null);
+        assertFalse(isPending("LateConflict922r5")); //$NON-NLS-1$
+    }
+
+    /** The late conclusion runs once, and only when the waiter gave up - whichever of the two ends comes last. */
+    @Test
+    public void aLateConclusionRunsOnceAndOnlyAfterAHandOff()
+    {
+        java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+
+        GitCheckoutSupport.LateConclusion withinTheWait = new GitCheckoutSupport.LateConclusion(runs::incrementAndGet);
+        withinTheWait.jobEnded();
+        assertEquals("a Job that ended within the wait is concluded by the waiter", 0, runs.get()); //$NON-NLS-1$
+
+        GitCheckoutSupport.LateConclusion endsLater = new GitCheckoutSupport.LateConclusion(runs::incrementAndGet);
+        endsLater.handOff();
+        assertEquals(0, runs.get());
+        endsLater.jobEnded();
+        endsLater.jobEnded();
+        assertEquals(1, runs.get());
+
+        GitCheckoutSupport.LateConclusion endedBeforeTheHandOff =
+            new GitCheckoutSupport.LateConclusion(runs::incrementAndGet);
+        endedBeforeTheHandOff.jobEnded();
+        endedBeforeTheHandOff.handOff();
+        endedBeforeTheHandOff.handOff();
+        assertEquals(2, runs.get());
+    }
+
+    private static IProject namedProject(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    /** Polls until an idle observation of {@code name} is no longer held as loading (a Job's done listener runs late). */
+    private static boolean becomesNotHeld(String name) throws InterruptedException
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            if (isNotHeldBusy(name))
+            {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    /**
+     * Codex P1 on #928 (round 5): a checkout that outlives the wait is handed off, and its own end concludes it; one
+     * that ends within the wait is not concluded a second time.
+     */
+    @Test(timeout = 60_000)
+    public void aCheckoutThatOutlivesTheWaitIsConcludedWhenItEnds() throws Exception
+    {
+        java.util.concurrent.atomic.AtomicInteger concluded = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        GitCheckoutSupport.LateConclusion late = new GitCheckoutSupport.LateConclusion(concluded::incrementAndGet);
+        org.eclipse.core.runtime.jobs.Job slow = new org.eclipse.core.runtime.jobs.Job("slow checkout 922") //$NON-NLS-1$
+        {
+            @Override
+            protected org.eclipse.core.runtime.IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                try
+                {
+                    release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return org.eclipse.core.runtime.Status.OK_STATUS;
+            }
+        };
+        slow.addJobChangeListener(new org.eclipse.core.runtime.jobs.JobChangeAdapter()
+        {
+            @Override
+            public void done(org.eclipse.core.runtime.jobs.IJobChangeEvent event)
+            {
+                late.jobEnded();
+            }
+        });
+        slow.schedule();
+        try
+        {
+            CheckoutOutcome outcome = GitCheckoutSupport.awaitCheckoutOrHandOff(slow, 100,
+                () -> List.of("SlowCheckout922r5"), late); //$NON-NLS-1$
+            assertTrue(outcome != null && outcome.timedOut());
+            assertEquals("nothing concluded while the checkout still runs", 0, concluded.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+        }
+        slow.join();
+        for (int i = 0; i < 100 && concluded.get() == 0; i++)
+        {
+            Thread.sleep(50);
+        }
+        assertEquals("the late end concluded it once", 1, concluded.get()); //$NON-NLS-1$
+
+        java.util.concurrent.atomic.AtomicInteger inTime = new java.util.concurrent.atomic.AtomicInteger();
+        GitCheckoutSupport.LateConclusion onTime = new GitCheckoutSupport.LateConclusion(inTime::incrementAndGet);
+        org.eclipse.core.runtime.jobs.Job fast = org.eclipse.core.runtime.jobs.Job.create("fast checkout 922", //$NON-NLS-1$
+            monitor -> org.eclipse.core.runtime.Status.OK_STATUS);
+        fast.addJobChangeListener(new org.eclipse.core.runtime.jobs.JobChangeAdapter()
+        {
+            @Override
+            public void done(org.eclipse.core.runtime.jobs.IJobChangeEvent event)
+            {
+                onTime.jobEnded();
+            }
+        });
+        fast.schedule();
+        assertNull(GitCheckoutSupport.awaitCheckoutOrHandOff(fast, 10_000, () -> List.of("FastCheckout922r5"), onTime)); //$NON-NLS-1$
+        Thread.sleep(200);
+        assertEquals("a checkout that ended within the wait is concluded by the waiter, not late", 0, inTime.get()); //$NON-NLS-1$
+    }
+
+    /** A branch change whose caller ran no refresh is held until the expiry; one that refreshed is concluded by it. */
+    @Test(timeout = 60_000)
+    public void aBranchChangeWithoutARefreshStaysHeld() throws Exception
+    {
+        GitCheckoutSupport.BranchChange unrefreshed =
+            GitCheckoutSupport.BranchChange.begin(List.of(namedProject("Unrefreshed922r5"))); //$NON-NLS-1$
+        unrefreshed.concludeWithoutRefresh();
+        unrefreshed.registration().done();
+        assertFalse("no refresh told EDT anything: held", isNotHeldBusy("Unrefreshed922r5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        GitCheckoutSupport.BranchChange refreshed =
+            GitCheckoutSupport.BranchChange.begin(List.of(namedProject("Refreshed922r5"))); //$NON-NLS-1$
+        assertNull(refreshed.refresh(10_000));
+        refreshed.concludeWithoutRefresh();
+        assertTrue("the refresh concluded it, and concludeWithoutRefresh did not pin it", //$NON-NLS-1$
+            becomesNotHeld("Refreshed922r5")); //$NON-NLS-1$
+    }
     /** Whether an idle observation of {@code name} is not held as loading by its own registration. */
     private static boolean isNotHeldBusy(String name)
     {

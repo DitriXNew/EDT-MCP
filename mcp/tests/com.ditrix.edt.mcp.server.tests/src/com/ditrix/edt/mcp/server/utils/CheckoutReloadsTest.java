@@ -319,6 +319,40 @@ public class CheckoutReloadsTest
         assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, T0 + 3 + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
     }
 
+    // ==================== Codex round 5 on #928 ====================
+
+    /**
+     * Codex P1 on #928 (round 5): an older checkout whose refresh is done but that has not been seen settled is still
+     * pending. A newer checkout that rewrote nothing must hand the project back to it, with a fresh idle span.
+     */
+    @Test
+    public void aDoneButUnsettledRegistrationSurvivesANewerCheckoutThatRewroteNothing()
+    {
+        CheckoutReloads.Registration older = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        older.done();
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0 + 1)); //$NON-NLS-1$
+        CheckoutReloads.Registration newer = CheckoutReloads.begin(List.of("P"), T0 + ms(500)); //$NON-NLS-1$
+        newer.release(T0 + ms(600));
+
+        assertTrue("the older reload is still pending", CheckoutReloads.isPending("P", T0 + ms(700))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, T0 + ms(700))); //$NON-NLS-1$
+        assertEquals("the idle span restarts on the hand-back", State.SETTLING, //$NON-NLS-1$
+            CheckoutReloads.observe("P", false, T0 + ms(700 + CheckoutReloads.STABLE_MS - 1))); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, T0 + ms(700 + CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
+    /** A predecessor whose own checkout rewrote nothing is never handed the project back. */
+    @Test
+    public void aWithdrawnPredecessorIsNotHandedBack()
+    {
+        CheckoutReloads.Registration older = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        CheckoutReloads.Registration newer = CheckoutReloads.begin(List.of("P"), T0 + 1); //$NON-NLS-1$
+        older.release(T0 + 2);
+        newer.release(T0 + 3);
+
+        assertFalse(CheckoutReloads.isPending("P", T0 + 4)); //$NON-NLS-1$
+    }
+
     /** Only the registered projects are pending. */
     @Test
     public void registrationIsPerProject()

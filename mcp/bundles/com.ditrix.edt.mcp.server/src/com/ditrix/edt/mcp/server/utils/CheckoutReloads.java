@@ -59,11 +59,14 @@ public final class CheckoutReloads
         /** Answers {@code true} while work that will still rewrite the model (the post-checkout refresh) runs. */
         final BooleanSupplier busy;
         /**
-         * The registration this one replaced while that one still held the project (its own work still running, or
-         * pinned): a newer checkout of the same project must not end the older one's hold before the older one ends.
+         * The registration this one replaced while that one was still pending (not expired, not withdrawn) - running,
+         * pinned, or done but not yet seen settled: a newer checkout of the same project must not end the older one's
+         * wait before the older one ends (#922).
          */
         final Entry previous;
         long idleSinceNanos;
+        /** Set when the owning checkout rewrote nothing ({@link Registration#release()}): never handed back to. */
+        volatile boolean withdrawn;
 
         Entry(long expiresAtNanos, BooleanSupplier busy, Entry previous)
         {
@@ -85,10 +88,36 @@ public final class CheckoutReloads
             return false;
         }
 
-        /** {@code candidate} when it still holds the project at {@code nowNanos}, otherwise {@code null}. */
-        static Entry ifHolding(Entry candidate, long nowNanos)
+        /**
+         * The first registration of the chain from {@code candidate} that is still pending at {@code nowNanos} - not
+         * expired and not withdrawn - or {@code null}. Pending is not the same as holding: a registration whose own
+         * work is done may still be waiting to be seen idle, and that wait must survive a newer checkout.
+         */
+        static Entry ifPending(Entry candidate, long nowNanos)
         {
-            return candidate != null && candidate.holds(nowNanos) ? candidate : null;
+            Entry e = candidate;
+            while (e != null && (e.withdrawn || nowNanos - e.expiresAtNanos >= 0))
+            {
+                e = e.previous;
+            }
+            return e;
+        }
+
+        /**
+         * {@link #ifPending} for a registration that takes the project back: its idle span restarts, since the
+         * observations made meanwhile were recorded on the registration that is leaving.
+         */
+        static Entry handBack(Entry candidate, long nowNanos)
+        {
+            Entry e = ifPending(candidate, nowNanos);
+            if (e != null)
+            {
+                synchronized (e)
+                {
+                    e.idleSinceNanos = 0L;
+                }
+            }
+            return e;
         }
     }
 
@@ -113,8 +142,9 @@ public final class CheckoutReloads
 
     /**
      * Registers projects whose files a checkout just rewrote. A new registration replaces an older one, so a second
-     * checkout starts the projects' idle wait afresh; an older one that still holds the project (its own work still
-     * running, or pinned) keeps holding it through the newer one until it ends or expires.
+     * checkout starts the projects' idle wait afresh; an older one that is still pending (running, pinned, or done but
+     * not yet seen settled) is kept as its predecessor, holds the project through it while its own work runs, and
+     * takes the project back if the newer one is withdrawn or expires first.
      *
      * @param projectNames the projects of the checked-out work tree
      * @param busy answers {@code true} while this server's own post-checkout work on those projects (the explicit
@@ -133,7 +163,7 @@ public final class CheckoutReloads
             if (name != null)
             {
                 Entry entry = PENDING.compute(name,
-                    (key, current) -> new Entry(expires, running, Entry.ifHolding(current, nowNanos)));
+                    (key, current) -> new Entry(expires, running, Entry.ifPending(current, nowNanos)));
                 put.put(name, entry);
             }
         }
@@ -142,13 +172,13 @@ public final class CheckoutReloads
 
     /**
      * Ends {@code entry}'s own hold on {@code name}: the registration it replaced takes the project back when that
-     * one still holds it, otherwise the project is unregistered. An entry a newer checkout has replaced meanwhile is
-     * left alone - the newer one carries it as its {@code previous}, and asks it whether it still holds.
+     * one is still pending ({@link Entry#ifPending}), otherwise the project is unregistered. An entry a newer
+     * checkout has replaced meanwhile is left alone - the newer one carries it as its {@code previous}.
      */
     private static void withdraw(String name, Entry entry, long nowNanos)
     {
         PENDING.computeIfPresent(name, (key, current) -> current != entry ? current
-            : Entry.ifHolding(entry.previous, nowNanos));
+            : Entry.handBack(entry.previous, nowNanos));
     }
 
     /**
@@ -233,8 +263,9 @@ public final class CheckoutReloads
                 for (Map.Entry<String, Object> e : entries.entrySet())
                 {
                     Entry own = (Entry) e.getValue();
+                    own.withdrawn = false;
                     Entry restored = PENDING.compute(e.getKey(), (key, current) -> current == null ? own
-                        : new Entry(own.expiresAtNanos, own.busy, Entry.ifHolding(current, nowNanos)));
+                        : new Entry(own.expiresAtNanos, own.busy, Entry.ifPending(current, nowNanos)));
                     e.setValue(restored);
                 }
             }
@@ -257,7 +288,11 @@ public final class CheckoutReloads
             }
             for (Map.Entry<String, Object> e : entries.entrySet())
             {
-                withdraw(e.getKey(), (Entry) e.getValue(), nowNanos);
+                Entry own = (Entry) e.getValue();
+                // Also when a newer checkout has replaced it: that one carries it as a predecessor and must not
+                // hand the project back to a registration that rewrote nothing.
+                own.withdrawn = true;
+                withdraw(e.getKey(), own, nowNanos);
             }
         }
     }
@@ -271,7 +306,7 @@ public final class CheckoutReloads
         for (String name : PENDING.keySet())
         {
             PENDING.computeIfPresent(name, (key, current) -> nowNanos - current.expiresAtNanos < 0 ? current
-                : Entry.ifHolding(current.previous, nowNanos));
+                : Entry.handBack(current.previous, nowNanos));
         }
     }
 
@@ -309,7 +344,7 @@ public final class CheckoutReloads
                 hook.run();
             }
             // An expired registration hands the project back to one it replaced that still holds it (#922).
-            Entry successor = Entry.ifHolding(entry.previous, nowNanos);
+            Entry successor = Entry.handBack(entry.previous, nowNanos);
             if (successor == null ? PENDING.remove(projectName, entry)
                 : PENDING.replace(projectName, entry, successor))
             {

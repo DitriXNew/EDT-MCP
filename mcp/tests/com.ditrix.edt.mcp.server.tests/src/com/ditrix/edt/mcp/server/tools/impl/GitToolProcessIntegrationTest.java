@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
@@ -38,6 +40,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
+import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -551,6 +554,39 @@ public class GitToolProcessIntegrationTest
         new GitTool().runGit(GitTool.parseCommand("status --short"), repository.toFile(), //$NON-NLS-1$
             () -> heldAfterStatus.set(BranchBindingLock.isHeldByCurrentThread()));
         assertEquals("the step after a status runs, without the lock", Boolean.FALSE, heldAfterStatus.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #928 (round 5): a command of this tool that switches the work tree is a branch change of this
+     * server - the step after it gets the change registered before the process ran, the lifecycle
+     * {@code switch_git_branch} uses (#922). A command that moves only a ref, or none, gets no change.
+     */
+    @Test(timeout = 60_000)
+    public void testASwitchOfTheWorkTreeIsABranchChangeOfThisServer() throws Exception
+    {
+        AtomicReference<GitCheckoutSupport.BranchChange> afterSwitch = new AtomicReference<>();
+        String switched = new GitTool().runGitWith(GitTool.parseCommand("switch -c reload-922"), repository.toFile(), //$NON-NLS-1$
+            afterSwitch::set);
+        assertTrue(switched, JsonParser.parseString(switched).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("a switch reaches its step as a registered branch change", afterSwitch.get() != null); //$NON-NLS-1$
+
+        AtomicReference<GitCheckoutSupport.BranchChange> afterBranch = new AtomicReference<>();
+        AtomicBoolean branchStepRan = new AtomicBoolean();
+        new GitTool().runGitWith(GitTool.parseCommand("branch other-922"), repository.toFile(), change -> { //$NON-NLS-1$
+            branchStepRan.set(true);
+            afterBranch.set(change);
+        });
+        assertTrue(branchStepRan.get());
+        assertNull("a ref-only command rewrites no work tree", afterBranch.get()); //$NON-NLS-1$
+
+        AtomicBoolean statusStepRan = new AtomicBoolean();
+        AtomicReference<GitCheckoutSupport.BranchChange> afterStatus = new AtomicReference<>();
+        new GitTool().runGitWith(GitTool.parseCommand("status --short"), repository.toFile(), change -> { //$NON-NLS-1$
+            statusStepRan.set(true);
+            afterStatus.set(change);
+        });
+        assertTrue(statusStepRan.get());
+        assertNull(afterStatus.get());
     }
 
     /** Parses {@code command} through the production parser and runs it in the test repository. */

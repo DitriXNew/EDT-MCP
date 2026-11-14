@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.base;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -40,5 +41,38 @@ public class WriteGateCheckoutReloadTest
         assertEquals("model", AbstractMetadataWriteTool.writeGateError(false, () -> { //$NON-NLS-1$
             throw new AssertionError("asked twice"); //$NON-NLS-1$
         }, () -> "strict", () -> "model")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Codex round 5 on #928: the reload is asked again on the UI thread, right before the write - a branch change
+     * that registered while the call waited for the UI thread refuses the write instead of being written into.
+     */
+    @Test
+    public void aReloadRegisteredWhileWaitingForTheUiThreadRefusesTheWrite() throws Exception
+    {
+        String refused = AbstractMetadataWriteTool.recheckedOnUiThread(() -> RELOAD, () -> {
+            throw new AssertionError("written into a reloading model"); //$NON-NLS-1$
+        });
+        assertTrue(refused, refused.contains(RELOAD) && refused.contains("\"success\":false")); //$NON-NLS-1$
+
+        assertEquals("written", AbstractMetadataWriteTool.recheckedOnUiThread(() -> null, () -> "written")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The write tools' shared execute path makes that UI-thread re-check, for the project the call names. */
+    @Test
+    public void theUiThreadWorkReChecksTheReload() throws Exception
+    {
+        java.io.File dir = new java.io.File(System.getProperty("user.dir")); //$NON-NLS-1$
+        java.io.File source = null;
+        for (int i = 0; i < 12 && dir != null && source == null; i++)
+        {
+            java.io.File candidate = new java.io.File(dir, "mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/" //$NON-NLS-1$
+                + "mcp/server/tools/base/AbstractMetadataWriteTool.java"); //$NON-NLS-1$
+            source = candidate.isFile() ? candidate : null;
+            dir = dir.getParentFile();
+        }
+        assertTrue("AbstractMetadataWriteTool.java not found", source != null); //$NON-NLS-1$
+        String text = java.nio.file.Files.readString(source.toPath(), java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains("recheckedOnUiThread(() -> ProjectStateChecker.checkoutReloadErrorOrNull(projectName)")); //$NON-NLS-1$
     }
 }

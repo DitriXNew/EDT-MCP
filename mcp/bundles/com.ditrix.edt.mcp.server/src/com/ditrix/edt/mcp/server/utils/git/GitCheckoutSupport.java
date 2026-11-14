@@ -257,9 +257,95 @@ public final class GitCheckoutSupport
         AtomicReference<Exception> jobError = new AtomicReference<>();
         // Registered BEFORE the checkout starts (#922): metadata writers do not take BranchBindingLock, so a write that
         // arrived between the checkout's end and a later registration would land in the previous branch's model.
-        List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
-        CheckoutReloads.Registration reload = CheckoutReloads.begin(WorkTreeProjects.names(projects));
-        return pinOnFailure(reload, () -> checkoutRegistered(op, jobError, project, repo, fullRef, projects, reload));
+        BranchChange change = BranchChange.begin(
+            projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree())));
+        return change.run(() -> checkoutRegistered(op, jobError, project, repo, fullRef, change.projects(),
+            change.registration()));
+    }
+
+    /**
+     * A branch change this server makes in a work tree - a checkout of {@code switch_git_branch} /
+     * {@code create_git_branch}, or a branch-changing command of the {@code git} tool - with the reload lifecycle of
+     * #922: the projects checked out with the work tree are registered BEFORE the change runs
+     * ({@link CheckoutReloads#begin}), and every path ends with one verdict - the post-change refresh concludes it
+     * ({@link #refresh}), or it is pinned when no refresh followed or the change threw. The one entry point both
+     * callers use, so the lifecycle has no second copy.
+     */
+    public static final class BranchChange
+    {
+        private final List<IProject> projects;
+
+        private final CheckoutReloads.Registration reload;
+
+        private final AtomicBoolean refreshed = new AtomicBoolean();
+
+        private BranchChange(List<IProject> projects, CheckoutReloads.Registration reload)
+        {
+            this.projects = projects;
+            this.reload = reload;
+        }
+
+        /**
+         * Registers the projects a branch change is about to rewrite - the ones its refresh covers afterwards.
+         *
+         * @param projects the projects of the work tree, in refresh order
+         * @return the change
+         */
+        public static BranchChange begin(List<IProject> projects)
+        {
+            List<IProject> registered = projects == null ? List.of() : List.copyOf(projects);
+            return new BranchChange(registered, CheckoutReloads.begin(WorkTreeProjects.names(registered)));
+        }
+
+        /** @return the projects registered and refreshed, the addressed one first */
+        public List<IProject> projects()
+        {
+            return projects;
+        }
+
+        /** @return the reload registration */
+        public CheckoutReloads.Registration registration()
+        {
+            return reload;
+        }
+
+        /**
+         * Runs the change; a body that throws pins the registration first ({@link GitCheckoutSupport#pinOnFailure}).
+         *
+         * @param body the change
+         * @return what the body returned
+         */
+        public <T> T run(Supplier<T> body)
+        {
+            return pinOnFailure(reload, body);
+        }
+
+        /**
+         * Refreshes the projects after the change and waits at most {@code timeoutMillis} for it; the refresh's end
+         * concludes the registration ({@link GitCheckoutSupport#concludeRefresh}).
+         *
+         * @param timeoutMillis how long to wait for the refresh
+         * @return a note when the refresh failed or outlived the wait, otherwise {@code null}
+         */
+        public String refresh(long timeoutMillis)
+        {
+            String note = refreshAfterCheckout(projects, timeoutMillis, reload);
+            // Only once it is scheduled: a refresh that could not even start leaves the change to concludeWithoutRefresh.
+            refreshed.set(true);
+            return note;
+        }
+
+        /**
+         * Ends a change whose caller ran no {@link #refresh}: nothing told EDT about the files it may have rewritten,
+         * so the projects stay held until the expiry.
+         */
+        public void concludeWithoutRefresh()
+        {
+            if (!refreshed.get())
+            {
+                reload.pin();
+            }
+        }
     }
 
     /**
@@ -285,11 +371,13 @@ public final class GitCheckoutSupport
         IProject project, Repository repo, String fullRef, List<IProject> projects,
         CheckoutReloads.Registration reload)
     {
+        AtomicBoolean entered = new AtomicBoolean();
         Job checkoutJob = new Job("Checkout git branch: " + fullRef) //$NON-NLS-1$
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
+                entered.set(true);
                 try
                 {
                     op.execute(monitor);
@@ -303,35 +391,33 @@ public final class GitCheckoutSupport
         };
         checkoutJob.setUser(false);
         checkoutJob.setSystem(true);
+        // A checkout that outlives the wait is concluded when it ends, by the same verdict the wait would have given
+        // it - a late success is refreshed, so the model does not stay on the previous branch (#922).
+        LateConclusion late = new LateConclusion(() -> concludeLateCheckout(entered.get(), jobError.get(),
+            statusOf(op, repo), projects, reload));
+        checkoutJob.addJobChangeListener(new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                late.jobEnded();
+            }
+        });
         McpJobs.schedule(checkoutJob);
 
-        CheckoutOutcome unfinished = awaitCheckout(checkoutJob, TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS),
-            () -> affectedProjects(project, repo));
+        CheckoutOutcome unfinished = awaitCheckoutOrHandOff(checkoutJob,
+            TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS), () -> affectedProjects(project, repo), late);
         if (unfinished != null)
         {
-            // The checkout may still be rewriting the tree: keep the projects registered until the expiry.
-            reload.pin();
             return unfinished;
         }
 
-        if (jobError.get() != null)
-        {
-            reload.pin();
-            return new CheckoutOutcome(null, null, false, false, jobError.get(), false);
-        }
         CheckoutResult result = op.getResult(repo);
         CheckoutResult.Status status = result == null ? null : result.getStatus();
-        if (!changesBranch(status))
+        if (!refreshNeeded(entered.get(), jobError.get(), status, reload))
         {
-            if (leavesTreeUntouched(status))
-            {
-                reload.release();
-            }
-            else
-            {
-                reload.pin();
-            }
-            return new CheckoutOutcome(result, null, false, false, null, false);
+            return jobError.get() != null ? new CheckoutOutcome(null, null, false, false, jobError.get(), false)
+                : new CheckoutOutcome(result, null, false, false, null, false);
         }
         // Unconditional refresh (see class javadoc): on the EGit-mapped path BranchOperation already refreshed the
         // projects it maps, so this is a cheap near no-op; on the discovery-fallback path it is the ONLY thing that
@@ -342,6 +428,24 @@ public final class GitCheckoutSupport
             TimeUnit.SECONDS.toMillis(REFRESH_TIMEOUT_SECONDS), reload);
         return new CheckoutOutcome(result, refreshWarning, false, false, null, false)
             .withRefreshedProjects(projects);
+    }
+
+    /**
+     * {@link #awaitCheckout}; a checkout that outlives the wait is handed to {@code late}, so its own end concludes it
+     * (#922): the projects stay registered (and held) until then, and one that never ends is held until the expiry.
+     * Package-visible for tests.
+     *
+     * @return {@code null} when the Job ended within the wait, otherwise the timed-out or interrupted outcome
+     */
+    static CheckoutOutcome awaitCheckoutOrHandOff(Job checkoutJob, long timeoutMillis,
+        Supplier<? extends Collection<String>> affected, LateConclusion late)
+    {
+        CheckoutOutcome unfinished = awaitCheckout(checkoutJob, timeoutMillis, affected);
+        if (unfinished != null)
+        {
+            late.handOff();
+        }
+        return unfinished;
     }
 
     /**
@@ -486,6 +590,20 @@ public final class GitCheckoutSupport
         CheckoutReloads.Registration reload)
     {
         AtomicReference<String> failure = new AtomicReference<>();
+        Job refresh = scheduleRefresh(projects, reload, failure);
+        return awaitRefresh(refresh, timeoutMillis, () -> WorkTreeProjects.names(projects), failure);
+    }
+
+    /**
+     * Schedules the post-checkout refresh of {@code projects}; its end concludes {@code reload}
+     * ({@link #concludeRefresh}). Does not wait.
+     *
+     * @param failure receives the refresh's failure note
+     * @return the scheduled Job
+     */
+    private static Job scheduleRefresh(List<IProject> projects, CheckoutReloads.Registration reload,
+        AtomicReference<String> failure)
+    {
         AtomicBoolean ran = new AtomicBoolean();
         Job refresh = new Job("Refresh projects after a git checkout") //$NON-NLS-1$
         {
@@ -510,7 +628,148 @@ public final class GitCheckoutSupport
             }
         });
         McpJobs.schedule(refresh);
-        return awaitRefresh(refresh, timeoutMillis, () -> WorkTreeProjects.names(projects), failure);
+        return refresh;
+    }
+
+    /**
+     * The verdict of a checkout Job that has ended, for every outcome that needs no refresh (#922): a Job that never
+     * ran its body rewrote nothing and releases; one that threw is pinned; a status that did not move HEAD releases
+     * when JGit left the tree untouched and pins otherwise. Package-visible for tests.
+     *
+     * @param entered whether the Job's body started
+     * @param jobError what the body threw, or {@code null}
+     * @param status JGit's status, or {@code null}
+     * @param reload the checkout's registration
+     * @return {@code true} when HEAD moved and the caller must refresh (which concludes the registration)
+     */
+    static boolean refreshNeeded(boolean entered, Exception jobError, CheckoutResult.Status status,
+        CheckoutReloads.Registration reload)
+    {
+        if (!entered)
+        {
+            reload.release();
+            return false;
+        }
+        if (jobError != null)
+        {
+            reload.pin();
+            return false;
+        }
+        if (changesBranch(status))
+        {
+            return true;
+        }
+        if (leavesTreeUntouched(status))
+        {
+            reload.release();
+        }
+        else
+        {
+            reload.pin();
+        }
+        return false;
+    }
+
+    /** JGit's status of {@code op} in {@code repo}, or {@code null} when it has none (or cannot be read). */
+    private static CheckoutResult.Status statusOf(BranchOperation op, Repository repo)
+    {
+        try
+        {
+            CheckoutResult result = op.getResult(repo);
+            return result == null ? null : result.getStatus();
+        }
+        catch (RuntimeException e) // NOSONAR an unreadable status is concluded as unknown (pinned)
+        {
+            Activator.logError("git checkout: the result of a late checkout could not be read", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Concludes a checkout that ended after its wait ran out (#922): the same verdict as {@link #refreshNeeded}, and a
+     * late success is refreshed - the refresh is the only thing that tells EDT about the checkout on the
+     * discovery-fallback path - recorded as a branch change still running until it ends
+     * ({@link BranchBindingLock#awaitOrTrack}, waiting not at all: this runs in the checkout Job's {@code done}).
+     * Package-visible for tests.
+     *
+     * @return the scheduled refresh, or {@code null} when none was needed
+     */
+    static Job concludeLateCheckout(boolean entered, Exception jobError, CheckoutResult.Status status,
+        List<IProject> projects, CheckoutReloads.Registration reload)
+    {
+        try
+        {
+            if (!refreshNeeded(entered, jobError, status, reload))
+            {
+                return null;
+            }
+            Job refresh = scheduleRefresh(projects, reload, new AtomicReference<>());
+            BranchBindingLock.awaitOrTrack(refresh, 0L, () -> WorkTreeProjects.names(projects));
+            return refresh;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        catch (RuntimeException e) // NOSONAR runs in a Job listener: logged, and the registration is held
+        {
+            reload.pin();
+            Activator.logError("git checkout: concluding a late checkout failed", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Hands a checkout Job's conclusion to whichever side comes last: the waiter that gave up on it
+     * ({@link #handOff}) or the Job's own end ({@link #jobEnded}). The conclusion runs at most once, and only when the
+     * waiter gave up - a Job that ended within the wait is concluded by the waiter itself. Package-visible for tests.
+     */
+    static final class LateConclusion
+    {
+        private static final int WAITING = 0;
+
+        private static final int HANDED_OFF = 1;
+
+        private static final int ENDED = 2;
+
+        private static final int CONCLUDED = 3;
+
+        private final java.util.concurrent.atomic.AtomicInteger state =
+            new java.util.concurrent.atomic.AtomicInteger(WAITING);
+
+        private final Runnable conclusion;
+
+        LateConclusion(Runnable conclusion)
+        {
+            this.conclusion = conclusion;
+        }
+
+        /** The Job ended. */
+        void jobEnded()
+        {
+            if (state.compareAndSet(WAITING, ENDED))
+            {
+                return;
+            }
+            if (state.compareAndSet(HANDED_OFF, CONCLUDED))
+            {
+                conclusion.run();
+            }
+        }
+
+        /** The waiter gave up on the Job. */
+        void handOff()
+        {
+            if (state.compareAndSet(WAITING, HANDED_OFF))
+            {
+                return;
+            }
+            if (state.compareAndSet(ENDED, CONCLUDED))
+            {
+                conclusion.run();
+            }
+        }
     }
 
     /**
