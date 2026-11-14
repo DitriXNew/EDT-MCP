@@ -627,6 +627,11 @@ public class GetMetadataObjectsTool implements IMcpTool
      * of an ERP role list) does not touch the 1,900 roles before it. With a filter every object
      * has to be read to be matched; matches before the window are only counted.</p>
      *
+     * <p>An external-objects project's roots arrive already loaded: EDT's
+     * {@code IExternalObjectProject.getExternalObjects} reads every root by id
+     * ({@code IBmTransaction.getObjectById}) before it returns, and offers no paged read. There the
+     * window shortens the answer, not the read.</p>
+     *
      * @param found the collection, may be {@code null}
      * @param page the window to fill
      * @param filter the caller's substring, or {@code null}
