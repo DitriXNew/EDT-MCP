@@ -62,6 +62,7 @@ import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
@@ -660,7 +661,8 @@ public class DcsTool implements IMcpTool
             }
             DcsWriter.TypeResolver typeResolver = com.ditrix.edt.mcp.server.HostKind.current()
                 == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? null
-                    : DcsWriter.typeResolver(context.configuration(), version);
+                    : DcsWriter.typeResolver(context.configuration(), version,
+                        ExtensionOriginUtils.isExtensionProject(context.project()));
             StyleValueBuilder.NamedColorResolver namedColors = com.ditrix.edt.mcp.server.HostKind.current()
                 == com.ditrix.edt.mcp.server.HostKind.HEADLESS ? null
                     : StyleValueBuilder.forConfiguration(context.configuration(), AppearanceValueBuilder.colorCatalogue(version));
@@ -1664,7 +1666,8 @@ public class DcsTool implements IMcpTool
         Version version, IBmTransaction tx, DcsWriter.TypeResolver windowed)
     {
         return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
-            ? DcsWriter.typeResolver(configurationInTransaction(context, tx), version) : windowed;
+            ? DcsWriter.typeResolver(configurationInTransaction(context, tx), version,
+                ExtensionOriginUtils.isExtensionProject(context.project())) : windowed;
     }
 
     private static StyleValueBuilder.NamedColorResolver colorsForTransaction(ProjectContext.ConfigurationResult context,

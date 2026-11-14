@@ -114,6 +114,16 @@ public final class MetadataTypeBuilder
         0x0435, 0x0434, 0x0435, 0x043B, 0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438,
         0x043F);
 
+    /**
+     * The platform's StandardPeriod type in both spellings - the one platform value a data-composition
+     * parameter takes beyond the primitives and references (EDT's ParameterCategoryTypeInfoProvider
+     * includes it; issue #665).
+     */
+    private static final String STANDARD_PERIOD = "StandardPeriod"; //$NON-NLS-1$
+    private static final String RU_STANDARD_PERIOD = MetadataLanguageUtils.cp(0x0421, 0x0442, 0x0430,
+        0x043D, 0x0434, 0x0430, 0x0440, 0x0442, 0x043D, 0x044B, 0x0439, 0x041F, 0x0435, 0x0440, 0x0438,
+        0x043E, 0x0434);
+
     /** One bilingual produced-type suffix and the generated holder feature that carries it. */
     private static final class ProducedTypeSuffix
     {
@@ -1308,7 +1318,7 @@ public final class MetadataTypeBuilder
                     return error(unresolvedDefinedType(kind, ref, isExtensionProject));
                 }
                 return error("Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + ref + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref + "'. Use {kind:'Ref', ref:'Catalog.Name'} (or ref:'CatalogRef.Name') or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "{kind:'CatalogRef', ref:'Name'} and check the object exists." //$NON-NLS-1$
                     + extensionAdoptHint(isExtensionProject));
             }
@@ -1383,6 +1393,12 @@ public final class MetadataTypeBuilder
         // StandardPeriod, TypeDescription, ... (issue #369). The provider indexes every type under BOTH
         // its English and its Russian name, so the bilingual spelling resolves with no alias table here.
         TypeProbe probe = probeTypeItem(provider, kind);
+        if (probe.item() == null && probe.crash() == null && isStandardPeriodKind(kind))
+        {
+            // The type index knows only the exact spellings, while the DCS value spec writes the
+            // same type 'standardPeriod' (issue #920): any case resolves through the English name.
+            probe = probeTypeItem(provider, STANDARD_PERIOD);
+        }
         TypeItem platformType = probe.item();
         if (platformType != null)
         {
@@ -1397,9 +1413,7 @@ public final class MetadataTypeBuilder
                 // EDT's ParameterCategoryTypeInfoProvider explicitly includes StandardPeriod.
                 if ((typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
                     && producedKind.hasKnownMetadataType())
-                    || (typeTarget == TypeTarget.DCS_PARAMETER
-                        && ("StandardPeriod".equalsIgnoreCase(kind)
-                            || "СтандартныйПериод".equalsIgnoreCase(kind)))
+                    || (typeTarget == TypeTarget.DCS_PARAMETER && isStandardPeriodKind(kind))
                     || (typeTarget == TypeTarget.SESSION_PARAMETER && isFixedCollectionKind(kind)))
                 {
                     td.getTypes().add(platformType);
@@ -1450,6 +1464,17 @@ public final class MetadataTypeBuilder
                 + "{kind:'DocumentObject', ref:'Invoice'}, or a platform value such as ValueTable / " //$NON-NLS-1$
                 + "ValueTree / FixedArray / ValueList (English or Russian) - this one names no type this " //$NON-NLS-1$
                 + "platform version knows."; //$NON-NLS-1$
+        }
+        if (typeTarget == TypeTarget.DCS_PARAMETER)
+        {
+            // Produced types and the form-only platform values are not built here, so the general
+            // inventory would advertise kinds this target refuses (issue #920).
+            return "Unknown type kind '" + kind + "'. A data-composition parameter or field takes String / " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Number / Boolean / Date / ValueStorage / UUID, " + STANDARD_PERIOD + " (" + RU_STANDARD_PERIOD //$NON-NLS-1$ //$NON-NLS-2$
+                + "), a DefinedType ({kind:'DefinedType', ref:'Name'}), a characteristic value " //$NON-NLS-1$
+                + "({kind:'Characteristic', ref:'Name'}), or a reference " //$NON-NLS-1$
+                + "({kind:'Ref', ref:'Catalog.Name'}, {kind:'Ref', ref:'CatalogRef.Name'} or " //$NON-NLS-1$
+                + "{kind:'CatalogRef', ref:'Name'}) - this one names no type this platform version knows."; //$NON-NLS-1$
         }
         return "Unknown type kind '" + kind //$NON-NLS-1$
             + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$
@@ -1811,7 +1836,7 @@ public final class MetadataTypeBuilder
             return "Type kind '" + kind + "' is a platform value this tool does not build for a " //$NON-NLS-1$ //$NON-NLS-2$
                 + "data-composition parameter: it belongs on a FORM attribute (fqn " //$NON-NLS-1$
                 + "'Type.Object.Form.FormName.Attribute.Name'). Give " //$NON-NLS-1$
-                + "the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+                + "the parameter a primitive, " + STANDARD_PERIOD + " or a reference type instead."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (typeTarget == TypeTarget.SESSION_PARAMETER)
         {
@@ -2015,6 +2040,20 @@ public final class MetadataTypeBuilder
             || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
     }
 
+    /**
+     * Whether the kind names the platform's StandardPeriod, in either language and in ANY case: the DCS
+     * value spec spells the same type {@code standardPeriod} (issue #920).
+     */
+    static boolean isStandardPeriodKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String k = kind.trim();
+        return STANDARD_PERIOD.equalsIgnoreCase(k) || RU_STANDARD_PERIOD.equalsIgnoreCase(k);
+    }
+
     /** Whether the kind is the explicit bilingual DefinedType token (without an inline object name). */
     static boolean isDefinedTypeKind(String kind)
     {
@@ -2074,13 +2113,69 @@ public final class MetadataTypeBuilder
         }
         if (kind.equalsIgnoreCase("Ref")) //$NON-NLS-1$
         {
-            // ref is a full FQN ('Type.Name'); resolve it bilingually.
-            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, ref);
+            // ref is a full FQN ('Type.Name'), or the reference TYPE name the platform stores and every
+            // read prints ('CatalogRef.Name', issue #920); resolve it bilingually.
+            String address = objectAddressOfRefTypeName(ref);
+            MetadataNodeResolver.MetadataNode node =
+                MetadataNodeResolver.resolveExisting(config, address != null ? address : ref);
             return node != null ? node.object : null;
         }
         // kind is '<Type>Ref'; the leading token is the type, ref is the object Name.
         String type = kind.substring(0, kind.length() - 3);
         return MetadataTypeUtils.findObject(config, type, ref);
+    }
+
+    /**
+     * The object address a reference TYPE name stands for (issue #920): {@code CatalogRef.Goods}, or the
+     * same name spelled with the Russian reference token, names {@code Catalog.Goods}. This is how the
+     * platform names every object's Ref type - the {@code .mdo} / {@code .dcs} store it so and every read
+     * prints it - so a caller copying a read type back into {@code {kind:'Ref', ref:...}} lands the same
+     * type as the object address. The suffix is the platform naming catalogue's own Ref entry
+     * ({@link #PRODUCED_TYPE_SUFFIXES}), never a second spelling list.
+     *
+     * @param ref the {@code ref} of a literal {@code Ref} kind
+     * @return {@code <EnglishType>.<Name>} when {@code ref} is exactly {@code <TypeToken>Ref.<Name>} over a
+     *     top-level metadata type other than DefinedType; {@code null} otherwise (an object address, a
+     *     member address or anything else passes through unchanged)
+     */
+    static String objectAddressOfRefTypeName(String ref)
+    {
+        if (ref == null)
+        {
+            return null;
+        }
+        String candidate = ref.trim();
+        int dot = candidate.indexOf('.');
+        if (dot <= 0 || dot == candidate.length() - 1 || candidate.indexOf('.', dot + 1) >= 0)
+        {
+            return null;
+        }
+        String token = candidate.substring(0, dot);
+        int suffixLength = matchingSuffixLength(token, refTypeSuffix());
+        if (suffixLength < 0)
+        {
+            return null;
+        }
+        // A bare suffix leaves an empty prefix, which names no type.
+        String englishType = MetadataTypeUtils.toEnglishSingular(token.substring(0, token.length() - suffixLength));
+        if (englishType == null || DEFINED_TYPE_KIND.equals(englishType))
+        {
+            return null;
+        }
+        return englishType + candidate.substring(dot);
+    }
+
+    /** The naming catalogue's Ref entry ({@code Ref} / its Russian token, feature {@code refType}). */
+    private static ProducedTypeSuffix refTypeSuffix()
+    {
+        for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+        {
+            if ("refType".equals(suffix.featureName)) //$NON-NLS-1$
+            {
+                return suffix;
+            }
+        }
+        throw new IllegalStateException("The produced-type catalogue has no Ref entry."); //$NON-NLS-1$
     }
 
     /** Maps a primitive kind to its canonical platform type name, or {@code null} if not a primitive. */
