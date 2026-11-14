@@ -6,14 +6,14 @@ Clone one metadata object with EDT's native paste semantics. Call once without c
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | Plain configuration project; source and clone stay in this project |
-| fqn | yes | string | Top Catalog, Document, Report or DataProcessor FQN. Only the TYPE token may be Russian/English; Name is a programmatic identifier, not a synonym |
+| fqn | yes | string | Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; Name is a programmatic identifier, not a synonym |
 | newName | — | string | Unused 1C identifier; omit for EDT's automatic free name |
 | confirm | — | boolean | Default false: preview only. True requires expectedHash from the same preview scope |
 | expectedHash | — | string | contentHash from preview; required with confirm=true |
 | transfer | — | array | Default []: keep incoming relations unchanged. Select {kind:'subsystem'\|'roleRights', owner:'Subsystem.X'\|'Role.Y'} and preview that selection before confirming |
 
 ## Guide
-Clone one Catalog, Document, Report or DataProcessor inside a plain configuration project, including its owned forms, commands, modules, templates and predefined items. Extensions, external-objects projects, Configuration and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
+Clone one Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, CommonModule or Role inside a plain configuration project, including its owned forms, commands, modules, templates, predefined items, enum values, register fields and role rights model. Extensions, external-objects projects, Configuration, global common modules and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
 
 ## Preview and confirm
 
@@ -40,6 +40,14 @@ After reviewing incoming owners, preview the selected scope:
 `newName` is optional. When present it must be an unused 1C identifier in the source's metadata collection, compared without case. It is assigned before attachment: there is no temporary auto-named object and no rename/refactoring of the source. Omit it to use EDT's free-name algorithm; always use the returned actual `fqn` in later calls.
 
 The operation uses the exported native paste copier behind `IModelObjectCopySupport`, retaining its graph, external-resource, type-reference and identity handling. The service's private factory accepts no name and opens its own transaction, so the tool configures its public `AttachingModelObjectCopier` inside one global BM write. It retains the plain-configuration filters and additional-index identity handling. Predefined item ids follow native paste unchanged; they are not metadata UUIDs. Compare them with navigator Copy/Paste during live acceptance.
+
+## Kind notes
+
+- **Enum:** values are copied with the same names and new UUIDs.
+- **InformationRegister:** dimensions, resources, attributes, forms and modules are copied. Documents' `registerRecords` stay on the source and appear in `notCopied`. For a register with `writeMode=RecorderSubordinate` the warning says the clone has no recorder: add it to a document's `registerRecords` with `modify_metadata`, or set its `writeMode` to `Independent`.
+- **ScheduledJob:** the clone keeps `methodName` and `use`. When the source is enabled, the warning says both jobs will run the same method; disable one with `modify_metadata`.
+- **CommonModule:** the module text is copied unchanged, so calls inside it like `Source.Method(` still call the source; `codeReferences` lists them with the `CommonModule.Source` forms. A global module (`global=true`) is refused: its clone would duplicate exported methods in the global context.
+- **Role:** the rights model (`Rights.rights`), its RLS restrictions and templates and the role flags are copied to the clone. Other roles and subsystems are not changed unless selected in `transfer`.
 
 ## Incoming relations
 

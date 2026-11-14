@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
@@ -186,6 +187,13 @@ public class WriteModuleSourceTool implements IMcpTool
             return ToolResult.error(ProjectContext.notFoundMessage(req.projectName)).toJson();
         }
         IProject project = ctx.project();
+        // A project this server just switched still holds the previous branch's model; the write of an adopted
+        // module exports its owner's .mdo from that model over the checked-out file (#922).
+        String reload = ProjectStateChecker.checkoutReloadErrorOrNull(project);
+        if (reload != null)
+        {
+            return ToolResult.error(reload).toJson();
+        }
 
         AtomicBoolean mutationEntered = new AtomicBoolean();
         AtomicBoolean mutationCommitted = new AtomicBoolean();

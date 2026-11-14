@@ -69,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -264,6 +265,13 @@ public class DcsTool implements IMcpTool
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
             || ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action))
         {
+            // A project this server just switched to another branch still holds the previous branch's model until
+            // EDT reloads it; a DCS write now would be exported over the checked-out files (#922).
+            String reload = ProjectStateChecker.checkoutReloadErrorOrNull(projectName);
+            if (reload != null)
+            {
+                return ToolResult.error(reload).toJson();
+            }
             JsonObject parsedBody = ACTION_REMOVE.equals(action) ? null
                 : JsonParser.parseString(body).getAsJsonObject();
             WriteScope writeScope = new WriteScope();

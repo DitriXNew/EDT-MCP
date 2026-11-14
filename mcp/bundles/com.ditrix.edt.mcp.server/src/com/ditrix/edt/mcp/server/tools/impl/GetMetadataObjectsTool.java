@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EMap;
@@ -67,6 +68,9 @@ public class GetMetadataObjectsTool implements IMcpTool
 
     private static final String LIMIT = "limit"; //$NON-NLS-1$
 
+    /** Paging: how many matching objects to skip before the first row of this page. */
+    private static final String OFFSET = "offset"; //$NON-NLS-1$
+
     private static final String NAME_FILTER = "nameFilter"; //$NON-NLS-1$
     private static final String TEXT_FILTER = "textFilter"; //$NON-NLS-1$
 
@@ -112,6 +116,8 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "mutually exclusive with nameFilter") //$NON-NLS-1$
             .integerProperty(LIMIT,
                 "Max rows (default from preferences: 100, max 1000)") //$NON-NLS-1$
+            .integerProperty(OFFSET,
+                "Skip this many matching objects - the next page; default 0") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
@@ -170,6 +176,7 @@ public class GetMetadataObjectsTool implements IMcpTool
             .getParameterValue(NAME, LIMIT, 100);
         int limit = JsonUtils.extractIntArgument(params, LIMIT, defaultLimit);
         limit = Pagination.clampLimit(limit, 1000);
+        final int offset = Math.max(0, JsonUtils.extractIntArgument(params, OFFSET, 0));
 
         // Preserve windowed dispatch; headless reads stay on the calling thread.
         AtomicReference<String> resultRef = new AtomicReference<>();
@@ -184,7 +191,8 @@ public class GetMetadataObjectsTool implements IMcpTool
             try
             {
                 String result = ReadToolExecution.read(projectName, NAME,
-                    () -> getMetadataObjectsInternal(projectName, mdType, filter, filterMode, maxResults, lang));
+                    () -> getMetadataObjectsInternal(projectName, mdType, filter, filterMode,
+                        new PageWindow(offset, maxResults), lang));
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -209,7 +217,7 @@ public class GetMetadataObjectsTool implements IMcpTool
      * Reads metadata under the caller's BM boundary.
      */
     private String getMetadataObjectsInternal(String projectName, String metadataType,
-        String filter, FilterMode filterMode, int limit, String language)
+        String filter, FilterMode filterMode, PageWindow page, String language)
     {
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
@@ -233,7 +241,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         if (scope.isExternalObjects())
         {
             return externalObjectsOutput(projectName, scope, metadataType, filter, filterMode,
-                limit, effectiveLanguage);
+                page, effectiveLanguage);
         }
 
         // Normalize the caller's bilingual type spelling to the canonical English FQN token.
@@ -248,28 +256,8 @@ public class GetMetadataObjectsTool implements IMcpTool
             return unknownMetadataType(metadataType);
         }
 
-        // Count every match for the Total line, but copy synonym maps only for rows that
-        // can be rendered. Large configurations contain tens of thousands of top objects.
-        List<MetadataInfo> objects = new ArrayList<>();
-        int total = 0;
-        if (TYPE_ALL.equals(normalizedType))
-        {
-            for (MetadataTypeUtils.MetadataTypeInfo info
-                : MetadataTypeUtils.MetadataTypeInfo.values())
-            {
-                if (!info.isStandalone())
-                {
-                    total += collectMetadataObjects(config, info, objects, filter, filterMode,
-                        limit, effectiveLanguage);
-                }
-            }
-        }
-        else
-        {
-            MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(normalizedType);
-            total = collectMetadataObjects(config, info, objects, filter, filterMode, limit,
-                effectiveLanguage);
-        }
+        int total = collectConfiguration(config, normalizedType, page, filter, filterMode,
+            effectiveLanguage);
 
         // An object's ORIGIN (core vs extension-adopted vs extension-own) is only
         // meaningful for an EXTENSION project, where adopted base objects are listed
@@ -278,8 +266,41 @@ public class GetMetadataObjectsTool implements IMcpTool
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
 
         // Show the caller's original filter spelling in the Filter line.
-        return formatOutput(projectName, objects, total, limit, effectiveLanguage, metadataType,
+        return formatOutput(projectName, page, total, effectiveLanguage, metadataType,
             isExtensionProject, false);
+    }
+
+    /**
+     * Collects one PAGE of a configuration listing - every collection for {@code all}, one for a
+     * type - and returns how many objects match in total, across every page.
+     *
+     * <p>Package-private so the cost of a listing can be pinned without a workbench (issue #932).</p>
+     *
+     * @param config the configuration
+     * @param normalizedType {@link #TYPE_ALL} or a canonical English singular type token
+     * @param page the window to fill
+     * @param filter the caller's substring, or {@code null}
+     * @param filterMode whether the substring matches Name only or Name / effective Synonym
+     * @param language the resolved synonym language code (may be {@code null})
+     * @return the number of matching objects
+     */
+    int collectConfiguration(Configuration config, String normalizedType, PageWindow page,
+        String filter, FilterMode filterMode, String language)
+    {
+        if (!TYPE_ALL.equals(normalizedType))
+        {
+            return collectMetadataObjects(config, MetadataTypeUtils.resolve(normalizedType), page,
+                filter, filterMode, language);
+        }
+        int total = 0;
+        for (MetadataTypeUtils.MetadataTypeInfo info : MetadataTypeUtils.MetadataTypeInfo.values())
+        {
+            if (!info.isStandalone())
+            {
+                total += collectMetadataObjects(config, info, page, filter, filterMode, language);
+            }
+        }
+        return total;
     }
 
     /**
@@ -297,12 +318,12 @@ public class GetMetadataObjectsTool implements IMcpTool
      * @param metadataType the caller's raw type filter
      * @param filter the caller's case-insensitive substring, or {@code null}
      * @param filterMode whether the substring matches Name only or Name / effective Synonym
-     * @param limit max rows
+     * @param page the window to fill
      * @param language the resolved synonym language code (may be {@code null})
      * @return the Markdown listing, or a JSON error for a type this project cannot hold
      */
     private String externalObjectsOutput(String projectName, MetadataScope scope, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-        String metadataType, String filter, FilterMode filterMode, int limit, String language)
+        String metadataType, String filter, FilterMode filterMode, PageWindow page, String language)
     {
         String category = normalizeExternalMetadataType(metadataType);
         if (category == null)
@@ -314,20 +335,19 @@ public class GetMetadataObjectsTool implements IMcpTool
                 .toJson();
         }
 
-        List<MetadataInfo> objects = new ArrayList<>();
         int total = 0;
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(category))
         {
-            total += collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, objects,
-                filter, filterMode, limit, language);
+            total += collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, page,
+                filter, filterMode, language);
         }
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_REPORTS.equals(category))
         {
-            total += collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, filter,
-                filterMode, limit, language);
+            total += collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, page, filter,
+                filterMode, language);
         }
         // An external-objects project holds no adopted objects, so it has no Origin column.
-        return formatOutput(projectName, objects, total, limit, language, metadataType, false, true);
+        return formatOutput(projectName, page, total, language, metadataType, false, true);
     }
 
     /**
@@ -373,34 +393,15 @@ public class GetMetadataObjectsTool implements IMcpTool
     /**
      * Appends the external objects of one TYPE, honouring the selected substring filter.
      */
-    private int collectExternalObjects(MetadataScope scope, String typeToken,
-        List<MetadataInfo> objects, String filter, FilterMode filterMode, int limit,
-        String language)
+    private int collectExternalObjects(MetadataScope scope, String typeToken, PageWindow page,
+        String filter, FilterMode filterMode, String language)
     {
-        List<? extends MdObject> found = scope.objects(typeToken);
-        if (found == null)
-        {
-            return 0;
-        }
-
-        int total = 0;
-        for (MdObject object : found)
-        {
-            if (!matches(object, filter, filterMode, language))
-            {
-                continue;
-            }
-            total++;
-            if (objects.size() >= limit)
-            {
-                continue;
-            }
+        return collectPage(scope.objects(typeToken), page, filter, filterMode, language, object -> {
             MetadataInfo info = createMetadataInfo(object, typeToken);
             // An external data processor / report carries an object module and no manager one.
             info.hasObjectModule = hasModule(externalObjectModule(object));
-            objects.add(info);
-        }
-        return total;
+            return info;
+        });
     }
 
     /** The object module of an external data processor / report, or {@code null}. */
@@ -492,32 +493,43 @@ public class GetMetadataObjectsTool implements IMcpTool
     /**
      * Formats the output as markdown.
      */
-    private String formatOutput(String projectName, List<MetadataInfo> objects, int total, int limit, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    private String formatOutput(String projectName, PageWindow page, int total, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String language, String metadataType, boolean isExtensionProject, boolean externalObjects)
     {
         StringBuilder sb = new StringBuilder();
-        
+        List<MetadataInfo> objects = page.rows;
+
         // The heading names WHAT was listed: an external-objects project holds no configuration,
         // and calling its roots "Configuration Metadata" is the same confusion issue #309 was.
         sb.append(externalObjects ? "## External Objects: " : "## Configuration Metadata: ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(projectName).append("\n\n"); //$NON-NLS-1$
-        
-        int shown = Math.min(total, limit);
-        
+
+        int shown = objects.size();
+
         if (!TYPE_ALL.equalsIgnoreCase(metadataType))
         {
             sb.append("**Filter:** ").append(metadataType).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append("**Total:** ").append(total).append(" objects"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append(Pagination.truncationNotice(shown, total));
+        if (shown > 0 || page.offset == 0)
+        {
+            sb.append(Pagination.pageNotice(page.offset, shown, total));
+        }
         sb.append("\n\n"); //$NON-NLS-1$
-        
+
         if (total == 0)
         {
             sb.append("No metadata objects found.\n"); //$NON-NLS-1$
             return sb.toString();
         }
-        
+        if (shown == 0)
+        {
+            sb.append("No rows on this page: offset=").append(page.offset) //$NON-NLS-1$
+                .append(" is past the last of the ").append(total) //$NON-NLS-1$
+                .append(" matching objects. The first page is offset=0.\n"); //$NON-NLS-1$
+            return sb.toString();
+        }
+
         // Table header. Cells are escaped by MarkdownUtils.tableRow, so a
         // synonym or comment containing '|' cannot break the table. The Origin
         // column is appended only for an extension project (see isExtensionProject).
@@ -532,18 +544,10 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "Name", "Synonym", "Comment", "Type", "ObjectModule", "ManagerModule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         }
 
-        // Table rows
-        int count = 0;
+        // Table rows: the window already holds at most `limit` of them.
         for (MetadataInfo info : objects)
         {
-            if (count >= limit)
-            {
-                break;
-            }
-
             sb.append(formatObjectRow(info, language, isExtensionProject));
-
-            count++;
         }
 
         return sb.toString();
@@ -588,18 +592,72 @@ public class GetMetadataObjectsTool implements IMcpTool
         List<MetadataInfo> objects, String filter, FilterMode filterMode, int limit,
         String language)
     {
+        PageWindow page = new PageWindow(0, limit, objects);
+        return collectMetadataObjects(config, typeInfo, page, filter, filterMode, language);
+    }
+
+    /** One collection into {@code page}; returns how many of its objects match. */
+    int collectMetadataObjects(Configuration config, MetadataTypeUtils.MetadataTypeInfo typeInfo,
+        PageWindow page, String filter, FilterMode filterMode, String language)
+    {
         if (typeInfo == null)
         {
             return 0;
         }
+        String type = typeInfo.getEnglishSingular();
+        return collectPage(MetadataTypeUtils.getObjects(config, type), page, filter, filterMode,
+            language, object -> {
+                MetadataInfo info = createMetadataInfo(object, type);
+                info.hasObjectModule = hasFeatureValue(object, FEATURE_OBJECT_MODULE)
+                    || hasFeatureValue(object, FEATURE_RECORD_SET_MODULE)
+                    || hasFeatureValue(object, FEATURE_VALUE_MANAGER_MODULE)
+                    || hasFeatureValue(object, FEATURE_MODULE)
+                    || hasFeatureValue(object, FEATURE_COMMAND_MODULE);
+                info.hasManagerModule = hasFeatureValue(object, FEATURE_MANAGER_MODULE);
+                return info;
+            });
+    }
 
-        List<? extends MdObject> found = MetadataTypeUtils.getObjects(config,
-            typeInfo.getEnglishSingular());
+    /**
+     * The one paging rule for every collection this tool lists (issue #932).
+     *
+     * <p>A configuration collection is a list of references to BM top objects, and reading an
+     * element resolves it. Without a filter there is nothing to match, so the total is the list's
+     * size and only the objects that land on this page are read - a far page ({@code offset} 1900
+     * of an ERP role list) does not touch the 1,900 roles before it. With a filter every object
+     * has to be read to be matched; matches before the window are only counted.</p>
+     *
+     * <p>An external-objects project's roots arrive already loaded: EDT's
+     * {@code IExternalObjectProject.getExternalObjects} reads every root by id
+     * ({@code IBmTransaction.getObjectById}) before it returns, and offers no paged read. There the
+     * window shortens the answer, not the read.</p>
+     *
+     * @param found the collection, may be {@code null}
+     * @param page the window to fill
+     * @param filter the caller's substring, or {@code null}
+     * @param filterMode whether the substring matches Name only or Name / effective Synonym
+     * @param language the resolved synonym language code (may be {@code null})
+     * @param row builds the row of one object on the page
+     * @return how many objects of {@code found} match
+     */
+    private int collectPage(List<? extends MdObject> found, PageWindow page, String filter,
+        FilterMode filterMode, String language, Function<MdObject, MetadataInfo> row)
+    {
         if (found == null)
         {
             return 0;
         }
-
+        if (!hasFilter(filter))
+        {
+            int size = found.size();
+            int first = Math.min(page.toSkip, size);
+            page.toSkip -= first;
+            for (int i = first; i < size && page.hasRoom(); i++)
+            {
+                page.rows.add(row.apply(found.get(i)));
+            }
+            return size;
+        }
         int total = 0;
         for (MdObject object : found)
         {
@@ -607,21 +665,15 @@ public class GetMetadataObjectsTool implements IMcpTool
             {
                 continue;
             }
-
             total++;
-            if (objects.size() >= limit)
+            if (page.toSkip > 0)
             {
-                continue;
+                page.toSkip--;
             }
-
-            MetadataInfo info = createMetadataInfo(object, typeInfo.getEnglishSingular());
-            info.hasObjectModule = hasFeatureValue(object, FEATURE_OBJECT_MODULE)
-                || hasFeatureValue(object, FEATURE_RECORD_SET_MODULE)
-                || hasFeatureValue(object, FEATURE_VALUE_MANAGER_MODULE)
-                || hasFeatureValue(object, FEATURE_MODULE)
-                || hasFeatureValue(object, FEATURE_COMMAND_MODULE);
-            info.hasManagerModule = hasFeatureValue(object, FEATURE_MANAGER_MODULE);
-            objects.add(info);
+            else if (page.hasRoom())
+            {
+                page.rows.add(row.apply(object));
+            }
         }
         return total;
     }
@@ -704,6 +756,37 @@ public class GetMetadataObjectsTool implements IMcpTool
         return MetadataLanguageUtils.getSynonymForLanguage(info.synonyms, language);
     }
     
+    /**
+     * One page of a listing: the matching objects to skip first ({@code offset}), the rows the
+     * page may hold ({@code limit}), and the rows collected so far. Filled across collections, so
+     * an {@code all} page spans type boundaries.
+     */
+    static final class PageWindow
+    {
+        final int offset;
+        final int limit;
+        final List<MetadataInfo> rows;
+        int toSkip;
+
+        PageWindow(int offset, int limit)
+        {
+            this(offset, limit, new ArrayList<>());
+        }
+
+        PageWindow(int offset, int limit, List<MetadataInfo> rows)
+        {
+            this.offset = Math.max(0, offset);
+            this.limit = limit;
+            this.rows = rows;
+            this.toSkip = this.offset;
+        }
+
+        boolean hasRoom()
+        {
+            return rows.size() < limit;
+        }
+    }
+
     /**
      * Holds metadata object information.
      */

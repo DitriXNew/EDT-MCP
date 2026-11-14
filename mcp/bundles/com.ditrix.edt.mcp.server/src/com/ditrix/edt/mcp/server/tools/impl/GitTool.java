@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
+import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
 import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
@@ -769,10 +770,13 @@ public class GitTool implements IMcpTool
             // leaving EDT stale after that is worse than a redundant refresh. Best-effort: a refresh
             // failure is logged, never turned into a failed git result. A branch-changing command keeps
             // the binding lock through it (runGit).
-            boolean branchChanging = changesBranch(argv);
-            Runnable refresh = changesWorkTree(argv) ? () -> refreshWorkTree(workTree, startedAt, branchChanging)
-                : null;
-            return runGit(argv, workTree, refresh);
+            boolean worktreeChanging = changesWorkTree(argv);
+            return runGitWith(argv, workTree, change -> {
+                if (worktreeChanging)
+                {
+                    refreshWorkTree(workTree, startedAt, change);
+                }
+            });
         }
         catch (Exception e) // NOSONAR unattended-safety: no exception may escape the tool (CLAUDE.md #8)
         {
@@ -882,7 +886,8 @@ public class GitTool implements IMcpTool
                 return consentError;
             }
             long startedAt = System.nanoTime();
-            return runInit(argv, folder, () -> refreshWorkTree(folder, startedAt, false));
+            // No branch change: init moves no branch, so it refreshes like every non-branch command (null).
+            return runInit(argv, folder, () -> refreshWorkTree(folder, startedAt, null));
         }
         catch (Exception e) // NOSONAR unattended-safety: no exception may escape the tool (CLAUDE.md #8)
         {
@@ -903,7 +908,14 @@ public class GitTool implements IMcpTool
      */
     String runInit(List<String> argv, File folder, Runnable afterProcess)
     {
-        return runGit(argv, folder, afterProcess, result -> result.put(KEY_NEXT_STEP, INIT_NEXT_STEP));
+        // Straight to the process: init changes no branch ({@link #changesBranch} is false for it), so
+        // there is no binding lock to take and no branch change to register.
+        String output = runGitProcess(argv, folder, result -> result.put(KEY_NEXT_STEP, INIT_NEXT_STEP));
+        if (afterProcess != null)
+        {
+            afterProcess.run();
+        }
+        return output;
     }
 
     /**
@@ -3343,6 +3355,19 @@ public class GitTool implements IMcpTool
         }
         return STASH.equals(subcommand) && argv.subList(2, argv.size()).contains(STASH_BRANCH);
     }
+    /**
+     * Whether this command switches the work tree to another branch - it can move the checked-out branch
+     * ({@link #changesBranch}) AND rewrites the work tree ({@link #changesWorkTree}): {@code checkout}, {@code switch},
+     * {@code pull}, {@code stash branch}. Such a command is a branch change of this server, with the reload lifecycle
+     * of {@code switch_git_branch} (#922).
+     *
+     * @param argv the parsed command ({@code git} first)
+     * @return {@code true} for a command that switches the work tree
+     */
+    static boolean switchesWorkTree(List<String> argv)
+    {
+        return changesBranch(argv) && changesWorkTree(argv);
+    }
 
     /**
      * Refreshes every workspace project inside {@code workTree} so Eclipse - and the EDT model built
@@ -3358,13 +3383,24 @@ public class GitTool implements IMcpTool
      *
      * @param workTree the repository work tree whose projects must be refreshed
      * @param startedAt the call's start timestamp, so the wait shares the command's own budget
-     * @param branchChanging whether the command could change the checked-out branch ({@link #changesBranch})
+     * @param change the branch change of this server the command made ({@link #changesBranch}), or {@code null}
      */
-    private static void refreshWorkTree(File workTree, long startedAt, boolean branchChanging)
+    private static void refreshWorkTree(File workTree, long startedAt, GitCheckoutSupport.BranchChange change)
     {
         try
         {
-            refreshWorkTreeUnguarded(workTree, startedAt, branchChanging);
+            if (change != null)
+            {
+                // A branch change of this server (#922): the shared refresh refreshes the projects checked out with
+                // the work tree and concludes the reload registration made before the command ran.
+                change.refresh(Math.min(REFRESH_WAIT_SECONDS * 1000L, remainingBudgetMillis(startedAt)));
+                // The projects of nested repositories are refreshed as before, outside the registration: their
+                // files belong to another repository, and a failed refresh of one must not pin the switch's own.
+                refreshProjects(outsideTheChange(WorkTreeProjects.inside(workTree), change.projects()), startedAt,
+                    true);
+                return;
+            }
+            refreshProjects(WorkTreeProjects.inside(workTree), startedAt, false);
         }
         catch (RuntimeException e) // NOSONAR the git command already succeeded; a refresh never fails it
         {
@@ -3375,9 +3411,36 @@ public class GitTool implements IMcpTool
         }
     }
 
-    private static void refreshWorkTreeUnguarded(File workTree, long startedAt, boolean branchChanging)
+    /** What is left of the call's {@link #TIMEOUT_SECONDS} budget, started at {@code startedAt}. */
+    private static long remainingBudgetMillis(long startedAt)
     {
-        List<IProject> projects = WorkTreeProjects.inside(workTree);
+        return TIMEOUT_SECONDS * 1000L - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+    }
+
+    /**
+     * The projects of {@code inside} that the branch change did not register - those of nested repositories, whose
+     * files the outer command does not check out (#922). Package-visible for tests.
+     *
+     * @param inside every workspace project inside the work tree
+     * @param registered the projects the change registered ({@link WorkTreeProjects#checkedOutWith})
+     * @return the rest, in order
+     */
+    static List<IProject> outsideTheChange(List<IProject> inside, List<IProject> registered)
+    {
+        List<String> names = WorkTreeProjects.names(registered);
+        List<IProject> rest = new ArrayList<>();
+        for (IProject project : inside)
+        {
+            if (project != null && !names.contains(project.getName()))
+            {
+                rest.add(project);
+            }
+        }
+        return rest;
+    }
+
+    private static void refreshProjects(List<IProject> projects, long startedAt, boolean branchChanging)
+    {
         if (projects.isEmpty())
         {
             return;
@@ -3406,9 +3469,7 @@ public class GitTool implements IMcpTool
             // response past the timeout the git process already respects. The Job keeps running
             // after the wait expires, so the workspace still catches up - the caller simply is not
             // made to wait for it.
-            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
-            long budgetMillis = TIMEOUT_SECONDS * 1000L - elapsedMillis;
-            long waitMillis = Math.min(REFRESH_WAIT_SECONDS * 1000L, budgetMillis);
+            long waitMillis = Math.min(REFRESH_WAIT_SECONDS * 1000L, remainingBudgetMillis(startedAt));
             awaitRefresh(refresh, waitMillis, branchChanging, WorkTreeProjects.names(projects));
         }
         catch (InterruptedException e)
@@ -3494,19 +3555,28 @@ public class GitTool implements IMcpTool
      */
     String runGit(List<String> argv, File workTree, Runnable afterProcess)
     {
-        return runGit(argv, workTree, afterProcess, null);
+        return runGitWith(argv, workTree, change -> {
+            if (afterProcess != null)
+            {
+                afterProcess.run();
+            }
+        });
     }
 
     /**
-     * {@link #runGit(List, File, Runnable)}, with {@code onSuccess} given the result of a process that
-     * exited 0 before it is serialised - how a subcommand adds a field of its own ({@link #runInit}).
+     * {@link #runGit(List, File, Runnable)} with a step that receives the command's branch change: a command that can
+     * change the checked-out branch is a branch change of this server (#922), registered as reloading before the
+     * process runs ({@link GitCheckoutSupport.BranchChange}) - the same lifecycle {@code switch_git_branch} uses. The
+     * step gets that change to refresh through ({@link GitCheckoutSupport.BranchChange#refresh}); one that did not
+     * refresh leaves it held until the expiry. Every other command's step gets {@code null}.
      */
-    private String runGit(List<String> argv, File workTree, Runnable afterProcess, Consumer<ToolResult> onSuccess)
+    String runGitWith(List<String> argv, File workTree,
+        java.util.function.Consumer<GitCheckoutSupport.BranchChange> afterProcess)
     {
         if (!changesBranch(argv))
         {
-            String output = runGitProcess(argv, workTree, onSuccess);
-            runAfterProcess(afterProcess);
+            String output = runGitProcess(argv, workTree);
+            afterProcess.accept(null);
             return output;
         }
         if (!BranchBindingLock.tryLock())
@@ -3518,9 +3588,23 @@ public class GitTool implements IMcpTool
         }
         try
         {
-            String output = runGitProcess(argv, workTree, onSuccess);
-            runAfterProcess(afterProcess);
-            return output;
+            if (!switchesWorkTree(argv))
+            {
+                // Moves a ref without rewriting the work tree (git branch -f / -m): nothing for EDT to reload.
+                String output = runGitProcess(argv, workTree);
+                afterProcess.accept(null);
+                return output;
+            }
+            // Only the projects this repository checks out: a nested clone or submodule is another repository,
+            // whose files the command does not rewrite (#922).
+            GitCheckoutSupport.BranchChange change =
+                GitCheckoutSupport.BranchChange.begin(WorkTreeProjects.checkedOutWith(workTree));
+            return change.run(() -> {
+                String output = runGitProcess(argv, workTree);
+                afterProcess.accept(change);
+                change.concludeWithoutRefresh();
+                return output;
+            });
         }
         finally
         {
@@ -3528,15 +3612,16 @@ public class GitTool implements IMcpTool
         }
     }
 
-    private static void runAfterProcess(Runnable afterProcess)
+    /** {@link #runGit}'s process, under {@link BranchBindingLock} when the subcommand needs it. */
+    private String runGitProcess(List<String> argv, File workTree)
     {
-        if (afterProcess != null)
-        {
-            afterProcess.run();
-        }
+        return runGitProcess(argv, workTree, null);
     }
 
-    /** {@link #runGit}'s process, under {@link BranchBindingLock} when the subcommand needs it. */
+    /**
+     * {@link #runGitProcess(List, File)}, with {@code onSuccess} given the result of a process that exited 0
+     * before it is serialised - how a subcommand adds a field of its own ({@link #runInit}).
+     */
     private String runGitProcess(List<String> argv, File workTree, Consumer<ToolResult> onSuccess)
     {
         // Started BEFORE hardenEnv (inside processFor): that call may run the core.sshCommand probe,

@@ -7,7 +7,7 @@ Discover where a metadata object is used throughout the configuration and BSL co
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required) |
 | objectFqn | yes | string | FQN of the object to search for, e.g. 'Catalog.Products' (type token may be English or Russian) (required) |
-| limit | — | integer | Result-size hint (default 100, max 500); caps the overall reference count (at limit*10), not per category. |
+| limit | — | integer | Max references to collect (default 100, max 500), overall, not per category; the search itself stops one past it and says that more exist. |
 
 ## Guide
 Locates every reference to one metadata object across the whole configuration: BSL code modules (with line numbers), other metadata objects (forms, roles, subsystems, attributes that type-reference it), predefined-item usages and field references. Results are grouped by category and returned as Markdown.
@@ -20,7 +20,7 @@ Locates every reference to one metadata object across the whole configuration: B
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `objectFqn` (required) - fully qualified name `Type.Name` of the object to find references for. The `Name` part is the object's programmatic name (never its synonym). Only the leading TYPE token is bilingual: `Catalog.Products` and `Справочник.Products` resolve to the same object (the Russian type spelling is normalized internally). Examples: `Catalog.Products`, `Document.SalesOrder`, `CommonModule.Common`, `InformationRegister.Prices`.
-- `limit` - result-size hint; default 100, max 500 (clamped). It caps the OVERALL number of references collected (at `limit*10`) before they are grouped, NOT a per-category count - so a single busy category can consume most of the budget. Raise it when a large object truncates the result.
+- `limit` - the most references the search collects and shows; default 100, clamped to 1..500. It is an OVERALL count, NOT per category (metadata references are collected first, then BSL), and it bounds the SEARCH itself: one reference past it proves that more exist, the search stops there and the report says so. Each BSL reference costs a parse of its module, so a smaller limit also answers sooner on a large project.
 
 ## Result categories
 References are grouped by where they were found, e.g.:
@@ -38,7 +38,7 @@ References are grouped by where they were found, e.g.:
 - Before scanning, the tool waits up to 10 s for search-scope projects to become ready (not for an unknown, closed or non-EDT project, which errors at once, and not when called on the EDT UI thread). If adopted copies or the code index still cannot be searched, a `**Scan incomplete:**` paragraph after the count explains the gap and how to retry; the count may be low.
 - An unknown or malformed `objectFqn` (no `Type.Name`, or a type/name that does not exist) returns an error - check the type token and the programmatic name.
 - Resolution is by the object's `Name`, NOT by its synonym; passing a synonym will not match.
-- The result is a hint-limited snapshot: a truncation notice means there are more references than `limit*10` - raise `limit` to see them.
+- The search has a 45 s time budget counted from the start of the call (the readiness wait above included). When `limit` or the budget stops it, the count line reads `**References shown:** N` instead of `**Total references found:** N` and a `**Search stopped early:**` paragraph says which bound stopped it: the total is then unknown, so treat the rows as a lower bound, never as the full set - raise `limit` (up to 500) for more, or for the budget, pass a smaller `limit` and make sure `list_projects` shows every project `ready` (a project that is not ready makes the search cover the whole workspace).
 - For a literal text search (comments, messages, raw strings) use `search_in_code` instead; for call graphs of a specific method use `get_method_call_hierarchy`.
 
 ---

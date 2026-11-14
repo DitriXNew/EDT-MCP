@@ -10,7 +10,8 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 - `metadataType` - which kind to list; default `all`. Matching is case-insensitive, and it is a single string, not an array. Accepts `all` or any standard metadata type name - the FQN token. **English resolves in singular or plural** (`ScheduledJob`, `Role`, `HTTPServices`), so the legacy tokens `documents`, `commonModules`, `xdtoPackages` keep working unchanged. **Russian resolves in the spelling 1C registers for that type**, which for most types is the singular alone: `Справочник` and `Справочники` both work (Catalog registers both), while `ОбщиеФормы` does NOT - CommonForm registers only `ОбщаяФорма`. An unrecognized value returns an error naming the bad value and listing every available configuration type. There is no `types` array parameter.
 - `nameFilter` - case-insensitive substring matched against the object **Name only**, never the Synonym. Omit to list everything of the chosen type.
 - `textFilter` - case-insensitive substring matched against the object **Name or Synonym**. The effective language is resolved exactly like the Synonym column: from `language` when supplied, otherwise from the configuration language settings. Mutually exclusive with `nameFilter`.
-- `limit` - max rows returned; default from preferences (100), clamped to 1000. A truncation notice is appended when results are capped, while **Total** still reports the full count.
+- `limit` - max rows returned; default from preferences (100), clamped to 1000. **Total** always reports the full count; when more objects match than the page shows, the Total line names the window and the next page: `(showing 1-100 of 2010; next page: offset=100)`.
+- `offset` - how many matching objects to skip before the first row; default 0. Pass the `offset` the Total line names to get the next page - this is how to list every object of a large kind (an ERP configuration holds 2,000+ roles) without guessing names for a filter. In a configuration, a page without a filter reads only the objects it shows, so any page of a large kind is cheap; a `nameFilter` / `textFilter` reads every object of the kind to match it. An external-objects project is read whole by EDT before paging (its few roots come back from one platform call), so there `offset` shortens the answer, not the read.
 - `language` - language code for the Synonym column (e.g. `en`, `ru`). Defaults to the configuration's default language.
 
 ## Columns
@@ -34,6 +35,7 @@ answered from the base configuration it is linked to.
 - Only documents: `{projectName: "MyProject", metadataType: "documents"}`.
 - Only scheduled jobs, via the type-name token: `{projectName: "MyProject", metadataType: "ScheduledJob"}` (equivalent to `metadataType: "scheduledJobs"`).
 - Only XDTO packages: `{projectName: "MyProject", metadataType: "xdtoPackages"}` (or the type name `XDTOPackage` / `ПакетXDTO`). This is how you get the `XDTOPackage.<Name>` FQN the XDTO tools need - `create_metadata` / `modify_metadata` / `delete_metadata` on a package member, and `validate_xdto_package`.
+- The next page of roles: `{projectName: "MyProject", metadataType: "Role", offset: 100}`.
 - Filter by name: `{projectName: "MyProject", nameFilter: "Order"}`.
 - Filter by name or localized synonym: `{projectName: "MyProject", textFilter: "Sales order", language: "en"}`.
 - Russian synonyms: `{projectName: "MyProject", language: "ru"}`.

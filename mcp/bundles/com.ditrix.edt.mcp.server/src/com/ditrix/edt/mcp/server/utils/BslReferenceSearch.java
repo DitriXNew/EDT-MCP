@@ -14,6 +14,7 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.xtext.resource.IReferenceDescription;
@@ -49,7 +50,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesRes
  * The scope optimization fails CLOSED: unless dependency discovery completes, every scoped project is
  * ready, and every indexed URI can be classified as either a workspace resource or a known
  * non-workspace resource, this helper calls {@link IReferenceFinder#findAllReferences} exactly as the
- * previous implementation did. Membership and readiness are captured before index enumeration and
+ * previous implementation did. A cancellation through the caller's monitor is the one exception: it is not
+ * an undeterminable scope, so it propagates as {@link org.eclipse.core.runtime.OperationCanceledException}
+ * from enumeration and from the finder alike. Membership and readiness are captured before index enumeration and
  * re-captured afterward; an observable change discards the scoped result. This is change DETECTION,
  * not an atomic snapshot.
  * <p>
@@ -134,7 +137,7 @@ public final class BslReferenceSearch
         IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor,
         SearchDependenciesResult before, CascadeEnvironment environment)
     {
-        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, before);
+        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, before, monitor);
         SearchDependenciesResult afterEnumeration =
             ProjectStateChecker.determineSearchDependencies(baseProject, environment);
         boolean stable = before != null && before.hasSameSnapshot(afterEnumeration);
@@ -177,8 +180,15 @@ public final class BslReferenceSearch
             ProjectStateChecker.determineSearchDependencies(baseProject, environment));
     }
 
+    /**
+     * Enumerates the scoped source set. The caller's monitor is polled before every index entry: a
+     * bounded search (find_references' time budget) must be able to end here too, since two passes over
+     * a large workspace index come before the finder walk. A cancellation is not a scope failure and is
+     * never turned into the workspace-wide fallback - it propagates, so the caller can tell its own stop
+     * from a foreign one (which it reports as an incomplete scan, failing closed).
+     */
     private static ScopeResolution resolveScope(IResourceServiceProvider resourceServiceProvider,
-        IProject baseProject, SearchDependenciesResult before)
+        IProject baseProject, SearchDependenciesResult before, IProgressMonitor monitor)
     {
         if (resourceServiceProvider == null)
         {
@@ -225,6 +235,10 @@ public final class BslReferenceSearch
                 Set<URI> currentPassSourceResourceURIs = new LinkedHashSet<>();
                 for (IResourceDescription description : descriptions)
                 {
+                    if (monitor != null && monitor.isCanceled())
+                    {
+                        throw new OperationCanceledException();
+                    }
                     if (description == null || description.getURI() == null)
                     {
                         return ScopeResolution.failure(
@@ -269,6 +283,12 @@ public final class BslReferenceSearch
             // project readiness, not an invented per-project resource-count rule, guards this case.
             return ScopeResolution.scoped(new ArrayList<>(secondPassSourceResourceURIs),
                 projectNames.size());
+        }
+        catch (OperationCanceledException e)
+        {
+            // A cancellation, not an undeterminable scope: widening to the whole workspace would turn
+            // a stop into the slowest possible search, and would hide a foreign cancellation.
+            throw e;
         }
         catch (RuntimeException e)
         {

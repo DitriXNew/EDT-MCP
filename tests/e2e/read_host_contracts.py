@@ -1,6 +1,7 @@
 """Exact windowed formatter pins, shared by windowed and display-free stdio acceptance."""
 
 import json
+import re
 from pathlib import Path
 
 from harness import assert_ok, assert_contains, assert_error
@@ -8,17 +9,43 @@ from harness import assert_ok, assert_contains, assert_error
 
 BASELINE = Path(__file__).with_name("resources") / "stdio-read-windowed.json"
 HEADLESS_BASELINE = BASELINE.with_name("stdio-read-headless.json")
+# The windowed get_symbol_info answer is EDT's editor hover, which EDT renders in its UI language
+# (the stand's -nl / OS locale). The main baseline holds the English UI; this one the Russian UI.
+RU_HOVER_BASELINE = BASELINE.with_name("stdio-read-windowed-ru.json")
 MOVED_TOOLS = ("get_metadata_objects", "get_metadata_details", "list_modules",
                "read_method_source", "get_module_structure", "get_symbol_info")
+
+# A type link in the hover: the label is the type name in EDT's UI language, the target names the
+# syntax-helper page by the type's ENGLISH name (def_Number) in every UI language.
+_V8HELP_TYPE_LINK = re.compile(r"\[([^\]]*)\]\(v8help:[^)\s]*/def_([A-Za-z0-9_]+)\)")
+_CYRILLIC = re.compile("[Ѐ-ӿ]")
 
 
 def baseline_cases():
     return json.loads(BASELINE.read_text(encoding="utf-8"))["cases"]
 
 
-def expected_response(label, case, host_kind):
+def hover_language(text):
+    """The UI language EDT rendered a hover in, read from the hover's own type links.
+
+    "en" when every type link's label is the English name its target carries, "ru" when every
+    label is Cyrillic, None otherwise (no type link, or a mix) - None selects the English pin,
+    so an unrecognised answer is still compared byte for byte and fails there."""
+    links = _V8HELP_TYPE_LINK.findall(text or "")
+    if not links:
+        return None
+    if all(label == english for label, english in links):
+        return "en"
+    if all(_CYRILLIC.search(label) for label, _ in links):
+        return "ru"
+    return None
+
+
+def expected_response(label, case, host_kind, actual_text=None):
     if host_kind == "HEADLESS" and case["tool"] == "get_symbol_info":
         return json.loads(HEADLESS_BASELINE.read_text(encoding="utf-8"))["cases"][label]["response"]
+    if case["tool"] == "get_symbol_info" and hover_language(actual_text) == "ru":
+        return json.loads(RU_HOVER_BASELINE.read_text(encoding="utf-8"))["cases"][label]["response"]
     return case["response"]
 
 
@@ -29,12 +56,15 @@ def _contract(tool, invoke, host_kind):
             continue
         result = invoke(tool, dict(case["arguments"]))
         assert_ok(result, host_kind + " " + label)
-        expected = expected_response(label, case, host_kind)
+        expected = expected_response(label, case, host_kind, result.text)
         text = expected["text"]
         if host_kind == "HEADLESS" and tool == "read_module_source":
             text = text.partition("\n## Extension interception\n")[0]
+        pin = ""
+        if host_kind == "WINDOWED" and tool == "get_symbol_info":
+            pin = " (hover language %s; pins exist for en and ru)" % (hover_language(result.text),)
         assert result.text.encode("utf-8") == text.encode("utf-8"), (
-            host_kind + " formatter contract changed: " + label + "\n"
+            host_kind + " formatter contract changed: " + label + pin + "\n"
             + repr(result.text) + "\nexpected: " + repr(text))
         assert result.structured == expected["structuredContent"], label
         assert result.is_error == expected["isError"], label

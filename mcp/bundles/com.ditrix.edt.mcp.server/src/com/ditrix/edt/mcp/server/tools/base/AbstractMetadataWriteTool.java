@@ -256,9 +256,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         // lookup. Only the transient BUILDING state is refused here; a missing/closed
         // project falls through to resolveProjectAndConfig's value-naming error. Checked
         // on the calling thread before marshalling onto the UI thread.
-        String building = requiresFullDerivedData()
-            ? ProjectStateChecker.buildingErrorOrNull(params.get("projectName")) //$NON-NLS-1$
-            : ProjectStateChecker.modelBuildingErrorOrNull(params.get("projectName")); //$NON-NLS-1$
+        String projectName = params.get("projectName"); //$NON-NLS-1$
+        String building = writeGateError(requiresFullDerivedData(),
+            () -> ProjectStateChecker.checkoutReloadErrorOrNull(projectName),
+            () -> ProjectStateChecker.buildingErrorOrNull(projectName),
+            () -> ProjectStateChecker.modelBuildingErrorOrNull(projectName));
         if (building != null)
         {
             return ToolResult.error(building).toJson();
@@ -275,7 +277,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 // whatever scope is bound.
                 try
                 {
-                    resultRef.set(executeOnUiThread(params));
+                    resultRef.set(recheckedOnUiThread(() -> ProjectStateChecker.checkoutReloadErrorOrNull(projectName),
+                        () -> executeOnUiThread(params)));
                 }
                 catch (Exception e)
                 {
@@ -324,6 +327,52 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             logExecutionFailure("Error finishing " + getName(), e); //$NON-NLS-1$
             return scope.markErrorAfterRecordedWrite(ToolResult.error(e.getMessage()).toJson());
         }
+    }
+
+    /**
+     * The UI-thread half of the checkout-reload gate (#922): the reload is asked again right before the write, after
+     * the call waited for the UI thread - a branch change of this server that registered meanwhile is refused here
+     * instead of being written into. It narrows the window to the time between this probe and the write; EDT offers
+     * no "write only if the model is not reloading", so that last window is the declared residual. Package-visible
+     * for tests.
+     *
+     * @param checkoutReload the checkout-reload refusal
+     * @param write the write
+     * @return the refusal as error JSON, or what the write returned
+     * @throws Exception what the write threw
+     */
+    static String recheckedOnUiThread(java.util.function.Supplier<String> checkoutReload,
+        java.util.concurrent.Callable<String> write) throws Exception
+    {
+        String reload = checkoutReload.get();
+        if (reload != null)
+        {
+            return ToolResult.error(reload).toJson();
+        }
+        return write.call();
+    }
+
+    /**
+     * The pre-write refusal. The model gate already includes the checkout-reload check; the STRICT gate does not, so
+     * a strict writer ({@code delete_metadata}, {@code apply_quick_fix}) asks it first - right after this server's
+     * branch switch the previous branch's model can read fully computed while its reload has not been scheduled yet
+     * (#922). Package-visible for tests.
+     *
+     * @param strict whether the tool uses the strict gate ({@link #requiresFullDerivedData()})
+     * @param checkoutReload the checkout-reload refusal
+     * @param strictGate the strict gate
+     * @param modelGate the model gate
+     * @return the refusal, or {@code null}
+     */
+    static String writeGateError(boolean strict, java.util.function.Supplier<String> checkoutReload,
+        java.util.function.Supplier<String> strictGate, java.util.function.Supplier<String> modelGate)
+    {
+        if (!strict)
+        {
+            return modelGate.get();
+        }
+        String reload = checkoutReload.get();
+        return reload != null ? reload : strictGate.get();
     }
 
     /**
