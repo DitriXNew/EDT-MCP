@@ -11,6 +11,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -237,13 +238,113 @@ public class RenameMetadataObjectTool implements IMcpTool
         String settle(String projectName, long timeoutMs);
     }
 
+    /** Bounded wait for the workspace build; the seam {@link #indexedThenSettled} composes. */
+    @FunctionalInterface
+    interface BuildWaiter
+    {
+        BuildUtils.BuildWait await(long timeoutMs);
+    }
+
     private final CascadeSettler cascadeSettler;
 
     /** Production instance: settle through the live EDT-backed project-state checker. */
     public RenameMetadataObjectTool()
     {
-        this((projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
-            timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
+        this(productionSettler());
+    }
+
+    /**
+     * The settle the production tool runs before every preview and confirm: the workspace build
+     * first, then the derived-data and BM-model settle. Package-visible so a test can prove the
+     * production wiring waits for a pending build.
+     */
+    static CascadeSettler productionSettler()
+    {
+        return indexedThenSettled(BuildUtils::awaitWorkspaceBuild,
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
+    }
+
+    /**
+     * Composes the pre-flight of a rename (#935): wait for the workspace build, then run
+     * {@code cascade} with what is left of the SAME budget.
+     * <p>
+     * The build comes first because it is what makes a just-written module visible to the rename at
+     * all: {@code write_module_source} answers once the file is written, the workspace build that
+     * indexes it starts up to a second later, and the reference finder of EDT's rename reads that
+     * index. Without this wait a rename issued right after the write collected its change points
+     * from the index of the OLD module text and answered {@code executed} with the new reference
+     * still naming the old element. The derived-data settle cannot see that window: the pipeline is
+     * idle until the build has run, so it is asked only afterwards. A build that is still pending,
+     * cannot start, or ended canceled or failed refuses the rename - running it could leave
+     * references behind.
+     *
+     * @param build the bounded build wait
+     * @param cascade the derived-data / BM-model settle run after it
+     * @return the composed settler
+     */
+    static CascadeSettler indexedThenSettled(BuildWaiter build, CascadeSettler cascade)
+    {
+        return (projectName, timeoutMs) -> {
+            long start = System.nanoTime();
+            BuildUtils.BuildWait outcome = build.await(timeoutMs);
+            if (outcome != BuildUtils.BuildWait.DRAINED)
+            {
+                return buildRefusal(outcome, timeoutMs);
+            }
+            long spent = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            return cascade.settle(projectName, Math.max(0L, timeoutMs - spent));
+        };
+    }
+
+    /** The retryable refusal for a workspace build that did not leave the BSL index current. */
+    static String buildRefusal(BuildUtils.BuildWait outcome, long timeoutMs)
+    {
+        String why;
+        String advice = "Please wait and retry."; //$NON-NLS-1$
+        switch (outcome)
+        {
+        case SUSPENDED:
+            why = "is pending, but EDT's job manager is suspended (EDT is still starting), so it " //$NON-NLS-1$
+                + "cannot run"; //$NON-NLS-1$
+            break;
+        case FAILED:
+            why = "ended canceled or with an error"; //$NON-NLS-1$
+            advice = "Build the project (Project > Build Project, or clean_project), then retry."; //$NON-NLS-1$
+            break;
+        case INTERRUPTED:
+            why = "could not be waited for: the call was interrupted"; //$NON-NLS-1$
+            break;
+        default:
+            why = "did not finish within " + (timeoutMs / 1000) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+            break;
+        }
+        return "Project is building: the workspace build that indexes the BSL modules " + why //$NON-NLS-1$
+            + ", so references written since the last build (for example by write_module_source) " //$NON-NLS-1$
+            + "would be missed by the rename. Nothing was renamed. " + advice; //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the automatic-build note to a rename's Markdown result (#935). With Eclipse's
+     * "Build Automatically" off, a module write schedules no build, so the rename reads the index
+     * of the user's LAST build: nothing pending can be waited for, and refusing would refuse every
+     * rename of a user who builds by hand, whether or not anything changed since. EDT's own rename
+     * reads the same index. The honest answer is to say so. A JSON error payload is left as it is.
+     *
+     * @param result the rename's result
+     * @param autoBuilding whether the workspace builds automatically
+     * @return the result, with the note when automatic building is off
+     */
+    static String withAutoBuildNote(String result, boolean autoBuilding)
+    {
+        if (autoBuilding || result == null || result.startsWith("{")) //$NON-NLS-1$
+        {
+            return result;
+        }
+        return result + "\n\n> **Note:** automatic building is off in this workspace, so the rename " //$NON-NLS-1$
+            + "searched the BSL index of the last build. A reference written since then (for example by " //$NON-NLS-1$
+            + "write_module_source) may be missing from the change points. Build the project and check " //$NON-NLS-1$
+            + "the modules you changed.\n"; //$NON-NLS-1$
     }
 
     /** Package-visible test seam for settling before the UI-thread hand-off. */
@@ -465,9 +566,10 @@ public class RenameMetadataObjectTool implements IMcpTool
                 if (queued.get() && !export.drained())
                     return WriteExportBarrier.notConfirmedAfterMutation(projectName, export.pendingProject() != null
                         ? BuildUtils.DiskExportState.PENDING : BuildUtils.DiskExportState.UNOBSERVABLE);
-                return finishHeadlessRename(projectName, objectFqn, newName, resultRef.get(), queued.get(), export.drained());
+                return withAutoBuildNote(finishHeadlessRename(projectName, objectFqn, newName, resultRef.get(),
+                    queued.get(), export.drained()), BuildUtils.isAutoBuilding());
             }
-            return resultRef.get();
+            return withAutoBuildNote(resultRef.get(), BuildUtils.isAutoBuilding());
         };
         if (!confirm)
         {

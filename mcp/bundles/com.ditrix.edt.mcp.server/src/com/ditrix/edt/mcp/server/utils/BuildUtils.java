@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -21,6 +21,9 @@ import java.util.function.LongSupplier;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.jobs.IJobManager;
 import org.eclipse.core.runtime.jobs.Job;
 
@@ -131,12 +134,197 @@ public final class BuildUtils
     }
     
     /**
+     * The job families of the Eclipse workspace build, in the order {@link #awaitWorkspaceBuild}
+     * joins them. The build is what runs EDT's Xtext builder ({@code xtextBuilder} in every EDT
+     * project's {@code .project}), and that builder is the only writer of the BSL index the
+     * reference finder of a rename reads.
+     */
+    static final List<Object> WORKSPACE_BUILD_FAMILIES =
+        List.of(ResourcesPlugin.FAMILY_AUTO_BUILD, ResourcesPlugin.FAMILY_MANUAL_BUILD);
+
+    /** How a {@link #awaitWorkspaceBuild} ended. Only {@link #DRAINED} lets a rename read the index. */
+    public enum BuildWait
+    {
+        /** No workspace build was sleeping, waiting or running at the end of a full pass. */
+        DRAINED,
+        /** A build was still pending when the deadline passed. */
+        TIMED_OUT,
+        /** The waiting thread was interrupted (its interrupt flag is kept). */
+        INTERRUPTED,
+        /**
+         * A build is pending while the job manager is suspended: it cannot start, and
+         * {@code IJobManager.join} would then wait only for jobs already RUNNING.
+         */
+        SUSPENDED,
+        /**
+         * A build this wait joined ended canceled or with an error, so the index it should have
+         * written may be stale.
+         */
+        FAILED
+    }
+
+    /**
+     * BOUNDED wait for the workspace build: {@link BuildWait#DRAINED} once a full pass over the
+     * build families finds no build job sleeping, waiting or running, otherwise the reason it could
+     * not be established.
+     * <p>
+     * Why a cascade needs it (#935): writing a {@code .bsl} file only SCHEDULES the auto-build -
+     * {@code AutoBuildJob.build} puts the job to sleep for 100-1000 ms before it runs - and only
+     * that build updates the Xtext index of BSL modules. A rename collects the module references it
+     * rewrites through EDT's {@code BslBmReferenceFinder}, which looks a module up in that index
+     * first: a reference written before the build ran is invisible to it, and the rename then
+     * leaves it pointing at the old name. The derived-data pipeline does not cover this window -
+     * it is idle until the build has run.
+     * <p>
+     * Unlike {@link #waitForBuildJobs}, this never blocks past its deadline:
+     * {@code IJobManager.join} polls its monitor about every 100 ms, and the monitor here reports
+     * cancellation once the deadline has passed. Joining a family includes its SLEEPING jobs, so a
+     * build that is scheduled but not yet started is waited for too - except while the job manager
+     * is suspended, when {@code join} waits only for RUNNING jobs; a pending build is then reported
+     * as {@link BuildWait#SUSPENDED} instead. The families are passed over again until one whole pass
+     * finds them all empty, so a build scheduled in one family while another was being joined is
+     * not missed. A joined build that ended canceled ({@code AutoBuildJob.canceled()} - unless
+     * interrupted, which reschedules it and is waited for) or with an error status is
+     * {@link BuildWait#FAILED}: its index may be stale.
+     * <p>
+     * What this cannot see: changes no build was scheduled for (automatic building off, see
+     * {@link #isAutoBuilding()}), and a build that ended canceled or failed BEFORE this wait began.
+     *
+     * @param timeoutMs how long to wait at most
+     * @return the outcome; only {@link BuildWait#DRAINED} means no workspace build is pending
+     */
+    public static BuildWait awaitWorkspaceBuild(long timeoutMs)
+    {
+        return awaitJobFamilies(Job.getJobManager(), WORKSPACE_BUILD_FAMILIES, timeoutMs);
+    }
+
+    /**
+     * Whether Eclipse's "Build Automatically" is on. When it is off, writing a module schedules no
+     * build at all, so a rename reads the index of the user's last build.
+     *
+     * @return {@code true} when the workspace builds automatically, or when that cannot be read
+     */
+    public static boolean isAutoBuilding()
+    {
+        try
+        {
+            return ResourcesPlugin.getWorkspace().isAutoBuilding();
+        }
+        catch (RuntimeException e) // NOSONAR no workspace: nothing to warn about
+        {
+            return true;
+        }
+    }
+
+    /**
+     * {@link #awaitWorkspaceBuild} over any job manager and families; package-visible so a test can
+     * drive it with its own job family, or a stand-in job manager, instead of the live build.
+     *
+     * @param manager the job manager to join on
+     * @param families the families to wait for, passed over under ONE deadline
+     * @param timeoutMs how long to wait at most for all of them together
+     * @return the outcome
+     */
+    static BuildWait awaitJobFamilies(IJobManager manager, List<Object> families, long timeoutMs)
+    {
+        if (Thread.currentThread().isInterrupted())
+        {
+            return BuildWait.INTERRUPTED;
+        }
+        long start = System.nanoTime();
+        long deadline = start + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+        boolean waited = false;
+        boolean pendingInPass = true;
+        while (pendingInPass)
+        {
+            pendingInPass = false;
+            for (Object family : families)
+            {
+                Job[] pending = manager.find(family);
+                if (pending.length == 0)
+                {
+                    continue;
+                }
+                pendingInPass = true;
+                waited = true;
+                if (manager.isSuspended())
+                {
+                    return BuildWait.SUSPENDED;
+                }
+                try
+                {
+                    manager.join(family, new DeadlineMonitor(deadline));
+                }
+                catch (OperationCanceledException e)
+                {
+                    Activator.logInfo("The workspace build did not finish within " + timeoutMs + " ms"); //$NON-NLS-1$ //$NON-NLS-2$
+                    return BuildWait.TIMED_OUT;
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return BuildWait.INTERRUPTED;
+                }
+                if (endedUnsuccessfully(pending))
+                {
+                    return BuildWait.FAILED;
+                }
+            }
+            if (pendingInPass && System.nanoTime() - deadline >= 0)
+            {
+                return BuildWait.TIMED_OUT;
+            }
+        }
+        if (waited)
+        {
+            Activator.logInfo("Waited " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) //$NON-NLS-1$
+                + " ms for the workspace build"); //$NON-NLS-1$
+        }
+        return BuildWait.DRAINED;
+    }
+
+    /**
+     * Whether one of the joined jobs ended canceled or with an error. A job that is pending again
+     * is not judged here: the next pass waits for its new run.
+     */
+    private static boolean endedUnsuccessfully(Job[] joined)
+    {
+        for (Job job : joined)
+        {
+            IStatus result = job.getResult();
+            if (job.getState() == Job.NONE && result != null
+                && (result.getSeverity() == IStatus.CANCEL || result.matches(IStatus.ERROR)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A monitor that reports cancellation once its deadline (a {@link System#nanoTime} value) passed. */
+    private static final class DeadlineMonitor extends NullProgressMonitor
+    {
+        private final long deadline;
+
+        DeadlineMonitor(long deadline)
+        {
+            this.deadline = deadline;
+        }
+
+        @Override
+        public boolean isCanceled()
+        {
+            return super.isCanceled() || System.nanoTime() - deadline >= 0;
+        }
+    }
+
+    /**
      * Waits for build jobs and derived data computations to complete.
-     * 
+     *
      * <p>Note: This method does NOT wait for lifecycle events. If you need to wait for
      * project restart during clean build, use {@link LifecycleWaiter#prepareForRestart(IDtProject)}
      * BEFORE triggering the build, then call {@link LifecycleWaiter.ProjectRestartWaiter#await(long)}.
-     * 
+     *
      * @param project the IProject to wait for
      * @param monitor progress monitor
      */

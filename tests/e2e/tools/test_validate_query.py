@@ -176,8 +176,10 @@ def test_extension_union_scope_rejects_unknown_borrowed_field():
     assert r.structured.get("valid") is False, \
         "an unknown field must be invalid in the union scope: %r" % (r.structured,)
     issues = r.structured.get("issues") or []
-    assert any("not found" in str(issue.get("message", "")).lower() for issue in issues), \
-        "the unknown field must produce a 'not found' issue: %r" % (issues,)
+    # The issue CODE, not the message: the message is EDT's localized text ("Поле ... не найдено"
+    # under a Russian EDT, #935), while the code is the validator's stable identifier.
+    assert any(issue.get("code") == "Field not found" for issue in issues), \
+        "the unknown field must produce a 'Field not found' issue: %r" % (issues,)
     assert_no_diff("validate_query is read-only; nothing may change on disk")
 
 

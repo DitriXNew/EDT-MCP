@@ -630,6 +630,29 @@ public class GetMetadataDetailsTool implements IMcpTool
             sb.append(SECTION_SEPARATOR);
             return;
         }
+        // A NESTED subsystem is its own top object that its parent only REFERS to, so the containment
+        // grammar below has no step to it: it resolves by its chain, by the very rule modify_metadata
+        // writes it with (MetadataNodeResolver.resolveNestedSubsystem, yo retry included), and is named
+        // by its canonical chain - this view lists what that write sets (issue #929). A malformed chain
+        // is refused as the plain view refuses it, never rendered by its trimmed reading.
+        if (isMalformedSubsystemChain(fqn) && !ctx.scope.isExternalObjects())
+        {
+            String segment = SubsystemUtils.malformedSegmentError(normFqn);
+            failures.add(new String[] { fqn, segment != null ? segment : MALFORMED_SUBSYSTEM_CHAIN });
+            return;
+        }
+        if (SubsystemUtils.nestedChain(normFqn) != null && !ctx.scope.isExternalObjects())
+        {
+            MetadataNodeResolver.ResolvedNode nested = MetadataNodeResolver.resolveNestedSubsystem(ctx.scope, normFqn, true);
+            if (nested.node == null || nested.node.object == null)
+            {
+                failures.add(new String[] { fqn, NESTED_SUBSYSTEM_NOT_FOUND });
+                return;
+            }
+            sb.append(formatAssignable(nested.fqn, nested.node.object));
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.scope, fqn);
         if (node == null || node.object == null)
         {
@@ -1652,7 +1675,9 @@ public class GetMetadataDetailsTool implements IMcpTool
                 + "root itself is '" + ConfigurationRoot.FQN + "'"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         String hint = scope == null ? "" : scope.addressingHint(fqn); //$NON-NLS-1$
-        return "Object not found - use get_metadata_objects to list valid FQNs" + hint; //$NON-NLS-1$
+        // A short 'Subsystem.<Child>' of a subsystem that exists only nested names its chains (issue #929).
+        String nested = SubsystemUtils.nestedNamesakesHint(scope, MetadataTypeUtils.normalizeFqn(fqn));
+        return "Object not found - use get_metadata_objects to list valid FQNs" + nested + hint; //$NON-NLS-1$
     }
 
     /**
