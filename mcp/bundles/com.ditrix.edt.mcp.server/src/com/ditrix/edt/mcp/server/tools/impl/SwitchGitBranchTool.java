@@ -260,7 +260,8 @@ public class SwitchGitBranchTool implements IMcpTool
         // #922: answer only once EDT has loaded the new branch into the models of the refreshed projects (bounded),
         // or say which ones are still loading - a write sent in that window is refused by the write gate.
         String note = outcome.refreshWarning();
-        if (outcome.result() != null && outcome.result().getStatus() == CheckoutResult.Status.OK)
+        // NONDELETED moved HEAD too (some paths could not be removed): the models reload all the same (#922).
+        if (outcome.result() != null && GitCheckoutSupport.changesBranch(outcome.result().getStatus()))
         {
             note = GitCheckoutSupport.joinNotes(note, GitCheckoutSupport.awaitModelReload(outcome));
             // The wait runs outside BranchBindingLock: another branch change may have checked out something else
@@ -280,6 +281,12 @@ public class SwitchGitBranchTool implements IMcpTool
      */
     static String movedAwayError(String targetShort, String now)
     {
+        if (GitCheckoutSupport.UNREADABLE.equals(now))
+        {
+            return ToolResult.error("Switched to branch '" + targetShort + "', but after waiting for EDT to load it " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the repository's current branch could not be read, so it is not confirmed to be on '" //$NON-NLS-1$
+                + targetShort + "'. Check list_git_branches before relying on it.").toJson(); //$NON-NLS-1$
+        }
         return ToolResult.error("Switched to branch '" + targetShort + "', but while this call waited for EDT to " //$NON-NLS-1$ //$NON-NLS-2$
             + "load it another checkout moved the repository to '" + now + "'; it is on '" + now //$NON-NLS-1$ //$NON-NLS-2$
             + "' now, not on '" + targetShort + "'. Check list_git_branches and switch again if needed.") //$NON-NLS-1$ //$NON-NLS-2$

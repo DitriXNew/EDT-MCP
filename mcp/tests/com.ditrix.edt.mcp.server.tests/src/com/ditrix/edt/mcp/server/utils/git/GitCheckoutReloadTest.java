@@ -245,6 +245,71 @@ public class GitCheckoutReloadTest
         }
     }
 
+    // ==================== Codex round 3 on #928 ====================
+
+    /** Only a refresh that ran and refreshed every project lets the registration settle; otherwise it is pinned. */
+    @Test
+    public void onlyACleanRefreshReleasesTheRegistration()
+    {
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration clean =
+            com.ditrix.edt.mcp.server.utils.CheckoutReloads.begin(List.of("Clean922")); //$NON-NLS-1$
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration failed =
+            com.ditrix.edt.mcp.server.utils.CheckoutReloads.begin(List.of("Failed922")); //$NON-NLS-1$
+        com.ditrix.edt.mcp.server.utils.CheckoutReloads.Registration notRun =
+            com.ditrix.edt.mcp.server.utils.CheckoutReloads.begin(List.of("NotRun922")); //$NON-NLS-1$
+        try
+        {
+            GitCheckoutSupport.concludeRefresh(clean, true, null);
+            GitCheckoutSupport.concludeRefresh(failed, true, "refresh failed for Failed922"); //$NON-NLS-1$
+            GitCheckoutSupport.concludeRefresh(notRun, false, null);
+
+            assertTrue(isNotHeldBusy("Clean922")); //$NON-NLS-1$
+            assertFalse(isNotHeldBusy("Failed922")); //$NON-NLS-1$
+            assertFalse(isNotHeldBusy("NotRun922")); //$NON-NLS-1$
+        }
+        finally
+        {
+            clean.release();
+            failed.release();
+            notRun.release();
+        }
+    }
+
+    /** Whether an idle observation of {@code name} is not held as loading by its own registration. */
+    private static boolean isNotHeldBusy(String name)
+    {
+        return com.ditrix.edt.mcp.server.utils.CheckoutReloads.observe(name, false)
+            != com.ditrix.edt.mcp.server.utils.CheckoutReloads.State.LOADING;
+    }
+
+    /** NONDELETED moved HEAD, so it is a branch-changing outcome; only NOT_TRIED and CONFLICTS left the tree alone. */
+    @Test
+    public void nondeletedChangesTheBranchAndOnlyCleanFailuresLeaveTheTree()
+    {
+        assertTrue(GitCheckoutSupport.changesBranch(CheckoutResult.Status.OK));
+        assertTrue(GitCheckoutSupport.changesBranch(CheckoutResult.Status.NONDELETED));
+        assertFalse(GitCheckoutSupport.changesBranch(CheckoutResult.Status.CONFLICTS));
+        assertFalse(GitCheckoutSupport.changesBranch(null));
+
+        assertTrue(GitCheckoutSupport.leavesTreeUntouched(CheckoutResult.Status.CONFLICTS));
+        assertTrue(GitCheckoutSupport.leavesTreeUntouched(CheckoutResult.Status.NOT_TRIED));
+        assertFalse(GitCheckoutSupport.leavesTreeUntouched(CheckoutResult.Status.ERROR));
+        assertFalse(GitCheckoutSupport.leavesTreeUntouched(null));
+    }
+
+    /** Codex P2 on #928: an unreadable branch is never taken for "still on the switched-to branch". */
+    @Test
+    public void anUnreadableBranchIsNotStillCheckedOut() throws Exception
+    {
+        org.eclipse.jgit.lib.Repository throwing = org.mockito.Mockito.mock(org.eclipse.jgit.lib.Repository.class);
+        org.mockito.Mockito.when(throwing.getFullBranch()).thenThrow(new java.io.IOException("HEAD unreadable")); //$NON-NLS-1$
+        org.eclipse.jgit.lib.Repository nothing = org.mockito.Mockito.mock(org.eclipse.jgit.lib.Repository.class);
+        org.mockito.Mockito.when(nothing.getFullBranch()).thenReturn(null);
+
+        assertEquals(GitCheckoutSupport.UNREADABLE, GitCheckoutSupport.movedAwayFrom(throwing, "refs/heads/feature")); //$NON-NLS-1$
+        assertEquals(GitCheckoutSupport.UNREADABLE, GitCheckoutSupport.movedAwayFrom(nothing, "refs/heads/feature")); //$NON-NLS-1$
+    }
+
     /** An outcome built without a refresh names no project to wait for. */
     @Test
     public void anOutcomeWithoutARefreshNamesNoProject()

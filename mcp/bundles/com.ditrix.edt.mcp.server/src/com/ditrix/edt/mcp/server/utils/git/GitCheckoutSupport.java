@@ -67,6 +67,9 @@ public final class GitCheckoutSupport
     /** Background-Job timeout for the checkout (mirrors {@code CreateInfobaseTool}). */
     public static final long CHECKOUT_TIMEOUT_SECONDS = 120;
 
+    /** What {@link #movedAwayFrom} answers when the repository's current branch cannot be read (#922). */
+    public static final String UNREADABLE = "(unreadable)"; //$NON-NLS-1$
+
     /** How long the post-checkout workspace refresh is waited for before it becomes a note (#922). */
     public static final long REFRESH_TIMEOUT_SECONDS = 120;
 
@@ -252,6 +255,10 @@ public final class GitCheckoutSupport
     {
         BranchOperation op = new BranchOperation(repo, fullRef);
         AtomicReference<Exception> jobError = new AtomicReference<>();
+        // Registered BEFORE the checkout starts (#922): metadata writers do not take BranchBindingLock, so a write that
+        // arrived between the checkout's end and a later registration would land in the previous branch's model.
+        List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(WorkTreeProjects.names(projects));
 
         Job checkoutJob = new Job("Checkout git branch: " + fullRef) //$NON-NLS-1$
         {
@@ -277,16 +284,28 @@ public final class GitCheckoutSupport
             () -> affectedProjects(project, repo));
         if (unfinished != null)
         {
+            // The checkout may still be rewriting the tree: keep the projects registered until the expiry.
+            reload.pin();
             return unfinished;
         }
 
         if (jobError.get() != null)
         {
+            reload.pin();
             return new CheckoutOutcome(null, null, false, false, jobError.get(), false);
         }
         CheckoutResult result = op.getResult(repo);
-        if (result == null || result.getStatus() != CheckoutResult.Status.OK)
+        CheckoutResult.Status status = result == null ? null : result.getStatus();
+        if (!changesBranch(status))
         {
+            if (leavesTreeUntouched(status))
+            {
+                reload.release();
+            }
+            else
+            {
+                reload.pin();
+            }
             return new CheckoutOutcome(result, null, false, false, null, false);
         }
         // Unconditional refresh (see class javadoc): on the EGit-mapped path BranchOperation already refreshed the
@@ -294,9 +313,8 @@ public final class GitCheckoutSupport
         // keeps the EDT model from going stale. It runs in its OWN bounded Job after the checkout Job has ended
         // (#922): a slow refresh must not turn a checkout that already succeeded into a timed-out one. A refresh that
         // fails or outlives its wait is a note on the successful outcome, never a failure of it.
-        List<IProject> projects = projectsToRefresh(project, WorkTreeProjects.checkedOutWith(repo.getWorkTree()));
         String refreshWarning = refreshAfterCheckout(projects,
-            TimeUnit.SECONDS.toMillis(REFRESH_TIMEOUT_SECONDS));
+            TimeUnit.SECONDS.toMillis(REFRESH_TIMEOUT_SECONDS), reload);
         return new CheckoutOutcome(result, refreshWarning, false, false, null, false)
             .withRefreshedProjects(projects);
     }
@@ -439,15 +457,18 @@ public final class GitCheckoutSupport
      * @param timeoutMillis how long to wait for the refresh
      * @return a short note for {@link CheckoutOutcome#refreshWarning()}, or {@code null} when the refresh ended cleanly
      */
-    private static String refreshAfterCheckout(List<IProject> projects, long timeoutMillis)
+    private static String refreshAfterCheckout(List<IProject> projects, long timeoutMillis,
+        CheckoutReloads.Registration reload)
     {
         AtomicReference<String> failure = new AtomicReference<>();
+        AtomicBoolean ran = new AtomicBoolean();
         Job refresh = new Job("Refresh projects after a git checkout") //$NON-NLS-1$
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
                 failure.set(refreshAll(projects, monitor));
+                ran.set(true);
                 return Status.OK_STATUS;
             }
         };
@@ -455,18 +476,63 @@ public final class GitCheckoutSupport
         refresh.setSystem(true);
         // The projects count as reloading until this refresh has ENDED, not merely until its wait ran out: a refresh
         // that is still scanning has not reported the rewritten files yet, so no other signal shows the reload (#922).
-        AtomicBoolean ended = new AtomicBoolean();
         refresh.addJobChangeListener(new JobChangeAdapter()
         {
             @Override
             public void done(IJobChangeEvent event)
             {
-                ended.set(true);
+                concludeRefresh(reload, ran.get(), failure.get());
             }
         });
-        CheckoutReloads.register(WorkTreeProjects.names(projects), () -> !ended.get());
         McpJobs.schedule(refresh);
         return awaitRefresh(refresh, timeoutMillis, () -> WorkTreeProjects.names(projects), failure);
+    }
+
+    /**
+     * What the end of the post-checkout refresh means for the reload registration (#922). A refresh that ran and
+     * refreshed every project lets the projects settle once they are seen idle; a refresh that failed for a project,
+     * or never ran (cancelled), told EDT nothing about the rewritten files, so no later signal would show the stale
+     * model - the projects stay registered until the expiry. Package-visible for tests.
+     *
+     * @param reload the checkout's registration
+     * @param ran whether the refresh ran to its end
+     * @param failure the refresh's failure note, or {@code null}
+     */
+    static void concludeRefresh(CheckoutReloads.Registration reload, boolean ran, String failure)
+    {
+        if (ran && failure == null)
+        {
+            reload.done();
+        }
+        else
+        {
+            reload.pin();
+        }
+    }
+
+    /**
+     * Whether a JGit checkout status means HEAD moved to the new branch: {@code OK}, and {@code NONDELETED} (switched,
+     * but some paths could not be removed). Package-visible for tests.
+     *
+     * @param status the status, or {@code null}
+     * @return {@code true} for a branch-changing outcome
+     */
+    public static boolean changesBranch(CheckoutResult.Status status)
+    {
+        return status == CheckoutResult.Status.OK || status == CheckoutResult.Status.NONDELETED;
+    }
+
+    /**
+     * Whether a JGit checkout status guarantees the work tree was not touched: {@code NOT_TRIED} and {@code CONFLICTS}
+     * (JGit checks for conflicts before writing anything). {@code ERROR} and an absent status are not known to have
+     * left the tree alone. Package-visible for tests.
+     *
+     * @param status the status, or {@code null}
+     * @return {@code true} when nothing was rewritten
+     */
+    static boolean leavesTreeUntouched(CheckoutResult.Status status)
+    {
+        return status == CheckoutResult.Status.NOT_TRIED || status == CheckoutResult.Status.CONFLICTS;
     }
 
     /**
@@ -540,8 +606,9 @@ public final class GitCheckoutSupport
      *
      * @param repo the repository
      * @param fullRef the ref the checkout put the repository on
-     * @return {@code null} when it is still checked out (or the state cannot be read), otherwise what is checked out
-     *         now: a short branch name, or the commit of a detached HEAD
+     * @return {@code null} when it is still checked out, {@link #UNREADABLE} when the state cannot be read (never taken
+     *         for "still checked out"), otherwise what is checked out now: a short branch name, or the commit of a
+     *         detached HEAD
      */
     public static String movedAwayFrom(Repository repo, String fullRef)
     {
@@ -552,9 +619,13 @@ public final class GitCheckoutSupport
         }
         catch (java.io.IOException | RuntimeException e)
         {
-            return null;
+            return UNREADABLE;
         }
-        if (now == null || now.equals(fullRef))
+        if (now == null)
+        {
+            return UNREADABLE;
+        }
+        if (now.equals(fullRef))
         {
             return null;
         }

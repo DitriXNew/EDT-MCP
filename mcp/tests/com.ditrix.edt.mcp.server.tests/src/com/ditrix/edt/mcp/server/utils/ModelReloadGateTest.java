@@ -184,6 +184,33 @@ public class ModelReloadGateTest
             org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong());
     }
 
+    /**
+     * Codex P1 on #928 (round 3): the base is settled, but an adopting extension that this server just switched takes
+     * part in the cascade - the refactoring would write into its previous-branch model.
+     */
+    @Test
+    public void aCascadeWithAJustSwitchedParticipantIsRefused()
+    {
+        IProject base = mock(IProject.class);
+        when(base.getName()).thenReturn("Base"); //$NON-NLS-1$
+        when(base.exists()).thenReturn(true);
+        when(base.isOpen()).thenReturn(true);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("SwitchedExtension"); //$NON-NLS-1$
+        ProjectStateChecker.CascadeEnvironment env = mock(ProjectStateChecker.CascadeEnvironment.class);
+        when(env.hasBmModelProjectNature(base)).thenReturn(Boolean.TRUE);
+        when(env.getOpenDtProjects()).thenReturn(List.of(base, extension));
+        when(env.isExtensionProject(extension)).thenReturn(true);
+        when(env.resolveBaseProject(extension)).thenReturn(base);
+        when(env.checkoutReloadErrorOrNull(extension)).thenReturn(ProjectStateChecker.LOADING_FROM_DISK_ERROR);
+
+        String error = ProjectStateChecker.settleBeforeCascadeOrError(base, 50L, env, "rename_metadata_object", //$NON-NLS-1$
+            "Nothing was renamed."); //$NON-NLS-1$
+
+        assertTrue(String.valueOf(error), error != null && error.contains("'SwitchedExtension'") //$NON-NLS-1$
+            && error.contains(ProjectStateChecker.LOADING_FROM_DISK_ERROR));
+    }
+
     /** The refusal keeps the prefix the e2e harness and agents retry on, and says nothing was changed. */
     @Test
     public void theLoadingRefusalIsRetryableAndSaysNothingChanged()

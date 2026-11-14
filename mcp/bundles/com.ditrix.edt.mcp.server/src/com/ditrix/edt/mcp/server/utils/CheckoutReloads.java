@@ -68,6 +68,9 @@ public final class CheckoutReloads
     /** Test hook run just before an idle registration is removed; {@code null} in production. */
     static volatile Runnable beforeSettle;
 
+    /** Test hook run just before an expired registration is removed; {@code null} in production. */
+    static volatile Runnable beforeExpire;
+
     private CheckoutReloads()
     {
         // Utility class
@@ -86,16 +89,88 @@ public final class CheckoutReloads
         register(projectNames, busy, System.nanoTime());
     }
 
-    static void register(Collection<String> projectNames, BooleanSupplier busy, long nowNanos)
+    static Map<String, Object> register(Collection<String> projectNames, BooleanSupplier busy, long nowNanos)
     {
         purgeExpired(nowNanos);
         long expires = nowNanos + TimeUnit.MILLISECONDS.toNanos(EXPIRY_MS);
         BooleanSupplier running = busy == null ? () -> false : busy;
+        Map<String, Object> put = new java.util.LinkedHashMap<>();
         for (String name : projectNames)
         {
             if (name != null)
             {
-                PENDING.put(name, new Entry(expires, running));
+                Entry entry = new Entry(expires, running);
+                PENDING.put(name, entry);
+                put.put(name, entry);
+            }
+        }
+        return put;
+    }
+
+    /**
+     * Registers the projects a checkout is ABOUT to rewrite, before the checkout starts, so no write can slip in
+     * between the checkout's end and the registration (#922). The caller then reports how the checkout went: the
+     * registration is held (loading) until {@link Registration#done()}, kept until it expires after
+     * {@link Registration#pin()}, and dropped by {@link Registration#release()} when nothing was rewritten.
+     *
+     * @param projectNames the projects of the work tree
+     * @return the registration
+     */
+    public static Registration begin(Collection<String> projectNames)
+    {
+        return begin(projectNames, System.nanoTime());
+    }
+
+    static Registration begin(Collection<String> projectNames, long nowNanos)
+    {
+        Registration registration = new Registration();
+        registration.entries.putAll(register(projectNames, registration::busy, nowNanos));
+        return registration;
+    }
+
+    /** A checkout's own registration, from before the checkout to the end of its post-checkout refresh. */
+    public static final class Registration
+    {
+        private enum Phase
+        {
+            RUNNING, DONE, PINNED
+        }
+
+        private final java.util.concurrent.atomic.AtomicReference<Phase> phase =
+            new java.util.concurrent.atomic.AtomicReference<>(Phase.RUNNING);
+
+        private final Map<String, Object> entries = new ConcurrentHashMap<>();
+
+        private Registration()
+        {
+        }
+
+        private boolean busy()
+        {
+            return phase.get() != Phase.DONE;
+        }
+
+        /** The checkout and its refresh ended cleanly: the projects settle once they are seen idle. */
+        public void done()
+        {
+            phase.compareAndSet(Phase.RUNNING, Phase.DONE);
+        }
+
+        /**
+         * The checkout's effect on disk, or the refresh that tells EDT about it, is not known to have completed (a
+         * timed-out or failed checkout, a failed refresh): the projects stay registered until the expiry.
+         */
+        public void pin()
+        {
+            phase.set(Phase.PINNED);
+        }
+
+        /** The checkout rewrote nothing (it did not run, or JGit left the tree as it was): drop this registration. */
+        public void release()
+        {
+            for (Map.Entry<String, Object> e : entries.entrySet())
+            {
+                PENDING.remove(e.getKey(), e.getValue());
             }
         }
     }
@@ -126,17 +201,28 @@ public final class CheckoutReloads
         {
             return false;
         }
-        Entry entry = PENDING.get(projectName);
-        if (entry == null)
+        while (true)
         {
-            return false;
+            Entry entry = PENDING.get(projectName);
+            if (entry == null)
+            {
+                return false;
+            }
+            if (nowNanos - entry.expiresAtNanos < 0)
+            {
+                return true;
+            }
+            Runnable hook = beforeExpire;
+            if (hook != null)
+            {
+                hook.run();
+            }
+            if (PENDING.remove(projectName, entry))
+            {
+                return false;
+            }
+            // A newer checkout replaced the expired registration meanwhile: ask about that one instead.
         }
-        if (nowNanos - entry.expiresAtNanos >= 0)
-        {
-            PENDING.remove(projectName, entry);
-            return false;
-        }
-        return true;
     }
 
     /**
@@ -207,5 +293,6 @@ public final class CheckoutReloads
     {
         PENDING.clear();
         beforeSettle = null;
+        beforeExpire = null;
     }
 }

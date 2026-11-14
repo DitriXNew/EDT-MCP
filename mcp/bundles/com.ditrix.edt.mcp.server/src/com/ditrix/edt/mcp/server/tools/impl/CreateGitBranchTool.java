@@ -147,7 +147,7 @@ public class CreateGitBranchTool implements IMcpTool
             .booleanProperty(KEY_CREATED, "Always true on a non-error result.") //$NON-NLS-1$
             .booleanProperty(KEY_CHECKED_OUT,
                 "Whether the branch ended up checked out. False when checkout was not requested, " //$NON-NLS-1$
-                + "or was requested but did not complete cleanly (see message).") //$NON-NLS-1$
+                + "or the new branch did not end up checked out (see message).") //$NON-NLS-1$
             .stringProperty(KEY_START_POINT, "The start point actually used ('HEAD' when none was given).") //$NON-NLS-1$
             .objectProperty(KEY_BOUND,
                 "Branch-infobase binding read-back: {infobases: [...], defaultInfobase}. Present " //$NON-NLS-1$
@@ -313,8 +313,15 @@ public class CreateGitBranchTool implements IMcpTool
 
         CheckoutResult result = outcome.result();
         CheckoutResult.Status status = result != null ? result.getStatus() : CheckoutResult.Status.ERROR;
-        if (status == CheckoutResult.Status.OK)
+        if (GitCheckoutSupport.changesBranch(status))
         {
+            if (status == CheckoutResult.Status.NONDELETED)
+            {
+                // HEAD moved to the new branch; JGit only could not remove some paths (#922).
+                warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' switched the repository, but some files could " //$NON-NLS-1$
+                    + "not be deleted (likely locked or dirty): " + SwitchGitBranchTool.joinBounded( //$NON-NLS-1$
+                        result.getUndeletedList()) + "."); //$NON-NLS-1$
+            }
             String note = GitCheckoutSupport.joinNotes(outcome.refreshWarning(),
                 GitCheckoutSupport.awaitModelReload(outcome));
             if (note != null)
@@ -346,6 +353,12 @@ public class CreateGitBranchTool implements IMcpTool
         if (now == null)
         {
             return true;
+        }
+        if (GitCheckoutSupport.UNREADABLE.equals(now))
+        {
+            warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' succeeded, but " + during + " the repository's " //$NON-NLS-1$ //$NON-NLS-2$
+                + "current branch became unreadable, so the new branch is not confirmed to be the one checked out."); //$NON-NLS-1$
+            return false;
         }
         warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' succeeded, but " + during + " another checkout moved " //$NON-NLS-1$ //$NON-NLS-2$
             + "the repository to '" + now + "'; the new branch is not the one checked out now."); //$NON-NLS-1$ //$NON-NLS-2$

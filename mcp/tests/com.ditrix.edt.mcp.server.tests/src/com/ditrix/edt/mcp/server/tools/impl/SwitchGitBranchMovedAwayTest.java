@@ -26,4 +26,15 @@ public class SwitchGitBranchMovedAwayTest
         assertTrue(error, error.contains("on 'master' now")); //$NON-NLS-1$
         assertTrue(error, error.contains("list_git_branches")); //$NON-NLS-1$
     }
+
+    /** Codex P2 on #928 (round 3): an unreadable final state is an error, never "on the branch". */
+    @Test
+    public void anUnreadableFinalStateIsNotConfirmed()
+    {
+        String error = SwitchGitBranchTool.movedAwayError("feature", //$NON-NLS-1$
+            com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport.UNREADABLE);
+
+        assertTrue(error, error.contains("could not be read") && error.contains("'feature'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error, error.contains("list_git_branches")); //$NON-NLS-1$
+    }
 }

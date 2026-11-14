@@ -51,6 +51,19 @@ public class CreateGitBranchRecheckTest
         });
     }
 
+    /** Codex P2 on #928 (round 3): an unreadable branch never reports the new branch as checked out. */
+    @Test
+    public void anUnreadableBranchIsNotReportedCheckedOut() throws Exception
+    {
+        org.eclipse.jgit.lib.Repository repo = org.mockito.Mockito.mock(org.eclipse.jgit.lib.Repository.class);
+        org.mockito.Mockito.when(repo.getFullBranch()).thenThrow(new java.io.IOException("HEAD unreadable")); //$NON-NLS-1$
+        List<String> warnings = new ArrayList<>();
+
+        assertFalse(CreateGitBranchTool.stillCheckedOut(repo, "feature", "during", warnings)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(warnings.toString(), warnings.size() == 1 && warnings.get(0).contains("current branch became unreadable") //$NON-NLS-1$
+            && !warnings.get(0).contains("moved the repository")); //$NON-NLS-1$
+    }
+
     private interface GitWork
     {
         void run(Git git) throws Exception;

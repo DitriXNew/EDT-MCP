@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -1243,6 +1243,11 @@ public final class ProjectStateChecker
                 env.waitForDerivedData(project, remaining);
             }
             List<IProject> participants = findParticipants(project, env);
+            String participantReload = participantReloadError(participants, env);
+            if (participantReload != null)
+            {
+                return participantReload;
+            }
             lastNewParticipant = rememberNewParticipants(participants,
                 discoveredParticipantNames);
             discoveredNewParticipantThisPass = lastNewParticipant != null;
@@ -1313,6 +1318,12 @@ public final class ProjectStateChecker
             }
             List<IProject> unserved = findUnsettledParticipants(participants,
                 settledParticipantNames);
+            // The participant set is read again here; one just switched by this server must not join the cascade.
+            String refreshedReload = participantReloadError(participants, env);
+            if (refreshedReload != null)
+            {
+                return refreshedReload;
+            }
             if (refreshedBuilding == null && unserved.isEmpty())
             {
                 return null;
@@ -1895,6 +1906,23 @@ public final class ProjectStateChecker
             }
             return Collections.unmodifiableSet(names);
         }
+    }
+
+    /**
+     * The checkout-reload refusal for the first cascade participant this server just switched, or {@code null}: the
+     * refactoring writes into every participant, so each must have taken in its checkout (#922).
+     */
+    private static String participantReloadError(List<IProject> participants, CascadeEnvironment env)
+    {
+        for (IProject participant : participants)
+        {
+            String reload = env.checkoutReloadErrorOrNull(participant);
+            if (reload != null)
+            {
+                return "Project '" + participant.getName() + "' takes part in this cascade. " + reload; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
     }
 
     private static List<IProject> findParticipants(IProject base, CascadeEnvironment env)

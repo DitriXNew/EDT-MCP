@@ -13,7 +13,7 @@ Once `branch` itself is created, that is FINAL - nothing after it can turn the r
 { "success": true, "branch": "feature/x", "created": true, "checkedOut": true,
   "startPoint": "HEAD", "bound": { "infobases": ["MyBase"], "defaultInfobase": "MyBase" } }
 ```
-- `checkedOut` is `true` only when `checkout` was requested AND the checkout completed cleanly. If checkout was requested but timed out, was interrupted, or left conflicts, `checkedOut` is `false` and `message` explains why - **the branch still exists**. After a timeout the checkout may still be finishing (see `checkout`); otherwise the branch is simply not the one checked out.
+- `checkedOut` is `true` only when `checkout` was requested AND the new branch ended up checked out - also when JGit could not delete some files (`message` lists them). If checkout was requested but timed out, was interrupted, or left conflicts, `checkedOut` is `false` and `message` explains why - **the branch still exists**. After a timeout the checkout may still be finishing (see `checkout`); otherwise the branch is simply not the one checked out.
 - `bound` is present only when `applicationId` was given AND the binding succeeded; a resolution or association failure (application not found, no infobase reference, association-manager error) instead appends to `message` and omits `bound` - again, the branch itself is unaffected. A default EDT refuses after a successful attach (see `setDefault`) appends to `message` too, but keeps `bound`: the attach stands.
 - `startPoint` echoes what was actually used: the given value, or the literal `"HEAD"` when omitted.
 

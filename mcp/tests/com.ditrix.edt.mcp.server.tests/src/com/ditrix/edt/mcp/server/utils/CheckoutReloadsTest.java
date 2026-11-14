@@ -136,6 +136,64 @@ public class CheckoutReloadsTest
         assertEquals(1, CheckoutReloads.size());
     }
 
+    // ==================== Codex round 3 on #928 ====================
+
+    /** A registration made before the checkout holds the projects as loading until the checkout's refresh is done. */
+    @Test
+    public void aRegistrationMadeBeforeTheCheckoutLoadsUntilDone()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+
+        assertEquals(State.LOADING, CheckoutReloads.observe("P", false, T0 + ms(10 * CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+        reload.done();
+        long t = T0 + ms(11 * CheckoutReloads.STABLE_MS);
+        assertEquals(State.SETTLING, CheckoutReloads.observe("P", false, t)); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, t + ms(CheckoutReloads.STABLE_MS))); //$NON-NLS-1$
+    }
+
+    /** A pinned registration (failed refresh, unfinished checkout) never settles before the expiry. */
+    @Test
+    public void aPinnedRegistrationHoldsUntilTheExpiry()
+    {
+        CheckoutReloads.Registration reload = CheckoutReloads.begin(List.of("P"), T0); //$NON-NLS-1$
+        reload.pin();
+        reload.done();
+
+        assertEquals("done() after pin() does not release it", State.LOADING, //$NON-NLS-1$
+            CheckoutReloads.observe("P", false, T0 + ms(CheckoutReloads.EXPIRY_MS - 1))); //$NON-NLS-1$
+        assertEquals(State.SETTLED, CheckoutReloads.observe("P", false, T0 + ms(CheckoutReloads.EXPIRY_MS))); //$NON-NLS-1$
+    }
+
+    /** A checkout that rewrote nothing drops its own registration - but never a newer one. */
+    @Test
+    public void releaseDropsOnlyItsOwnRegistration()
+    {
+        CheckoutReloads.Registration first = CheckoutReloads.begin(List.of("A", "B"), T0); //$NON-NLS-1$ //$NON-NLS-2$
+        CheckoutReloads.begin(List.of("B"), T0 + 1); //$NON-NLS-1$
+
+        first.release();
+
+        assertFalse(CheckoutReloads.isPending("A", T0 + 2)); //$NON-NLS-1$
+        assertTrue("the newer registration of B stays", CheckoutReloads.isPending("B", T0 + 2)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Codex P2 on #928: a newer checkout that replaces an expired registration just before it is dropped must not be
+     * reported as "nothing pending".
+     */
+    @Test
+    public void anExpiredRegistrationReplacedMeanwhileStaysPending()
+    {
+        CheckoutReloads.register(List.of("P"), IDLE, T0); //$NON-NLS-1$
+        long at = T0 + ms(CheckoutReloads.EXPIRY_MS);
+        CheckoutReloads.beforeExpire = () -> {
+            CheckoutReloads.beforeExpire = null;
+            CheckoutReloads.register(List.of("P"), IDLE, at); //$NON-NLS-1$
+        };
+
+        assertTrue(CheckoutReloads.isPending("P", at)); //$NON-NLS-1$
+    }
+
     /** Only the registered projects are pending. */
     @Test
     public void registrationIsPerProject()
