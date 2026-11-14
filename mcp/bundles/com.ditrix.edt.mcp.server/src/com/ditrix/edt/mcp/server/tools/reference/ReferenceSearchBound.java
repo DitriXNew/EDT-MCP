@@ -163,6 +163,21 @@ public final class ReferenceSearchBound
         return false;
     }
 
+    /**
+     * Records a newly collected reference. The reference one past the limit marks the search stopped AT
+     * ONCE, not at the next poll: when it is the finder's last result the finder returns without polling
+     * again, and the report must still show {@link #limit()} rows and say that more exist.
+     *
+     * @param collected the number of unique references collected, the new one included
+     */
+    public void recordCollected(int collected)
+    {
+        if (bounded && stopReason == StopReason.NONE && collected > limit)
+        {
+            stopReason = StopReason.LIMIT;
+        }
+    }
+
     /** @return whether a bounded search has stopped early */
     public boolean isStopped()
     {

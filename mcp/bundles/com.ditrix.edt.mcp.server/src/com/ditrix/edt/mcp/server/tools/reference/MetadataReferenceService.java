@@ -262,7 +262,7 @@ public class MetadataReferenceService
         {
             // The reference past the limit was collected only to prove that more exist.
             return renderStoppedReport(objectFqn, refs.subList(0, Math.min(refs.size(), bound.limit())),
-                Pagination.limitReachedNotice(bound.limit()), limitStopNote(bound.limit()), note);
+                limitCountNotice(bound.limit()), limitStopNote(bound.limit()), note);
         }
         if (bound.stopReason() == ReferenceSearchBound.StopReason.TIME_BUDGET)
         {
@@ -278,10 +278,27 @@ public class MetadataReferenceService
      */
     static String limitStopNote(int limit)
     {
+        String advice = limit < ReferenceSearchBound.MAX_LIMIT
+            ? " limit accepts up to " + ReferenceSearchBound.MAX_LIMIT + "." //$NON-NLS-1$ //$NON-NLS-2$
+            : " " + ReferenceSearchBound.MAX_LIMIT //$NON-NLS-1$
+                + " is the maximum limit, so treat the rows as a sample, not the full set."; //$NON-NLS-1$
         return "**Search stopped early:** more than " + limit + " reference(s) exist; the search stopped at " //$NON-NLS-1$ //$NON-NLS-2$
             + "limit=" + limit + ", so the total is unknown and the rows below are the first ones found " //$NON-NLS-1$ //$NON-NLS-2$
-            + "(metadata references first, then BSL). limit accepts up to " //$NON-NLS-1$
-            + ReferenceSearchBound.MAX_LIMIT + "."; //$NON-NLS-1$
+            + "(metadata references first, then BSL)." + advice; //$NON-NLS-1$
+    }
+
+    /**
+     * The count-line notice of a search the limit stopped. Below the maximum it is the shared
+     * {@link Pagination#limitReachedNotice}; at the maximum a higher limit would clamp back to the same
+     * value, so it must not suggest one.
+     */
+    static String limitCountNotice(int limit)
+    {
+        if (limit < ReferenceSearchBound.MAX_LIMIT)
+        {
+            return Pagination.limitReachedNotice(limit);
+        }
+        return " (showing first " + limit + ", limit reached; " + limit + " is the maximum limit)"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**
@@ -840,8 +857,13 @@ public class MetadataReferenceService
         {
             IBmEngine engine = bmModel.getEngine();
 
-            // 1. Collect direct back references - applies to ANY IBmObject.
-            collectBackReferences(engine, target);
+            // 1. Collect direct back references - applies to ANY IBmObject. Checked like every later
+            // step: the readiness wait and the object lookup may already have spent the time budget,
+            // and loading the back references of a busy object is itself work.
+            if (!stopped())
+            {
+                collectBackReferences(engine, target);
+            }
 
             if (targetAsMdObject != null)
             {
@@ -899,6 +921,7 @@ public class MetadataReferenceService
 
             seenReferences.add(key);
             references.add(ref);
+            bound.recordCollected(references.size());
             return true;
         }
 

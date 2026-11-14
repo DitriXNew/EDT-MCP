@@ -58,10 +58,17 @@ public class MetadataReferenceServiceBoundTest
     {
         final AtomicInteger visited = new AtomicInteger();
         private final Runnable perCandidate;
+        private final int size;
 
         CountingFinder(Runnable perCandidate)
         {
+            this(perCandidate, INDEX_SIZE);
+        }
+
+        CountingFinder(Runnable perCandidate, int size)
+        {
             this.perCandidate = perCandidate;
+            this.size = size;
         }
 
         @Override
@@ -81,7 +88,7 @@ public class MetadataReferenceServiceBoundTest
 
         private void walk(IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor)
         {
-            for (int i = 0; i < INDEX_SIZE; i++)
+            for (int i = 0; i < size; i++)
             {
                 // Exactly where Xtext's ReferenceFinder polls: before each candidate resource.
                 if (monitor.isCanceled())
@@ -350,5 +357,88 @@ public class MetadataReferenceServiceBoundTest
 
         assertFalse(bound.isStopped());
         assertFalse(collector.isBslScanComplete());
+    }
+
+    // ==================== review round 1 ====================
+
+    /**
+     * The reference one past the limit can be the finder's LAST result: the finder then returns without
+     * polling the monitor again, and the report must still show {@code limit} rows and the stop marker.
+     */
+    @Test
+    public void theProofReferenceStopsTheSearchEvenAsTheFindersLastResult() throws Exception
+    {
+        CountingFinder finder = new CountingFinder(() -> { }, 3);
+        ReferenceSearchBound bound = ReferenceSearchBound.of(2, 60_000L, System::nanoTime);
+        CountingCollector collector = new CountingCollector(mock(IBmModel.class), 2, bound);
+        SearchDependenciesResult scope = readyScope();
+
+        collector.collectBslReferences(target(), () -> provider(finder), project -> scope);
+
+        assertEquals(3, finder.visited.get());
+        assertEquals(ReferenceSearchBound.StopReason.LIMIT, bound.stopReason());
+        String report = MetadataReferenceService.formatOutput(FQN, collector);
+        assertTrue(report, report.contains("**References shown:** 2 (")); //$NON-NLS-1$
+        assertTrue(report, report.contains(MetadataReferenceService.limitStopNote(2)));
+        assertFalse(report, report.contains("**Total references found:**")); //$NON-NLS-1$
+        assertFalse(report, report.contains("CommonModules/M2/")); //$NON-NLS-1$
+    }
+
+    /** A budget already spent before the scan starts (readiness wait, lookup) loads no back references. */
+    @Test
+    public void aBudgetSpentBeforeTheScanLoadsNoBackReferences() throws Exception
+    {
+        AtomicLong now = new AtomicLong();
+        ReferenceSearchBound bound = ReferenceSearchBound.of(10, 50L, now::get);
+        now.addAndGet(60_000_000L);
+        IBmEngine engine = mock(IBmEngine.class);
+        IBmModel model = mock(IBmModel.class);
+        when(model.getEngine()).thenReturn(engine);
+        CountingCollector collector = new CountingCollector(model, 10, bound);
+        AtomicInteger bslLookups = new AtomicInteger();
+
+        collector.collect(() -> {
+            bslLookups.incrementAndGet();
+            return null;
+        }, project -> null);
+
+        org.mockito.Mockito.verify(engine, org.mockito.Mockito.never())
+            .getBackReferences(org.mockito.ArgumentMatchers.any(IBmObject.class));
+        assertEquals(0, bslLookups.get());
+        assertEquals(ReferenceSearchBound.StopReason.TIME_BUDGET, bound.stopReason());
+        String report = MetadataReferenceService.formatOutput(FQN, collector);
+        assertTrue(report, report.contains("**References shown:** 0\n\n")); //$NON-NLS-1$
+        assertTrue(report, report.contains("No references found before the search stopped.")); //$NON-NLS-1$
+    }
+
+    /** At the maximum limit a higher limit would clamp back to the same value: do not suggest one. */
+    @Test
+    public void aStopAtTheMaximumLimitDoesNotSuggestAHigherLimit() throws Exception
+    {
+        int max = ReferenceSearchBound.MAX_LIMIT;
+        CountingFinder finder = new CountingFinder(() -> { });
+        ReferenceSearchBound bound = ReferenceSearchBound.of(max, 60_000L, System::nanoTime);
+        CountingCollector collector = new CountingCollector(mock(IBmModel.class), max, bound);
+        SearchDependenciesResult scope = readyScope();
+
+        collector.collectBslReferences(target(), () -> provider(finder), project -> scope);
+
+        assertEquals(max + 1, finder.visited.get());
+        String report = MetadataReferenceService.formatOutput(FQN, collector);
+        assertTrue(report, report.contains("**References shown:** " + max //$NON-NLS-1$
+            + " (showing first " + max + ", limit reached; " + max + " is the maximum limit)\n\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(report, report.contains(" is the maximum limit, so treat the rows as a sample")); //$NON-NLS-1$
+        assertFalse(report, report.contains("pass a higher limit")); //$NON-NLS-1$
+        assertFalse(report, report.contains("limit accepts up to")); //$NON-NLS-1$
+    }
+
+    /** Below the maximum the shared notice still invites a higher limit. */
+    @Test
+    public void aStopBelowTheMaximumStillSuggestsAHigherLimit()
+    {
+        assertEquals(" (showing first 499, limit reached; pass a higher limit for more)", //$NON-NLS-1$
+            MetadataReferenceService.limitCountNotice(ReferenceSearchBound.MAX_LIMIT - 1));
+        assertTrue(MetadataReferenceService.limitStopNote(ReferenceSearchBound.MAX_LIMIT - 1)
+            .endsWith(" limit accepts up to " + ReferenceSearchBound.MAX_LIMIT + ".")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
