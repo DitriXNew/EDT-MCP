@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -137,7 +138,8 @@ public class GetProblemSummaryTool implements IMcpTool
             .enumProperty(PARAM_GROUP_BY, "Aggregate into one table of groups by this key (optional)", //$NON-NLS-1$
                 GroupBy.CHECK.wire, GroupBy.MODULE.wire, GroupBy.OBJECT.wire)
             .integerProperty(PARAM_TOP, "Groups shown with groupBy; default 25, max 1000 (optional)") //$NON-NLS-1$
-            .enumProperty(PARAM_SEVERITY, "Count only this severity (optional)", //$NON-NLS-1$
+            .enumProperty(PARAM_SEVERITY, "Count only this exact severity (optional); NONE is the level of a marker " //$NON-NLS-1$
+                + "EDT stores without a severity, not 'all levels'", //$NON-NLS-1$
                 GetProjectErrorsTool.SEVERITY_VALUES.toArray(new String[0]))
             .stringProperty(PARAM_CHECK_ID, "Count only checks whose symbolic id or short UID contains this (optional)") //$NON-NLS-1$
             .stringArrayProperty(PARAM_MODULE_PATHS, "Count only these module paths (optional)") //$NON-NLS-1$
@@ -256,7 +258,8 @@ public class GetProblemSummaryTool implements IMcpTool
 
             MarkerSeverity severityFilter = severity != null
                 ? MarkerSeverity.valueOf(severity.toUpperCase(Locale.ROOT)) : null;
-            List<SummaryRow> rows = collectRows(MarkerRows.groupMarkersByProject(markerManager, projectName),
+            Map<IProject, List<Marker>> markersByProject = MarkerRows.groupMarkersByProject(markerManager, projectName);
+            List<SummaryRow> rows = collectRows(markersByProject,
                 Activator.getDefault().getBmModelManager(), severityFilter, checkId,
                 MarkerRows.modulePathKeys(modulePaths), Activator.getDefault().getCheckRepository(),
                 Activator.getDefault().getFixRepository(), groupBy == GroupBy.OBJECT);
@@ -264,6 +267,15 @@ public class GetProblemSummaryTool implements IMcpTool
             String filters = filterLine(projectName, severity, checkId, modulePaths);
             StringBuilder md = new StringBuilder(groupBy == null ? renderTotals(rows, filters)
                 : renderGroups(rows, groupBy, top, filters));
+            if (severityFilter != null && rows.isEmpty())
+            {
+                // A severity that leaves nothing must not read like a clean scope (#918): count what the
+                // other filters keep at the other levels. Run only on an empty answer, without the model read.
+                List<SummaryRow> unfiltered = collectRows(markersByProject, Activator.getDefault().getBmModelManager(),
+                    null, checkId, MarkerRows.modulePathKeys(modulePaths), Activator.getDefault().getCheckRepository(),
+                    null, false);
+                MarkerRows.appendOtherSeveritiesNote(md, severityFilter, severityCounts(unfiltered, severityFilter));
+            }
             if (project != null)
             {
                 MarkerRows.appendModulePathsNotFoundWarning(md, projectName,
@@ -356,6 +368,27 @@ public class GetProblemSummaryTool implements IMcpTool
                 rows.add(row);
             }
         }
+    }
+
+    /**
+     * Counts {@code rows} per severity, leaving out {@code excluded} (the level the call filtered on).
+     *
+     * @param rows the rows collected without the severity filter
+     * @param excluded the severity the call asked for
+     * @return severity -&gt; count (never {@code null})
+     */
+    static Map<MarkerSeverity, Integer> severityCounts(List<SummaryRow> rows, MarkerSeverity excluded)
+    {
+        Map<MarkerSeverity, Integer> counts = new EnumMap<>(MarkerSeverity.class);
+        for (SummaryRow row : rows)
+        {
+            MarkerSeverity severity = row.severity != null ? row.severity : MarkerSeverity.NONE;
+            if (severity != excluded)
+            {
+                counts.merge(severity, 1, Integer::sum);
+            }
+        }
+        return counts;
     }
 
     /**

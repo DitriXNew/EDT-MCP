@@ -1291,7 +1291,8 @@ public class GetProjectErrorsToolTest
         assertTrue(detailed.contains("| Offset | Length |"));
         assertTrue(detailed.contains("| 3 | 27 | 0 | `SU23` |"));
         assertTrue(detailed.contains("pipe\\|and newline"));
-        assertTrue(detailed.contains("limit"));
+        // The page states the total (#917) instead of the old "limit reached" notice, which had none.
+        assertTrue(detailed.contains("**Found:** 2\n")); //$NON-NLS-1$
         assertTrue(detailed.contains("1 marker(s) could not be resolved"));
         assertTrue(detailed.contains("1 marker(s) were excluded from the object filter"));
         assertTrue(detailed.contains("|  |  |  |  |  |  | `` |  | false |"));

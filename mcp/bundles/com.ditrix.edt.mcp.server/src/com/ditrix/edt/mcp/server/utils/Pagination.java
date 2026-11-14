@@ -67,6 +67,33 @@ public final class Pagination
     }
 
     /**
+     * Canonical notice for one PAGE of a result whose total is known and that is paged with an
+     * {@code offset}. Append it after the count header (e.g. {@code "**Found:** " + total}).
+     * Returns {@code " (showing <from>-<to> of <total>; next page: offset=<next>)"} - the
+     * next-page clause only while problems remain - or an empty string when the page is the
+     * whole result.
+     *
+     * @param offset how many items precede this page
+     * @param shown the number of items rendered on this page
+     * @param total the true total number of items
+     * @return the notice text (empty when everything is on this page)
+     */
+    public static String pageNotice(int offset, int shown, int total)
+    {
+        if (offset <= 0 && shown >= total)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder notice = new StringBuilder(" (showing ").append(offset + 1).append('-') //$NON-NLS-1$
+            .append(offset + shown).append(" of ").append(total); //$NON-NLS-1$
+        if (offset + shown < total)
+        {
+            notice.append("; next page: offset=").append(offset + shown); //$NON-NLS-1$
+        }
+        return notice.append(')').toString();
+    }
+
+    /**
      * Canonical truncation notice for a tool that caps collection at the limit
      * and therefore does NOT know the true total (only that the limit was hit).
      * Append it after the count header when the cap was reached.
