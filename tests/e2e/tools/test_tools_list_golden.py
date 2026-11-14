@@ -23,6 +23,15 @@ After an intentional schema change, regenerate and review the diff:
 
 then `git diff tests/e2e/tools_list.golden.json` to confirm the change is exactly
 what you meant, and commit it alongside the code change.
+
+THE TOOL PROFILE THE GOLDEN IS TAKEN IN
+---------------------------------------
+tools/list advertises only the ENABLED tools, so the golden is tied to one tool profile: the CI
+one, in which `git` and `ask_workmate` are disabled and the default-disabled `get_form_screenshot`
+is enabled (e2e-tests.yml writes `mcpDisabledTools=git,ask_workmate` with
+`mcpToolPrefsMigration=15` before EDT starts). A stand on the shipped defaults also hides
+`get_form_screenshot` and fails here on the tool SET, not on a schema; tests/TESTING.md says how to
+put a local stand into the CI profile.
 """
 
 import os
@@ -35,6 +44,29 @@ _GOLDEN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
                        "tools_list.golden.json")
 _ACTUAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "tools_list.actual.json")  # written on mismatch for inspection (gitignored)
+
+
+# The tool profile CI takes the golden in (e2e-tests.yml, the EDT setup step).
+CI_DISABLED_TOOLS = ("git", "ask_workmate")
+
+
+def tool_set_hint(golden_text, actual_text):
+    """A note for a golden mismatch whose tool SET differs, or "" when the sets agree.
+
+    A different set is almost always the stand's tool profile, not a schema change, so the note
+    names the tools on each side and the CI profile the golden is taken in."""
+    try:
+        golden = {entry.get("name") for entry in json.loads(golden_text)}
+        live = {entry.get("name") for entry in json.loads(actual_text)}
+    except (ValueError, AttributeError, TypeError):
+        return ""  # a malformed golden is reported by the diff itself
+    if golden == live:
+        return ""
+    return ("\nThe tool SET differs - only in the golden: %s; only live: %s. The golden is taken in "
+            "the CI tool profile (workspace preference mcpDisabledTools=%s with "
+            "mcpToolPrefsMigration=15, so get_form_screenshot is enabled); a stand on the shipped "
+            "defaults also hides get_form_screenshot. See tests/TESTING.md, 'The stand profile the suite expects'."
+            % (sorted(golden - live) or "-", sorted(live - golden) or "-", ",".join(CI_DISABLED_TOOLS)))
 
 
 def _canonical_tools_list():
@@ -97,8 +129,8 @@ def test_tools_list_matches_committed_golden_snapshot():
         _fail("tools/list schema drifted from the committed golden. If this change is "
               "INTENTIONAL, regenerate with EDT_MCP_UPDATE_GOLDEN=1 and review/commit "
               "the golden diff; otherwise a tool's name/param/enum/required/annotation/"
-              "description changed unexpectedly.\nFull live payload: %s\n--- drift (first 60 lines) ---\n%s"
-              % (_ACTUAL, snippet))
+              "description changed unexpectedly.%s\nFull live payload: %s\n--- drift (first 60 lines) ---\n%s"
+              % (tool_set_hint(golden, actual), _ACTUAL, snippet))
 
     # A protocol read must never touch the fixture on disk.
     assert_no_diff("reading tools/list must not modify the project")

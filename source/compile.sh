@@ -38,7 +38,7 @@ Path options (each has matching ENV fallback):
                               default: $DEFAULT_OUTPUT_DIR
 
 Toolchain options:
-  --java-home PATH            JDK 17 home                          [\$JAVA_HOME]
+  --java-home PATH            JDK 25 home                          [\$JAVA_HOME]
   --maven-home PATH           Maven home (uses <maven-home>/bin/mvn)  [\$MAVEN_HOME / \$M2_HOME]
                               falls back to 'mvn' on PATH
 
@@ -48,8 +48,8 @@ Other:
 Examples:
   $(basename "$0") --skip-tests
   $(basename "$0") --version 1.27.1 --output-dir D:/builds
-  $(basename "$0") --java-home "/c/Program Files/Java/jdk-17" --maven-home /d/Soft/maven
-  JAVA_HOME=/c/jdk17 MAVEN_HOME=/d/Soft/maven $(basename "$0")
+  $(basename "$0") --java-home "/c/Program Files/Java/jdk-25" --maven-home /d/Soft/maven
+  JAVA_HOME=/c/jdk25 MAVEN_HOME=/d/Soft/maven $(basename "$0")
 EOF
 }
 
