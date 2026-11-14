@@ -20,6 +20,7 @@ import com._1c.g5.designer.ssh.client.IDesignerSession;
 import com._1c.g5.designer.ssh.client.operation.IExtensionProperties;
 import com._1c.g5.designer.ssh.client.operation.IUpdateConfigurationStep.SessionTermination;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseReferences;
 import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.RuntimeExecutionArguments;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
@@ -36,11 +37,40 @@ public final class DesignerExtensionBackend implements Backend
 
     private final IDesignerSession session;
     private final IProgressMonitor monitor;
+    private final boolean serverAgent;
 
+    /** A backend over the 1cv8 Designer agent, whose extension answer is taken as reported. */
     public DesignerExtensionBackend(IDesignerSession session, IProgressMonitor monitor)
+    {
+        this(session, monitor, false);
+    }
+
+    /**
+     * @param serverAgent whether the session talks to the Designer agent built into a standalone server
+     *     ({@code ibsrv}) rather than to a 1cv8 Designer that EDT starts in agent mode; see {@link #usesServerAgent}
+     */
+    public DesignerExtensionBackend(IDesignerSession session, IProgressMonitor monitor, boolean serverAgent)
     {
         this.session = session;
         this.monitor = monitor;
+        this.serverAgent = serverAgent;
+    }
+
+    /**
+     * EDT's own choice of agent: {@code DesignerSessionPool.setupAgent} starts a local 1cv8 in agent mode for a
+     * reference that is not web ({@link InfobaseReferences#notWeb}), and connects to the agent at the reference's
+     * designer URL otherwise, which for a standalone-server application is the agent built into {@code ibsrv}.
+     */
+    static boolean usesServerAgent(InfobaseReference reference)
+    {
+        return !InfobaseReferences.notWeb(reference);
+    }
+
+    /** The backend for a session EDT opened to this reference, aware of which agent answers. */
+    static DesignerExtensionBackend forReference(IDesignerSession session, IProgressMonitor monitor,
+        InfobaseReference reference)
+    {
+        return new DesignerExtensionBackend(session, monitor, usesServerAgent(reference));
     }
 
     @FunctionalInterface
@@ -92,7 +122,7 @@ public final class DesignerExtensionBackend implements Backend
                     if ("run".equals(method.getName()))
                     {
                         checkCancelled(monitor);
-                        return work.run(new DesignerExtensionBackend((IDesignerSession)getSession.invoke(connection), monitor));
+                        return work.run(forReference((IDesignerSession)getSession.invoke(connection), monitor, reference));
                     }
                     if ("toString".equals(method.getName()))
                     {
@@ -146,7 +176,7 @@ public final class DesignerExtensionBackend implements Backend
         {
             throw new IllegalStateException("Designer did not return an extension inventory; retry action=list.");
         }
-        boolean swapped = activeReportedAsVersion(states);
+        boolean swapped = serverAgent && activeReportedAsVersion(states);
         return states.stream().map(e -> new Extension(e.getName(),
             swapped ? null : Objects.toString(e.getVersion(), ""),
             swapped ? Boolean.parseBoolean(e.getVersion()) : e.isActive(),
@@ -154,17 +184,19 @@ public final class DesignerExtensionBackend implements Backend
     }
 
     /**
-     * Whether the answer has the standalone server's swapped shape (#916). The Designer agent built into
-     * {@code ibsrv} (8.3.27, 8.5) writes the active flag as JSON {@code "version": true|false} and the
-     * version text as {@code "active"}; EDT's client reads both leniently, so every record arrives with the
-     * version {@code "true"} or {@code "false"} and an active flag parsed from the version text, which is
-     * {@code false}. The version itself is lost before it reaches this plugin. The shape is judged on the
-     * whole answer, because the agent writes every record alike: an answer of the documented shape keeps its
-     * values, even with an odd version text, as soon as one record has a real version or an active flag.
+     * Whether a standalone server's answer has the swapped shape (#916); asked only of the agent built into
+     * {@code ibsrv}, because the 1cv8 Designer agent answers with the documented fields and a legitimate
+     * version {@code "true"} there must stay a version. The {@code ibsrv} agent (8.3.27, 8.5) writes the
+     * active flag as JSON {@code "version": true|false} and the version text as {@code "active"}; EDT's client
+     * reads both leniently, so every record arrives with the version {@code "true"} or {@code "false"} (Gson's
+     * own lower-case rendering of a JSON boolean) and an active flag parsed from the version text, which says
+     * nothing. The version itself is lost before it reaches this plugin. The shape is judged on the whole
+     * answer, because the agent writes every record alike: as soon as one record has a real version, the
+     * answer is taken as reported.
      */
     static boolean activeReportedAsVersion(List<? extends IExtensionProperties> states)
     {
-        return !states.isEmpty() && states.stream().allMatch(e -> e != null && !e.isActive()
+        return !states.isEmpty() && states.stream().allMatch(e -> e != null
             && ("true".equals(e.getVersion()) || "false".equals(e.getVersion())));
     }
 

@@ -22,6 +22,8 @@ import com._1c.g5.designer.ssh.client.operation.IExtensionProperties;
 import com._1c.g5.designer.ssh.client.operation.IExtensionPropertiesStep;
 import com._1c.g5.designer.ssh.client.operation.IExtensionStep;
 import com._1c.g5.designer.ssh.client.operation.IExtensionsQuery;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseType;
 import com.ditrix.edt.mcp.server.utils.InfobaseExtensionLifecycle.Extension;
 
 /**
@@ -73,7 +75,7 @@ public class DesignerExtensionInventoryTest
 
     @Test public void standaloneServerInventoryRestoresTheActiveFlagAndReportsNoVersion() throws Exception
     {
-        List<Extension> states = read(decode(STANDALONE_SERVER_ANSWER));
+        List<Extension> states = read(decode(STANDALONE_SERVER_ANSWER), SERVER_AGENT);
         assertEquals(List.of(
             new Extension("ExtActive", null, true, false, false, "METdfbHfKPy6WIQDoPOT8XxZe9A="),
             new Extension("ExtInactive", null, false, true, true, "qXbMxjlImBZGrO0zNO0BtzcX3ng=")), states);
@@ -81,7 +83,7 @@ public class DesignerExtensionInventoryTest
 
     @Test public void designerAgentInventoryIsTakenAsReported() throws Exception
     {
-        List<Extension> states = read(decode(DESIGNER_AGENT_ANSWER));
+        List<Extension> states = read(decode(DESIGNER_AGENT_ANSWER), DESIGNER_AGENT);
         assertEquals(List.of(
             new Extension("ExtActive", "25.12", true, false, false, "METdfbHfKPy6WIQDoPOT8XxZe9A="),
             new Extension("ExtInactive", "", false, true, true, "qXbMxjlImBZGrO0zNO0BtzcX3ng=")), states);
@@ -89,25 +91,64 @@ public class DesignerExtensionInventoryTest
 
     @Test public void aBooleanLookingVersionNextToARealVersionIsNotRewritten() throws Exception
     {
-        List<Extension> states = read(List.of(properties("Odd", "true", false), properties("Plain", "2.1", false)));
+        List<Extension> states = read(List.of(properties("Odd", "true", false), properties("Plain", "2.1", false)), SERVER_AGENT);
         assertEquals("true", states.get(0).version());
         assertFalse(states.get(0).active());
         assertEquals("2.1", states.get(1).version());
     }
 
-    @Test public void anActiveRecordIsNeverTheSwappedShape() throws Exception
+    @Test public void aServerAgentAnswerWhoseVersionTextReadAsTrueIsStillUndone() throws Exception
     {
-        // In the swapped answer every active flag is parsed from a version text, which is never "true".
-        List<Extension> states = read(List.of(properties("Odd", "false", true), properties("Other", "true", false)));
-        assertEquals("false", states.get(0).version());
-        assertTrue(states.get(0).active());
-        assertEquals("true", states.get(1).version());
-        assertFalse(states.get(1).active());
+        // The swapped active flag is parsed from the version text, so a version "TRUE" reads as active:
+        // it says nothing, and the active state still comes from the version field.
+        List<Extension> states = read(List.of(properties("Odd", "false", true), properties("Other", "true", false)),
+            SERVER_AGENT);
+        assertNull(states.get(0).version());
+        assertFalse(states.get(0).active());
+        assertNull(states.get(1).version());
+        assertTrue(states.get(1).active());
+    }
+
+    @Test public void aDesignerAgentInactiveExtensionAtVersionTrueStaysAVersion() throws Exception
+    {
+        // The 1cv8 agent answers with the documented fields: a legitimate version "true" is not a flag.
+        List<Extension> states = read(List.of(properties("Legit", "true", false)), DESIGNER_AGENT);
+        assertEquals("true", states.get(0).version());
+        assertFalse(states.get(0).active());
+    }
+
+    @Test public void aDesignerAgentAnswerIsTakenAsReportedEvenWhenEveryVersionLooksBoolean() throws Exception
+    {
+        List<Extension> states = read(List.of(properties("A", "true", false), properties("B", "false", true)),
+            DESIGNER_AGENT);
+        assertEquals("true", states.get(0).version());
+        assertFalse(states.get(0).active());
+        assertEquals("false", states.get(1).version());
+        assertTrue(states.get(1).active());
+    }
+
+    @Test public void onlyAWebReferenceIsServedByTheServerAgent() throws Exception
+    {
+        assertTrue(DesignerExtensionBackend.usesServerAgent(SERVER_AGENT));
+        assertFalse(DesignerExtensionBackend.usesServerAgent(DESIGNER_AGENT));
+        assertFalse(DesignerExtensionBackend.usesServerAgent(reference(InfobaseType.SERVER)));
+    }
+
+    /** A standalone-server application: EDT adapts it to a web reference with a designer URL. */
+    private static final InfobaseReference SERVER_AGENT = reference(InfobaseType.WEB);
+    /** A file infobase: EDT starts a local 1cv8 Designer in agent mode. */
+    private static final InfobaseReference DESIGNER_AGENT = reference(InfobaseType.FILE);
+
+    private static InfobaseReference reference(InfobaseType type)
+    {
+        InfobaseReference reference = mock(InfobaseReference.class);
+        when(reference.getInfobaseType()).thenReturn(type);
+        return reference;
     }
 
     @Test public void anEmptyInventoryStaysEmpty() throws Exception
     {
-        assertEquals(List.of(), read(List.of()));
+        assertEquals(List.of(), read(List.of(), SERVER_AGENT));
     }
 
     private static IExtensionProperties properties(String name, String version, boolean active)
@@ -121,7 +162,7 @@ public class DesignerExtensionInventoryTest
     }
 
     /** Reads through the production backend over a session whose inventory returns the given records. */
-    private static List<Extension> read(List<IExtensionProperties> inventory) throws Exception
+    private static List<Extension> read(List<IExtensionProperties> inventory, InfobaseReference reference) throws Exception
     {
         IDesignerSession session = mock(IDesignerSession.class);
         IExtensionsQuery extensions = mock(IExtensionsQuery.class);
@@ -133,7 +174,7 @@ public class DesignerExtensionInventoryTest
         when(properties.get()).thenReturn(get);
         when(get.allExtensions()).thenReturn(all);
         when(all.exec()).thenReturn(inventory);
-        return new DesignerExtensionBackend(session, new NullProgressMonitor()).read();
+        return DesignerExtensionBackend.forReference(session, new NullProgressMonitor(), reference).read();
     }
 
     /** Decodes an agent answer exactly as EDT's Designer client does for this command. */

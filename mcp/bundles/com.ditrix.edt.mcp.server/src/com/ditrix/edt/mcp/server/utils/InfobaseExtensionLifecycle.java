@@ -82,6 +82,14 @@ public final class InfobaseExtensionLifecycle
     static final String VERSION_UNREPORTED = "The infobase's Designer agent did not report extension versions "
         + "(the standalone server's agent puts the active flag in place of the version), so expectedVersion was not read back.";
 
+    static final String SCOPE = "Presence, runtime flags, preserved active state, other extensions and expectedVersion "
+        + "when supplied; updates require an observed transition to expectedVersion; not binary file identity.";
+
+    /** Only the checks that ran: an unreported version proves neither expectedVersion nor a version transition. */
+    static final String SCOPE_WITHOUT_VERSION = "Presence, runtime flags, preserved active state and other extensions; "
+        + "expectedVersion and the version transition were not checked because the Designer agent did not report "
+        + "versions; not binary file identity.";
+
     private InfobaseExtensionLifecycle()
     {
     }
@@ -277,8 +285,7 @@ public final class InfobaseExtensionLifecycle
                 return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", "Presence, runtime flags, preserved active state, other extensions and expectedVersion when supplied; "
-                        + "updates require an observed transition to expectedVersion; not binary file identity.");
+                    .put("verificationScope", versionUnreported ? SCOPE_WITHOUT_VERSION : SCOPE);
             }
             catch (Exception failure)
             {

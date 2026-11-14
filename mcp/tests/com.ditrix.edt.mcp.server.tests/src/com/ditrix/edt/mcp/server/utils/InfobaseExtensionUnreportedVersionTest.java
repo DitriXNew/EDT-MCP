@@ -109,6 +109,7 @@ public class InfobaseExtensionUnreportedVersionTest
         assertTrue(result.toString(), result.get("verificationReason").getAsString().contains("did not report"));
         assertTrue(result.toString(), result.getAsJsonObject("actualState").get("active").getAsBoolean());
         assertFalse(result.getAsJsonObject("actualState").get("versionReported").getAsBoolean());
+        assertScopeLeavesOutTheVersion(result);
     }
 
     @Test public void installWithoutExpectedVersionNeedsNoVersionReadBack() throws Exception
@@ -129,6 +130,7 @@ public class InfobaseExtensionUnreportedVersionTest
         assertEquals("notVerified", result.get("verification").getAsString());
         assertTrue(result.toString(), result.get("verificationReason").getAsString().contains("did not report"));
         assertTrue(result.get("extensionInstalled").getAsBoolean());
+        assertScopeLeavesOutTheVersion(result);
     }
 
     @Test public void aWrongFlagIsStillAMismatchWhenTheVersionIsUnreported() throws Exception
@@ -157,6 +159,40 @@ public class InfobaseExtensionUnreportedVersionTest
             properties.getAsJsonObject("verificationReason").get("description").getAsString());
     }
 
+    /** The scope names only the checks that ran: nothing about expectedVersion was proved. */
+    private static void assertScopeLeavesOutTheVersion(JsonObject result)
+    {
+        String scope = result.get("verificationScope").getAsString();
+        assertFalse(scope, scope.contains("expectedVersion when supplied"));
+        assertFalse(scope, scope.contains("require an observed transition"));
+        assertTrue(scope, scope.contains("were not checked"));
+        assertTrue(scope, scope.contains("runtime flags, preserved active state and other extensions"));
+    }
+
+    @Test public void aReportedVersionKeepsTheFullScope() throws Exception
+    {
+        UnreportedVersions backend = new UnreportedVersions()
+        {
+            @Override public void load(Path file, String name)
+            {
+                super.load(file, name);
+                states = states.stream().map(e -> !e.name().equals(name) ? e
+                    : new Extension(name, "2", e.active(), e.safeMode(), e.protectionFromDangerousActions(), e.hash()))
+                    .toList();
+            }
+        };
+        backend.states = List.of(OTHER);
+        JsonObject result = run(install("2"), backend);
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE, result.get("verificationScope").getAsString());
+    }
+    @Test public void theGuideMakesTheVersionConditional()
+    {
+        GuideLoader.clearCache();
+        String guide = GuideLoader.load("infobase_extensions").replaceAll("\\s+", " ");
+        assertFalse(guide, guide.contains("every record contains the actual name, version,"));
+        assertTrue(guide, guide.contains("and version, or `versionReported:false` when the agent did not report it"));
+    }
     private Request update(String expectedVersion) throws Exception
     {
         return new Request("update", "Runtime", cfe(), null, null, expectedVersion, true, null);
