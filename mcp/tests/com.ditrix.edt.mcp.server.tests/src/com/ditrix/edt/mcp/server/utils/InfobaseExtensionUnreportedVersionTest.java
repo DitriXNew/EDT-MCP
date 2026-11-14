@@ -180,7 +180,7 @@ public class InfobaseExtensionUnreportedVersionTest
         assertFalse(scope, scope.contains("expectedVersion when supplied"));
         assertFalse(scope, scope.contains("require an observed transition"));
         assertTrue(scope, scope.contains("were not checked"));
-        assertTrue(scope, scope.contains("runtime flags, preserved active state and other extensions"));
+        assertTrue(scope, scope.contains("Presence, runtime flags, other extensions and the preserved active state on update"));
     }
 
     @Test public void aReportedVersionKeepsTheFullScope() throws Exception
@@ -242,23 +242,43 @@ public class InfobaseExtensionUnreportedVersionTest
         assertEquals(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION, result.get("verificationScope").getAsString());
     }
 
-    @Test public void anUninstallOfAnUnreportedVersionUsesTheVersionlessScope() throws Exception
+    @Test public void anUninstallOfAnUnreportedVersionUsesTheUninstallScope() throws Exception
     {
         UnreportedVersions backend = new UnreportedVersions();
         backend.states = List.of(ACTIVE, OTHER);
         JsonObject result = run(new Request("uninstall", "Runtime", null, null, null, null, true, null), backend);
         assertTrue(result.toString(), result.get("success").getAsBoolean());
         assertEquals("verified", result.get("verification").getAsString());
-        assertEquals(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION, result.get("verificationScope").getAsString());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE_UNINSTALL, result.get("verificationScope").getAsString());
     }
 
-    @Test public void anUninstallOfAReportedVersionKeepsTheFullScope() throws Exception
+    @Test public void anUninstallOfAReportedVersionUsesTheUninstallScopeToo() throws Exception
     {
         UnreportedVersions backend = new UnreportedVersions();
         backend.states = List.of(new Extension("Runtime", "1", true, false, false, "old"), OTHER);
         JsonObject result = run(new Request("uninstall", "Runtime", null, null, null, null, true, null), backend);
         assertTrue(result.toString(), result.get("success").getAsBoolean());
-        assertEquals(InfobaseExtensionLifecycle.SCOPE, result.get("verificationScope").getAsString());
+        assertEquals(InfobaseExtensionLifecycle.SCOPE_UNINSTALL, result.get("verificationScope").getAsString());
+    }
+
+    @Test public void everyScopeNamesOnlyTheChecksOfItsBranch()
+    {
+        String uninstall = InfobaseExtensionLifecycle.SCOPE_UNINSTALL;
+        for (String claim : List.of("runtime flags", "active state", "expectedVersion", "transition"))
+        {
+            assertFalse(uninstall, uninstall.contains(claim));
+        }
+        assertTrue(uninstall, uninstall.contains("resulting absence"));
+        // Install has no active state to preserve: the install/update scopes say "on update".
+        for (String scope : List.of(InfobaseExtensionLifecycle.SCOPE, InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION))
+        {
+            assertTrue(scope, scope.contains("preserved active state on update"));
+        }
+        assertTrue(InfobaseExtensionLifecycle.SCOPE.contains("an update additionally requires an observed transition"));
+        assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains(
+            "expectedVersion and the version transition were not checked"));
+        assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("the version transition was not checked"));
+        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("expectedVersion and the version transition"));
     }
     private Request update(String expectedVersion) throws Exception
     {

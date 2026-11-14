@@ -82,21 +82,34 @@ public final class InfobaseExtensionLifecycle
     static final String VERSION_UNREPORTED = "The infobase's Designer agent did not report extension versions "
         + "(the standalone server's agent puts the active flag in place of the version), so expectedVersion was not read back.";
 
-    static final String SCOPE = "Presence, runtime flags, preserved active state, other extensions and expectedVersion "
-        + "when supplied; updates require an observed transition to expectedVersion; not binary file identity.";
+    /*
+     * Each scope names exactly the checks of the branch that publishes it. Install and update check presence,
+     * the requested runtime flags and the other extensions; only an update has an active state to preserve
+     * and a version transition to observe. Uninstall checks prior presence, resulting absence and the other
+     * extensions, and accepts no expectedVersion or runtime flags.
+     */
 
-    /** Only the checks that ran: an unreported version proves neither expectedVersion nor a version transition. */
-    static final String SCOPE_WITHOUT_VERSION = "Presence, runtime flags, preserved active state and other extensions; "
-        + "expectedVersion and the version transition were not checked because the Designer agent did not report "
-        + "versions; not binary file identity.";
+    /** Install/update with readable versions. */
+    static final String SCOPE = "Presence, runtime flags, other extensions, the preserved active state on update "
+        + "and expectedVersion when supplied; an update additionally requires an observed transition to "
+        + "expectedVersion; not binary file identity.";
+
+    /** Install/update whose version after the write was not reported. */
+    static final String SCOPE_WITHOUT_VERSION = "Presence, runtime flags, other extensions and the preserved active "
+        + "state on update; expectedVersion and the version transition were not checked because the Designer agent "
+        + "did not report versions; not binary file identity.";
 
     static final String TRANSITION_UNREPORTED = "The Designer agent did not report the extension version before the "
         + "update, so the transition to expectedVersion was not observed; the version after the update was read back.";
 
-    /** An update whose previous version is unknown: expectedVersion was read back, the transition was not observed. */
+    /** Update whose previous version was not reported: expectedVersion was read back, the transition was not observed. */
     static final String SCOPE_WITHOUT_TRANSITION = "Presence, runtime flags, preserved active state, other extensions and "
         + "expectedVersion when supplied; the version transition was not checked because the Designer agent did not "
         + "report the previous version; not binary file identity.";
+
+    /** Every uninstall, whatever the agent reported about versions. */
+    static final String SCOPE_UNINSTALL = "Prior presence, resulting absence and unchanged other extensions; "
+        + "not binary file identity.";
 
     private InfobaseExtensionLifecycle()
     {
@@ -301,7 +314,7 @@ public final class InfobaseExtensionLifecycle
                 return result.put("verification", verified ? "verified" : matches && othersUnchanged ? "notVerified" : "mismatched")
                     .put("extensionInstalled", actual != null).put("actualState", actual == null ? null : actual.details())
                     .put("stateBefore", previous == null ? null : previous.details())
-                    .put("verificationScope", afterUnknown || uninstall && beforeUnknown ? SCOPE_WITHOUT_VERSION
+                    .put("verificationScope", uninstall ? SCOPE_UNINSTALL : afterUnknown ? SCOPE_WITHOUT_VERSION
                         : beforeUnknown ? SCOPE_WITHOUT_TRANSITION : SCOPE);
             }
             catch (Exception failure)
