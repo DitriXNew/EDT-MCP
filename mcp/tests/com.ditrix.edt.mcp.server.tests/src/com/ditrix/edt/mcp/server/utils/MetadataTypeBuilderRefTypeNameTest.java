@@ -19,9 +19,13 @@ import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.TypeSet;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdtype.MdTypeFactory;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -213,10 +217,41 @@ public class MetadataTypeBuilderRefTypeNameTest
 
         assertNull(result.typeDescription);
         assertEquals("Unknown type kind 'Nonsense920'. A data-composition parameter or field takes String / " //$NON-NLS-1$
-            + "Number / Boolean / Date / UUID, StandardPeriod (" + RU_STANDARD_PERIOD + "), a DefinedType " //$NON-NLS-1$ //$NON-NLS-2$
-            + "({kind:'DefinedType', ref:'Name'}), or a reference ({kind:'Ref', ref:'Catalog.Name'}, " //$NON-NLS-1$
+            + "Number / Boolean / Date / ValueStorage / UUID, StandardPeriod (" + RU_STANDARD_PERIOD + "), a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "DefinedType ({kind:'DefinedType', ref:'Name'}), a characteristic value ({kind:'Characteristic', " //$NON-NLS-1$
+            + "ref:'Name'}), or a reference ({kind:'Ref', ref:'Catalog.Name'}, " //$NON-NLS-1$
             + "{kind:'Ref', ref:'CatalogRef.Name'} or {kind:'CatalogRef', ref:'Name'}) - this one names no " //$NON-NLS-1$
             + "type this platform version knows.", result.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryKindTheDcsRefusalOffersIsBuiltForADcsParameter()
+    {
+        // The refusal is the caller's only inventory: each kind it names must really build here.
+        Type standardPeriod = named("StandardPeriod"); //$NON-NLS-1$
+        Type valueStorage = named("ValueStorage"); //$NON-NLS-1$
+        Type uuid = named("UUID"); //$NON-NLS-1$
+        Type string = named("String"); //$NON-NLS-1$
+        IEObjectProvider provider = providerKnowing(Map.of("StandardPeriod", standardPeriod, //$NON-NLS-1$
+            "ValueStorage", valueStorage, "UUID", uuid, "String", string)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Type goodsRef = seed(config, "Catalog", "Goods", "refType", "CatalogRef.Goods"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        TypeItem money = MetadataTypeBuilderTest.seedDefinedType(config, "Money", true); //$NON-NLS-1$
+        TypeSet expenses = seedCharacteristic(config, "ExpenseItems"); //$NON-NLS-1$
+
+        Object[][] offered = {
+            { kind("String"), string }, { kind("ValueStorage"), valueStorage }, { kind("UUID"), uuid }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            { kind(RU_STANDARD_PERIOD), standardPeriod }, { item("DefinedType", "Money"), money }, //$NON-NLS-1$ //$NON-NLS-2$
+            { item("Characteristic", "ExpenseItems"), expenses }, { item("Ref", "Catalog.Goods"), goodsRef }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            { item("Ref", "CatalogRef.Goods"), goodsRef }, { item("CatalogRef", "Goods"), goodsRef } }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (Object[] row : offered)
+        {
+            MetadataTypeBuilder.Result result = MetadataTypeBuilder.buildWithProvider(spec((JsonObject)row[0]),
+                provider, config, MetadataScope.ofConfiguration(config), false,
+                MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+            assertNull(row[0] + ": " + result.error, result.error); //$NON-NLS-1$
+            assertSame(row[0].toString(), row[1], result.typeDescription.getTypes().get(0));
+        }
     }
 
     @Test
@@ -249,6 +284,20 @@ public class MetadataTypeBuilderRefTypeNameTest
         Type type = named(typeName);
         MetadataTypeBuilderTest.seedProducedType(config, englishMetadataType, name, producedFeature, type);
         return type;
+    }
+
+    /** A chart of characteristic types whose produced value type set is {@code Characteristic.<name>}. */
+    private static TypeSet seedCharacteristic(Configuration config, String name)
+    {
+        ChartOfCharacteristicTypes chart = MdClassFactory.eINSTANCE.createChartOfCharacteristicTypes();
+        chart.setName(name);
+        config.getChartsOfCharacteristicTypes().add(chart);
+        chart.setProducedTypes(MdTypeFactory.eINSTANCE.createChartOfCharacteristicTypesTypes());
+        chart.getProducedTypes().setContainerType(MdTypeFactory.eINSTANCE.createMdContainerType());
+        TypeSet valueType = McoreFactory.eINSTANCE.createTypeSet();
+        valueType.setName("Characteristic." + name); //$NON-NLS-1$
+        chart.getProducedTypes().getContainerType().setTypeSet(valueType);
+        return valueType;
     }
 
     private static Type named(String name)

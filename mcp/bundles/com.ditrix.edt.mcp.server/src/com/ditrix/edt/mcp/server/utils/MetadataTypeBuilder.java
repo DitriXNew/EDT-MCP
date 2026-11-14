@@ -1470,8 +1470,9 @@ public final class MetadataTypeBuilder
             // Produced types and the form-only platform values are not built here, so the general
             // inventory would advertise kinds this target refuses (issue #920).
             return "Unknown type kind '" + kind + "'. A data-composition parameter or field takes String / " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Number / Boolean / Date / UUID, " + STANDARD_PERIOD + " (" + RU_STANDARD_PERIOD //$NON-NLS-1$ //$NON-NLS-2$
-                + "), a DefinedType ({kind:'DefinedType', ref:'Name'}), or a reference " //$NON-NLS-1$
+                + "Number / Boolean / Date / ValueStorage / UUID, " + STANDARD_PERIOD + " (" + RU_STANDARD_PERIOD //$NON-NLS-1$ //$NON-NLS-2$
+                + "), a DefinedType ({kind:'DefinedType', ref:'Name'}), a characteristic value " //$NON-NLS-1$
+                + "({kind:'Characteristic', ref:'Name'}), or a reference " //$NON-NLS-1$
                 + "({kind:'Ref', ref:'Catalog.Name'}, {kind:'Ref', ref:'CatalogRef.Name'} or " //$NON-NLS-1$
                 + "{kind:'CatalogRef', ref:'Name'}) - this one names no type this platform version knows."; //$NON-NLS-1$
         }
