@@ -179,7 +179,7 @@ public class InfobaseExtensionUnreportedVersionTest
         String scope = result.get("verificationScope").getAsString();
         assertFalse(scope, scope.contains("expectedVersion when supplied"));
         assertFalse(scope, scope.contains("require an observed transition"));
-        assertTrue(scope, scope.contains("were not checked"));
+        assertTrue(scope, scope.contains("no version check"));
         assertTrue(scope, scope.contains("Presence, runtime flags, other extensions and the preserved active state on update"));
     }
 
@@ -275,13 +275,17 @@ public class InfobaseExtensionUnreportedVersionTest
             assertTrue(scope, scope.contains("preserved active state on update"));
         }
         assertTrue(InfobaseExtensionLifecycle.SCOPE.contains("an update additionally requires an observed transition"));
-        // An install has no transition and may carry no expectedVersion: both skips are conditional (#925).
+        // This scope is published for install and update, with and without expectedVersion: it states only
+        // what holds in every one of those branches - no version was readable - and never that a requested
+        // check was skipped (#925).
         assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains(
-            "expectedVersion (when supplied) and, on update, the version transition were not checked"));
-        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains(
-            "expectedVersion and the version transition were not checked"));
-        assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("the version transition was not checked"));
-        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("expectedVersion and the version transition"));
+            "did not report the extension version, so no version check (expectedVersion or an update transition) "
+            + "was possible"));
+        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_VERSION.contains("were not checked"));
+        // Selected for an update with or without expectedVersion: it says what was impossible, not what was skipped.
+        assertTrue(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains(
+            "did not report the previous version, so no update transition could be observed"));
+        assertFalse(InfobaseExtensionLifecycle.SCOPE_WITHOUT_TRANSITION.contains("was not checked"));
     }
     private Request update(String expectedVersion) throws Exception
     {
