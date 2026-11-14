@@ -815,7 +815,9 @@ concatenations and keyword-leading strings without query structure; an empty sca
 #### DCS lifecycle and values
 
 Creating or changing an empty template to `templateType=DataCompositionSchema` exports `Template.dcs`
-in that call; an empty schema supports `dcs get format="xml"`. Query data sets with
+in that call; an empty schema supports `dcs get format="xml"`. `create_metadata` with
+`setAsDefault=true` on a Report / ExternalReport template also makes it the report's
+`mainDataCompositionSchema` (DataCompositionSchema implied). Query data sets with
 `autoFillFields=true` fill fields and missing parameters synchronously before export.
 Explicit fields default auto-fill to false; otherwise it defaults to true.
 LocalString output values accept strings, `{kind:"string",value:...}`, and language maps;
