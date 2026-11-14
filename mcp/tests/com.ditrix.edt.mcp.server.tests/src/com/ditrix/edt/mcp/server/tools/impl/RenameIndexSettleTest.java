@@ -23,6 +23,8 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.utils.BuildUtils.BuildWait;
+
 /**
  * The rename pre-flight waits for the workspace build BEFORE it settles the derived data, so a
  * module written right before the rename is in the BSL index the rename's reference finder reads
@@ -39,7 +41,7 @@ public class RenameIndexSettleTest
         RenameMetadataObjectTool.CascadeSettler settler = RenameMetadataObjectTool.indexedThenSettled(
             timeout -> {
                 order.add("build"); //$NON-NLS-1$
-                return true;
+                return BuildWait.DRAINED;
             },
             (project, timeout) -> {
                 order.add("cascade:" + project); //$NON-NLS-1$
@@ -54,7 +56,7 @@ public class RenameIndexSettleTest
     public void testACascadeRefusalIsPassedThrough()
     {
         RenameMetadataObjectTool.CascadeSettler settler = RenameMetadataObjectTool.indexedThenSettled(
-            timeout -> true, (project, timeout) -> "still building"); //$NON-NLS-1$
+            timeout -> BuildWait.DRAINED, (project, timeout) -> "still building"); //$NON-NLS-1$
 
         assertEquals("still building", settler.settle(PROJECT, 60_000)); //$NON-NLS-1$
     }
@@ -64,7 +66,7 @@ public class RenameIndexSettleTest
     {
         List<String> cascade = new ArrayList<>();
         RenameMetadataObjectTool.CascadeSettler settler = RenameMetadataObjectTool.indexedThenSettled(
-            timeout -> false, (project, timeout) -> {
+            timeout -> BuildWait.TIMED_OUT, (project, timeout) -> {
                 cascade.add(project);
                 return null;
             });
@@ -89,7 +91,7 @@ public class RenameIndexSettleTest
             timeout -> {
                 buildBudget.set(timeout);
                 sleep(400);
-                return true;
+                return BuildWait.DRAINED;
             },
             (project, timeout) -> {
                 cascadeBudget.set(timeout);
@@ -110,7 +112,7 @@ public class RenameIndexSettleTest
         RenameMetadataObjectTool.CascadeSettler settler = RenameMetadataObjectTool.indexedThenSettled(
             timeout -> {
                 sleep(150);
-                return true;
+                return BuildWait.DRAINED;
             },
             (project, timeout) -> {
                 cascadeBudget.set(timeout);
@@ -153,6 +155,80 @@ public class RenameIndexSettleTest
         assertNull(refusal);
         assertNotNull("the production pre-flight returned before the pending build had run", build.getResult()); //$NON-NLS-1$
         assertTrue("waited " + elapsed + " ms", elapsed >= 800); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testEveryNonDrainedOutcomeRefusesTheRename()
+    {
+        for (BuildWait outcome : BuildWait.values())
+        {
+            if (outcome == BuildWait.DRAINED)
+            {
+                continue;
+            }
+            List<String> cascade = new ArrayList<>();
+            String refusal = RenameMetadataObjectTool.indexedThenSettled(timeout -> outcome,
+                (project, timeout) -> {
+                    cascade.add(project);
+                    return null;
+                }).settle(PROJECT, 60_000);
+            assertNotNull(outcome + " must refuse", refusal); //$NON-NLS-1$
+            assertTrue(outcome + ": " + refusal, refusal.contains("Nothing was renamed.")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(outcome + " must not settle or rename", cascade.isEmpty()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testASuspendedManagerSaysWhyTheBuildCannotRun()
+    {
+        String refusal = RenameMetadataObjectTool.buildRefusal(BuildWait.SUSPENDED, 60_000);
+        assertTrue(refusal, refusal.contains("job manager is suspended")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.endsWith("Please wait and retry.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedBuildAsksForABuildNotJustARetry()
+    {
+        // A canceled build leaves the index stale and schedules nothing new: waiting alone would
+        // not fix it, so the advice is to build.
+        String refusal = RenameMetadataObjectTool.buildRefusal(BuildWait.FAILED, 60_000);
+        assertTrue(refusal, refusal.contains("ended canceled or with an error")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("Build the project")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("clean_project")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnInterruptedWaitIsNotCalledATimeout()
+    {
+        String refusal = RenameMetadataObjectTool.buildRefusal(BuildWait.INTERRUPTED, 60_000);
+        assertTrue(refusal, refusal.contains("interrupted")); //$NON-NLS-1$
+        assertTrue(refusal, !refusal.contains("within")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutomaticBuildingOffAddsANoteInsteadOfRefusing()
+    {
+        String report = "---\naction: executed\n---\n# Rename\n"; //$NON-NLS-1$
+        String noted = RenameMetadataObjectTool.withAutoBuildNote(report, false);
+        assertTrue(noted, noted.startsWith(report));
+        assertTrue(noted, noted.contains("automatic building is off")); //$NON-NLS-1$
+        assertTrue(noted, noted.contains("write_module_source")); //$NON-NLS-1$
+        assertTrue(noted, noted.contains("Build the project")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutomaticBuildingOnLeavesTheReportAlone()
+    {
+        String report = "---\naction: executed\n---\n# Rename\n"; //$NON-NLS-1$
+        assertEquals(report, RenameMetadataObjectTool.withAutoBuildNote(report, true));
+    }
+
+    @Test
+    public void testAnErrorPayloadGetsNoNote()
+    {
+        String error = "{\"isError\":true}"; //$NON-NLS-1$
+        assertEquals(error, RenameMetadataObjectTool.withAutoBuildNote(error, false));
+        assertNull(RenameMetadataObjectTool.withAutoBuildNote(null, false));
     }
 
     private static void sleep(long ms)
