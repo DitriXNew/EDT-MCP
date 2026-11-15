@@ -111,7 +111,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final Set<String> READ_ONLY_V23_ADDITIONS = Set.of("standalone_server"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_V24_ADDITIONS = Set.of("manage_profiling_results");
+    private static final Set<String> READ_ONLY_V24_ADDITIONS = Set.of("manage_profiling_results", "manage_tech_log"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(

@@ -37,6 +37,8 @@ public final class HostToolCapabilities
         define("get_project_errors", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("get_markers", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("get_event_log", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
+        define("get_tech_log", Capability.HEADLESS, "Pure local JSON file analysis/reference; unit fixtures cover parser, groups and correlation; live wire acceptance remains separate");
+        define("manage_tech_log", Capability.HEADLESS, "Local capture/CSV file writes reuse the existing consent and preset policy; unit temporary-file round trips do not prove platform pickup");
         define("get_mcp_history", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("list_git_branches", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("switch_git_branch", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");

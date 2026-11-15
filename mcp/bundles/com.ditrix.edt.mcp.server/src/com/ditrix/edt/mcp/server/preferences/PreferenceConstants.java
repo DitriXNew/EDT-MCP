@@ -127,7 +127,7 @@ public final class PreferenceConstants
      * 21 = recorded read-only profiles gain {@code sort_metadata}.
      * 22 = recorded read-only profiles gain {@code edt_dialog}.
      * 23 = recorded read-only profiles gain {@code standalone_server};
-     * 24 = recorded read-only profiles gain {@code manage_profiling_results}.
+     * 24 = recorded read-only profiles gain {@code manage_profiling_results} and {@code manage_tech_log}.
      */
     public static final int TOOL_PREFS_MIGRATION_VERSION = 24;
 

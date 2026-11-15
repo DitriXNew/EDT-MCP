@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**109 tools.**
+**111 tools.**
 
 ## Core
 
@@ -102,10 +102,12 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Profiling
 
-> Performance profiling: start/stop, inspect, compare and exchange measurements.
+> Performance profiling and 1C technological logs: capture, inspect, compare and exchange.
 
 | Tool | Description |
 |------|-------------|
+| [`get_tech_log`](get_tech_log.md) | Analyze 1C JSON technological logs: problems first, then details and correlated chains; describe explains events and capture profiles. Absent events do not prove absence of a problem. Full parameters and examples: call get_tool_guide('get_tech_log'). |
+| [`manage_tech_log`](manage_tech_log.md) | Preview and manage 1C JSON technological-log capture, or export CSV. Preview before start; start, stop and export require consent and refuse read-only mode. Stop after a short reproduction to restore logcfg.xml. Full parameters and examples: call get_tool_guide('manage_tech_log'). |
 | [`get_profiling_results`](get_profiling_results.md) | Read-only Markdown summary (default), measurement list, paged lines and comparison. Select a UUID with `measurementId`; `applicationId` only scopes the active flag. |
 | [`manage_profiling_results`](manage_profiling_results.md) | Export complete CSV/EDT measurements or import native EDT folders with `mode`. Requires separate write permission, consent, a writable preset and absolute host paths; never overwrites. |
 | [`start_profiling`](start_profiling.md) | Measure execution time and coverage of BSL code in a debug session. Parameters and examples: get_tool_guide('start_profiling'). |

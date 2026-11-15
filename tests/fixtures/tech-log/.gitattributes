@@ -1,0 +1,2 @@
+# Preserve the real capture's BOM and CRLF bytes on every checkout.
+*.log -text
