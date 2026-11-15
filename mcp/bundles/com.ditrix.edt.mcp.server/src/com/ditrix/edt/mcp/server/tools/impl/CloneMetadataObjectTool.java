@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.MetadataCloneEditors;
+import com.ditrix.edt.mcp.server.utils.MetadataCloneDestination;
 import com.ditrix.edt.mcp.server.utils.MetadataCloneDiskVerifier;
 import com.ditrix.edt.mcp.server.utils.MetadataClonePlan;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
@@ -63,6 +64,9 @@ import com.google.gson.JsonParser;
 public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "clone_metadata_object";
+
+    /** The optional destination project of a cross-project clone (issue #933 PR-3). */
+    static final String TARGET_PROJECT_NAME = "targetProjectName";
 
     @Override
     public String getName()
@@ -83,8 +87,10 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         JsonObject schema = JsonParser.parseString(JsonSchemaBuilder.object()
-            .stringProperty(McpKeys.PROJECT_NAME, "Configuration or extension project (an extension's own objects only); "
-                + "source and clone stay in this project", true)
+            .stringProperty(McpKeys.PROJECT_NAME, "Configuration or extension project of the source (an extension's own "
+                + "objects only); the clone stays here unless targetProjectName is set", true)
+            .stringProperty(TARGET_PROJECT_NAME, "Another configuration or extension project to clone into; omit to "
+                + "clone inside projectName. No transfer; references missing there are refused")
             .stringProperty("fqn", "Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, "
                 + "ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; "
                 + "Name is a programmatic identifier, not a synonym", true)
@@ -111,6 +117,9 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             .enumProperty("action", "Preview or applied native clone", "preview", "cloned")
             .stringProperty("sourceFqn", "Canonical source FQN")
             .stringProperty("fqn", "Actual created FQN, present after cloning")
+            .stringProperty(TARGET_PROJECT_NAME, "Destination project of a cross-project clone")
+            .stringArrayProperty("missingReferences", "On a cross-project refusal: referenced objects the destination "
+                + "lacks")
             .stringProperty("contentHash", "Preview token covering source, disk, destination names and selected owners")
             .stringProperty("namePolicy", "callerSupplied or edtAutomatic")
             .objectArrayProperty("incomingRelations", "Incoming references grouped by kind; each has owner and transferSupport")
@@ -144,7 +153,36 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             JsonUtils.extractStringArgument(params, "newName"),
             JsonUtils.extractBooleanArgument(params, "confirm", false),
             JsonUtils.extractStringArgument(params, "expectedHash"), params.get("transfer"));
+        if (error == null)
+        {
+            error = targetRequestError(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME),
+                params.containsKey(TARGET_PROJECT_NAME), JsonUtils.extractStringArgument(params, TARGET_PROJECT_NAME),
+                JsonUtils.extractObjectArray(params, "transfer"));
+        }
         return error == null ? null : ToolResult.error(error).toJson();
+    }
+
+    /** The cross-project clone writes only the destination, so no source-project relation can be transferred. */
+    static String targetRequestError(String projectName, boolean present, String target, List<JsonObject> transfer)
+    {
+        if (present && (target == null || target.isBlank()))
+        {
+            return "targetProjectName is blank. Pass the destination project from list_projects, or omit it to clone "
+                + "inside projectName.";
+        }
+        if (crossProject(projectName, target) && !transfer.isEmpty())
+        {
+            return "transfer is not supported with targetProjectName '" + target + "': the selected owners belong to "
+                + "project '" + projectName + "', and a cross-project clone writes only the destination. Omit "
+                + "transfer, then add the clone to the destination's subsystems and roles with modify_metadata.";
+        }
+        return null;
+    }
+
+    /** Whether the call names a destination other than the source project; the same name is today's clone. */
+    static boolean crossProject(String projectName, String target)
+    {
+        return target != null && !target.isBlank() && !target.equals(projectName);
     }
 
     @Override
@@ -156,6 +194,27 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         if (!project.exists())
         {
             return com.ditrix.edt.mcp.server.utils.ProjectContext.notFoundMessage(projectName);
+        }
+        String target = JsonUtils.extractStringArgument(params, TARGET_PROJECT_NAME);
+        if (crossProject(projectName, target))
+        {
+            com.ditrix.edt.mcp.server.utils.ProjectContext destination =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(target);
+            if (!destination.exists())
+            {
+                return com.ditrix.edt.mcp.server.utils.ProjectContext.notFoundMessage(target);
+            }
+            // The shared write gate asks about projectName only; the destination is the project written.
+            String gate = com.ditrix.edt.mcp.server.utils.ProjectStateChecker.modelBuildingErrorOrNull(target);
+            if (gate != null)
+            {
+                return gate;
+            }
+            if (BuildUtils.waitForDiskExport(destination.project(), 10_000L) != BuildUtils.DiskExportState.DRAINED)
+            {
+                return "Destination export is not confirmed for project '" + target
+                    + "'. Wait for list_projects to report it ready, then preview again.";
+            }
         }
         return BuildUtils.waitForDiskExport(project.project(), 10_000L) == BuildUtils.DiskExportState.DRAINED
             ? null : "Source export is not confirmed for project '" + projectName
@@ -186,6 +245,11 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("Project '" + projectName + "' is an external-objects project. "
                 + "Use list_projects and select a configuration or extension project; external-objects projects "
                 + "are unsupported by clone_metadata_object.").toJson();
+        }
+        String target = JsonUtils.extractStringArgument(params, TARGET_PROJECT_NAME);
+        if (crossProject(projectName, target))
+        {
+            return executeIntoProject(ctx, target, fqn, newName, confirm, expectedHash);
         }
         // EDT's configuration copier asks the same question to keep extension properties of the copy.
         boolean extensionProject =
@@ -357,7 +421,244 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         MetadataClonePlan.checkName(config, source, newName);
     }
 
+    /**
+     * Issue #933 PR-3: a clone into another project. EDT's own cross-project paste runs the DESTINATION's copier in one
+     * destination task; a BM transaction reads every active namespace by URI, so this preview and this write each read
+     * the source, the destination and an extension destination's base configuration in ONE transaction of the
+     * destination model - no second transaction is opened on this thread. Incoming relations stay in the source.
+     */
+    private String executeIntoProject(ProjectContext source, String targetName, String fqn, String newName,
+        boolean confirm, String expectedHash) throws Exception
+    {
+        String projectName = source.project.getName();
+        String reload = com.ditrix.edt.mcp.server.utils.ProjectStateChecker.checkoutReloadErrorOrNull(targetName);
+        if (reload != null)
+        {
+            return ToolResult.error(reload).toJson();
+        }
+        ProjectContext target = resolveProjectAndScope(targetName);
+        if (target.hasError())
+        {
+            return target.error;
+        }
+        if (target.scope.isExternalObjects())
+        {
+            return ToolResult.error("Project '" + targetName + "' is an external-objects project. Use list_projects "
+                + "and pass a configuration or extension project as targetProjectName; external-objects projects are "
+                + "unsupported by clone_metadata_object.").toJson();
+        }
+        com._1c.g5.v8.dt.core.platform.IV8Project destinationProject =
+            Activator.getDefault().getV8ProjectManager().getProject(target.project);
+        boolean extension = destinationProject instanceof IExtensionProject;
+        IProject baseProject = extension ? ((IExtensionProject)destinationProject).getParentProject() : null;
+        if (extension && baseProject == null)
+        {
+            return ToolResult.error("Extension '" + targetName + "' has no loaded base configuration project. Import "
+                + "or open its base project, wait for list_projects to report it ready, then preview again.").toJson();
+        }
+        BmModelResolver.Resolution sourceResolution = BmModelResolver.resolve(source.project);
+        BmModelResolver.Resolution targetResolution = BmModelResolver.resolve(target.project);
+        BmModelResolver.Resolution baseResolution = extension ? BmModelResolver.resolve(baseProject) : null;
+        for (BmModelResolver.Resolution resolution : java.util.Arrays.asList(sourceResolution, targetResolution,
+            baseResolution))
+        {
+            if (resolution != null && !resolution.isAvailable())
+            {
+                return ToolResult.error(resolution.actionableError(NAME, "Nothing was written.")).toJson();
+            }
+        }
+        IProjectFileSystemSupportProvider provider = ServiceAccess.get(IProjectFileSystemSupportProvider.class);
+        if (ServiceAccess.get(IModelObjectCopySupport.class) == null || provider == null
+            || ServiceAccess.get(ITopObjectFqnGenerator.class) == null)
+        {
+            return ToolResult.error("EDT native metadata-copy/filesystem services are unavailable. "
+                + "Wait for the projects to load or restart EDT, then preview again.").toJson();
+        }
+        IProjectFileSystemSupport sourceFs = provider.getProjectFileSystemSupport(source.project);
+        IProjectFileSystemSupport targetFs = provider.getProjectFileSystemSupport(target.project);
+        if (sourceFs == null || targetFs == null)
+        {
+            return ToolResult.error("Project filesystem is unavailable for '" + (sourceFs == null ? projectName
+                : targetName) + "'. Refresh/reopen the project and preview again.").toJson();
+        }
+        IBmModel sourceModel = sourceResolution.getModel();
+        IBmModel model = targetResolution.getModel();
+        String sourceNamespace = sourceModel.getEngine().getId();
+        String targetNamespace = model.getEngine().getId();
+        String baseNamespace = baseResolution == null ? null : baseResolution.getModel().getEngine().getId();
+        String baseName = baseProject == null ? null : baseProject.getName();
+        IProject destinationHandle = target.project;
+        CrossRead read = tx -> {
+            Configuration sourceConfig = MetadataCloneDestination.source(tx, sourceNamespace, projectName);
+            MetadataCloneDestination destination = MetadataCloneDestination.read(tx, targetName, targetNamespace,
+                extension, baseName, baseNamespace, sourceNamespace,
+                folder -> destinationHandle.getFolder(new org.eclipse.core.runtime.Path(folder)).exists());
+            return new CrossState(sourceConfig, destination, MetadataClonePlan.source(sourceConfig, fqn));
+        };
+        MetadataCloneEditors.requireClean(source.project);
+        MetadataCloneEditors.requireClean(target.project);
+        MetadataClonePlan preview;
+        try
+        {
+            preview = BmTransactions.read(model, NAME + ": cross-project preview", (tx, monitor) -> {
+                CrossState state = read.apply(tx);
+                MetadataCloneDestination destination = state.destination();
+                MdObject object = state.object();
+                vendorCheck(destination.configuration, object, MetadataCloneDestination.effectiveName(object, newName));
+                MetadataCloneDiskVerifier.verifyOwned(source.project, MetadataClonePlan.graph(object), sourceFs);
+                MetadataCloneDiskVerifier.verifyOwned(destinationHandle,
+                    java.util.Collections.singletonMap("", destination.configuration), targetFs);
+                return MetadataClonePlan.captureInto(destination, source.project, sourceModel, state.sourceConfig(),
+                    object, newName, sourceFs, true);
+            });
+        }
+        catch (RuntimeException e)
+        {
+            return previewError(fqn, e);
+        }
+        String crossWarning = "The clone is written into project '" + targetName + "' only; incoming relations stay "
+            + "in '" + projectName + "' (see notCopied). Module text is copied unchanged: code that names objects "
+            + "absent in '" + targetName + "' will show errors there.";
+        if (!confirm)
+        {
+            WriteScope.recordNothingQueued();
+            return answer(preview, newName).put("action", "preview").put(TARGET_PROJECT_NAME, targetName)
+                .put("contentHash", preview.hash()).put("resources", sourceResources(preview))
+                .put("transferred", List.of()).put("selectedTransfers", List.of()).put("notCopied", preview.incoming)
+                .put("codeReferences", sourceTextReferences(source.project, preview))
+                .put("warning", withKindWarnings("No name is reserved. " + crossWarning + " The indexed reference "
+                    + "scan is best effort; dynamic code references and binary template text may not be "
+                    + "discoverable.", preview)).toJson();
+        }
+        if (!ContentHash.matches(preview.fingerprint, expectedHash))
+        {
+            return drift();
+        }
+        ConsentDecision decision = DestructiveConsentGate.getInstance().requireConsent(NAME,
+            new ConsentPreview("Clone metadata object", preview.sourceFqn + " -> " + targetName + ": "
+                + (newName == null ? "the source name" : newName), 1, List.of(preview.sourceFqn)));
+        if (decision != ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        MetadataCloneEditors.requireClean(source.project);
+        MetadataCloneEditors.requireClean(target.project);
+        AtomicReference<String> actualFqn = new AtomicReference<>();
+        AtomicReference<List<String>> dirty = new AtomicReference<>(List.of());
+        AtomicReference<String> result = new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+        String applyWarning = withKindWarnings("Texts are preserved. " + crossWarning + " Do not retry this "
+            + "non-idempotent operation after a timeout or partial error; inspect the returned FQN in '" + targetName
+            + "' first.", preview);
+        try
+        {
+            result.set(WorkspaceModelWrite.run(target.project.getWorkspace(), model, NAME,
+                () -> BmTransactions.writeInGlobalContext(model, NAME, (tx, progress) -> {
+                CrossState state = read.apply(tx);
+                MetadataCloneDestination destination = state.destination();
+                MdObject object = state.object();
+                String name = MetadataCloneDestination.effectiveName(object, newName);
+                vendorCheck(destination.configuration, object, name);
+                MetadataClonePlan current = MetadataClonePlan.captureInto(destination, source.project, sourceModel,
+                    state.sourceConfig(), object, newName, sourceFs, false);
+                if (!ContentHash.matches(current.fingerprint, expectedHash))
+                {
+                    throw new IllegalArgumentException("Preview scope changed. Run clone_metadata_object without "
+                        + "confirm again with the same targetProjectName, then use its new contentHash.");
+                }
+                WriteScope.recordUndeterminable("native copy may write external files before failure",
+                    List.of(targetName));
+                started.set(true);
+                Configuration config = destination.configuration;
+                // The name is passed explicitly: it is the one checked above, so EDT never picks another.
+                NativeMetadataClone copier = NativeMetadataClone.create(tx, model, config, object, name,
+                    attached -> actualFqn.set(attached.eClass().getName() + "." + attached.getName()));
+                MdObject clone = (MdObject)copier.copy(object, config, MetadataClonePlan.collection(config, object));
+                if (!(clone instanceof IBmObject) || model.getEngine().getCurrentTransaction() != tx)
+                {
+                    throw new IllegalStateException("EDT native copy did not join this transaction. Inspect project '"
+                        + targetName + "' with get_metadata_objects before retrying.");
+                }
+                String created = clone.eClass().getName() + "." + clone.getName();
+                actualFqn.set(created);
+                if (targetFs.getFile(clone).exists())
+                {
+                    throw new IllegalStateException("Clone metadata file already exists for '" + created
+                        + "' in '" + targetName + "'. Inspect the destination and choose an unused name.");
+                }
+                validateClone(object, clone, name, sourceNamespace);
+                Set<String> exports = new LinkedHashSet<>(copier.attachedTopFqns());
+                exports.add(created);
+                exports.addAll(MetadataClonePlan.collectTopFqns(MetadataClonePlan.graph(clone)));
+                exports.add(((IBmObject)config).bmGetFqn());
+                dirty.set(new ArrayList<>(exports));
+                JsonArray resources = resourceManifest(preview, object, clone, sourceFs, targetFs);
+                for (String attachedFqn : copier.attachedTopFqns())
+                {
+                    addModelResource(resources, tx.getTopObjectByFqn(attachedFqn), targetFs);
+                }
+                addModelResource(resources, config, targetFs);
+                return answer(preview, newName).put("action", "cloned").put("fqn", created)
+                    .put(TARGET_PROJECT_NAME, targetName).put("selectedTransfers", List.of())
+                    .put("notCopied", preview.incoming)
+                    .put("cloneModelHash", ContentHash.of(MetadataClonePlan.modelFingerprint(clone)))
+                    .put("configurationFile", targetFs.getFile(config).getProjectRelativePath().toPortableString())
+                    .put("collection", MetadataClonePlan.collection(config, object).getName())
+                    .put("resources", resources).put("transferred", List.of()).put("persisted", false)
+                    .put("warning", applyWarning).toJson();
+            })));
+            WriteScope.recordWrite(target.project);
+            if (!BmTransactions.forceExportToDisk(target.project, dirty.get()))
+            {
+                return partial(actualFqn.get(), "EDT did not accept all export requests", applyWarning);
+            }
+            return result.get();
+        }
+        catch (Exception e)
+        {
+            if (!started.get() && MetadataClonePlan.Refusal.in(e) != null)
+            {
+                // The destination changed since the preview into a refusal (a new name, a removed object).
+                return previewError(fqn, new IllegalStateException(e));
+            }
+            return started.get() ? partial(actualFqn.get(), unwrapCauseMessage(e), applyWarning)
+                : ToolResult.error(unwrapCauseMessage(e)).toJson();
+        }
+    }
+
+    /** Reads the cross-project state in the transaction it is given. */
+    @FunctionalInterface
+    private interface CrossRead
+    {
+        CrossState apply(com._1c.g5.v8.bm.core.IBmTransaction tx);
+    }
+
+    /** The source configuration, the destination and the source object, all read in one transaction. */
+    private record CrossState(Configuration sourceConfig, MetadataCloneDestination destination, MdObject object)
+    {
+    }
+
+    private static void vendorCheck(Configuration destination, MdObject source, String name)
+    {
+        String refusal = VendorSupportGuard.refusalFor(destination, MetadataScope.ofConfiguration(destination),
+            "Configuration", source.eClass().getName() + "." + name, "modified to create a clone");
+        if (refusal != null)
+        {
+            throw new IllegalArgumentException(refusal);
+        }
+    }
+
     static void validateClone(MdObject source, MdObject clone, String newName)
+    {
+        validateClone(source, clone, newName, null);
+    }
+
+    /**
+     * @param sourceNamespace the source's BM namespace when the clone lives in ANOTHER project: then no clone
+     *     reference may stay in the source namespace at all, and a top address equal to the source's (the clone keeps
+     *     the source name) is the clone itself; {@code null} for a clone in the same project
+     */
+    static void validateClone(MdObject source, MdObject clone, String newName, String sourceNamespace)
     {
         if (source == clone || source.getUuid().equals(clone.getUuid())
             || (newName != null && !newName.equals(clone.getName())))
@@ -398,9 +699,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                         org.eclipse.emf.common.util.URI uri = org.eclipse.emf.ecore.util.EcoreUtil.getURI((EObject)target);
                         if (com._1c.g5.v8.bm.core.BmUriUtil.isBmUri(uri))
                         {
-                            String top = com._1c.g5.v8.bm.core.BmUriUtil.extractTopObjectFqn(uri);
-                            String sourceTop = ((IBmObject)source).bmGetFqn();
-                            originalTarget |= top.equals(sourceTop) || top.startsWith(sourceTop + ".");
+                            originalTarget |= targetsSource(uri, ((IBmObject)source).bmGetFqn(), sourceNamespace,
+                                source.getName().equals(clone.getName()));
                         }
                     }
                     if (originalTarget)
@@ -414,15 +714,46 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         }
     }
 
+    /**
+     * Whether a clone reference still points at the source. In one project that is any address inside the source's
+     * top object. In another project a reference left in the source namespace is never valid, and the source's
+     * address in the destination namespace is the clone's own exactly when the clone kept the source name.
+     *
+     * @param uri a BM reference of the clone
+     * @param sourceTop the source's top FQN
+     * @param sourceNamespace the source namespace of a cross-project clone, {@code null} in one project
+     * @param keptName whether the clone has the source's name
+     */
+    static boolean targetsSource(org.eclipse.emf.common.util.URI uri, String sourceTop, String sourceNamespace,
+        boolean keptName)
+    {
+        String top = com._1c.g5.v8.bm.core.BmUriUtil.extractTopObjectFqn(uri);
+        boolean sourceAddress = top != null && sourceTop != null
+            && (top.equals(sourceTop) || top.startsWith(sourceTop + "."));
+        if (sourceNamespace == null)
+        {
+            return sourceAddress;
+        }
+        return sourceNamespace.equals(com._1c.g5.v8.bm.core.BmUriUtil.extractNamespace(uri))
+            || (sourceAddress && !keptName);
+    }
+
     static JsonArray resourceManifest(MetadataClonePlan plan, MdObject source, MdObject clone,
         IProjectFileSystemSupport fs)
     {
+        return resourceManifest(plan, source, clone, fs, fs);
+    }
+
+    /** @param sourceFs the source project's filesystem; {@code fs} is the clone's (the same in one project) */
+    static JsonArray resourceManifest(MetadataClonePlan plan, MdObject source, MdObject clone,
+        IProjectFileSystemSupport sourceFs, IProjectFileSystemSupport fs)
+    {
         Map<String, EObject> originals = MetadataClonePlan.graph(source);
         Map<String, EObject> copies = MetadataClonePlan.graph(clone);
-        Map<String, IFile> from = MetadataClonePlan.ownedResources(originals, fs);
+        Map<String, IFile> from = MetadataClonePlan.ownedResources(originals, sourceFs);
         Map<String, IFile> to = MetadataClonePlan.destinationResources(copies, fs);
         Map<String, JsonObject> files = new java.util.LinkedHashMap<>();
-        IFile sourceFile = fs.getFile(source);
+        IFile sourceFile = sourceFs.getFile(source);
         for (Map.Entry<String, IFile> entry : from.entrySet())
         {
             IFile target = to.get(entry.getKey());
@@ -510,6 +841,11 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     static String previewError(String fqn, RuntimeException e)
     {
         MetadataClonePlan.Refusal refusal = MetadataClonePlan.Refusal.in(e);
+        if (refusal instanceof MetadataCloneDestination.MissingReferences)
+        {
+            return ToolResult.error("Cannot clone '" + fqn + "': " + refusal.getMessage())
+                .put("missingReferences", ((MetadataCloneDestination.MissingReferences)refusal).references).toJson();
+        }
         if (refusal != null)
         {
             return ToolResult.error("Cannot clone '" + fqn + "': " + refusal.getMessage()).toJson();
@@ -623,8 +959,10 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         {
             return partial(fqn, "export completion is unobservable", warning);
         }
+        // The clone lives in the destination of a cross-project clone, which the result names.
+        String target = resultString(response, TARGET_PROJECT_NAME);
         IProject project = com.ditrix.edt.mcp.server.utils.ProjectContext.of(
-            JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME)).project();
+            target != null ? target : JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME)).project();
         JsonArray references = new JsonArray();
         try
         {

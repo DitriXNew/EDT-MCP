@@ -214,7 +214,7 @@ public final class MetadataClonePlan
     }
 
     /** A source this tool never clones; retrying after a resync cannot change the answer. */
-    public static final class Refusal extends IllegalArgumentException
+    public static class Refusal extends IllegalArgumentException
     {
         private static final long serialVersionUID = 1L;
 
@@ -327,8 +327,41 @@ public final class MetadataClonePlan
         MdObject source, String newName, List<JsonObject> transfer, IProjectFileSystemSupport fs,
         boolean scanReferences, boolean extensionProject)
     {
-        checkName(config, source, newName);
+        return capture(project, model, config, source, newName, transfer, fs, scanReferences, extensionProject, null);
+    }
+
+    /**
+     * A clone into another project: {@code config}, {@code project}, {@code model} and {@code fs} are the SOURCE
+     * project's; the destination decides the name, the folder, the prefix warning and the missing references, and
+     * its state joins the fingerprint. Incoming relations stay in the source project, so none is transferable.
+     */
+    public static MetadataClonePlan captureInto(MetadataCloneDestination destination, IProject project,
+        IBmModel model, Configuration config, MdObject source, String newName, IProjectFileSystemSupport fs,
+        boolean scanReferences)
+    {
+        return capture(project, model, config, source, newName, List.of(), fs, scanReferences,
+            destination.extension, destination);
+    }
+
+    private static MetadataClonePlan capture(IProject project, IBmModel model, Configuration config,
+        MdObject source, String newName, List<JsonObject> transfer, IProjectFileSystemSupport fs,
+        boolean scanReferences, boolean extensionProject, MetadataCloneDestination destination)
+    {
         String fqn = source.eClass().getName() + "." + source.getName();
+        List<String> missing = List.of();
+        if (destination == null)
+        {
+            checkName(config, source, newName);
+        }
+        else
+        {
+            destination.checkName(source, newName);
+            missing = destination.missingReferences(source);
+            if (!missing.isEmpty())
+            {
+                throw destination.missing(fqn, missing);
+            }
+        }
         Map<String, EObject> graph = graph(source);
         StringBuilder content = new StringBuilder(fqn).append('\n').append(newName).append('\n');
         // The destination's project kind decides whether the copy keeps extension properties.
@@ -337,11 +370,23 @@ public final class MetadataClonePlan
         appendModel(content, Collections.singletonMap("configuration", config));
         IFile rootFile = fs.getFile(source);
         requireFile(rootFile, "source metadata");
-        if (newName != null && rootFile.getParent().getParent()
+        if (destination == null && newName != null && rootFile.getParent().getParent()
             .getFolder(new org.eclipse.core.runtime.Path(newName)).exists())
         {
             throw new IllegalArgumentException("Destination folder for newName '" + newName
                 + "' already exists. Inspect its files and choose an unused name; clone never overwrites a folder.");
+        }
+        if (destination != null)
+        {
+            String folder = rootFile.getParent().getParent().getProjectRelativePath()
+                .append(MetadataCloneDestination.effectiveName(source, newName)).toPortableString();
+            if (destination.folderExists(folder))
+            {
+                throw new IllegalArgumentException("Destination folder '" + folder + "' already exists in project '"
+                    + destination.projectName + "'. Inspect its files and choose an unused newName; clone never "
+                    + "overwrites a folder.");
+            }
+            destination.appendFingerprint(content, source, missing);
         }
         Map<String, String> files = ownedFileHashes(graph, fs, rootFile);
         content.append(files).append('\n');
@@ -351,6 +396,11 @@ public final class MetadataClonePlan
             content.append(sibling.getName()).append(':').append(sibling.getUuid()).append('\n');
         }
         JsonArray relations = transferRelations(config, source);
+        if (destination != null)
+        {
+            // The owners live in the source project; the clone is never written there.
+            relations.forEach(relation -> relation.getAsJsonObject().addProperty("transferSupport", "reportedOnly"));
+        }
         content.append(relations).append('\n');
         for (Role role : config.getRoles())
         {
@@ -435,7 +485,8 @@ public final class MetadataClonePlan
         JsonArray incoming = new JsonArray();
         grouped.forEach(incoming::add);
         List<String> warnings = new ArrayList<>(kindWarnings(source));
-        String prefix = extensionProject ? prefixWarning(config, source, newName) : null;
+        String prefix = !extensionProject ? null
+            : prefixWarning(destination == null ? config : destination.configuration, source, newName);
         if (prefix != null)
         {
             warnings.add(prefix);
@@ -582,7 +633,7 @@ public final class MetadataClonePlan
                 && ((BasicTemplate)owner).getTemplateType() == TemplateType.HTML_DOCUMENT);
     }
 
-    private static void appendModel(StringBuilder text, Map<String, EObject> graph)
+    static void appendModel(StringBuilder text, Map<String, EObject> graph)
     {
         for (Map.Entry<String, EObject> entry : graph.entrySet())
         {

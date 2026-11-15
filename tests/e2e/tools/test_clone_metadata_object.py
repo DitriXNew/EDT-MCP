@@ -13,7 +13,7 @@ from harness import (
     assert_no_diff, assert_tree_unchanged, tree_snapshot, read_disk,
     e2e_test, PROJECT, PROJECT_DIR, TESTS_PROJECT, wait_for_project_ready,
     E2ECallTimeout, EXT_OBJECTS_PROJECT, REPO_ROOT, TESTS_PROJECT_REL, assert_no_diff_rel, diff_rel,
-    read_fixture_file, restore_extension_fixture, settle_or_fail, status_porcelain_rel,
+    read_fixture_file, restore_extension_fixture, settle_or_fail, status_porcelain_rel, PROJECT_REL,
 )
 
 
@@ -768,3 +768,158 @@ def test_clone_extension_refuses_adopted_sources_and_warns_about_the_prefix():
     assert "namePrefix" not in automatic["warning"], "the automatic name keeps the source's prefix: %r" % automatic
     assert_no_diff_rel(TESTS_PROJECT_REL, "previews write nothing")
     assert_no_diff("previews in the extension never touch the base")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Between projects (issue #933 PR-3): targetProjectName writes the clone into ANOTHER configuration or
+# extension project, with the destination's copier semantics. References the destination lacks are
+# refused before any write, with the list; nothing is adopted automatically.
+# ──────────────────────────────────────────────────────────────────────────────
+def _cross(project, **arguments):
+    return call("clone_metadata_object", {"projectName": project, **arguments})
+
+
+def _settled_cross_preview(project, timeout=120, **arguments):
+    """A cross-project preview once both fixtures and the contentHash hold still for 10 s (see
+    _settled_ext_preview: the extension's model may change once more after list_projects is ready)."""
+    deadline = time.time() + timeout
+
+    def take():
+        result = _cross(project, **arguments)
+        assert_ok(result, "cross-project clone preview")
+        data = result.structured
+        assert isinstance(data, dict) and data.get("action") == "preview", data
+        assert data["writtenProjects"] == [], data
+        return (_ext_state(), status_porcelain_rel(PROJECT_REL)), data
+
+    previous = take()
+    while True:
+        time.sleep(10)
+        current = take()
+        if current[0] == previous[0] and current[1]["contentHash"] == previous[1]["contentHash"]:
+            return current[1]
+        assert time.time() < deadline, "the fixtures kept changing for %ss" % timeout
+        previous = current
+
+
+def _cross_apply(project, preview, written, **arguments):
+    result = _cross(project, **arguments, confirm=True, expectedHash=preview["contentHash"])
+    assert_ok(result, "cross-project clone")
+    data = result.structured
+    assert data["action"] == "cloned" and data["persisted"] is True, data
+    assert data["writtenProjects"] == [written], "only the destination is written: %r" % data
+    assert data["targetProjectName"] == written, data
+    assert data["resources"] and all(row["verified"] for row in data["resources"]), data
+    return data
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_into_the_extension_writes_an_own_object_there_and_nothing_in_the_source():
+    """A configuration catalog (only platform types, a form and a template) clones into the extension
+    as an OWN object of the extension: no objectBelonging, no extension block, new identities, its
+    files copied, registered in the extension's Configuration.mdo. The source project is not touched."""
+    def body():
+        settle_or_fail("the cross-project clone preview")
+        source_path = "src/Catalogs/Catalog/Catalog.mdo"
+        source_bytes = _read_bytes(source_path)
+        preview = _settled_cross_preview(PROJECT, fqn="Catalog.Catalog", newName="tests_E2ECrossCopy",
+                                         targetProjectName=TESTS_PROJECT)
+        assert preview["targetProjectName"] == TESTS_PROJECT, preview
+        assert preview["selectedTransfers"] == [], preview
+        assert all(row["transferSupport"] == "reportedOnly" for row in preview["incomingRelations"]), preview
+        assert "written into project '%s' only" % TESTS_PROJECT in preview["warning"], preview
+        assert_no_diff_rel(TESTS_PROJECT_REL, "a cross-project preview writes nothing")
+        data = _cross_apply(PROJECT, preview, TESTS_PROJECT, fqn="Catalog.Catalog", newName="tests_E2ECrossCopy",
+                            targetProjectName=TESTS_PROJECT)
+        assert data["fqn"] == "Catalog.tests_E2ECrossCopy", data
+        assert_no_diff("a clone into the extension must not touch the source project")
+        assert _read_bytes(source_path) == source_bytes
+
+        # Disk first: an own object of the extension, with the source's shape and new identities.
+        folder = "src/Catalogs/tests_E2ECrossCopy/"
+        root = _ext_xml(folder + "tests_E2ECrossCopy.mdo")
+        source = ET.fromstring(source_bytes)
+        assert root.findtext("name") == "tests_E2ECrossCopy"
+        assert root.attrib["uuid"] != source.attrib["uuid"]
+        assert root.find("objectBelonging") is None and root.find("extension") is None, \
+            ET.tostring(root, encoding="unicode")
+        assert root.find("attributes/name").text == source.find("attributes/name").text
+        assert root.find("attributes").attrib["uuid"] != source.find("attributes").attrib["uuid"]
+        assert [node.text for node in root.findall("inputByString")] == [
+            "Catalog.tests_E2ECrossCopy.StandardAttribute.Code",
+            "Catalog.tests_E2ECrossCopy.StandardAttribute.Description"], "own fields follow the clone"
+        assert _ext_bytes(folder + "Templates/Invoice/Template.mxlx") == _read_bytes(
+            "src/Catalogs/Catalog/Templates/Invoice/Template.mxlx"), "the template is copied byte for byte"
+        assert _ext_xml(folder + "Forms/ItemForm/Form.form") is not None
+        assert _ext_registered("catalogs", "Catalog.tests_E2ECrossCopy")
+
+        details = call("get_metadata_details", {"projectName": TESTS_PROJECT,
+                                                "objectFqns": ["Catalog.tests_E2ECrossCopy"], "full": True})
+        assert_ok(details, "clone read-back from the extension model")
+        assert_contains(details.text, source.find("attributes/name").text, "the owned attribute resolves there")
+    _restoring_extension("a cross-project clone into the extension", body)
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_into_the_extension_refuses_missing_references_and_name_collisions():
+    """Before any write: a reference the destination lacks (the document's register record, a register the
+    extension has not adopted) is refused with the complete list and the adopt_metadata_object way out;
+    a name the extension already has, or an unadopted base name, is refused; transfer and an
+    external-objects destination are refused."""
+    settle_or_fail("the cross-project refusals")
+    missing = _cross(PROJECT, fqn="Document.QueryOrder", newName="tests_E2ECrossOrder",
+                     targetProjectName=TESTS_PROJECT)
+    message = assert_error(missing, "a document whose register the extension lacks")
+    assert_error_quality(message, names=["AccumulationRegister.QueryStock", TESTS_PROJECT],
+                         suggests=["adopt_metadata_object", "Nothing was written"])
+    assert "resync_to_disk" not in message, "a missing reference is final, not a stale source: " + message
+    assert missing.structured["missingReferences"] == ["AccumulationRegister.QueryStock"], missing.structured
+
+    taken = assert_error(_cross(PROJECT, fqn="Catalog.Catalog", targetProjectName=TESTS_PROJECT),
+                         "the extension already has Catalog.Catalog (adopted)")
+    assert_error_quality(taken, names=["Catalog.Catalog", "already exists", TESTS_PROJECT], suggests=["newName"])
+    base = assert_error(_cross(PROJECT, fqn="Document.QueryOrder", targetProjectName=TESTS_PROJECT),
+                        "an unadopted base name")
+    assert_error_quality(base, names=["Document.QueryOrder", "base configuration"],
+                         suggests=["newName", "adopt_metadata_object"])
+    transfer = assert_error(_cross(PROJECT, fqn="Catalog.Catalog", newName="tests_E2ECrossCopy",
+                                   targetProjectName=TESTS_PROJECT,
+                                   transfer=[{"kind": "subsystem", "owner": "Subsystem.Subsystem"}]),
+                            "transfer across projects")
+    assert_error_quality(transfer, names=["transfer", TESTS_PROJECT], suggests=["modify_metadata"])
+    external = assert_error(_cross(PROJECT, fqn="Catalog.Catalog", newName="E2ECrossCopy",
+                                   targetProjectName=EXT_OBJECTS_PROJECT), "an external-objects destination")
+    assert_error_quality(external, names=[EXT_OBJECTS_PROJECT], suggests=["configuration or extension project"])
+    unknown = assert_error(_cross(PROJECT, fqn="Catalog.Catalog", newName="E2ECrossCopy",
+                                  targetProjectName="NoSuchProject_e2e"), "an unknown destination")
+    assert_error_quality(unknown, names=["NoSuchProject_e2e"], suggests=["list_projects"])
+    assert_no_diff("refusals write nothing in the source")
+    assert_no_diff_rel(TESTS_PROJECT_REL, "refusals write nothing in the extension")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_from_the_extension_into_the_configuration():
+    """An own catalog of the extension clones into its base configuration as a plain configuration object;
+    the extension is not touched. Its own role cannot: the rights model names that own catalog, which the
+    configuration does not have."""
+    settle_or_fail("the extension-to-configuration clone")
+    source_bytes = _ext_bytes("src/Catalogs/tests_ExtOnly/tests_ExtOnly.mdo")
+    rights = assert_error(_cross(TESTS_PROJECT, fqn="Role.tests_DefaultRole", newName="E2ECrossRole",
+                                 targetProjectName=PROJECT), "a role whose rights name an extension object")
+    assert_error_quality(rights, names=["Catalog.tests_ExtOnly", PROJECT], suggests=["create_metadata"])
+    preview = _settled_cross_preview(TESTS_PROJECT, fqn=_EXT_SOURCE, newName="E2ECrossFromExtension",
+                                     targetProjectName=PROJECT)
+    assert all(row["transferSupport"] == "reportedOnly" for row in preview["incomingRelations"]), preview
+    data = _cross_apply(TESTS_PROJECT, preview, PROJECT, fqn=_EXT_SOURCE, newName="E2ECrossFromExtension",
+                        targetProjectName=PROJECT)
+    assert data["fqn"] == "Catalog.E2ECrossFromExtension", data
+    assert_no_diff_rel(TESTS_PROJECT_REL, "a clone out of the extension must not touch it")
+    root = _xml("src/Catalogs/E2ECrossFromExtension/E2ECrossFromExtension.mdo")
+    source = ET.fromstring(source_bytes)
+    assert root.findtext("name") == "E2ECrossFromExtension"
+    assert root.attrib["uuid"] != source.attrib["uuid"]
+    assert root.find("objectBelonging") is None and root.find("extension") is None
+    assert root.find("attributes/name").text == "ExtValue"
+    assert "Catalog.E2ECrossFromExtension" in [node.text for node in
+                                                _xml("src/Configuration/Configuration.mdo").findall("catalogs")]
+    assert_contains(_details("Catalog.E2ECrossFromExtension"), "ExtValue", "read back from the configuration model")

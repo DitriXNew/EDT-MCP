@@ -988,12 +988,13 @@ _CONFIRMED_MUTATION_TOOLS = set()
 _MUTATIONS_UNRESOLVED = 0
 
 # Only arguments whose schema says they NAME a project participate in target inference. Across the
-# fixture-model writers these are projectName and adopt_metadata_object's extensionProjectName;
+# fixture-model writers these are projectName, adopt_metadata_object's extensionProjectName and
+# clone_metadata_object's targetProjectName (the project a cross-project clone writes);
 # fixture-looking text in source, fqn, or any other value is unrelated. The one exception is
 # `_implicit_extension_targets` below: an adoption whose omitted or empty extensionProjectName makes
 # the server select the single extension. An unresolved outcome widens evidence only for these
 # candidate projects, because this branch already treats "outcome unknown" as "assume it moved".
-_PROJECT_ARGUMENT_KEYS = frozenset({"projectName", "extensionProjectName"})
+_PROJECT_ARGUMENT_KEYS = frozenset({"projectName", "extensionProjectName", "targetProjectName"})
 
 
 def _fixture_projects_named_in(args):

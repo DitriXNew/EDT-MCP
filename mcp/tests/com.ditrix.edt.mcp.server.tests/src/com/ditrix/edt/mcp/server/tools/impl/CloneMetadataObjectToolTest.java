@@ -148,7 +148,9 @@ public class CloneMetadataObjectToolTest
         assertTrue(tool.getDescription().contains("get_tool_guide('clone_metadata_object')"));
         JsonObject schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject();
         assertEquals(2, schema.getAsJsonArray("required").size());
-        assertEquals(6, schema.getAsJsonObject("properties").size());
+        assertEquals(7, schema.getAsJsonObject("properties").size());
+        assertEquals("string", schema.getAsJsonObject("properties").getAsJsonObject("targetProjectName")
+            .get("type").getAsString());
         JsonObject item = schema.getAsJsonObject("properties").getAsJsonObject("transfer").getAsJsonObject("items");
         assertEquals(2, item.getAsJsonArray("required").size());
         assertFalse(item.get("additionalProperties").getAsBoolean());
