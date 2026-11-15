@@ -9,8 +9,13 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import org.eclipse.debug.core.model.IDebugTarget;
 import org.junit.Test;
+import com._1c.g5.v8.dt.profiling.core.IProfileTarget;
 import com._1c.g5.v8.dt.profiling.core.IProfilingResult;
 import com._1c.g5.v8.dt.profiling.core.IProfilingService;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -25,7 +30,7 @@ public class ProfilingSupportTest
         IProfilingResult old = GetProfilingResultsToolTest.measurement("Old", 1, List.of());
         when(service.getResults()).thenReturn(List.of(old));
         String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service,
-            Set.of(old.getUuid()), "New name", 0).toJson();
+            Set.of(old.getUuid()), null, "New name", 0).toJson();
         assertTrue(output, output.contains("No measurement was named") && output.contains("mode=list"));
         verify(service, never()).setResultName(any(), anyString());
     }
@@ -35,7 +40,7 @@ public class ProfilingSupportTest
         IProfilingResult result = GetProfilingResultsToolTest.measurement("Original", 2, List.of());
         when(service.getResults()).thenReturn(List.of(result));
         doAnswer(call -> { when(result.getName()).thenReturn("After"); return null; }).when(service).setResultName(result, "After");
-        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), "After", 0).toJson();
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), result.getUuid(), "After", 0).toJson();
         assertTrue(output, output.contains(result.getUuid().toString()) && output.contains("\"name\":\"After\""));
         verify(service).setResultName(result, "After");
     }
@@ -44,7 +49,7 @@ public class ProfilingSupportTest
         IProfilingService service = mock(IProfilingService.class);
         IProfilingResult result = GetProfilingResultsToolTest.measurement("Arrival", 2, List.of());
         when(service.getResults()).thenReturn(List.of(), List.of(result));
-        assertSame(result, ProfilingSupport.awaitNewResult(service, Set.of(), 500));
+        assertSame(result, ProfilingSupport.awaitNewResult(service, Set.of(), null, 500));
     }
     @Test public void concurrentArrivalsAreNotGuessed() throws Exception
     {
@@ -52,14 +57,47 @@ public class ProfilingSupportTest
         IProfilingResult one = GetProfilingResultsToolTest.measurement("One", 1, List.of());
         IProfilingResult two = GetProfilingResultsToolTest.measurement("Two", 2, List.of());
         when(service.getResults()).thenReturn(List.of(one, two));
-        assertNull(ProfilingSupport.awaitNewResult(service, Set.of(), 0));
+        assertNull(ProfilingSupport.awaitNewResult(service, Set.of(), null, 0));
+    }
+    @Test public void staggeredForeignArrivalIsSkippedForTheOwnSession() throws Exception
+    {
+        IProfilingService service = mock(IProfilingService.class);
+        IProfilingResult foreign = GetProfilingResultsToolTest.measurement("Foreign", 1, List.of());
+        IProfilingResult own = GetProfilingResultsToolTest.measurement("Own", 2, List.of());
+        when(service.getResults()).thenReturn(List.of(foreign), List.of(foreign, own));
+        assertSame(own, ProfilingSupport.awaitNewResult(service, Set.of(), own.getUuid(), 500));
+    }
+    @Test public void foreignArrivalIsNeverNamedWithoutASessionId() throws Exception
+    {
+        IProfilingService service = mock(IProfilingService.class);
+        IProfilingResult foreign = GetProfilingResultsToolTest.measurement("Foreign", 1, List.of());
+        when(service.getResults()).thenReturn(List.of(foreign));
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), null, "Mine", 0).toJson();
+        assertTrue(output, output.contains("\"success\":false") && output.contains("none was named"));
+        verify(service, never()).setResultName(any(), anyString());
+    }
+    @Test public void sessionIdIsReadFromTheServiceSessionMap()
+    {
+        IDebugTarget target = mock(IDebugTarget.class, withSettings().extraInterfaces(IProfileTarget.class));
+        IDebugTarget other = mock(IDebugTarget.class, withSettings().extraInterfaces(IProfileTarget.class));
+        ServiceWithSessions service = mock(ServiceWithSessions.class, withSettings().useConstructor());
+        UUID id = UUID.randomUUID();
+        service.targets.put(UUID.randomUUID(), (IProfileTarget)other);
+        service.targets.put(id, (IProfileTarget)target);
+        assertEquals(id, ProfilingSupport.sessionId(service, target));
+        assertNull("A service without the map gives no ownership", ProfilingSupport.sessionId(mock(IProfilingService.class), target));
+    }
+    /** Mirrors the field EDT's ProfilingService keeps. */
+    public abstract static class ServiceWithSessions implements IProfilingService
+    {
+        final Map<UUID, IProfileTarget> targets = new ConcurrentHashMap<>();
     }
     @Test public void noNameStillReturnsNewIdentity() throws Exception
     {
         IProfilingService service = mock(IProfilingService.class);
         IProfilingResult result = GetProfilingResultsToolTest.measurement("Arrival", 2, List.of());
         when(service.getResults()).thenReturn(List.of(result));
-        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), null, 0).toJson();
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), null, null, 0).toJson();
         assertTrue(output, output.contains(result.getUuid().toString()) && output.contains("Arrival"));
         verify(service, never()).setResultName(any(), anyString());
     }
@@ -68,7 +106,7 @@ public class ProfilingSupportTest
         IProfilingService service = mock(IProfilingService.class);
         IProfilingResult result = GetProfilingResultsToolTest.measurement("Original", 2, List.of());
         when(service.getResults()).thenReturn(List.of(result));
-        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), "After", 0).toJson();
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), result.getUuid(), "After", 0).toJson();
         assertTrue(output, output.contains("EDT did not apply") && output.contains("\"success\":false"));
     }
     @Test public void invalidStopNameRefusedBeforeInactiveShortcut()
@@ -106,7 +144,7 @@ public class ProfilingSupportTest
             when(service.getResults()).thenReturn(List.of(persisted));
             throw new NullPointerException("No active profiling window");
         }).when(service).setResultName(original, "After");
-        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), "After", 0).toJson();
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), uuid, "After", 0).toJson();
         assertTrue(output, output.contains("\"success\":true") && output.contains("\"name\":\"After\""));
         assertTrue(output, output.contains("profiling view may need a refresh"));
         assertEquals("The original object deliberately stays stale", "Original", original.getName());
@@ -118,7 +156,7 @@ public class ProfilingSupportTest
         IProfilingResult result = GetProfilingResultsToolTest.measurement("Original", 2, List.of());
         when(service.getResults()).thenReturn(List.of(result));
         doThrow(new IllegalStateException("Save refused")).when(service).setResultName(result, "After");
-        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), "After", 0).toJson();
+        String output = StopProfilingTool.describeMeasurement(ToolResult.success(), service, Set.of(), result.getUuid(), "After", 0).toJson();
         assertTrue(output, output.contains("\"success\":false") && output.contains("Save refused"));
         assertFalse(output, output.contains("profiling view may need a refresh"));
     }

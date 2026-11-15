@@ -139,6 +139,7 @@ public class StopProfilingTool implements IMcpTool
             // switches profiling OFF.
             IProfilingService service = ProfilingSupport.service();
             Set<UUID> before = ProfilingSupport.ids(service);
+            UUID sessionId = ProfilingSupport.sessionId(service, target); // read before the toggle drops it
             if (name != null && service.getResults().stream().anyMatch(r -> name.equalsIgnoreCase(r.getName())))
             {
                 return ToolResult.error("Measurement name '" + name
@@ -158,7 +159,7 @@ public class StopProfilingTool implements IMcpTool
                 .put(KEY_ACTIVE, false)
                 .put(KEY_STOPPED, true)
                 .put(McpKeys.APPLICATION_ID, applicationId);
-            return describeMeasurement(result, service, before, name, 5000).toJson();
+            return describeMeasurement(result, service, before, sessionId, name, 5000).toJson();
         }
         catch (IllegalArgumentException e)
         {
@@ -174,9 +175,16 @@ public class StopProfilingTool implements IMcpTool
 
     /** Bounded worker-thread read-back; old results are never renamed. */
     public static ToolResult describeMeasurement(ToolResult response, IProfilingService service,
-        Set<UUID> before, String name, long timeoutMillis) throws InterruptedException
+        Set<UUID> before, UUID sessionId, String name, long timeoutMillis) throws InterruptedException
     {
-        IProfilingResult measurement = ProfilingSupport.awaitNewResult(service, before, timeoutMillis);
+        IProfilingResult measurement = ProfilingSupport.awaitNewResult(service, before, sessionId, timeoutMillis);
+        if (measurement != null && name != null && sessionId == null)
+        {
+            // Another stop (UI, session end, a parallel call) can deliver its measurement first.
+            return ToolResult.error("Profiling stopped, but EDT does not expose which measurement belongs to this session,"
+                + " so none was named. Find it with get_profiling_results mode=list.")
+                .put(KEY_STOPPED, true).put(KEY_ACTIVE, false);
+        }
         if (measurement == null)
         {
             return response.put(McpKeys.MESSAGE, "Profiling stopped, but no unambiguous new measurement arrived within "

@@ -6,8 +6,11 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +23,7 @@ import com._1c.g5.v8.dt.profiling.core.IProfileTarget;
 import com._1c.g5.v8.dt.profiling.core.IProfilingResult;
 import com._1c.g5.v8.dt.profiling.core.IProfilingService;
 import com._1c.g5.wiring.ServiceAccess;
+import com.ditrix.edt.mcp.server.Activator;
 
 /** Typed EDT service access and bounded completion of asynchronous measurements. */
 public final class ProfilingSupport
@@ -77,6 +81,45 @@ public final class ProfilingSupport
         return failure == null ? "" : " The change was observed, but the EDT profiling view may need a refresh.";
     }
 
+    static IProfileTarget profileTarget(IDebugTarget target)
+    {
+        if (target == null) { return null; }
+        return target instanceof IProfileTarget direct ? direct : target.getAdapter(IProfileTarget.class);
+    }
+
+    /**
+     * The measurement UUID EDT sent to the debug server for this target. EDT keeps it only in the
+     * service's private {@code targets} map, so it is read reflectively; null when it cannot be read.
+     */
+    public static UUID sessionId(IProfilingService service, IDebugTarget target)
+    {
+        IProfileTarget profile = profileTarget(target);
+        if (profile == null || service == null) { return null; }
+        for (Class<?> type = service.getClass(); type != null; type = type.getSuperclass())
+        {
+            try
+            {
+                Field field = type.getDeclaredField("targets"); //$NON-NLS-1$
+                field.setAccessible(true);
+                if (!(field.get(service) instanceof Map<?, ?> targets)) { break; }
+                for (Map.Entry<?, ?> entry : new ArrayList<>(targets.entrySet()))
+                {
+                    if (entry.getValue() == profile && entry.getKey() instanceof UUID id) { return id; }
+                }
+                return null;
+            }
+            catch (NoSuchFieldException e) { continue; }
+            catch (ReflectiveOperationException | RuntimeException e)
+            {
+                Activator.logWarning("Profiling session id is unreadable (" + PlatformFailures.describe(e) //$NON-NLS-1$
+                    + "); stop_profiling will not name measurements."); //$NON-NLS-1$
+                return null;
+            }
+        }
+        Activator.logWarning("IProfilingService has no session map in this EDT build; stop_profiling will not name measurements."); //$NON-NLS-1$
+        return null;
+    }
+
     /** The caller owns the tracked on/off state: EDT exposes a toggle, not a setter. */
     public static String toggleProfiling(IDebugTarget target)
     {
@@ -84,7 +127,7 @@ public final class ProfilingSupport
         {
             return "No active debug target. Use debug_status to select a running session.";
         }
-        IProfileTarget profile = target instanceof IProfileTarget direct ? direct : target.getAdapter(IProfileTarget.class);
+        IProfileTarget profile = profileTarget(target);
         if (profile == null)
         {
             return "Debug target does not support profiling. Launch a 1C debug session first.";
@@ -110,17 +153,25 @@ public final class ProfilingSupport
         return service.getResults().stream().map(IProfilingResult::getUuid).collect(Collectors.toSet());
     }
 
-    /** Runs on the calling worker, never SWT. Multiple arrivals are ambiguous and are not renamed. */
-    public static IProfilingResult awaitNewResult(IProfilingService service, Set<UUID> before, long timeoutMillis)
-        throws InterruptedException
+    /**
+     * Runs on the calling worker, never SWT. With a known session id only that measurement matches;
+     * without one, a single new arrival is reported and several are ambiguous.
+     */
+    public static IProfilingResult awaitNewResult(IProfilingService service, Set<UUID> before, UUID sessionId,
+        long timeoutMillis) throws InterruptedException
     {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         do
         {
             List<IProfilingResult> added = service.getResults().stream()
                 .filter(result -> !before.contains(result.getUuid())).toList();
-            if (added.size() == 1) { return added.get(0); }
-            if (added.size() > 1) { return null; }
+            if (sessionId != null)
+            {
+                IProfilingResult own = added.stream().filter(r -> sessionId.equals(r.getUuid())).findFirst().orElse(null);
+                if (own != null) { return own; }
+            }
+            else if (added.size() == 1) { return added.get(0); }
+            else if (added.size() > 1) { return null; }
             if (System.nanoTime() >= deadline) { return null; }
             TimeUnit.MILLISECONDS.sleep(100);
         }
