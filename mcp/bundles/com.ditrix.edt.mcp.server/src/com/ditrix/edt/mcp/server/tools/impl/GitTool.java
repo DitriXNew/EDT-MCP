@@ -214,6 +214,9 @@ public class GitTool implements IMcpTool
     /** The background-job registry a clone runs in. */
     private final BackgroundJobs jobs;
 
+    /** Test seam: makes each clone's cancellation state. */
+    java.util.function.Supplier<CloneControl> controls = CloneControl::new;
+
     /** A tool on the bundle-wide job registry. */
     public GitTool()
     {
@@ -1258,7 +1261,7 @@ public class GitTool implements IMcpTool
             List<String> display = new ArrayList<>(argv);
             display.set(2 + clone.directoryIndex(), directory.toString());
             String safeCommand = redactCredentialUrls(String.join(" ", display)); //$NON-NLS-1$
-            CloneControl control = new CloneControl();
+            CloneControl control = controls.get();
             AtomicReference<String> outcome = new AtomicReference<>();
             BackgroundJobs.JobSnapshot started;
             try
@@ -1277,6 +1280,12 @@ public class GitTool implements IMcpTool
                                 Math.min(timeoutMillis, progress.remainingMillis() - CLONE_CLEANUP_MARGIN_MILLIS));
                             CloneRun result = cloneThroughStaging(argv, clone, target, control, limit);
                             outcome.set(result.json());
+                            if (control.stopRequested())
+                            {
+                                // A cancel that gave up waiting settled the job without this report:
+                                // hand it in now, so the poller still learns what was (not) removed.
+                                progress.cancellationResult(result.json());
+                            }
                             if (!result.success())
                             {
                                 throw new BackgroundJobs.MarkedFailure(result.failure(), null);
@@ -1466,6 +1475,9 @@ public class GitTool implements IMcpTool
         private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
         private final ProcessWatch watch;
 
+        /** How long a cancel waits for the rollback; a test shortens it. */
+        volatile long cancelWaitMillis = CLONE_CANCEL_WAIT_MILLIS;
+
         /** Test seam: runs right after git's process has ended, before the worker concludes. */
         volatile Runnable afterGit = () -> { };
 
@@ -1533,7 +1545,7 @@ public class GitTool implements IMcpTool
             }
             try
             {
-                String json = report.get(CLONE_CANCEL_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+                String json = report.get(cancelWaitMillis, TimeUnit.MILLISECONDS);
                 JsonObject result = JsonParser.parseString(json).getAsJsonObject();
                 boolean clean = result.has(KEY_CLEANED_UP) && result.get(KEY_CLEANED_UP).getAsBoolean();
                 String message = result.has("error") ? result.get("error").getAsString() : "The clone was stopped."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -1543,8 +1555,8 @@ public class GitTool implements IMcpTool
             catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e)
             {
                 return BackgroundJobs.CommittedCancellation.stopInitiated("git was killed, but the clone's rollback " //$NON-NLS-1$
-                    + "had not finished within " + CLONE_CANCEL_WAIT_MILLIS / 1000 + " s; poll get_job_status for " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "its outcome.", null); //$NON-NLS-1$
+                    + "had not finished within " + cancelWaitMillis / 1000 + " s; poll get_job_status: the rollback " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "report becomes the job's result when it ends.", null); //$NON-NLS-1$
             }
             catch (InterruptedException e)
             {

@@ -170,6 +170,79 @@ public class GitToolCloneRollbackTest
         assertTrue(report.toString(), report.has("cleanedUp")); //$NON-NLS-1$
     }
 
+    /**
+     * Codex P2 on #944 (round 2): a cancel that gives up waiting for the rollback settles the job
+     * without a result - the rollback report that arrives later still becomes the job's result.
+     */
+    @Test(timeout = 120_000)
+    public void testASlowRollbackStillPublishesItsReportAfterTheCancelGaveUp() throws Exception
+    {
+        ServerSocket server = new ServerSocket(0, 5, InetAddress.getLoopbackAddress());
+        servers.add(server);
+        CountDownLatch connected = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            try (Socket socket = server.accept())
+            {
+                connected.countDown();
+                InputStream in = socket.getInputStream();
+                while (in.read() != -1)
+                {
+                    // say nothing back
+                }
+            }
+            catch (IOException e)
+            {
+                // closed
+            }
+        }, "clone-rollback-slow"); //$NON-NLS-1$
+        holder.setDaemon(true);
+        holder.start();
+        Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
+        List<String> argv = GitTool.parseCommand("clone git://127.0.0.1:" + server.getLocalPort() + "/repo.git '" //$NON-NLS-1$ //$NON-NLS-2$
+            + target + "'"); //$NON-NLS-1$
+        GitCloneTarget.Checked checked = GitCloneTarget.check(target, List.of());
+        assertTrue(String.valueOf(checked.refusal()), checked.ok());
+        GitTool tool = new GitTool(jobs);
+        tool.controls = () -> {
+            // A rollback slower than the cancel is willing to wait.
+            GitTool.CloneControl control = new GitTool.CloneControl(new GitTool.ProcessWatch()
+            {
+                @Override
+                boolean awaitExit(long millis)
+                {
+                    try
+                    {
+                        Thread.sleep(2_000);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                    }
+                    return super.awaitExit(millis);
+                }
+            });
+            control.cancelWaitMillis = 200;
+            return control;
+        };
+
+        JsonObject started = JsonParser.parseString(tool.startClone(argv,
+            GitTool.checkCloneGrammar(argv.subList(2, argv.size())), checked, TimeUnit.MINUTES.toMillis(10), 0))
+            .getAsJsonObject();
+        String jobId = started.get("jobId").getAsString(); //$NON-NLS-1$
+        assertTrue("git reached the remote", connected.await(30, TimeUnit.SECONDS)); //$NON-NLS-1$
+
+        BackgroundJobs.CancellationResult cancelled = jobs.cancel(jobId);
+        assertEquals(String.valueOf(cancelled.getDetail()), BackgroundJobs.CancellationOutcome.TERMINATION_REQUESTED,
+            cancelled.getOutcome());
+        BackgroundJobs.JobSnapshot snapshot = jobs.await(jobId, 30_000);
+
+        assertEquals(BackgroundJobs.Status.CANCELLED, snapshot.getStatus());
+        assertTrue("the late rollback report is the job's result, was " + snapshot.getResult(), //$NON-NLS-1$
+            snapshot.getResult() instanceof String);
+        JsonObject report = JsonParser.parseString((String)snapshot.getResult()).getAsJsonObject();
+        assertTrue(report.toString(), report.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
+    }
+
     private Path scratchFolder() throws IOException
     {
         Path folder = Files.createTempDirectory("git-clone-rollback").toRealPath(); //$NON-NLS-1$

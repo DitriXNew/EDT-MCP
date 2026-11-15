@@ -465,11 +465,8 @@ public final class GitCloneTarget
                 {
                     return false;
                 }
-                Path marker = container.resolve(MARKER);
-                BasicFileAttributes markerAttrs = Files.readAttributes(marker, BasicFileAttributes.class,
-                    LinkOption.NOFOLLOW_LINKS);
-                return markerAttrs.isRegularFile() && markerAttrs.size() < 256
-                    && token.equals(new String(Files.readAllBytes(marker), java.nio.charset.StandardCharsets.US_ASCII));
+                String held = readMarker(container.resolve(MARKER));
+                return token.equals(held);
             }
             catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably ours
             {
@@ -477,30 +474,41 @@ public final class GitCloneTarget
             }
         }
 
+        /** Test seam: runs before every removal attempt after the first. */
+        volatile Runnable beforeRetry = () -> { };
+
         /**
-         * Removes the container and everything in it, after checking it is still the one this run
-         * created; anything that leads out of it (a link, a junction) is removed as an entry and never
-         * entered. Read-only files are made writable first; an entry Windows still holds a handle on is
-         * retried briefly.
+         * Removes the container and everything in it. Ownership is proved again before EVERY attempt
+         * ({@link #unchanged}), and the marker - the proof - is deleted LAST, only once the container
+         * holds nothing else, so a retry after a partial attempt can still prove it. The container itself
+         * then goes with a non-recursive delete, which cannot remove a directory that has content, so even
+         * a directory swapped in at that last moment loses nothing. Anything that leads out of it (a link,
+         * a junction) is removed as an entry and never entered. Read-only files are made writable first;
+         * an entry Windows still holds a handle on is retried briefly.
          *
-         * @return {@code true} when it is gone
+         * @return {@code true} when it is gone; {@code false} when something is left, or as soon as
+         *         ownership can no longer be proved
          */
         public boolean remove()
         {
-            if (!Files.exists(container, LinkOption.NOFOLLOW_LINKS))
-            {
-                return true;
-            }
-            if (!unchanged())
-            {
-                Activator.logWarning("git clone: the staging directory " + container //$NON-NLS-1$
-                    + " is no longer the one this clone created; it is left in place."); //$NON-NLS-1$
-                return false;
-            }
             for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
             {
-                deleteTree(container);
                 if (!Files.exists(container, LinkOption.NOFOLLOW_LINKS))
+                {
+                    return true;
+                }
+                if (attempt > 1)
+                {
+                    beforeRetry.run();
+                }
+                if (!unchanged())
+                {
+                    Activator.logWarning("git clone: the staging directory " + container //$NON-NLS-1$
+                        + " can no longer be proved to be the one this clone created; it is left in place."); //$NON-NLS-1$
+                    return false;
+                }
+                deleteContentsExceptMarker(container);
+                if (removeEmptyContainer(this))
                 {
                     return true;
                 }
@@ -526,15 +534,90 @@ public final class GitCloneTarget
      */
     public static Staging createStaging(Checked checked) throws IOException
     {
+        return createStaging(checked, GitCloneTarget::writeMarker);
+    }
+
+    /** How the marker is written; a test passes one that fails. */
+    @FunctionalInterface
+    interface MarkerWriter
+    {
+        void write(Path marker, String token) throws IOException;
+    }
+
+    /**
+     * {@link #createStaging(Checked)} with the marker write as a seam. When anything after the
+     * directory's creation fails, the half-made container is taken back before the failure propagates:
+     * the caller has no handle on it to do that.
+     */
+    static Staging createStaging(Checked checked, MarkerWriter writer) throws IOException
+    {
         Path parent = checked.real().getParent();
         String name = STAGING_PREFIX + java.util.UUID.randomUUID().toString().substring(0, 8) + "-" //$NON-NLS-1$
             + checked.real().getFileName();
         Path created = Files.createDirectory(parent.resolve(name));
         String token = java.util.UUID.randomUUID().toString();
-        Files.write(created.resolve(Staging.MARKER), token.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+        try
+        {
+            writer.write(created.resolve(Staging.MARKER), token);
+            BasicFileAttributes attrs = Files.readAttributes(created, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return new Staging(created, attrs.fileKey(), token);
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // Only what this call just made: the marker, if it was written, then the directory, with a
+            // non-recursive delete that fails rather than remove anything another program put there.
+            try
+            {
+                Files.deleteIfExists(created.resolve(Staging.MARKER));
+                Files.deleteIfExists(created);
+            }
+            catch (IOException | RuntimeException again) // NOSONAR the original failure is what propagates
+            {
+                Activator.logWarning("git clone: the half-made staging directory " + created //$NON-NLS-1$
+                    + " could not be removed"); //$NON-NLS-1$
+            }
+            throw e;
+        }
+    }
+
+    private static void writeMarker(Path marker, String token) throws IOException
+    {
+        Files.write(marker, token.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
             java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
-        BasicFileAttributes attrs = Files.readAttributes(created, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        return new Staging(created, attrs.fileKey(), token);
+    }
+
+    /** The longest marker read: a token is 36 ASCII characters. */
+    private static final int MAX_MARKER_BYTES = 256;
+
+    /**
+     * The marker's content, read without following a link: the file is opened with
+     * {@code NOFOLLOW_LINKS} (a link in its place fails to open) and read up to
+     * {@link #MAX_MARKER_BYTES} - a regular file is required first, so neither a link, a directory nor
+     * a device is read, and a huge file is not read through.
+     *
+     * @return the content, or {@code null} when it is not a small regular file
+     */
+    static String readMarker(Path marker) throws IOException
+    {
+        BasicFileAttributes attrs = Files.readAttributes(marker, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attrs.isRegularFile() || attrs.size() > MAX_MARKER_BYTES)
+        {
+            return null;
+        }
+        try (java.nio.channels.SeekableByteChannel channel = Files.newByteChannel(marker,
+            java.util.Set.<java.nio.file.OpenOption>of(java.nio.file.StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))
+        {
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(MAX_MARKER_BYTES + 1);
+            while (buffer.hasRemaining() && channel.read(buffer) > 0)
+            {
+                // read up to the bound
+            }
+            if (buffer.position() > MAX_MARKER_BYTES)
+            {
+                return null;
+            }
+            return new String(buffer.array(), 0, buffer.position(), java.nio.charset.StandardCharsets.US_ASCII);
+        }
     }
     /**
      * Moves a successful clone from its staging directory to the target, without ever replacing
@@ -556,6 +639,85 @@ public final class GitCloneTarget
      * @return {@code null} when the clone is in place, else why not (the clone is still in staging)
      */
     public static String install(Staging staging, Checked checked)
+    {
+        return install(staging, checked, moved -> { });
+    }
+
+    /** One entry moved into an existing target, and what it was right after the move. */
+    private static final class Moved
+    {
+        final Path destination;
+        final EntryIdentity identity;
+
+        Moved(Path destination, EntryIdentity identity)
+        {
+            this.destination = destination;
+            this.identity = identity;
+        }
+    }
+
+    /**
+     * What an entry is, read without following links: its kind, file key (where the platform has one),
+     * size and modification time. Enough to tell an entry this run moved from one another program put
+     * in its place.
+     */
+    static final class EntryIdentity
+    {
+        private final boolean directory;
+        private final boolean regular;
+        private final boolean link;
+        private final boolean other;
+        private final Object fileKey;
+        private final long size;
+        private final java.nio.file.attribute.FileTime modified;
+
+        private EntryIdentity(BasicFileAttributes attrs)
+        {
+            directory = attrs.isDirectory();
+            regular = attrs.isRegularFile();
+            link = attrs.isSymbolicLink();
+            other = attrs.isOther();
+            fileKey = attrs.fileKey();
+            size = attrs.size();
+            modified = attrs.lastModifiedTime();
+        }
+
+        /** @return the identity, or {@code null} when it cannot be read (then nothing can match it) */
+        static EntryIdentity ofOrNull(Path path)
+        {
+            try
+            {
+                return of(path);
+            }
+            catch (IOException | RuntimeException e) // NOSONAR unreadable: not provable later either
+            {
+                return null;
+            }
+        }
+
+        static EntryIdentity of(Path path) throws IOException
+        {
+            return new EntryIdentity(Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
+        }
+
+        /** @return {@code true} when {@code path} is still this entry */
+        boolean matches(Path path)
+        {
+            try
+            {
+                EntryIdentity now = of(path);
+                return directory == now.directory && regular == now.regular && link == now.link && other == now.other
+                    && java.util.Objects.equals(fileKey, now.fileKey) && size == now.size && modified.equals(now.modified);
+            }
+            catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably the moved entry
+            {
+                return false;
+            }
+        }
+    }
+
+    /** {@link #install(Staging, Checked)} with a seam run after each entry moved into an existing target. */
+    static String install(Staging staging, Checked checked, java.util.function.Consumer<Path> afterMove)
     {
         Path target = checked.real();
         if (!staging.unchanged())
@@ -591,33 +753,47 @@ public final class GitCloneTarget
             return "The clone target '" + target + "' could not be read any more, so the clone was not moved " //$NON-NLS-1$ //$NON-NLS-2$
                 + "into it."; //$NON-NLS-1$
         }
-        List<Path> moved = new ArrayList<>();
+        List<Moved> moved = new ArrayList<>();
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(staging.repository()))
         {
             for (Path entry : entries)
             {
                 Path destination = target.resolve(entry.getFileName().toString());
                 Files.move(entry, destination); // no REPLACE_EXISTING: never over an entry of that name
-                moved.add(destination);
+                moved.add(new Moved(destination, EntryIdentity.ofOrNull(destination)));
+                afterMove.accept(destination);
             }
         }
         catch (IOException | RuntimeException e)
         {
-            for (Path back : moved)
+            List<Path> leftInTarget = new ArrayList<>();
+            for (Moved back : moved)
             {
+                // Only an entry that is provably still the one moved goes back; another program's
+                // replacement stays where it is, named for recovery by hand.
+                if (back.identity == null || !back.identity.matches(back.destination))
+                {
+                    leftInTarget.add(back.destination);
+                    continue;
+                }
                 try
                 {
-                    Files.move(back, staging.repository().resolve(back.getFileName().toString()));
+                    Files.move(back.destination, staging.repository().resolve(back.destination.getFileName().toString()));
                 }
                 catch (IOException | RuntimeException again) // NOSONAR reported through the message below
                 {
-                    return "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
-                        + ": something was written there while it ran), and '" + back //$NON-NLS-1$
-                        + "' could not be moved back - remove what this clone left in '" + target + "' by hand."; //$NON-NLS-1$ //$NON-NLS-2$
+                    leftInTarget.add(back.destination);
                 }
             }
-            return "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
-                + "): something was written there while it ran. The target was left as it was."; //$NON-NLS-1$
+            String why = "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "): something was written there while it ran."; //$NON-NLS-1$
+            if (leftInTarget.isEmpty())
+            {
+                return why + " The target was left as it was."; //$NON-NLS-1$
+            }
+            return why + " These entries could not be taken back, because they could not be moved or are no " //$NON-NLS-1$
+                + "longer the ones this clone put there - check and remove them by hand: " //$NON-NLS-1$
+                + String.join(", ", leftInTarget.stream().map(Path::toString).toArray(String[]::new)) + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         try
         {
@@ -631,18 +807,59 @@ public final class GitCloneTarget
         return null;
     }
 
-    /** Removes the container once the clone has left it: its marker, then the directory itself. */
-    private static void removeEmptyContainer(Staging staging)
+    /**
+     * Removes the container once nothing but its marker is left in it: the marker - the proof of
+     * ownership - goes last, then the directory with a NON-recursive delete, which fails on a directory
+     * that has content, so a directory swapped in at that moment loses nothing.
+     *
+     * @return {@code true} when the container is gone
+     */
+    private static boolean removeEmptyContainer(Staging staging)
     {
+        Path container = staging.path();
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(container))
+        {
+            for (Path entry : entries)
+            {
+                if (!Staging.MARKER.equals(entry.getFileName().toString()))
+                {
+                    return false; // more than the marker: keep the proof for the next attempt
+                }
+            }
+        }
+        catch (IOException | RuntimeException e) // NOSONAR not readable now: keep the proof, report a leftover
+        {
+            return false;
+        }
         try
         {
-            Files.deleteIfExists(staging.path().resolve(Staging.MARKER));
-            Files.delete(staging.path());
+            Files.deleteIfExists(container.resolve(Staging.MARKER));
         }
-        catch (IOException | RuntimeException e) // NOSONAR an empty leftover is harmless; logged
+        catch (AccessDeniedException e)
         {
-            Activator.logWarning("git clone: the staging directory " + staging.path() + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
+            deleteQuietly(container.resolve(Staging.MARKER));
         }
+        catch (IOException | RuntimeException e) // NOSONAR kept for the next attempt
+        {
+            return false;
+        }
+        for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
+        {
+            try
+            {
+                Files.deleteIfExists(container);
+                return true;
+            }
+            catch (IOException | RuntimeException e) // NOSONAR a handle Windows has not released yet, or content
+            {
+                if (attempt == CLEANUP_ATTEMPTS || !pause())
+                {
+                    break;
+                }
+            }
+        }
+        Activator.logWarning("git clone: the staging directory " + container + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
+        return false;
     }
 
     /** A real directory: not a link, not a junction or other reparse point (Java reports those as "other"). */
@@ -666,12 +883,15 @@ public final class GitCloneTarget
     }
 
     /**
-     * Deletes {@code root} (a real path) and its contents. A directory that is not a plain directory (a link, a
-     * junction) or whose real location is not under {@code root}'s is removed as an entry, never
-     * entered - the root itself included, whose identity the caller has checked just before.
+     * Deletes what {@code root} (a real path) holds - everything but its marker, which stays as the proof
+     * of ownership until the container is otherwise empty. A directory that is not a plain directory (a
+     * link, a junction) or whose real location is not under {@code root}'s is removed as an entry, never
+     * entered; the root itself, whose identity the caller has checked just before, is not entered unless
+     * it is a plain directory, and is not deleted here.
      */
-    private static void deleteTree(Path root)
+    private static void deleteContentsExceptMarker(Path root)
     {
+        Path marker = root.resolve(Staging.MARKER);
         try
         {
             Files.walkFileTree(root, new SimpleFileVisitor<Path>()
@@ -696,21 +916,30 @@ public final class GitCloneTarget
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
                 {
-                    deleteQuietly(file);
+                    if (!file.equals(marker))
+                    {
+                        deleteQuietly(file);
+                    }
                     return FileVisitResult.CONTINUE;
                 }
 
                 @Override
                 public FileVisitResult visitFileFailed(Path file, IOException exc)
                 {
-                    deleteQuietly(file);
+                    if (!file.equals(marker))
+                    {
+                        deleteQuietly(file);
+                    }
                     return FileVisitResult.CONTINUE;
                 }
 
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc)
                 {
-                    deleteQuietly(dir);
+                    if (!dir.equals(root))
+                    {
+                        deleteQuietly(dir);
+                    }
                     return FileVisitResult.CONTINUE;
                 }
             });

@@ -396,6 +396,20 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         /**
+         * Hands in the result of a committed cancellation that settled WITHOUT one - an owner's handler
+         * that gave up waiting and answered {@link CommittedCancellation#stopInitiated} with a
+         * {@code null} result - so the job, once cancelled, still carries the work's own account of what
+         * the stop left behind. Does nothing in every other case: before any cancellation, when the
+         * cancellation already carries a result, or for a reporter that is not registry-backed.
+         *
+         * @param result the work's report of the stopped run
+         */
+        default void cancellationResult(Object result)
+        {
+            // Not registry-backed: nothing to settle.
+        }
+
+        /**
          * What is left of the job's TOTAL budget, measured from submission.
          * <p>
          * The budget starts when the job is submitted, not when a worker picks it up, and the
@@ -1078,6 +1092,12 @@ public final class BackgroundJobs implements AutoCloseable
                 {
                     return record.remainingMillis(timeoutMs);
                 }
+
+                @Override
+                public void cancellationResult(Object result)
+                {
+                    record.lateCancellationResult(result);
+                }
             });
             record.complete(result);
         }
@@ -1248,6 +1268,22 @@ public final class BackgroundJobs implements AutoCloseable
             }
             committed = true;
             return true;
+        }
+
+        /** See {@link ProgressReporter#cancellationResult}: fills a committed cancellation's missing result. */
+        synchronized void lateCancellationResult(Object late)
+        {
+            boolean committedStop = cancellationOutcome == CancellationOutcome.TERMINATED
+                || cancellationOutcome == CancellationOutcome.TERMINATION_REQUESTED;
+            if (late == null || !cancellationRequested || !committedStop || cancellationResult != null)
+            {
+                return;
+            }
+            cancellationResult = late;
+            if (status == Status.CANCELLED && result == null)
+            {
+                result = late;
+            }
         }
 
         synchronized void setWorkFuture(Future<?> future)
