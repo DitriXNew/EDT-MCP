@@ -527,6 +527,9 @@
         "projectName": {
           "type": "string"
         },
+        "targetProjectName": {
+          "type": "string"
+        },
         "transfer": {
           "items": {
             "additionalProperties": false,
@@ -591,6 +594,12 @@
           },
           "type": "array"
         },
+        "missingReferences": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "modelObjects": {
           "type": "integer"
         },
@@ -635,6 +644,9 @@
         },
         "supported": {
           "type": "boolean"
+        },
+        "targetProjectName": {
+          "type": "string"
         },
         "transferred": {
           "items": {

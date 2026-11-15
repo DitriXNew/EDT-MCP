@@ -1,4 +1,4 @@
-Clone one Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, CommonModule or Role inside a configuration project, or one of an extension's own objects inside that extension, including its owned forms, commands, modules, templates, predefined items, enum values, register fields and role rights model. Adopted sources, external-objects projects, Configuration, global common modules and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
+Clone one Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, CommonModule or Role inside a configuration project, or one of an extension's own objects inside that extension, or into another configuration or extension project with `targetProjectName`, including its owned forms, commands, modules, templates, predefined items, enum values, register fields and role rights model. Adopted sources, external-objects projects, Configuration, global common modules and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
 
 ## Preview and confirm
 
@@ -37,6 +37,18 @@ The operation uses the exported native paste copier behind `IModelObjectCopySupp
 ## Extensions
 
 In an extension project only the extension's own objects are cloned; the clone stays in the same extension. An adopted source (`objectBelonging=Adopted`) is refused: clone it in the base configuration and adopt the clone with `adopt_metadata_object`. Subsystem and role owners the extension adopted are reported with `transferSupport=reportedOnly` and stay in `notCopied`; selecting one is refused, so the clone is never written into an adopted object. The warning names a clone name that does not start with the extension's `namePrefix` (EDT's `extension-md-object-prefix` check); without `newName` the automatic name keeps the source name's start.
+
+## Between projects
+
+Pass `targetProjectName` to write the clone into another configuration or extension project (an external-objects project is refused on either side; the same name as `projectName` is the ordinary clone). Only the destination is written (`writtenProjects`), with the destination's copy semantics: a configuration object cloned into an extension becomes an own object of the extension (nothing is adopted), and an extension's own object cloned into a configuration becomes a plain configuration object. Repeat the same `targetProjectName` with `confirm`; the hash also covers the destination's configuration, its same-kind names and, for an extension, its base configuration's names.
+
+```json
+{"projectName":"MyConfiguration","fqn":"Catalog.Products","newName":"ext_Products","targetProjectName":"MyExtension"}
+```
+
+- **Missing references:** every object the clone would reference (types, owners, register records, forms, rights rows and so on) must exist in the destination. Otherwise the preview is refused before any write and `missingReferences` lists them; in an extension adopt them first with `adopt_metadata_object`, in a configuration create them first. EDT itself would paste a dangling reference.
+- **Names:** without `newName` the clone keeps the source name, which must then be free. A name the destination already uses for that kind is refused; in an extension, so is a name its base configuration uses for an object the extension has not adopted.
+- **Relations and code:** `transfer` is refused; incoming relations stay in the source project and are all `reportedOnly`. Add the clone to the destination's subsystems and roles with `modify_metadata`. Module text is copied unchanged, so code naming objects absent in the destination shows errors there.
 
 ## Incoming relations
 
