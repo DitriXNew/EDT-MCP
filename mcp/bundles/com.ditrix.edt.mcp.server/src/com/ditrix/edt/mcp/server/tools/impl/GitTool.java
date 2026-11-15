@@ -1213,16 +1213,26 @@ public class GitTool implements IMcpTool
         }
     }
 
+    /** How long a cancel waits for the clone's own rollback before answering - below the registry's 30 s handler guard. */
+    static final long CLONE_CANCEL_WAIT_MILLIS = 25_000;
+
+    /** How long the rollback waits, after the kill, for git and every child it saw to exit before deleting anything. */
+    static final long CLONE_EXIT_WAIT_MILLIS = 15_000;
+
+    /** What cancel_job's preview says a cancel of a clone does. */
+    static final String CLONE_CANCEL_PREVIEW = "Cancelling a running git clone kills its git process and every " //$NON-NLS-1$
+        + "child process it saw, and removes the partial clone from the staging directory it was written to; " //$NON-NLS-1$
+        + "the target directory is not touched. A clone that has already finished is left in place."; //$NON-NLS-1$
+
     /**
      * Starts a checked clone as a background job and waits up to {@code waitSeconds} for it: the seam
      * the process tests drive, past the consent prompt.
      * <p>
-     * The target is CLAIMED for the clone ({@link GitCloneTarget#claim}) and, when new, CREATED here,
-     * before git starts: the clone then knows what is its own to take back on failure - the directory
-     * it created, or only the contents of an empty one that was already there - and a second clone into
-     * the same directory cannot race the first one's cleanup. git is given the target's REAL path, the
-     * one that was judged. The job never queues: it is admitted only while a worker is free, so a
-     * claimed, created directory is never left to a job that does not run.
+     * The target is CLAIMED for the clone ({@link GitCloneTarget#claim}), so a second clone of this server
+     * into the same directory is refused. The job never queues (it is admitted only while a worker is
+     * free) and COMMITS before it creates anything ({@code tryCommit}): from then on a cancel goes through
+     * the clone's own handler ({@link CloneControl#cancel}), which kills git and returns the rollback
+     * report as the job's cancellation result. A job cancelled before it committed did nothing.
      *
      * @param argv the validated argument vector
      * @param clone its parsed operands
@@ -1242,46 +1252,30 @@ public class GitTool implements IMcpTool
                 + "' (or a directory inside it or around it), or is still being cleaned up. Wait for that " //$NON-NLS-1$
                 + "job to end (get_job_status) or name another directory.").toJson(); //$NON-NLS-1$
         }
-        boolean created = false;
         boolean handedOver = false;
         try
         {
-            if (!target.existed())
-            {
-                try
-                {
-                    Files.createDirectory(directory);
-                }
-                catch (java.nio.file.FileAlreadyExistsException e)
-                {
-                    return ToolResult.error("The clone target '" + directory + "' appeared while the clone was " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "being set up, so nothing was cloned. Check what created it, then retry.").toJson(); //$NON-NLS-1$
-                }
-                catch (IOException e)
-                {
-                    Activator.logError(GitFailureLog.typesOnly("git clone: creating the clone target failed", e), null); //$NON-NLS-1$
-                    return ToolResult.error("The clone target '" + directory + "' could not be created (" //$NON-NLS-1$ //$NON-NLS-2$
-                        + e.getClass().getSimpleName() + "), so nothing was cloned. Check that this user may " //$NON-NLS-1$
-                        + "create a directory there, then retry.").toJson(); //$NON-NLS-1$
-                }
-                created = true;
-            }
-            List<String> run = new ArrayList<>(argv);
-            run.set(2 + clone.directoryIndex(), directory.toString());
-            boolean removeTarget = created;
-            String safeCommand = redactCredentialUrls(String.join(" ", run)); //$NON-NLS-1$
+            List<String> display = new ArrayList<>(argv);
+            display.set(2 + clone.directoryIndex(), directory.toString());
+            String safeCommand = redactCredentialUrls(String.join(" ", display)); //$NON-NLS-1$
+            CloneControl control = new CloneControl();
             AtomicReference<String> outcome = new AtomicReference<>();
             BackgroundJobs.JobSnapshot started;
             try
             {
                 started = jobs.start(NAME, timeoutMillis + CLONE_CLEANUP_MARGIN_MILLIS, jobs.getWorkerThreads(),
                     "Cloning " + redactCredentialUrls(clone.url()) + " into " + directory + ".", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    BackgroundJobs.CancellationCapability.of(CLONE_CANCEL_PREVIEW, control::cancel),
                     progress -> {
                         try
                         {
+                            if (!progress.tryCommit())
+                            {
+                                return null; // cancelled before anything was created
+                            }
                             long limit = Math.max(1L,
                                 Math.min(timeoutMillis, progress.remainingMillis() - CLONE_CLEANUP_MARGIN_MILLIS));
-                            CloneRun result = runClone(run, directory, removeTarget, limit);
+                            CloneRun result = cloneThroughStaging(argv, clone, target, control, limit);
                             outcome.set(result.json());
                             if (!result.success())
                             {
@@ -1319,84 +1313,333 @@ public class GitTool implements IMcpTool
         {
             if (!handedOver)
             {
-                if (created)
-                {
-                    GitCloneTarget.cleanUp(directory, true);
-                }
                 claim.close();
             }
         }
     }
 
     /**
-     * Runs a clone's git process, then - when it did not succeed - takes back what it wrote: the seam
-     * the process tests drive directly.
+     * Clones into a staging directory this run creates ({@link GitCloneTarget#createStaging}) and, when
+     * git succeeded and no cancel won first, moves the clone into the target
+     * ({@link GitCloneTarget#install}). Anything else - a git failure, the limit, a cancel - takes the
+     * staging directory back, and only after git and every child it saw are confirmed gone; the target
+     * is never touched. The seam the process tests drive directly.
      *
-     * @param argv the argument vector, its directory operand the target's real path
-     * @param directory the target's real path
-     * @param removeTarget {@code true} when this tool created the target, which then goes too
+     * @param argv the validated argument vector (its directory operand is replaced by the staging path)
+     * @param clone its parsed operands
+     * @param target the checked target
+     * @param control the run's cancellation state
      * @param timeoutMillis the process limit
      * @return the outcome
      */
-    CloneRun runClone(List<String> argv, Path directory, boolean removeTarget, long timeoutMillis)
+    CloneRun cloneThroughStaging(List<String> argv, CloneCommand clone, GitCloneTarget.Checked target,
+        CloneControl control, long timeoutMillis)
     {
-        AtomicBoolean succeeded = new AtomicBoolean();
-        String json = runGitProcess(argv, directory.getParent().toFile(), timeoutMillis, result -> {
-            succeeded.set(true);
-            result.put(KEY_DIRECTORY, directory.toString()).put(KEY_NEXT_STEP, cloneNextStep(directory));
-            List<String> warnings = GitCloneTarget.formatWarnings(directory);
-            if (!warnings.isEmpty())
-            {
-                result.put(KEY_WARNINGS, warnings);
-            }
-        });
-        if (succeeded.get())
-        {
-            return new CloneRun(true, json, null);
-        }
-        // A cancel or the job's deadline interrupts this thread; the cleanup must still run (it pauses
-        // between attempts), and the flag goes back afterwards.
-        boolean stopped = Thread.interrupted();
+        Path directory = target.real();
+        List<String> display = new ArrayList<>(argv);
+        display.set(2 + clone.directoryIndex(), directory.toString());
+        String safeCommand = redactCredentialUrls(String.join(" ", display)); //$NON-NLS-1$
+        GitCloneTarget.Staging staging;
         try
         {
-            boolean clean = GitCloneTarget.cleanUp(directory, removeTarget);
-            String cleanup;
-            if (!clean)
+            staging = GitCloneTarget.createStaging(target);
+        }
+        catch (IOException | RuntimeException e)
+        {
+            Activator.logError(GitFailureLog.typesOnly("git clone: creating the staging directory failed", e), null); //$NON-NLS-1$
+            control.conclude();
+            String error = "The clone could not start: its staging directory beside '" + directory //$NON-NLS-1$
+                + "' could not be created (" + e.getClass().getSimpleName() + "). Nothing was written; " //$NON-NLS-1$ //$NON-NLS-2$
+                + "check that this user may create a directory there, then retry."; //$NON-NLS-1$
+            String json = ToolResult.error(error).put(KEY_COMMAND, safeCommand).put(KEY_DIRECTORY, directory.toString())
+                .put(KEY_CLEANED_UP, true).toJson();
+            control.finished(json);
+            return new CloneRun(false, json, error);
+        }
+        List<String> run = new ArrayList<>(argv);
+        run.set(2 + clone.directoryIndex(), staging.repository().toString());
+        AtomicBoolean exitedZero = new AtomicBoolean();
+        String json = control.stopRequested() ? ToolResult.error("git was not started.").toJson() //$NON-NLS-1$
+            : runGitProcess(run, staging.path().getParent().toFile(), timeoutMillis, result -> exitedZero.set(true),
+                control.watch());
+        control.afterGit.run();
+        // A registry shutdown interrupts this thread; the rollback must still wait and pause, and the flag
+        // goes back afterwards.
+        boolean interrupted = Thread.interrupted();
+        try
+        {
+            boolean treeGone = control.watch().awaitExit(CLONE_EXIT_WAIT_MILLIS);
+            String notInstalled = null;
+            if (exitedZero.get() && treeGone && control.conclude())
             {
-                cleanup = " Part of what the clone wrote could not be removed: delete " //$NON-NLS-1$
-                    + (removeTarget ? "the directory '" + directory + "'" : "the contents of '" + directory + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                    + " before retrying."; //$NON-NLS-1$
+                notInstalled = GitCloneTarget.install(staging, target);
+                if (notInstalled == null)
+                {
+                    JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+                    result.addProperty(KEY_COMMAND, safeCommand);
+                    result.addProperty(KEY_DIRECTORY, directory.toString());
+                    result.addProperty(KEY_NEXT_STEP, cloneNextStep(directory));
+                    List<String> warnings = GitCloneTarget.formatWarnings(directory);
+                    if (!warnings.isEmpty())
+                    {
+                        result.add(KEY_WARNINGS, GsonProvider.get().toJsonTree(warnings));
+                    }
+                    String success = GsonProvider.toJson(result);
+                    control.finished(success);
+                    return new CloneRun(true, success, null);
+                }
             }
-            else if (removeTarget)
-            {
-                cleanup = " The directory this tool created for the clone was removed again."; //$NON-NLS-1$
-            }
-            else
-            {
-                cleanup = " What the clone wrote into '" + directory + "' was removed; the directory itself " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "stays, empty, as it was before."; //$NON-NLS-1$
-            }
-            JsonObject result = JsonParser.parseString(json).getAsJsonObject();
-            String error = result.has("error") ? result.get("error").getAsString() : "git clone failed."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            if (stopped)
-            {
-                error = "The clone was stopped (cancel_job, or the job's time limit) and its git process was " //$NON-NLS-1$
-                    + "killed. " + error; //$NON-NLS-1$
-            }
-            error += cleanup;
-            result.addProperty("error", error); //$NON-NLS-1$
-            result.addProperty(KEY_DIRECTORY, directory.toString());
-            result.addProperty(KEY_CLEANED_UP, clean);
-            String output = result.has(KEY_OUTPUT) ? result.get(KEY_OUTPUT).getAsString() : ""; //$NON-NLS-1$
-            String failure = output.isBlank() ? error : error + "\n\ngit output:\n\n" + fenced(output); //$NON-NLS-1$
-            return new CloneRun(false, GsonProvider.toJson(result), failure);
+            boolean cancelled = !control.conclude() && control.stopRequested();
+            return rollBack(json, notInstalled, staging, directory, safeCommand, treeGone, cancelled, control);
         }
         finally
         {
-            if (stopped)
+            if (interrupted)
             {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    /** Takes a clone's staging directory back and builds the failure answer. */
+    private static CloneRun rollBack(String processJson, String notInstalled, GitCloneTarget.Staging staging,
+        Path directory, String safeCommand, boolean treeGone, boolean cancelled, CloneControl control)
+    {
+        boolean clean = treeGone && staging.remove();
+        String cleanup;
+        if (clean)
+        {
+            cleanup = " The partial clone was removed (it was written to the staging directory '" + staging.path() //$NON-NLS-1$
+                + "'); the target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else if (!treeGone)
+        {
+            cleanup = " git (or a child process it started) had not exited " + CLONE_EXIT_WAIT_MILLIS / 1000 //$NON-NLS-1$
+                + " s after it was killed, so nothing was removed: delete the staging directory '" + staging.path() //$NON-NLS-1$
+                + "' by hand once it has. The target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            cleanup = " The partial clone could not be removed: delete the staging directory '" + staging.path() //$NON-NLS-1$
+                + "' by hand. The target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        JsonObject result = JsonParser.parseString(processJson).getAsJsonObject();
+        String error;
+        if (notInstalled != null)
+        {
+            error = "git cloned successfully, but " + notInstalled; //$NON-NLS-1$
+        }
+        else
+        {
+            error = result.has("error") ? result.get("error").getAsString() : "git clone failed."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (cancelled)
+        {
+            error = "The clone was cancelled (cancel_job) and its git process was killed. " + error; //$NON-NLS-1$
+        }
+        error += cleanup;
+        result.addProperty("success", false); //$NON-NLS-1$
+        result.addProperty("error", error); //$NON-NLS-1$
+        result.addProperty(KEY_COMMAND, safeCommand);
+        result.addProperty(KEY_DIRECTORY, directory.toString());
+        result.addProperty(KEY_CLEANED_UP, clean);
+        String output = result.has(KEY_OUTPUT) ? result.get(KEY_OUTPUT).getAsString() : ""; //$NON-NLS-1$
+        String failure = output.isBlank() ? error : error + "\n\ngit output:\n\n" + fenced(output); //$NON-NLS-1$
+        String json = GsonProvider.toJson(result);
+        control.finished(json);
+        return new CloneRun(false, json, failure);
+    }
+
+    /**
+     * The state a clone's cancellation and its worker decide over, so exactly one of them wins (#934,
+     * review round 1): either the worker CONCLUDES first - it is about to install a clone git finished,
+     * or has failed on its own - and a later cancel leaves it alone, or the cancel STOPS it first, and
+     * the worker then takes the staging directory back however git ended, an exit 0 included.
+     */
+    static final class CloneControl
+    {
+        private enum State
+        {
+            RUNNING, STOPPING, CONCLUDED
+        }
+
+        private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
+        private final ProcessWatch watch;
+
+        /** Test seam: runs right after git's process has ended, before the worker concludes. */
+        volatile Runnable afterGit = () -> { };
+
+        CloneControl()
+        {
+            this(new ProcessWatch());
+        }
+
+        /** @param watch the process watch (a test passes one whose processes do not exit) */
+        CloneControl(ProcessWatch watch)
+        {
+            this.watch = watch;
+        }
+        private final java.util.concurrent.CompletableFuture<String> report = new java.util.concurrent.CompletableFuture<>();
+
+        /** @return {@code true} when the worker concluded before any cancel (the cancel then leaves it alone) */
+        boolean conclude()
+        {
+            return state.compareAndSet(State.RUNNING, State.CONCLUDED) || state.get() == State.CONCLUDED;
+        }
+
+        /** @return {@code true} once a cancel has won */
+        boolean stopRequested()
+        {
+            return state.get() == State.STOPPING;
+        }
+
+        ProcessWatch watch()
+        {
+            return watch;
+        }
+
+        /** Publishes the run's final answer to a cancel waiting for it. */
+        void finished(String json)
+        {
+            report.complete(json);
+        }
+
+        /**
+         * Stops a running clone: wins the state for the cancel and kills git and every child it saw.
+         *
+         * @return {@code false} when the worker had already concluded
+         */
+        boolean requestStop()
+        {
+            if (!state.compareAndSet(State.RUNNING, State.STOPPING))
+            {
+                return false;
+            }
+            watch.killAll();
+            return true;
+        }
+
+        /**
+         * cancel_job's handler: stops a running clone - kills git and every child it saw - and waits
+         * for the worker's rollback, whose report becomes the job's cancellation result.
+         */
+        BackgroundJobs.CommittedCancellation cancel()
+        {
+            if (!requestStop())
+            {
+                return BackgroundJobs.CommittedCancellation.notStopped("The clone had already finished (or failed on " //$NON-NLS-1$
+                    + "its own) when the cancellation arrived, so nothing was stopped or removed; the job's own " //$NON-NLS-1$
+                    + "result says where it stands."); //$NON-NLS-1$
+            }
+            try
+            {
+                String json = report.get(CLONE_CANCEL_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+                JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+                boolean clean = result.has(KEY_CLEANED_UP) && result.get(KEY_CLEANED_UP).getAsBoolean();
+                String message = result.has("error") ? result.get("error").getAsString() : "The clone was stopped."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return clean ? BackgroundJobs.CommittedCancellation.stopped(message, json)
+                    : BackgroundJobs.CommittedCancellation.stopInitiated(message, json);
+            }
+            catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e)
+            {
+                return BackgroundJobs.CommittedCancellation.stopInitiated("git was killed, but the clone's rollback " //$NON-NLS-1$
+                    + "had not finished within " + CLONE_CANCEL_WAIT_MILLIS / 1000 + " s; poll get_job_status for " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "its outcome.", null); //$NON-NLS-1$
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return BackgroundJobs.CommittedCancellation.stopInitiated("git was killed; the wait for the clone's " //$NON-NLS-1$
+                    + "rollback was interrupted.", null); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /**
+     * The git process of a run and every child of it that was seen, so a clone's cancel can kill them and
+     * its rollback can wait until they are all gone before deleting what they were writing.
+     */
+    static class ProcessWatch
+    {
+        private final List<ProcessHandle> handles = new ArrayList<>();
+        private boolean killRequested;
+
+        /** Records the started process; kills it at once when a kill was already requested. */
+        void started(Process process)
+        {
+            boolean kill;
+            synchronized (this)
+            {
+                try
+                {
+                    handles.add(process.toHandle());
+                }
+                catch (RuntimeException e) // NOSONAR no handle: the process API is used instead
+                {
+                    Activator.logError("git: obtaining the clone's process handle failed", e); //$NON-NLS-1$
+                }
+                kill = killRequested;
+            }
+            if (kill)
+            {
+                destroyProcessQuietly(process);
+            }
+        }
+
+        /** Records children seen while git ran. */
+        synchronized void saw(List<ProcessHandle> descendants)
+        {
+            for (ProcessHandle handle : descendants)
+            {
+                if (!handles.contains(handle))
+                {
+                    handles.add(handle);
+                }
+            }
+        }
+
+        /** Kills everything recorded, and every live descendant of it. */
+        void killAll()
+        {
+            List<ProcessHandle> snapshot;
+            synchronized (this)
+            {
+                killRequested = true;
+                snapshot = new ArrayList<>(handles);
+            }
+            for (ProcessHandle handle : snapshot)
+            {
+                try
+                {
+                    handle.descendants().forEach(GitTool::destroyQuietly);
+                }
+                catch (RuntimeException e) // NOSONAR best-effort enumeration
+                {
+                    Activator.logError("git: enumerating the clone's child processes failed", e); //$NON-NLS-1$
+                }
+                destroyQuietly(handle);
+            }
+        }
+
+        /**
+         * Waits until every recorded process has exited.
+         *
+         * @param millis the budget
+         * @return {@code true} when none is alive any more
+         */
+        boolean awaitExit(long millis)
+        {
+            List<ProcessHandle> snapshot;
+            synchronized (this)
+            {
+                snapshot = new ArrayList<>(handles);
+            }
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+            for (ProcessHandle handle : snapshot)
+            {
+                awaitExitQuietly(handle, deadline);
+            }
+            return snapshot.stream().noneMatch(ProcessHandle::isAlive);
         }
     }
 
@@ -1414,7 +1657,7 @@ public class GitTool implements IMcpTool
         return fence + "\n" + text + (text.endsWith("\n") ? "" : "\n") + fence; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
-    /** What a clone's git process ended with. */
+    /** What a clone's run ended with. */
     static final class CloneRun
     {
         private final boolean success;
@@ -1428,7 +1671,7 @@ public class GitTool implements IMcpTool
             this.failure = failure;
         }
 
-        /** @return {@code true} when git exited 0 */
+        /** @return {@code true} when the clone is in place */
         boolean success()
         {
             return success;
@@ -1470,9 +1713,12 @@ public class GitTool implements IMcpTool
                     + "partial clone.") //$NON-NLS-1$
                 .toJson();
         }
-        if (outcome != null && (status == BackgroundJobs.Status.DONE || status == BackgroundJobs.Status.FAILED))
+        // A cancel stopped by the clone's own handler carries its rollback report as the job's result.
+        String report = status == BackgroundJobs.Status.CANCELLED && latest.getResult() instanceof String
+            ? (String)latest.getResult() : outcome;
+        if (report != null && status != BackgroundJobs.Status.RUNNING)
         {
-            JsonObject result = JsonParser.parseString(outcome).getAsJsonObject();
+            JsonObject result = JsonParser.parseString(report).getAsJsonObject();
             result.addProperty(KEY_JOB_ID, jobId);
             result.addProperty(KEY_STATUS, status.value());
             return GsonProvider.toJson(result);
@@ -4406,14 +4652,16 @@ public class GitTool implements IMcpTool
      */
     private String runGitProcess(List<String> argv, File workTree, Consumer<ToolResult> onSuccess)
     {
-        return runGitProcess(argv, workTree, TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS), onSuccess);
+        return runGitProcess(argv, workTree, TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS), onSuccess, null);
     }
 
     /**
      * {@link #runGitProcess(List, File, Consumer)} with its own limit - {@code clone} runs far longer than
-     * the {@link #TIMEOUT_SECONDS} of a call ({@link #CLONE_TIMEOUT_SECONDS}, inside a background job).
+     * the {@link #TIMEOUT_SECONDS} of a call ({@link #CLONE_TIMEOUT_SECONDS}, inside a background job) - and,
+     * for a clone, a {@link ProcessWatch} that records the process and the children seen (or {@code null}).
      */
-    private String runGitProcess(List<String> argv, File workTree, long timeoutMillis, Consumer<ToolResult> onSuccess)
+    private String runGitProcess(List<String> argv, File workTree, long timeoutMillis, Consumer<ToolResult> onSuccess,
+        ProcessWatch watch)
     {
         // Started BEFORE hardenEnv (inside processFor): that call may run the core.sshCommand probe,
         // whose own timeout would otherwise be added to the command's - a stalled config would push a
@@ -4436,6 +4684,10 @@ public class GitTool implements IMcpTool
         try
         {
             process = builder.start();
+            if (watch != null)
+            {
+                watch.started(process);
+            }
             process.getOutputStream().close(); // no stdin
             final Process started = process;
             drain = new Thread(() -> drainBounded(started, out), "git-output-drain"); //$NON-NLS-1$
@@ -4513,6 +4765,10 @@ public class GitTool implements IMcpTool
                 // Always the captured handles too: a child that DETACHED before this point is no
                 // longer a descendant of the parent, so killTree alone would leave it running.
                 killAll(descendants, deadline);
+                if (watch != null)
+                {
+                    watch.saw(descendants);
+                }
                 if (drain != null && drain.isAlive())
                 {
                     // Something still holds the write end, so the drain would block forever. Closing

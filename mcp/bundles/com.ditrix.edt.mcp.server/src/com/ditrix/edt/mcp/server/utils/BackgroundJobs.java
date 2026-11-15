@@ -716,7 +716,21 @@ public final class BackgroundJobs implements AutoCloseable
         return start(owningTool, timeoutMs, maxRunning, initialProgress, null, work);
     }
 
-    private JobSnapshot start(String owningTool, long timeoutMs, int maxRunning,
+    /**
+     * {@link #start(String, long, int, String, JobWork)} for an owner that also declares a
+     * committed-work cancellation capability: admitted only while fewer than {@code maxRunning}
+     * jobs run, and stoppable after its commit through {@code cancellation}.
+     *
+     * @param owningTool MCP tool that creates and owns the job
+     * @param timeoutMs total job budget in milliseconds
+     * @param maxRunning admit only while strictly fewer jobs are running
+     * @param initialProgress first domain-specific progress message
+     * @param cancellation owner-declared committed-work cancellation capability, or {@code null}
+     * @param work work to execute off the caller thread
+     * @return the initial snapshot, or {@code null} when the running limit is reached
+     * @throws RejectedExecutionException when the registry is stopped or full
+     */
+    public JobSnapshot start(String owningTool, long timeoutMs, int maxRunning,
         String initialProgress, CancellationCapability cancellation, JobWork work)
     {
         if (owningTool == null || owningTool.isBlank())

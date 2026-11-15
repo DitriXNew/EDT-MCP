@@ -349,81 +349,200 @@ public class GitToolCloneTest
         }
     }
 
-    // ---- the cleanup ----
+    // ---- the staging directory: rollback and install ----
 
     @Test
-    public void testTheCleanupRemovesADirectoryTheToolCreatedWithItsReadOnlyFiles() throws Exception
+    public void testTheStagingIsRemovedWithItsReadOnlyFilesAndNothingBesideIt() throws Exception
     {
         Path parent = freeFolder();
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        Path pack = Files.createDirectories(target.resolve(".git").resolve("objects").resolve("pack")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        assertTrue(staging.path().getFileName().toString().startsWith(".edt-mcp-clone-")); //$NON-NLS-1$
+        Path pack = Files.createDirectories(staging.repository().resolve(".git").resolve("objects").resolve("pack")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .resolve("pack-1.pack"); //$NON-NLS-1$
         Files.write(pack, "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
         assertTrue(pack.toFile().setReadOnly());
         Path sibling = Files.write(parent.resolve("keep.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue(GitCloneTarget.cleanUp(target, true));
-        assertFalse("the created directory is gone", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertTrue(staging.remove());
+        assertFalse("the staging directory is gone", Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
         assertTrue("nothing beside it is touched", Files.exists(sibling)); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTheCleanupOfAnExistingDirectoryKeepsTheDirectory() throws Exception
-    {
-        Path target = Files.createDirectory(freeFolder().resolve("repo")); //$NON-NLS-1$
-        Files.createDirectories(target.resolve(".git").resolve("refs")); //$NON-NLS-1$ //$NON-NLS-2$
-        Files.write(target.resolve("a.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-
-        assertTrue(GitCloneTarget.cleanUp(target, false));
-        assertTrue("the directory that existed before stays", Files.isDirectory(target)); //$NON-NLS-1$
-        try (Stream<Path> left = Files.list(target))
-        {
-            assertEquals("and is empty again", 0, left.count()); //$NON-NLS-1$
-        }
-    }
-
-    @Test
-    public void testTheCleanupDoesNotFollowALinkOutOfTheTarget() throws Exception
-    {
-        Path parent = freeFolder();
-        Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
-        Path precious = Files.write(outside.resolve("precious.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        try
-        {
-            Files.createSymbolicLink(target.resolve("link"), outside); //$NON-NLS-1$
-        }
-        catch (IOException | UnsupportedOperationException e)
-        {
-            Assume.assumeNoException("symbolic links cannot be created here", e); //$NON-NLS-1$
-        }
-        assertTrue(GitCloneTarget.cleanUp(target, true));
-        assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS));
-        assertTrue("what the link pointed at is untouched", Files.exists(precious)); //$NON-NLS-1$
+        assertFalse("the target was never created", Files.exists(parent.resolve("repo"), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
-     * A Windows directory JUNCTION is not a symbolic link to Java - it reads as a directory and a file
-     * walk enters it - so the cleanup must judge it by where it really leads.
+     * Codex P1 on #944: a staging directory REPLACED by a junction to somewhere else is not this run's
+     * any more - the rollback must leave it, and above all not walk into what it points at.
      */
     @Test
-    public void testTheCleanupDoesNotEnterAJunctionOutOfTheTarget() throws Exception
+    public void testAStagingReplacedByAJunctionIsLeftAloneAndNotFollowed() throws Exception
     {
         Assume.assumeTrue("junctions are a Windows feature", java.io.File.separatorChar == '\\'); //$NON-NLS-1$
         Path parent = freeFolder();
         Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
         Path precious = Files.write(outside.resolve("precious.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        Process mklink = new ProcessBuilder("cmd", "/c", "mklink", "/J", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            target.resolve("junction").toString(), outside.toString()).redirectErrorStream(true).start(); //$NON-NLS-1$
-        mklink.getInputStream().readAllBytes();
-        Assume.assumeTrue("mklink /J failed", mklink.waitFor() == 0); //$NON-NLS-1$
-        assertTrue("fixture: Java walks into the junction", Files.isDirectory(target.resolve("junction"), //$NON-NLS-1$ //$NON-NLS-2$
-            LinkOption.NOFOLLOW_LINKS));
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        // The junction's destination even carries this run's very marker: only "is it a plain directory"
+        // tells them apart.
+        Files.copy(staging.path().resolve(".edt-mcp-clone"), outside.resolve(".edt-mcp-clone")); //$NON-NLS-1$ //$NON-NLS-2$
+        deleteTree(staging.path());
+        junction(staging.path(), outside);
 
-        assertTrue(GitCloneTarget.cleanUp(target, true));
-        assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS));
+        assertFalse("a swapped-in junction is not removed as if it were the clone's", staging.remove()); //$NON-NLS-1$
+        assertTrue("what the junction points at is untouched", Files.exists(precious)); //$NON-NLS-1$
+        Files.delete(staging.path()); // the junction itself, for the test's own cleanup
+    }
+
+    /**
+     * Codex P1 on #944, the other half: a plain directory re-created under the staging name (its
+     * creation time may even be the old one's - NTFS tunnelling) is not provably this run's.
+     */
+    @Test
+    public void testAStagingReCreatedByAnotherProgramIsLeftAlone() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        deleteTree(staging.path());
+        Files.createDirectory(staging.path());
+        Files.write(staging.path().resolve(".edt-mcp-clone"), "someone-else".getBytes(StandardCharsets.US_ASCII)); //$NON-NLS-1$ //$NON-NLS-2$
+        Path theirs = Files.write(staging.path().resolve("theirs.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(staging.remove());
+        assertTrue("another program's directory is not deleted", Files.exists(theirs)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRollbackDoesNotEnterAJunctionInsideTheStaging() throws Exception
+    {
+        Assume.assumeTrue("junctions are a Windows feature", java.io.File.separatorChar == '\\'); //$NON-NLS-1$
+        Path parent = freeFolder();
+        Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
+        Path precious = Files.write(outside.resolve("precious.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        Files.createDirectories(staging.repository());
+        junction(staging.repository().resolve("junction"), outside); //$NON-NLS-1$
+        assertTrue("fixture: Java reports the junction as a directory", //$NON-NLS-1$
+            Files.isDirectory(staging.repository().resolve("junction"), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+
+        assertTrue(staging.remove());
+        assertFalse(Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS));
         assertTrue("what the junction pointed at is untouched", Files.exists(precious)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRollbackDoesNotFollowALinkInsideTheStaging() throws Exception
+    {
+        Path parent = freeFolder();
+        Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
+        Path precious = Files.write(outside.resolve("precious.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        Files.createDirectories(staging.repository());
+        try
+        {
+            Files.createSymbolicLink(staging.repository().resolve("link"), outside); //$NON-NLS-1$
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            Assume.assumeNoException("symbolic links cannot be created here", e); //$NON-NLS-1$
+        }
+        assertTrue(staging.remove());
+        assertTrue("what the link pointed at is untouched", Files.exists(precious)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASuccessfulCloneIsMovedToANewTarget() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        Files.write(staging.repository().resolve("a.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(GitCloneTarget.install(staging, checked));
+        assertTrue(Files.isDirectory(checked.real().resolve(".git"))); //$NON-NLS-1$
+        assertTrue(Files.exists(checked.real().resolve("a.txt"))); //$NON-NLS-1$
+        assertFalse("the staging directory is gone", Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #944: a file another program put into an existing target while the clone ran stays -
+     * the clone's entries join it, nothing is deleted or replaced.
+     */
+    @Test
+    public void testAnExistingTargetKeepsAFileThatAppearedInItWhileTheCloneRan() throws Exception
+    {
+        Path parent = freeFolder();
+        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Checked checked = checked(target);
+        assertTrue(checked.existed());
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        Files.write(staging.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Path theirs = Files.write(target.resolve("theirs.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(GitCloneTarget.install(staging, checked));
+        assertTrue(Files.isDirectory(target.resolve(".git"))); //$NON-NLS-1$
+        assertEquals("theirs", new String(Files.readAllBytes(theirs), StandardCharsets.UTF_8)); //$NON-NLS-1$
+        assertFalse(Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS));
+
+        // A name collision: nothing is replaced, what was moved goes back, the target stays as it was.
+        Path second = Files.createDirectory(parent.resolve("second")); //$NON-NLS-1$
+        GitCloneTarget.Checked secondChecked = checked(second);
+        GitCloneTarget.Staging other = GitCloneTarget.createStaging(secondChecked);
+        Files.createDirectories(other.repository().resolve(".git")); //$NON-NLS-1$
+        Files.write(other.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Path clash = Files.write(second.resolve("a.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = GitCloneTarget.install(other, secondChecked);
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("left as it was")); //$NON-NLS-1$
+        assertEquals("theirs", new String(Files.readAllBytes(clash), StandardCharsets.UTF_8)); //$NON-NLS-1$
+        try (Stream<Path> left = Files.list(second))
+        {
+            assertEquals("only their file is in the target", 1, left.count()); //$NON-NLS-1$
+        }
+        assertTrue("the clone is back in staging", Files.isDirectory(other.repository().resolve(".git"))); //$NON-NLS-1$
+        assertTrue(other.remove());
+    }
+
+    // ---- who wins: the cancel or the worker ----
+
+    @Test
+    public void testACancelAfterTheWorkerConcludedStopsNothing()
+    {
+        GitTool.CloneControl control = new GitTool.CloneControl();
+        assertTrue(control.conclude());
+        assertFalse("a clone that already concluded is not stopped", control.requestStop()); //$NON-NLS-1$
+        assertFalse(control.stopRequested());
+    }
+
+    @Test
+    public void testAWorkerAfterACancelDoesNotConclude()
+    {
+        GitTool.CloneControl control = new GitTool.CloneControl();
+        assertTrue(control.requestStop());
+        assertFalse("a cancel that won first is not overridden by a later success", control.conclude()); //$NON-NLS-1$
+        assertTrue(control.stopRequested());
+    }
+
+    /** Codex P2 on #944: the rollback waits for the process tree; the watch says when it is really gone. */
+    @Test(timeout = 60_000)
+    public void testTheProcessWatchWaitsUntilTheKilledProcessHasExited() throws Exception
+    {
+        boolean windows = java.io.File.separatorChar == '\\';
+        Process sleeper = new ProcessBuilder(windows ? List.of("ping", "-n", "60", "127.0.0.1") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            : List.of("sleep", "60")).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start(); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            GitTool.ProcessWatch watch = new GitTool.ProcessWatch();
+            watch.started(sleeper);
+            assertFalse("a live process is not reported gone", watch.awaitExit(300)); //$NON-NLS-1$
+            watch.killAll();
+            assertTrue("a killed process is waited for until it has exited", watch.awaitExit(20_000)); //$NON-NLS-1$
+            assertFalse(sleeper.isAlive());
+        }
+        finally
+        {
+            sleeper.destroyForcibly();
+        }
     }
 
     // ---- what EDT can read ----
@@ -528,6 +647,23 @@ public class GitToolCloneTest
     private static String quoted(String text)
     {
         return "'" + text + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The checked verdict for a target that must be accepted. */
+    private static GitCloneTarget.Checked checked(Path target)
+    {
+        GitCloneTarget.Checked checked = GitCloneTarget.check(target, List.of());
+        assertTrue(String.valueOf(checked.refusal()), checked.ok());
+        return checked;
+    }
+
+    /** A Windows directory junction at {@code link} pointing at {@code target}. */
+    private static void junction(Path link, Path target) throws Exception
+    {
+        Process mklink = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .redirectErrorStream(true).start();
+        mklink.getInputStream().readAllBytes();
+        Assume.assumeTrue("mklink /J failed", mklink.waitFor() == 0); //$NON-NLS-1$
     }
 
     private Path freeFolder() throws IOException

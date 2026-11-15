@@ -187,8 +187,9 @@ public class GitToolCloneProcessTest
         assertEquals("failed", result.get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("an unreachable remote must fail fast, took " + seconds + " s", seconds < 30); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(result.toString(), result.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
-        assertTrue(result.toString(), result.get("error").getAsString().contains("was removed again")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("the directory the tool created is gone", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertTrue(result.toString(), result.get("error").getAsString().contains("The partial clone was removed")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the target was never created", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertNoStagingBeside(target);
     }
 
     /**
@@ -209,7 +210,7 @@ public class GitToolCloneProcessTest
             "http://127.0.0.1:" + server.getLocalPort() + "/repo.git", target.toString())); //$NON-NLS-1$ //$NON-NLS-2$
         long started = System.nanoTime();
 
-        GitTool.CloneRun run = new GitTool(jobs).runClone(argv, target.toRealPath(), false, TimeUnit.MINUTES.toMillis(2));
+        GitTool.CloneRun run = runDirectly(argv, target, new GitTool.CloneControl());
 
         long seconds = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started);
         assertFalse(run.json(), run.success());
@@ -218,18 +219,20 @@ public class GitToolCloneProcessTest
         assertTrue("git's own message says why: " + result, result.get("output").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
             .toLowerCase(java.util.Locale.ROOT).matches("(?s).*(authentication|username|terminal prompts|401).*")); //$NON-NLS-1$
         assertTrue("an existing empty target stays", Files.isDirectory(target)); //$NON-NLS-1$
+        assertNoStagingBeside(target);
         try (Stream<Path> left = Files.list(target))
         {
-            assertEquals("and is empty again", 0, left.count()); //$NON-NLS-1$
+            assertEquals("and is never written to", 0, left.count()); //$NON-NLS-1$
         }
     }
 
     /**
      * cancel_job stops a clone that hangs on its remote: the git process is killed (the remote sees its
-     * connection close), the partial clone is taken back, and the target is free again.
+     * connection close), the partial clone is taken back, the target is free again - and the job's
+     * cancellation result is the rollback report (Codex P2 on #944: it used to be lost).
      */
     @Test(timeout = 120_000)
-    public void testCancellingTheJobKillsGitAndRemovesThePartialClone() throws Exception
+    public void testCancellingTheJobKillsGitRemovesThePartialCloneAndReportsIt() throws Exception
     {
         HangingRemote remote = hangingRemote();
         Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
@@ -239,16 +242,80 @@ public class GitToolCloneProcessTest
         assertEquals(started.toString(), "running", started.get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("git reached the remote", remote.connected.await(30, TimeUnit.SECONDS)); //$NON-NLS-1$
 
-        BackgroundJobs.CancellationResult cancelled = jobs.cancel(started.get("jobId").getAsString()); //$NON-NLS-1$
-        assertEquals(BackgroundJobs.CancellationOutcome.CANCELLED, cancelled.getOutcome());
-
+        String jobId = started.get("jobId").getAsString(); //$NON-NLS-1$
+        BackgroundJobs.CancellationResult cancelled = jobs.cancel(jobId);
+        assertEquals(String.valueOf(cancelled.getDetail()), BackgroundJobs.CancellationOutcome.TERMINATED,
+            cancelled.getOutcome());
         assertTrue("the git process must be killed: the remote's connection stays open", //$NON-NLS-1$
             remote.closed.await(30, TimeUnit.SECONDS));
+        BackgroundJobs.JobSnapshot snapshot = jobs.await(jobId, 30_000);
+        assertEquals(BackgroundJobs.Status.CANCELLED, snapshot.getStatus());
+        assertTrue("the cancellation result is the rollback report", snapshot.getResult() instanceof String); //$NON-NLS-1$
+        JsonObject report = JsonParser.parseString((String)snapshot.getResult()).getAsJsonObject();
+        assertTrue(report.toString(), report.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(report.toString(), report.get("error").getAsString().contains("cancelled (cancel_job)")); //$NON-NLS-1$ //$NON-NLS-2$
         Path real = target.getParent().toRealPath().resolve("clone"); //$NON-NLS-1$
         awaitTargetFree(real);
-        assertFalse("the partial clone is removed", Files.exists(real, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertFalse("the target was never created", Files.exists(real, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertNoStagingBeside(real);
     }
 
+    /**
+     * Codex P2 on #944: a cancel that wins after git has already exited 0 still takes the clone back - it
+     * never reaches the target, so nothing is left while the job says cancelled.
+     */
+    @Test(timeout = 120_000)
+    public void testACancelThatWinsAfterGitSucceededLeavesNoClone() throws Exception
+    {
+        String url = serveRepositoryWithOneCommit();
+        Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
+        GitTool.CloneControl control = new GitTool.CloneControl();
+        control.afterGit = control::requestStop; // the cancel arrives between git's exit and the install
+
+        GitTool.CloneRun run = runDirectly(new ArrayList<>(List.of("git", "clone", url, target.toString())), //$NON-NLS-1$ //$NON-NLS-2$
+            target, control);
+
+        assertFalse(run.json(), run.success());
+        assertTrue(run.json(), run.json().contains("cancelled (cancel_job)")); //$NON-NLS-1$
+        assertFalse("the clone never reaches the target", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertNoStagingBeside(target);
+    }
+
+    /**
+     * Codex P2 on #944: nothing is deleted while git (or a child of it) may still be writing - a process
+     * that has not exited leaves the staging directory in place, said so in the answer.
+     */
+    @Test(timeout = 120_000)
+    public void testTheRollbackWaitsForTheProcessTreeAndKeepsTheStagingWhileItLives() throws Exception
+    {
+        int closedPort;
+        try (ServerSocket probe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress()))
+        {
+            closedPort = probe.getLocalPort();
+        }
+        Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
+        GitTool.ProcessWatch neverExits = new GitTool.ProcessWatch()
+        {
+            @Override
+            boolean awaitExit(long millis)
+            {
+                return false;
+            }
+        };
+
+        GitTool.CloneRun run = runDirectly(new ArrayList<>(List.of("git", "clone", //$NON-NLS-1$ //$NON-NLS-2$
+            "git://127.0.0.1:" + closedPort + "/repo.git", target.toString())), target, //$NON-NLS-1$ //$NON-NLS-2$
+            new GitTool.CloneControl(neverExits));
+
+        JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
+        assertFalse(result.toString(), result.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.toString(), result.get("error").getAsString().contains("had not exited")); //$NON-NLS-1$ //$NON-NLS-2$
+        try (Stream<Path> siblings = Files.list(target.getParent()))
+        {
+            assertTrue("the staging directory is kept while a process may still write into it", //$NON-NLS-1$
+                siblings.anyMatch(p -> p.getFileName().toString().startsWith(".edt-mcp-clone-"))); //$NON-NLS-1$
+        }
+    }
     /** A clone past its limit is killed the same way and reported as a timeout. */
     @Test(timeout = 120_000)
     public void testACloneOverItsLimitIsKilledAndReported() throws Exception
@@ -267,6 +334,24 @@ public class GitToolCloneProcessTest
 
     // ---- helpers ----
 
+    /** Drives the run seam for {@code argv} (whose last token is the target) without a job. */
+    private GitTool.CloneRun runDirectly(List<String> argv, Path target, GitTool.CloneControl control) throws Exception
+    {
+        GitTool.CloneCommand clone = new GitTool.CloneCommand(argv.get(2), target.toString(), 1);
+        GitCloneTarget.Checked checked = GitCloneTarget.check(target, List.of());
+        assertTrue(String.valueOf(checked.refusal()), checked.ok());
+        return new GitTool(jobs).cloneThroughStaging(argv, clone, checked, control, TimeUnit.MINUTES.toMillis(2));
+    }
+
+    /** No staging directory of a clone is left beside {@code target}. */
+    private static void assertNoStagingBeside(Path target) throws IOException
+    {
+        try (Stream<Path> siblings = Files.list(target.toAbsolutePath().getParent()))
+        {
+            assertFalse("no staging directory is left behind", //$NON-NLS-1$
+                siblings.anyMatch(p -> p.getFileName().toString().startsWith(".edt-mcp-clone-"))); //$NON-NLS-1$
+        }
+    }
     /** Parses {@code command}, checks its target and starts the clone on this test's registry. */
     private JsonObject startClone(String command, Path target, long timeoutMillis, int waitSeconds) throws Exception
     {

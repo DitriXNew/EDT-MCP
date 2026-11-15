@@ -36,8 +36,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * <p>
  * The rules, judged on the file system before anything runs (and again after the consent prompt):
  * <ul>
- * <li>the target's PARENT exists - this tool creates only the target directory itself, so a failed
- * clone has exactly one directory of its own to take back;</li>
+ * <li>the target's PARENT exists - this tool creates nothing above it, only its staging directory beside
+ * the target and, at the end, the target itself;</li>
  * <li>the target is new, or an existing EMPTY directory - a clone never lands over files;</li>
  * <li>it is not inside, and does not contain, the folder of an EDT workspace project;</li>
  * <li>it is not inside a git work tree, judged by the same walk {@code git init} uses
@@ -47,7 +47,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * Paths are compared on their REAL location as well as their spelling, so a link or junction on the way
  * cannot carry a target past a rule; anything that cannot be resolved refuses (fail closed). None of it
  * is atomic with the clone that follows: a directory another program fills in between is not seen, which
- * is why the run claims the target ({@link #claim}) and creates it itself before git starts.
+ * is why the run claims the target ({@link #claim}) and clones into a staging directory of its own
+ * ({@link Staging}), moving the result into the target only once git has succeeded.
  */
 public final class GitCloneTarget
 {
@@ -184,7 +185,7 @@ public final class GitCloneTarget
         if (!Files.isDirectory(parent))
         {
             return Checked.refused("The parent directory of the clone target, '" + parent + "', does not " //$NON-NLS-1$ //$NON-NLS-2$
-                + "exist. This tool creates only the target directory itself: create '" + parent //$NON-NLS-1$
+                + "exist. This tool creates nothing above the target: create '" + parent //$NON-NLS-1$
                 + "' first, or name a target whose parent exists."); //$NON-NLS-1$
         }
         boolean existed = Files.exists(spelled, LinkOption.NOFOLLOW_LINKS);
@@ -399,49 +400,255 @@ public final class GitCloneTarget
         }
     }
 
-    // ==================== cleanup ====================
+    // ==================== the staging directory ====================
 
     /**
-     * Takes back what a failed clone left in {@code target}: everything in it, and the directory itself
-     * when this tool created it ({@code removeTarget}). Nothing outside it is touched: links are deleted
-     * as links, never followed, and a directory whose real location is not under the target's (a
-     * junction) is removed as an entry without being entered. Read-only files (git writes its objects
-     * read-only) are made writable first. An entry Windows still holds a handle on is retried briefly.
-     *
-     * @param target the clone target
-     * @param removeTarget {@code true} when this tool created the target and it goes too
-     * @return {@code true} when nothing of the clone is left
+     * The directory a clone is written into before it reaches its target (#934, review round 1).
+     * <p>
+     * git clones into {@code <container>/repo}, where the container is a fresh, uniquely named sibling of
+     * the target that THIS run creates - never into the target itself. Everything a failed, cancelled or
+     * timed-out clone left behind is then inside a directory that is provably this run's own, so taking
+     * it back never touches the target - in particular not an existing empty target into which another
+     * program may have written meanwhile. Only a clone that succeeded is moved into place
+     * ({@link #install}).
+     * <p>
+     * The container's identity is fixed when it is created: a marker file holding a random token, and -
+     * where the platform has one (POSIX) - its file key, both read WITHOUT following links.
+     * {@link #remove} and {@link #install} act only on a container that is still a plain directory (not
+     * a link, not a junction or other reparse point) carrying that marker: anything swapped in for it is
+     * left alone, never followed. A creation time would not do: NTFS "tunnelling" hands a directory
+     * re-created under the same name the old one's creation time.
+     * <p>
+     * Declared residual: what another program writes INTO the container while the clone runs is treated
+     * as the clone's own; and the identity is checked, then the walk opens the directory - an exchange in
+     * between is not seen (no portable open-by-handle walk exists in {@code java.nio}).
      */
-    public static boolean cleanUp(Path target, boolean removeTarget)
+    public static final class Staging
     {
-        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+        /** The marker file in the container, holding {@link #token}. */
+        static final String MARKER = ".edt-mcp-clone"; //$NON-NLS-1$
+
+        private final Path container;
+        private final Object fileKey;
+        private final String token;
+
+        private Staging(Path container, Object fileKey, String token)
         {
-            return true;
+            this.container = container;
+            this.fileKey = fileKey;
+            this.token = token;
         }
-        Path root;
-        try
+
+        /** @return the container directory this run created (a real path) */
+        public Path path()
         {
-            root = target.toRealPath();
+            return container;
         }
-        catch (IOException | RuntimeException e)
+
+        /** @return where git writes the clone: {@code <container>/repo} */
+        public Path repository()
         {
-            Activator.logError(GitFailureLog.typesOnly("git clone: resolving the clone target for cleanup failed", e), //$NON-NLS-1$
-                null);
-            return false;
+            return container.resolve("repo"); //$NON-NLS-1$
         }
-        for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
+
+        /**
+         * Whether the container is still the directory this run created: a plain directory (neither a
+         * link nor a junction) with the recorded file key, holding the marker with this run's token.
+         */
+        boolean unchanged()
         {
-            deleteContents(target, root, removeTarget);
-            if (isClean(target, removeTarget))
+            try
+            {
+                BasicFileAttributes now = Files.readAttributes(container, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+                if (!isPlainDirectory(now) || !java.util.Objects.equals(fileKey, now.fileKey()))
+                {
+                    return false;
+                }
+                Path marker = container.resolve(MARKER);
+                BasicFileAttributes markerAttrs = Files.readAttributes(marker, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+                return markerAttrs.isRegularFile() && markerAttrs.size() < 256
+                    && token.equals(new String(Files.readAllBytes(marker), java.nio.charset.StandardCharsets.US_ASCII));
+            }
+            catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably ours
+            {
+                return false;
+            }
+        }
+
+        /**
+         * Removes the container and everything in it, after checking it is still the one this run
+         * created; anything that leads out of it (a link, a junction) is removed as an entry and never
+         * entered. Read-only files are made writable first; an entry Windows still holds a handle on is
+         * retried briefly.
+         *
+         * @return {@code true} when it is gone
+         */
+        public boolean remove()
+        {
+            if (!Files.exists(container, LinkOption.NOFOLLOW_LINKS))
             {
                 return true;
             }
-            if (attempt < CLEANUP_ATTEMPTS && !pause())
+            if (!unchanged())
             {
-                break;
+                Activator.logWarning("git clone: the staging directory " + container //$NON-NLS-1$
+                    + " is no longer the one this clone created; it is left in place."); //$NON-NLS-1$
+                return false;
+            }
+            for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
+            {
+                deleteTree(container);
+                if (!Files.exists(container, LinkOption.NOFOLLOW_LINKS))
+                {
+                    return true;
+                }
+                if (attempt < CLEANUP_ATTEMPTS && !pause())
+                {
+                    break;
+                }
+            }
+            return !Files.exists(container, LinkOption.NOFOLLOW_LINKS);
+        }
+    }
+
+    /** The prefix of a staging directory's name - hidden on POSIX, and recognisable as this tool's. */
+    static final String STAGING_PREFIX = ".edt-mcp-clone-"; //$NON-NLS-1$
+
+    /**
+     * Creates the staging container for a clone into {@code checked}: a new, uniquely named directory
+     * beside the target, created atomically (it fails if anything is there already), with its marker.
+     *
+     * @param checked the checked target
+     * @return the staging directory
+     * @throws IOException when it cannot be created or its identity cannot be recorded
+     */
+    public static Staging createStaging(Checked checked) throws IOException
+    {
+        Path parent = checked.real().getParent();
+        String name = STAGING_PREFIX + java.util.UUID.randomUUID().toString().substring(0, 8) + "-" //$NON-NLS-1$
+            + checked.real().getFileName();
+        Path created = Files.createDirectory(parent.resolve(name));
+        String token = java.util.UUID.randomUUID().toString();
+        Files.write(created.resolve(Staging.MARKER), token.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+            java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
+        BasicFileAttributes attrs = Files.readAttributes(created, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        return new Staging(created, attrs.fileKey(), token);
+    }
+    /**
+     * Moves a successful clone from its staging directory to the target, without ever replacing
+     * anything:
+     * <ul>
+     * <li>a NEW target - the clone ({@code <container>/repo}) is renamed to it in one step; that fails if a
+     * directory with content appeared there meanwhile (an empty one is replaced on POSIX, which loses
+     * nothing);</li>
+     * <li>an existing EMPTY target - its own directory is kept, and the clone's top-level entries are
+     * moved into it one by one, never over an entry of the same name; on a collision the entries
+     * already moved go back, and the target is left as it was.</li>
+     * </ul>
+     * Declared residual: on POSIX a non-replacing move checks for the name and then renames, so a file
+     * of the SAME name created in between is overwritten; and the target is checked to be a plain
+     * directory just before the moves, not during them.
+     *
+     * @param staging the staging directory holding the clone
+     * @param checked the checked target
+     * @return {@code null} when the clone is in place, else why not (the clone is still in staging)
+     */
+    public static String install(Staging staging, Checked checked)
+    {
+        Path target = checked.real();
+        if (!staging.unchanged())
+        {
+            return "The staging directory '" + staging.path() + "' is no longer the one this clone created, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "so the clone was not moved to '" + target + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!checked.existed())
+        {
+            try
+            {
+                Files.move(staging.repository(), target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                removeEmptyContainer(staging);
+                return null;
+            }
+            catch (IOException | RuntimeException e)
+            {
+                return "The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                    + "): something was created there while it ran."; //$NON-NLS-1$
             }
         }
-        return isClean(target, removeTarget);
+        try
+        {
+            BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!isPlainDirectory(attrs))
+            {
+                return "The clone target '" + target + "' is no longer a plain directory (it was replaced while " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the clone ran), so the clone was not moved into it."; //$NON-NLS-1$
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return "The clone target '" + target + "' could not be read any more, so the clone was not moved " //$NON-NLS-1$ //$NON-NLS-2$
+                + "into it."; //$NON-NLS-1$
+        }
+        List<Path> moved = new ArrayList<>();
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(staging.repository()))
+        {
+            for (Path entry : entries)
+            {
+                Path destination = target.resolve(entry.getFileName().toString());
+                Files.move(entry, destination); // no REPLACE_EXISTING: never over an entry of that name
+                moved.add(destination);
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            for (Path back : moved)
+            {
+                try
+                {
+                    Files.move(back, staging.repository().resolve(back.getFileName().toString()));
+                }
+                catch (IOException | RuntimeException again) // NOSONAR reported through the message below
+                {
+                    return "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                        + ": something was written there while it ran), and '" + back //$NON-NLS-1$
+                        + "' could not be moved back - remove what this clone left in '" + target + "' by hand."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            return "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "): something was written there while it ran. The target was left as it was."; //$NON-NLS-1$
+        }
+        try
+        {
+            Files.delete(staging.repository());
+        }
+        catch (IOException | RuntimeException e) // NOSONAR an empty leftover is harmless; logged
+        {
+            Activator.logWarning("git clone: the emptied staging directory " + staging.repository() + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        removeEmptyContainer(staging);
+        return null;
+    }
+
+    /** Removes the container once the clone has left it: its marker, then the directory itself. */
+    private static void removeEmptyContainer(Staging staging)
+    {
+        try
+        {
+            Files.deleteIfExists(staging.path().resolve(Staging.MARKER));
+            Files.delete(staging.path());
+        }
+        catch (IOException | RuntimeException e) // NOSONAR an empty leftover is harmless; logged
+        {
+            Activator.logWarning("git clone: the staging directory " + staging.path() + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** A real directory: not a link, not a junction or other reparse point (Java reports those as "other"). */
+    private static boolean isPlainDirectory(BasicFileAttributes attrs)
+    {
+        return attrs.isDirectory() && !attrs.isSymbolicLink() && !attrs.isOther();
     }
 
     private static boolean pause()
@@ -458,42 +665,28 @@ public final class GitCloneTarget
         }
     }
 
-    private static boolean isClean(Path target, boolean removeTarget)
-    {
-        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS))
-        {
-            return true;
-        }
-        if (removeTarget)
-        {
-            return false;
-        }
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(target))
-        {
-            return !entries.iterator().hasNext();
-        }
-        catch (IOException | RuntimeException e) // NOSONAR an unreadable target is not a clean one
-        {
-            return false;
-        }
-    }
-
-    private static void deleteContents(Path target, Path root, boolean removeTarget)
+    /**
+     * Deletes {@code root} (a real path) and its contents. A directory that is not a plain directory (a link, a
+     * junction) or whose real location is not under {@code root}'s is removed as an entry, never
+     * entered - the root itself included, whose identity the caller has checked just before.
+     */
+    private static void deleteTree(Path root)
     {
         try
         {
-            Files.walkFileTree(target, new SimpleFileVisitor<Path>()
+            Files.walkFileTree(root, new SimpleFileVisitor<Path>()
             {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs)
                 {
-                    if (dir.equals(target))
+                    if (dir.equals(root) && !isPlainDirectory(attrs))
                     {
-                        return FileVisitResult.CONTINUE;
+                        // Swapped after the identity check: not this run's to touch at all.
+                        return FileVisitResult.SKIP_SUBTREE;
                     }
-                    if (!insideRoot(dir, root))
+                    if (!isPlainDirectory(attrs) || !insideRoot(dir, root))
                     {
-                        // A junction (or anything else that leads out): remove the entry, not what it names.
+                        // Leads out (a junction, or anything swapped in): remove the entry, not what it names.
                         deleteQuietly(dir);
                         return FileVisitResult.SKIP_SUBTREE;
                     }
@@ -517,17 +710,14 @@ public final class GitCloneTarget
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc)
                 {
-                    if (!dir.equals(target) || removeTarget)
-                    {
-                        deleteQuietly(dir);
-                    }
+                    deleteQuietly(dir);
                     return FileVisitResult.CONTINUE;
                 }
             });
         }
         catch (IOException | RuntimeException e)
         {
-            Activator.logError(GitFailureLog.typesOnly("git clone: cleaning up a failed clone failed", e), null); //$NON-NLS-1$
+            Activator.logError(GitFailureLog.typesOnly("git clone: removing a failed clone failed", e), null); //$NON-NLS-1$
         }
     }
 
