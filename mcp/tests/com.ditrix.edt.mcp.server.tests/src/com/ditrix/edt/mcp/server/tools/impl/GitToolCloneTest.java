@@ -240,27 +240,28 @@ public class GitToolCloneTest
         Path parent = freeFolder();
         GitCloneTarget.Checked checked = GitCloneTarget.check(parent.resolve("repo"), List.of()); //$NON-NLS-1$
         assertTrue(String.valueOf(checked.refusal()), checked.ok());
-        assertFalse(checked.existed());
         assertEquals(parent.toRealPath().resolve("repo"), checked.real()); //$NON-NLS-1$
     }
 
+    /**
+     * Only a NEW directory is accepted (#944, review round 4): an existing one - even empty - is refused
+     * with the fix, and so is anything else at that path.
+     */
     @Test
-    public void testAnExistingEmptyDirectoryIsAcceptedAndANonEmptyOneRefused() throws Exception
+    public void testAnExistingDirectoryEvenAnEmptyOneIsRefused() throws Exception
     {
         Path parent = freeFolder();
         Path empty = Files.createDirectory(parent.resolve("empty")); //$NON-NLS-1$
-        GitCloneTarget.Checked checked = GitCloneTarget.check(empty, List.of());
-        assertTrue(String.valueOf(checked.refusal()), checked.ok());
-        assertTrue(checked.existed());
+        String refusal = GitCloneTarget.check(empty, List.of()).refusal();
+        assertNotNull("an existing empty directory is refused", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("already exists")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("remove the empty directory or pick a new path")); //$NON-NLS-1$
 
         Files.write(empty.resolve("readme.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        String refusal = GitCloneTarget.check(empty, List.of()).refusal();
-        assertNotNull(refusal);
-        assertTrue(refusal, refusal.contains("exists and is not empty")); //$NON-NLS-1$
+        assertTrue(String.valueOf(GitCloneTarget.check(empty, List.of()).refusal()).contains("already exists")); //$NON-NLS-1$
 
         Path file = Files.write(parent.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        String fileRefusal = GitCloneTarget.check(file, List.of()).refusal();
-        assertTrue(String.valueOf(fileRefusal), String.valueOf(fileRefusal).contains("is not a directory")); //$NON-NLS-1$
+        assertTrue(String.valueOf(GitCloneTarget.check(file, List.of()).refusal()).contains("already exists")); //$NON-NLS-1$
     }
 
     @Test
@@ -283,8 +284,7 @@ public class GitToolCloneTest
         String newTarget = GitCloneTarget.check(nested.resolve("repo"), List.of()).refusal(); //$NON-NLS-1$
         assertNotNull("a new target inside a work tree must be refused", newTarget); //$NON-NLS-1$
         assertTrue(newTarget, newTarget.contains("lies inside the git repository at '" + outer.toRealPath() + "'")); //$NON-NLS-1$ //$NON-NLS-2$
-        String existingTarget = GitCloneTarget.check(nested, List.of()).refusal();
-        assertTrue(String.valueOf(existingTarget), String.valueOf(existingTarget).contains("nested")); //$NON-NLS-1$
+        assertTrue(newTarget, newTarget.contains("nested")); //$NON-NLS-1$
     }
 
     @Test
@@ -463,46 +463,6 @@ public class GitToolCloneTest
         assertFalse("the staging directory is gone", Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
     }
 
-    /**
-     * Codex P1 on #944: a file another program put into an existing target while the clone ran stays -
-     * the clone's entries join it, nothing is deleted or replaced.
-     */
-    @Test
-    public void testAnExistingTargetKeepsAFileThatAppearedInItWhileTheCloneRan() throws Exception
-    {
-        Path parent = freeFolder();
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        GitCloneTarget.Checked checked = checked(target);
-        assertTrue(checked.existed());
-        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
-        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
-        Files.write(staging.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        Path theirs = Files.write(target.resolve("theirs.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-
-        assertNull(GitCloneTarget.install(staging, checked).refusal());
-        assertTrue(Files.isDirectory(target.resolve(".git"))); //$NON-NLS-1$
-        assertEquals("theirs", new String(Files.readAllBytes(theirs), StandardCharsets.UTF_8)); //$NON-NLS-1$
-        assertFalse(Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS));
-
-        // A name collision: nothing is replaced, what was moved goes back, the target stays as it was.
-        Path second = Files.createDirectory(parent.resolve("second")); //$NON-NLS-1$
-        GitCloneTarget.Checked secondChecked = checked(second);
-        GitCloneTarget.Staging other = GitCloneTarget.createStaging(secondChecked);
-        Files.createDirectories(other.repository().resolve(".git")); //$NON-NLS-1$
-        Files.write(other.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        Path clash = Files.write(second.resolve("a.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        String refusal = GitCloneTarget.install(other, secondChecked).refusal();
-        assertNotNull(refusal);
-        assertTrue(refusal, refusal.contains("left as it was")); //$NON-NLS-1$
-        assertEquals("theirs", new String(Files.readAllBytes(clash), StandardCharsets.UTF_8)); //$NON-NLS-1$
-        try (Stream<Path> left = Files.list(second))
-        {
-            assertEquals("only their file is in the target", 1, left.count()); //$NON-NLS-1$
-        }
-        assertTrue("the clone is back in staging", Files.isDirectory(other.repository().resolve(".git"))); //$NON-NLS-1$
-        assertTrue(other.remove());
-    }
-
     // ---- who wins: the cancel or the worker ----
 
     @Test
@@ -598,7 +558,25 @@ public class GitToolCloneTest
         JsonObject result = execute(Map.of("command", "clone " + URL + " " + quoted(occupied.toString()))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue("the target refusal, not the consent one: " + result, //$NON-NLS-1$
-            result.get("error").getAsString().contains("exists and is not empty")); //$NON-NLS-1$ //$NON-NLS-2$
+            result.get("error").getAsString().contains("already exists")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** An existing EMPTY directory is refused before the consent prompt, and nothing is created. */
+    @Test
+    public void testAnExistingEmptyDirectoryIsRefusedBeforeConsentAndNothingIsCreated() throws Exception
+    {
+        Path parent = freeFolder();
+        Path empty = Files.createDirectory(parent.resolve("empty")); //$NON-NLS-1$
+        JsonObject result = execute(Map.of("command", "clone " + URL + " " + quoted(empty.toString()))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue("the target refusal, not the consent one: " + error, //$NON-NLS-1$
+            error.contains("remove the empty directory or pick a new path")); //$NON-NLS-1$
+        try (Stream<Path> inside = Files.list(empty); Stream<Path> beside = Files.list(parent))
+        {
+            assertEquals("nothing is created in it", 0, inside.count()); //$NON-NLS-1$
+            assertEquals("nor beside it (no staging directory)", 1, beside.count()); //$NON-NLS-1$
+        }
     }
 
     @Test

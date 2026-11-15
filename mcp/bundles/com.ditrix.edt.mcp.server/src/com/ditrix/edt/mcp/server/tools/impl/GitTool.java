@@ -781,8 +781,8 @@ public class GitTool implements IMcpTool
             .stringProperty(KEY_JOB_ID, "'clone' only: the background job it runs in (poll get_job_status)") //$NON-NLS-1$
             .stringProperty(KEY_STATUS, "'clone' only: the job's state - running, done, failed or cancelled") //$NON-NLS-1$
             .stringProperty(KEY_DIRECTORY, "'clone' only: the real path of the directory cloned into") //$NON-NLS-1$
-            .stringArrayProperty(KEY_WARNINGS, "'clone' only: what the git integration bundled with EDT " //$NON-NLS-1$
-                + "cannot use in the new repository (a SHA-256 or partial clone)") //$NON-NLS-1$
+            .stringArrayProperty(KEY_WARNINGS, "'clone' only: what the git integration bundled with EDT cannot " //$NON-NLS-1$
+                + "use in the new repository (a SHA-256 or partial clone), or a staging directory left behind") //$NON-NLS-1$
             .booleanProperty(KEY_CLEANED_UP, "'clone' only, on failure: whether what the clone wrote was " //$NON-NLS-1$
                 + "removed again") //$NON-NLS-1$
             .build();
@@ -1163,7 +1163,7 @@ public class GitTool implements IMcpTool
     // ==================== clone (#934) ====================
 
     /**
-     * {@code git clone <url> <directory>} (#934): copies a remote repository into a new or empty
+     * {@code git clone <url> <directory>} (#934): copies a remote repository into a NEW
      * directory, in a background job.
      * <p>
      * It takes no project - the target is the directory operand - so a {@code projectName} is refused
@@ -1399,19 +1399,24 @@ public class GitTool implements IMcpTool
         {
             boolean treeGone = control.watch().awaitExit(CLONE_EXIT_WAIT_MILLIS);
             String notInstalled = null;
-            List<Path> leftInTarget = List.of();
             if (exitedZero.get() && treeGone && control.conclude())
             {
-                GitCloneTarget.Installed installed = GitCloneTarget.install(staging, target, control.afterInstallMove);
+                control.beforeInstall.accept(staging);
+                GitCloneTarget.Installed installed = GitCloneTarget.install(staging, target);
                 notInstalled = installed.refusal();
-                leftInTarget = installed.leftInTarget();
                 if (installed.ok())
                 {
                     JsonObject result = JsonParser.parseString(json).getAsJsonObject();
                     result.addProperty(KEY_COMMAND, safeCommand);
                     result.addProperty(KEY_DIRECTORY, directory.toString());
                     result.addProperty(KEY_NEXT_STEP, cloneNextStep(directory));
-                    List<String> warnings = GitCloneTarget.formatWarnings(directory);
+                    List<String> warnings = new ArrayList<>(GitCloneTarget.formatWarnings(directory));
+                    if (installed.stagingLeftover() != null)
+                    {
+                        // The clone is in place; only its emptied staging directory could not be removed.
+                        warnings.add("The clone is in place, but its emptied staging directory '" //$NON-NLS-1$
+                            + installed.stagingLeftover() + "' could not be removed: delete it by hand."); //$NON-NLS-1$
+                    }
                     if (!warnings.isEmpty())
                     {
                         result.add(KEY_WARNINGS, GsonProvider.get().toJsonTree(warnings));
@@ -1422,8 +1427,7 @@ public class GitTool implements IMcpTool
                 }
             }
             boolean cancelled = !control.conclude() && control.stopRequested();
-            return rollBack(json, notInstalled, leftInTarget, staging, directory, safeCommand, treeGone, cancelled,
-                control);
+            return rollBack(json, notInstalled, staging, directory, safeCommand, treeGone, cancelled, control);
         }
         finally
         {
@@ -1435,21 +1439,12 @@ public class GitTool implements IMcpTool
     }
 
     /** Takes a clone's staging directory back and builds the failure answer. */
-    private static CloneRun rollBack(String processJson, String notInstalled, List<Path> leftInTarget,
-        GitCloneTarget.Staging staging, Path directory, String safeCommand, boolean treeGone, boolean cancelled,
-        CloneControl control)
+    private static CloneRun rollBack(String processJson, String notInstalled, GitCloneTarget.Staging staging,
+        Path directory, String safeCommand, boolean treeGone, boolean cancelled, CloneControl control)
     {
-        // Entries an install could not take back out of the target are a leftover like any other.
-        boolean removed = treeGone && staging.remove();
-        boolean clean = removed && leftInTarget.isEmpty();
+        boolean clean = treeGone && staging.remove();
         String cleanup;
-        if (!leftInTarget.isEmpty())
-        {
-            cleanup = " Remove the entries listed above from the target '" + directory + "' by hand" //$NON-NLS-1$ //$NON-NLS-2$
-                + (removed ? "; the rest of the clone was removed." //$NON-NLS-1$
-                    : ", and the staging directory '" + staging.path() + "' too."); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        else if (clean)
+        if (clean)
         {
             cleanup = " The partial clone was removed (it was written to the staging directory '" + staging.path() //$NON-NLS-1$
                 + "'); the target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
@@ -1514,8 +1509,8 @@ public class GitTool implements IMcpTool
         /** Test seam: runs once the staging directory exists, before it is proved and handed to git. */
         volatile Runnable beforeGit = () -> { };
 
-        /** Test seam: runs after each entry an install moves into an existing target. */
-        volatile java.util.function.Consumer<Path> afterInstallMove = moved -> { };
+        /** Test seam: runs after git succeeded, right before the install, with the staging directory. */
+        volatile java.util.function.Consumer<GitCloneTarget.Staging> beforeInstall = staging -> { };
 
         /** Test seam: runs right after git's process has ended, before the worker concludes. */
         volatile Runnable afterGit = () -> { };
@@ -1804,7 +1799,7 @@ public class GitTool implements IMcpTool
     {
         return new ConsentPreview("git " + CLONE, //$NON-NLS-1$
             "'git clone' downloads the repository '" + redactCredentialUrls(clone.url()) + "' into " //$NON-NLS-1$ //$NON-NLS-2$
-                + (target.existed() ? "the existing empty directory '" : "the new directory '") //$NON-NLS-1$ //$NON-NLS-2$
+                + "the new directory '" //$NON-NLS-1$
                 + target.real() + "'.", //$NON-NLS-1$
             1, List.of(target.real().toString(), renderArguments(argv.subList(1, argv.size()))));
     }

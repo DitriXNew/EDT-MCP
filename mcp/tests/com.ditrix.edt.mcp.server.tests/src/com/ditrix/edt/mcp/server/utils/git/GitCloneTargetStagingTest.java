@@ -183,91 +183,6 @@ public class GitCloneTargetStagingTest
     }
 
     /**
-     * Codex P1 on #944 (rounds 2 and 3): an install rollback moves back only entries that are still the
-     * ones it moved - here the first entry is replaced while the SECOND is being moved, and the third
-     * collides; the replacement stays in the target, named, and is reported as left there.
-     */
-    @Test
-    public void testAnInstallRollbackLeavesAReplacedEntryInTheTarget() throws Exception
-    {
-        Path parent = freeFolder();
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        GitCloneTarget.Checked checked = checked(target);
-        GitCloneTarget.Staging staging = threeEntryClone(checked);
-        List<Path> movedSoFar = new ArrayList<>();
-        List<Path> clashes = new ArrayList<>();
-        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked, moved -> {
-            movedSoFar.add(moved);
-            if (movedSoFar.size() != 2)
-            {
-                return;
-            }
-            try
-            {
-                // Another program replaces the FIRST entry while the second one is moved in...
-                replace(movedSoFar.get(0));
-                // ...and takes the name of the entry still to come, so the install collides.
-                try (Stream<Path> rest = Files.list(staging.repository()))
-                {
-                    Path next = rest.findFirst().orElseThrow();
-                    clashes.add(Files.write(target.resolve(next.getFileName().toString()),
-                        "their clash".getBytes(StandardCharsets.UTF_8))); //$NON-NLS-1$
-                }
-            }
-            catch (IOException e)
-            {
-                throw new IllegalStateException(e);
-            }
-        });
-
-        assertFalse("the collision fails the install", installed.ok()); //$NON-NLS-1$
-        Path replaced = movedSoFar.get(0);
-        assertTrue(installed.refusal(), installed.refusal().contains("remove them by hand")); //$NON-NLS-1$
-        assertEquals("the replacement is reported as left in the target", List.of(replaced), installed.leftInTarget()); //$NON-NLS-1$
-        assertEquals("the replacement stays in the target", "theirs, and longer", //$NON-NLS-1$ //$NON-NLS-2$
-            new String(Files.readAllBytes(replaced), StandardCharsets.UTF_8));
-        assertEquals("their clash", new String(Files.readAllBytes(clashes.get(0)), StandardCharsets.UTF_8)); //$NON-NLS-1$
-        assertFalse("the replacement was not pulled into the staging", //$NON-NLS-1$
-            Files.exists(staging.repository().resolve(replaced.getFileName().toString())));
-        assertTrue("the second entry, still the clone's, went back", //$NON-NLS-1$
-            Files.exists(staging.repository().resolve(movedSoFar.get(1).getFileName().toString())));
-    }
-
-    /**
-     * Codex P1 on #944 (round 3): the identity of a moved entry is taken from the SOURCE before the move;
-     * an entry replaced right after it landed is never recorded as the clone's - the install stops there.
-     */
-    @Test
-    public void testAnEntryReplacedRightAfterItsMoveIsNotRecordedAsTheClones() throws Exception
-    {
-        Path parent = freeFolder();
-        Path target = Files.createDirectory(parent.resolve("repo")); //$NON-NLS-1$
-        GitCloneTarget.Checked checked = checked(target);
-        GitCloneTarget.Staging staging = threeEntryClone(checked);
-        List<Path> movedSoFar = new ArrayList<>();
-        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked, moved -> {
-            movedSoFar.add(moved);
-            if (movedSoFar.size() == 1)
-            {
-                try
-                {
-                    replace(moved);
-                }
-                catch (IOException e)
-                {
-                    throw new IllegalStateException(e);
-                }
-            }
-        });
-
-        assertFalse("the install stops at an entry it cannot prove", installed.ok()); //$NON-NLS-1$
-        assertEquals(List.of(movedSoFar.get(0)), installed.leftInTarget());
-        assertEquals("nothing more was moved", 1, movedSoFar.size()); //$NON-NLS-1$
-        assertEquals("theirs, and longer", new String(Files.readAllBytes(movedSoFar.get(0)), StandardCharsets.UTF_8)); //$NON-NLS-1$
-        assertFalse(Files.exists(staging.repository().resolve(movedSoFar.get(0).getFileName().toString())));
-    }
-
-    /**
      * Codex P1 on #944 (round 3): the fresh container is proved a plain directory before anything is
      * written into it - one swapped for a link right after its creation is refused, and nothing is
      * written where the link points.
@@ -366,23 +281,66 @@ public class GitCloneTargetStagingTest
             Files.exists(outside.resolve(GitCloneTarget.Staging.MARKER)));
     }
 
-    /** A staging directory whose clone holds three files. */
-    private static GitCloneTarget.Staging threeEntryClone(GitCloneTarget.Checked checked) throws IOException
+    /**
+     * Codex P1 on #944 (round 4): {@code <staging>/repo} is read without following links right before the
+     * one rename - a link or junction put there after git ended is refused, and nothing it points at moves.
+     */
+    @Test
+    public void testAStagingRepositoryReplacedByALinkIsNotInstalled() throws Exception
     {
+        Path parent = freeFolder();
+        Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
+        Path theirs = Files.write(outside.resolve("theirs.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
         GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
         Files.createDirectories(staging.repository());
-        for (String name : List.of("a.txt", "b.txt", "c.txt")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        {
-            Files.write(staging.repository().resolve(name), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
-        }
-        return staging;
+        swapForLink(staging.repository(), outside);
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertFalse(installed.ok());
+        assertTrue(installed.refusal(), installed.refusal().contains("no longer a plain directory")); //$NON-NLS-1$
+        assertFalse("nothing reached the target", Files.exists(checked.real(), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
+        assertTrue("what the link points at stays where it is", Files.exists(theirs)); //$NON-NLS-1$
     }
 
-    /** What another program does: deletes {@code path} and writes a different file there. */
-    private static void replace(Path path) throws IOException
+    /**
+     * Codex P2 on #944 (round 4): a successful install whose emptied staging directory cannot be removed
+     * is still a success, and names the leftover.
+     */
+    @Test
+    public void testALeftoverStagingAfterASuccessfulInstallIsReported() throws Exception
     {
-        Files.delete(path);
-        Files.write(path, "theirs, and longer".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        staging.containerDelete = container -> {
+            throw new IOException("busy"); //$NON-NLS-1$
+        };
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertTrue("the clone is in place", installed.ok()); //$NON-NLS-1$
+        assertTrue(Files.isDirectory(checked.real().resolve(".git"))); //$NON-NLS-1$
+        assertEquals("the leftover is named", staging.path(), installed.stagingLeftover()); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P2 on #944 (round 4): only "no such file" counts as removed - a container whose presence
+     * cannot be read is not reported as cleaned up.
+     */
+    @Test
+    public void testAnUnreadableStagingIsNotReportedAsRemoved() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked(parent.resolve("repo"))); //$NON-NLS-1$
+        staging.presence = path -> null; // access denied, an unreadable parent: cannot tell
+        assertFalse("cannot tell is not removed", staging.remove()); //$NON-NLS-1$
+        assertTrue("and nothing was deleted", staging.unchanged()); //$NON-NLS-1$
+
+        assertEquals(Boolean.FALSE, GitCloneTarget.presenceOf(parent.resolve("never-there"))); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, GitCloneTarget.presenceOf(staging.path()));
     }
 
     /** Replaces the (empty) directory {@code dir} with a link to {@code to}: a junction on Windows. */

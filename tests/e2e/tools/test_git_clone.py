@@ -171,7 +171,8 @@ def test_clone_refuses_a_project_name_and_a_target_inside_a_work_tree():
 def test_clone_from_a_local_daemon_lands_in_a_new_directory_and_refuses_it_again():
     """git daemon -> git clone -b trunk git://... <new dir> -> the clone is there, named, not imported.
 
-    A second clone into the same, now non-empty, directory is refused before anything runs.
+    A second clone into the same, now existing, directory is refused before anything runs: only a new
+    directory is accepted.
     """
     _requires_enabled_git()
     scratch = _scratch()
@@ -206,7 +207,7 @@ def test_clone_from_a_local_daemon_lands_in_a_new_directory_and_refuses_it_again
 
         again = assert_error(call("git", {"command": "clone %s '%s'" % (url, target)}),
                              "a second clone into the same directory")
-        assert_error_quality(again, names=["exists and is not empty"],
+        assert_error_quality(again, names=["already exists", "remove the empty directory or pick a new path"],
                              ctx="a clone never lands over existing files")
     finally:
         if daemon is not None:

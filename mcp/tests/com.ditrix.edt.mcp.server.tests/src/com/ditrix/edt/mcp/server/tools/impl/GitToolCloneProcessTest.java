@@ -205,7 +205,7 @@ public class GitToolCloneProcessTest
         Thread responder = new Thread(() -> answerUnauthorized(server), "clone-test-401"); //$NON-NLS-1$
         responder.setDaemon(true);
         responder.start();
-        Path target = Files.createDirectory(scratchFolder().resolve("clone")); //$NON-NLS-1$
+        Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
         List<String> argv = new ArrayList<>(List.of("git", "clone", //$NON-NLS-1$ //$NON-NLS-2$
             "http://127.0.0.1:" + server.getLocalPort() + "/repo.git", target.toString())); //$NON-NLS-1$ //$NON-NLS-2$
         long started = System.nanoTime();
@@ -218,12 +218,8 @@ public class GitToolCloneProcessTest
         JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
         assertTrue("git's own message says why: " + result, result.get("output").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
             .toLowerCase(java.util.Locale.ROOT).matches("(?s).*(authentication|username|terminal prompts|401).*")); //$NON-NLS-1$
-        assertTrue("an existing empty target stays", Files.isDirectory(target)); //$NON-NLS-1$
+        assertFalse("the target is never created", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
         assertNoStagingBeside(target);
-        try (Stream<Path> left = Files.list(target))
-        {
-            assertEquals("and is never written to", 0, left.count()); //$NON-NLS-1$
-        }
     }
 
     /**
@@ -374,42 +370,28 @@ public class GitToolCloneProcessTest
     }
 
     /**
-     * Codex P2 on #944 (round 3): an entry an install could not take back out of the target makes the
-     * clone NOT cleaned up, and is named.
+     * Codex P2 on #944 (round 4): a clone that is in place but whose emptied staging directory cannot be
+     * removed is a success with a warning naming the leftover.
      */
     @Test(timeout = 120_000)
-    public void testAnInstallLeftoverInTheTargetIsReportedAsNotCleanedUp() throws Exception
+    public void testALeftoverStagingAfterASuccessfulCloneIsAWarning() throws Exception
     {
         String url = serveRepositoryWithOneCommit();
-        Path target = Files.createDirectory(scratchFolder().resolve("clone")); //$NON-NLS-1$
+        Path target = scratchFolder().resolve("clone"); //$NON-NLS-1$
         GitTool.CloneControl control = new GitTool.CloneControl();
-        List<Path> replaced = new ArrayList<>();
-        control.afterInstallMove = moved -> {
-            if (replaced.isEmpty() && Files.isRegularFile(moved, LinkOption.NOFOLLOW_LINKS))
-            {
-                try
-                {
-                    Files.delete(moved);
-                    Files.write(moved, "another program's file, longer".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
-                    replaced.add(moved);
-                }
-                catch (IOException e)
-                {
-                    throw new IllegalStateException(e);
-                }
-            }
+        control.beforeInstall = staging -> staging.containerDelete = container -> {
+            throw new IOException("busy"); //$NON-NLS-1$
         };
 
         GitTool.CloneRun run = runDirectly(new ArrayList<>(List.of("git", "clone", url, target.toString())), //$NON-NLS-1$ //$NON-NLS-2$
             target, control);
 
-        assertFalse(run.json(), run.success());
-        assertEquals("a regular file of the clone was replaced", 1, replaced.size()); //$NON-NLS-1$
+        assertTrue(run.json(), run.success());
         JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
-        assertFalse("a leftover in the target is not a clean rollback: " + result, //$NON-NLS-1$
-            result.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
-        assertTrue(result.toString(), result.get("error").getAsString().contains(replaced.get(0).toString()));
-        assertTrue("the replacement stays", Files.exists(replaced.get(0))); //$NON-NLS-1$
+        assertTrue("the leftover is a warning: " + result, result.has("warnings")); //$NON-NLS-1$ //$NON-NLS-2$
+        String warnings = result.get("warnings").toString(); //$NON-NLS-1$
+        assertTrue(warnings, warnings.contains(".edt-mcp-clone-")); //$NON-NLS-1$
+        assertTrue(Files.isDirectory(target.resolve(".git"))); //$NON-NLS-1$
     }
 
     // ---- helpers ----

@@ -93,35 +93,6 @@ public class GitToolCloneRollbackTest
     }
 
     /**
-     * Codex P1 on #944: a pre-existing empty target into which another program wrote while the clone ran
-     * keeps that file when the clone fails - the rollback deletes only what this run provably created.
-     */
-    @Test(timeout = 120_000)
-    public void testAFailedCloneKeepsAFileThatAppearedInAnExistingTarget() throws Exception
-    {
-        int closedPort;
-        try (ServerSocket probe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress()))
-        {
-            closedPort = probe.getLocalPort();
-        }
-        Path target = Files.createDirectory(scratchFolder().resolve("clone")); //$NON-NLS-1$
-        List<String> argv = GitTool.parseCommand("clone git://127.0.0.1:" + closedPort + "/repo.git '" + target + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        GitCloneTarget.Checked checked = GitCloneTarget.check(target, List.of());
-        assertTrue(String.valueOf(checked.refusal()), checked.ok());
-        // Written after the last check, as another program would.
-        Path theirs = Files.write(target.resolve("theirs.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-
-        JsonObject result = JsonParser.parseString(new GitTool(jobs).startClone(argv,
-            GitTool.checkCloneGrammar(argv.subList(2, argv.size())), checked, TimeUnit.MINUTES.toMillis(2), 60))
-            .getAsJsonObject();
-
-        assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertTrue("a file the clone did not create is kept", Files.exists(theirs)); //$NON-NLS-1$
-        assertEquals("theirs", new String(Files.readAllBytes(theirs), StandardCharsets.UTF_8)); //$NON-NLS-1$
-        assertTrue(Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS));
-    }
-
-    /**
      * Codex P2 on #944: cancelling a running clone publishes its rollback report as the job's result, so
      * get_job_status says what was removed (or what is left to remove) instead of a bare "cancelled".
      */

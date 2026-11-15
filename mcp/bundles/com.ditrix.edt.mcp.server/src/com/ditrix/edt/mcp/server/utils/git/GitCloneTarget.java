@@ -38,7 +38,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * <ul>
  * <li>the target's PARENT exists - this tool creates nothing above it, only its staging directory beside
  * the target and, at the end, the target itself;</li>
- * <li>the target is new, or an existing EMPTY directory - a clone never lands over files;</li>
+ * <li>the target is NEW - nothing is at that path yet, not even an empty directory: the clone arrives
+ * there in one atomic rename ({@link #install}), and nothing of the target's is ever merged or rolled back;</li>
  * <li>it is not inside, and does not contain, the folder of an EDT workspace project;</li>
  * <li>it is not inside a git work tree, judged by the same walk {@code git init} uses
  * ({@link GitRepositoryResolver#enclosingRepository}): a clone there nests one repository inside
@@ -100,20 +101,18 @@ public final class GitCloneTarget
     {
         private final Path target;
         private final Path real;
-        private final boolean existed;
         private final String refusal;
 
-        private Checked(Path target, Path real, boolean existed, String refusal)
+        private Checked(Path target, Path real, String refusal)
         {
             this.target = target;
             this.real = real;
-            this.existed = existed;
             this.refusal = refusal;
         }
 
         private static Checked refused(String refusal)
         {
-            return new Checked(null, null, false, refusal);
+            return new Checked(null, null, refusal);
         }
 
         /** @return {@code true} when the clone may go there */
@@ -138,12 +137,6 @@ public final class GitCloneTarget
         public Path real()
         {
             return real;
-        }
-
-        /** @return {@code true} when the target already existed (empty); {@code false} when it is new */
-        public boolean existed()
-        {
-            return existed;
         }
     }
 
@@ -188,19 +181,15 @@ public final class GitCloneTarget
                 + "exist. This tool creates nothing above the target: create '" + parent //$NON-NLS-1$
                 + "' first, or name a target whose parent exists."); //$NON-NLS-1$
         }
-        boolean existed = Files.exists(spelled, LinkOption.NOFOLLOW_LINKS);
-        if (existed)
+        String occupied = existingTargetRefusal(spelled);
+        if (occupied != null)
         {
-            String occupied = occupiedRefusal(spelled);
-            if (occupied != null)
-            {
-                return Checked.refused(occupied);
-            }
+            return Checked.refused(occupied);
         }
         Path real;
         try
         {
-            real = existed ? spelled.toRealPath() : parent.toRealPath().resolve(spelled.getFileName().toString());
+            real = parent.toRealPath().resolve(spelled.getFileName().toString());
         }
         catch (IOException | RuntimeException e)
         {
@@ -215,7 +204,7 @@ public final class GitCloneTarget
         {
             return Checked.refused(projectRefusal);
         }
-        File start = existed ? spelled.toFile() : parent.toFile();
+        File start = parent.toFile();
         GitRepositoryResolver.Enclosing enclosing =
             GitRepositoryResolver.enclosingRepository(start, "git clone", "the clone target"); //$NON-NLS-1$ //$NON-NLS-2$
         switch (enclosing.kind())
@@ -236,39 +225,34 @@ public final class GitCloneTarget
                     + "outer one would see it as untracked files), so it is refused. Name a directory " //$NON-NLS-1$
                     + "outside every git work tree."); //$NON-NLS-1$
             default:
-                return new Checked(spelled, real, existed, null);
+                return new Checked(spelled, real, null);
         }
     }
 
-    /** Why an existing {@code target} cannot take a clone, or {@code null} when it is an empty directory. */
-    private static String occupiedRefusal(Path target)
+    /**
+     * Why {@code target} cannot be cloned into because something is already there, or {@code null}
+     * when nothing is. Only a NEW directory is accepted - an existing one, even an empty one, is
+     * refused: the clone is then installed with ONE atomic rename, and nothing of the target's has to be
+     * judged, merged or rolled back.
+     */
+    private static String existingTargetRefusal(Path target)
     {
-        if (Files.isSymbolicLink(target) && !Files.exists(target))
+        try
         {
-            return "The clone target '" + target + "' is a link to something that does not exist. Name a " //$NON-NLS-1$ //$NON-NLS-2$
-                + "new directory, or an existing empty one."; //$NON-NLS-1$
+            Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         }
-        if (!Files.isDirectory(target))
+        catch (java.nio.file.NoSuchFileException e)
         {
-            return "The clone target '" + target + "' exists and is not a directory. 'git clone' needs a new " //$NON-NLS-1$ //$NON-NLS-2$
-                + "directory or an existing empty one: name another path."; //$NON-NLS-1$
-        }
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(target))
-        {
-            if (entries.iterator().hasNext())
-            {
-                return "The clone target '" + target + "' exists and is not empty. This tool never clones " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "over existing files: name a new directory, or an existing empty one."; //$NON-NLS-1$
-            }
             return null;
         }
         catch (IOException | RuntimeException e)
         {
-            Activator.logError(GitFailureLog.typesOnly(
-                "git clone: listing the existing clone target failed", e), null); //$NON-NLS-1$
-            return "The existing clone target '" + target + "' could not be read, so this tool cannot tell " //$NON-NLS-1$ //$NON-NLS-2$
-                + "whether it is empty. The clone is refused: check the directory in a terminal."; //$NON-NLS-1$
+            Activator.logError(GitFailureLog.typesOnly("git clone: reading the clone target failed", e), null); //$NON-NLS-1$
+            return "The clone target '" + target + "' could not be read, so this tool cannot tell whether " //$NON-NLS-1$ //$NON-NLS-2$
+                + "something is already there. The clone is refused: check the path in a terminal."; //$NON-NLS-1$
         }
+        return "The clone target '" + target + "' already exists. This tool clones only into a NEW directory, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "which it creates: remove the empty directory or pick a new path."; //$NON-NLS-1$
     }
 
     /** Why {@code target} collides with a workspace project's folder, or {@code null}. */
@@ -408,9 +392,8 @@ public final class GitCloneTarget
      * git clones into {@code <container>/repo}, where the container is a fresh, uniquely named sibling of
      * the target that THIS run creates - never into the target itself. Everything a failed, cancelled or
      * timed-out clone left behind is then inside a directory that is provably this run's own, so taking
-     * it back never touches the target - in particular not an existing empty target into which another
-     * program may have written meanwhile. Only a clone that succeeded is moved into place
-     * ({@link #install}).
+     * it back never touches the target. Only a clone that succeeded is moved into place, with one atomic
+     * rename ({@link #install}).
      * <p>
      * The container's identity is fixed when it is created: a marker file holding a random token, and -
      * where the platform has one (POSIX) - its file key, both read WITHOUT following links.
@@ -442,7 +425,10 @@ public final class GitCloneTarget
         }
 
         /** Test seam: how the emptied container itself is deleted. */
-        volatile ContainerDelete containerDelete = Files::deleteIfExists;
+        public volatile ContainerDelete containerDelete = Files::deleteIfExists;
+
+        /** Test seam: how the container's presence is read (without following links). */
+        volatile Presence presence = GitCloneTarget::presenceOf;
 
         /** @return the container directory this run created (a real path) */
         public Path path()
@@ -499,7 +485,12 @@ public final class GitCloneTarget
         {
             for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
             {
-                if (!Files.exists(container, LinkOption.NOFOLLOW_LINKS))
+                Boolean present = presence.of(container);
+                if (present == null)
+                {
+                    return false; // cannot tell: not "removed"
+                }
+                if (!present.booleanValue())
                 {
                     return true;
                 }
@@ -523,7 +514,7 @@ public final class GitCloneTarget
                     break;
                 }
             }
-            return !Files.exists(container, LinkOption.NOFOLLOW_LINKS);
+            return Boolean.FALSE.equals(presence.of(container));
         }
     }
 
@@ -669,10 +660,46 @@ public final class GitCloneTarget
         }
     }
 
+    /** How a path's presence is read; a test passes one that fails. */
+    @FunctionalInterface
+    interface Presence
+    {
+        /** @return {@code true} present, {@code false} gone, {@code null} when it cannot be told */
+        Boolean of(Path path);
+    }
+
+    /**
+     * Whether {@code path} is there, read without following links: {@code false} only on
+     * {@link java.nio.file.NoSuchFileException}; any other failure (access denied, an unreadable parent)
+     * is {@code null}, "cannot tell" - which a cleanup must never read as "already removed", unlike
+     * {@link Files#exists}.
+     */
+    static Boolean presenceOf(Path path)
+    {
+        try
+        {
+            Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return Boolean.TRUE;
+        }
+        catch (java.nio.file.NoSuchFileException e)
+        {
+            return Boolean.FALSE;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return null;
+        }
+    }
+
     /** How the emptied container is deleted; a test passes one that fails. */
     @FunctionalInterface
-    interface ContainerDelete
+    public interface ContainerDelete
     {
+        /**
+         * @param container the emptied container
+         * @return whether it was there
+         * @throws IOException when it cannot be deleted
+         */
         boolean delete(Path container) throws IOException;
     }
 
@@ -716,54 +743,86 @@ public final class GitCloneTarget
         }
     }
     /**
-     * Moves a successful clone from its staging directory to the target, without ever replacing
-     * anything:
-     * <ul>
-     * <li>a NEW target - the clone ({@code <container>/repo}) is renamed to it in one step; that fails if a
-     * directory with content appeared there meanwhile (an empty one is replaced on POSIX, which loses
-     * nothing);</li>
-     * <li>an existing EMPTY target - its own directory is kept, and the clone's top-level entries are
-     * moved into it one by one, never over an entry of the same name; on a collision the entries
-     * already moved go back, and the target is left as it was.</li>
-     * </ul>
-     * Declared residual: on POSIX a non-replacing move checks for the name and then renames, so a file
-     * of the SAME name created in between is overwritten; and the target is checked to be a plain
-     * directory just before the moves, not during them.
+     * Moves a successful clone into its NEW target with one atomic rename of {@code <container>/repo},
+     * never replacing anything: the container must still be this run's ({@link Staging#unchanged}) and
+     * {@code repo} a plain directory (not a link or junction swapped in after git exited), both read
+     * without following links just before the rename. The emptied container is removed afterwards; when
+     * that fails the clone is still in place and the leftover is reported, not hidden.
+     * <p>
+     * Declared residual: on POSIX an atomic rename replaces an EMPTY directory created at the target in
+     * the window since the check (which loses nothing); and the checks are made, then the rename runs.
      *
      * @param staging the staging directory holding the clone
      * @param checked the checked target
-     * @return {@code null} when the clone is in place, else why not (the clone is still in staging)
+     * @return the outcome
      */
     public static Installed install(Staging staging, Checked checked)
     {
-        return install(staging, checked, moved -> { });
+        Path target = checked.real();
+        if (!staging.unchanged())
+        {
+            return Installed.refused("The staging directory '" + staging.path() + "' is no longer the one this " //$NON-NLS-1$ //$NON-NLS-2$
+                + "clone created, so the clone was not moved to '" + target + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        try
+        {
+            BasicFileAttributes repo = Files.readAttributes(staging.repository(), BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS);
+            if (!isPlainDirectory(repo))
+            {
+                return Installed.refused("The cloned repository '" + staging.repository() + "' is no longer a plain " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "directory (a link or junction was put there after git ended), so nothing was moved to '" //$NON-NLS-1$
+                    + target + "'."); //$NON-NLS-1$
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return Installed.refused("The cloned repository '" + staging.repository() + "' could not be read (" //$NON-NLS-1$ //$NON-NLS-2$
+                + e.getClass().getSimpleName() + "), so nothing was moved to '" + target + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        try
+        {
+            Files.move(staging.repository(), target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return Installed.refused("The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "): something was created there while it ran."); //$NON-NLS-1$
+        }
+        if (!removeEmptyContainer(staging))
+        {
+            Activator.logWarning("git clone: cloned to " + target + ", but its emptied staging directory " //$NON-NLS-1$ //$NON-NLS-2$
+                + staging.path() + " could not be removed"); //$NON-NLS-1$
+            return Installed.doneWithLeftover(staging.path());
+        }
+        return Installed.done();
     }
 
-    /** The outcome of {@link #install}: done, or why not and what was left in the target. */
+    /** The outcome of {@link #install}: done (perhaps with a staging leftover), or why not. */
     public static final class Installed
     {
         private final String refusal;
-        private final List<Path> leftInTarget;
+        private final Path stagingLeftover;
 
-        private Installed(String refusal, List<Path> leftInTarget)
+        private Installed(String refusal, Path stagingLeftover)
         {
             this.refusal = refusal;
-            this.leftInTarget = List.copyOf(leftInTarget);
+            this.stagingLeftover = stagingLeftover;
         }
 
         static Installed done()
         {
-            return new Installed(null, List.of());
+            return new Installed(null, null);
+        }
+
+        static Installed doneWithLeftover(Path stagingLeftover)
+        {
+            return new Installed(null, stagingLeftover);
         }
 
         static Installed refused(String refusal)
         {
-            return new Installed(refusal, List.of());
-        }
-
-        static Installed refused(String refusal, List<Path> leftInTarget)
-        {
-            return new Installed(refusal, leftInTarget);
+            return new Installed(refusal, null);
         }
 
         /** @return {@code true} when the clone is in place */
@@ -778,178 +837,11 @@ public final class GitCloneTarget
             return refusal;
         }
 
-        /** @return entries of the clone (or not provably not) still in the target after a failed install */
-        public List<Path> leftInTarget()
+        /** @return the emptied staging directory left behind after a successful install, or {@code null} */
+        public Path stagingLeftover()
         {
-            return leftInTarget;
+            return stagingLeftover;
         }
-    }
-
-    /** One entry moved into an existing target, and what it was right after the move. */
-    private static final class Moved
-    {
-        final Path destination;
-        final EntryIdentity identity;
-
-        Moved(Path destination, EntryIdentity identity)
-        {
-            this.destination = destination;
-            this.identity = identity;
-        }
-    }
-
-    /**
-     * What an entry is, read without following links: its kind, file key (where the platform has one),
-     * size and modification time. Enough to tell an entry this run moved from one another program put
-     * in its place.
-     */
-    static final class EntryIdentity
-    {
-        private final boolean directory;
-        private final boolean regular;
-        private final boolean link;
-        private final boolean other;
-        private final Object fileKey;
-        private final long size;
-        private final java.nio.file.attribute.FileTime modified;
-
-        private EntryIdentity(BasicFileAttributes attrs)
-        {
-            directory = attrs.isDirectory();
-            regular = attrs.isRegularFile();
-            link = attrs.isSymbolicLink();
-            other = attrs.isOther();
-            fileKey = attrs.fileKey();
-            size = attrs.size();
-            modified = attrs.lastModifiedTime();
-        }
-
-        static EntryIdentity of(Path path) throws IOException
-        {
-            return new EntryIdentity(Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
-        }
-
-        /** @return {@code true} when {@code path} is still this entry */
-        boolean matches(Path path)
-        {
-            try
-            {
-                EntryIdentity now = of(path);
-                boolean sameKind = directory == now.directory && regular == now.regular && link == now.link
-                    && other == now.other;
-                if (fileKey != null)
-                {
-                    // A file key (POSIX: device and inode) survives a rename and names the entry itself; a
-                    // moved directory's own times may change with its '..' entry, so they are not compared.
-                    return sameKind && fileKey.equals(now.fileKey) && (directory || size == now.size);
-                }
-                return sameKind && now.fileKey == null && size == now.size && modified.equals(now.modified);
-            }
-            catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably the moved entry
-            {
-                return false;
-            }
-        }
-    }
-
-    /** {@link #install(Staging, Checked)} with a seam run after each entry moved into an existing target. */
-    public static Installed install(Staging staging, Checked checked, java.util.function.Consumer<Path> afterMove)
-    {
-        Path target = checked.real();
-        if (!staging.unchanged())
-        {
-            return Installed.refused("The staging directory '" + staging.path() + "' is no longer the one this clone created, " //$NON-NLS-1$ //$NON-NLS-2$
-                + "so the clone was not moved to '" + target + "'."); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (!checked.existed())
-        {
-            try
-            {
-                Files.move(staging.repository(), target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-                removeEmptyContainer(staging);
-                return Installed.done();
-            }
-            catch (IOException | RuntimeException e)
-            {
-                return Installed.refused("The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
-                    + "): something was created there while it ran."); //$NON-NLS-1$
-            }
-        }
-        try
-        {
-            BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            if (!isPlainDirectory(attrs))
-            {
-                return Installed.refused("The clone target '" + target + "' is no longer a plain directory (it was replaced while " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "the clone ran), so the clone was not moved into it."); //$NON-NLS-1$
-            }
-        }
-        catch (IOException | RuntimeException e)
-        {
-            return Installed.refused("The clone target '" + target + "' could not be read any more, so the clone was not moved " //$NON-NLS-1$ //$NON-NLS-2$
-                + "into it."); //$NON-NLS-1$
-        }
-        List<Moved> moved = new ArrayList<>();
-        List<Path> unproved = new ArrayList<>();
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(staging.repository()))
-        {
-            for (Path entry : entries)
-            {
-                Path destination = target.resolve(entry.getFileName().toString());
-                EntryIdentity before = EntryIdentity.of(entry); // what this run is about to move
-                Files.move(entry, destination); // no REPLACE_EXISTING: never over an entry of that name
-                afterMove.accept(destination);
-                if (!before.matches(destination))
-                {
-                    // Not provably what was moved: not recorded as the clone's, and the install stops.
-                    unproved.add(destination);
-                    throw new IOException("an entry moved into the target was replaced right after the move"); //$NON-NLS-1$
-                }
-                moved.add(new Moved(destination, before));
-            }
-        }
-        catch (IOException | RuntimeException e)
-        {
-            List<Path> leftInTarget = new ArrayList<>(unproved);
-            for (Moved back : moved)
-            {
-                // Only an entry that is provably still the one moved goes back; another program's
-                // replacement stays where it is, named for recovery by hand.
-                if (!back.identity.matches(back.destination))
-                {
-                    leftInTarget.add(back.destination);
-                    continue;
-                }
-                try
-                {
-                    Files.move(back.destination, staging.repository().resolve(back.destination.getFileName().toString()));
-                }
-                catch (IOException | RuntimeException again) // NOSONAR reported through the message below
-                {
-                    leftInTarget.add(back.destination);
-                }
-            }
-            String why = "The clone could not be moved into '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
-                + "): something was written there while it ran."; //$NON-NLS-1$
-            if (leftInTarget.isEmpty())
-            {
-                return Installed.refused(why + " The target was left as it was.", leftInTarget); //$NON-NLS-1$
-            }
-            return Installed.refused(why + " These entries could not be taken back, because they could not be " //$NON-NLS-1$
-                + "moved or are not provably the ones this clone put there - check and remove them by hand: " //$NON-NLS-1$
-                + String.join(", ", leftInTarget.stream().map(Path::toString).toArray(String[]::new)) + ".", //$NON-NLS-1$ //$NON-NLS-2$
-                leftInTarget);
-        }
-        try
-        {
-            Files.delete(staging.repository());
-        }
-        catch (IOException | RuntimeException e) // NOSONAR an empty leftover is harmless; logged
-        {
-            Activator.logWarning("git clone: the emptied staging directory " + staging.repository() + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        removeEmptyContainer(staging);
-        return Installed.done();
     }
 
     /**
