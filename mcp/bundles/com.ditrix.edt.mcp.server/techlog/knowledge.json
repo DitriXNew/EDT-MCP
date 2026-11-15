@@ -1,13 +1,12 @@
 {
   "events": {
     "CALL": {
-      "meaning": "Incoming remote call at the receiving component.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Context, Func, CallID, ClientID, t:clientID, SessionID, t:connectID, Usr; CpuTime in us; Memory/MemoryPeak in bytes; InBytes/OutBytes are disk I/O.",
-      "badSigns": "Large duration, CPU, memory peak or many repetitions.",
-      "traps": "Nested calls overlap: do not sum them as independent work. A CALL is not necessarily one user action.",
-      "fixes": "Locate the expensive component and repeat the same scenario.",
+      "meaning": "Incoming remote call recorded by the receiving component; its elapsed interval includes work delegated to other components.",
+      "read": "Use Context and Func to locate BSL, and CallID with client identities to find the caller. duration and CpuTime are microseconds; Memory/MemoryPeak and disk InBytes/OutBytes are bytes. Nested SDBL/DB events can explain part of this interval.",
+      "badSigns": "A call exceeds the operation's measured budget, repeats per processed row, or has a MemoryPeak that grows with the result set.",
+      "traps": "One CALL is not necessarily one user action. Summing nested calls or adding their DB durations double counts elapsed work.",
+      "fixes": "Use the scenario profile to separate SQL, waits and exchanges; batch repeated server work and reduce form data when that component dominates.",
+      "cost": "Unfiltered CALL records scale with remote-call frequency; Context adds stack text to each record.",
       "sources": [
         {
           "tag": "[doc]",
@@ -28,18 +27,20 @@
         {
           "tag": "[doc]",
           "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "SCALL": {
-      "meaning": "Outgoing remote call; the destination need not be a DBMS.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CallID, ClientID, DstClientID, IName, MName, Interface, Method, Context.",
-      "badSigns": "Long receiver wait or many short calls.",
-      "traps": "[unverified] SCALL minus CALL duration is not proven pure network time; pair identities and boundaries first.",
-      "fixes": "Batch repeated calls; inspect the receiver.",
+      "meaning": "Outgoing remote call recorded by the component making the call.",
+      "read": "Match CallID, ClientID/DstClientID and IName/MName to a receiving CALL within compatible intervals. duration is microseconds; inspect the receiver's nested work before attributing the delay.",
+      "badSigns": "Repeated calls to the same MName during one action, or a long SCALL whose receiver also runs slowly.",
+      "traps": "Starkov's pairing method needs both sides. [unverified] Subtracting CALL from SCALL does not isolate pure network time without validating the pair and its boundaries.",
+      "fixes": "Combine per-row requests into one server call; investigate the receiving CALL and measure exchange time separately.",
+      "cost": "Busy clients can emit many short SCALL records; duration filtering hides call-count problems.",
       "sources": [
         {
           "tag": "[doc]",
@@ -52,18 +53,20 @@
         {
           "tag": "[article: Dmitry Chesnokov]",
           "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "SDBL": {
-      "meaning": "Platform data-model operation, including queries and transaction boundaries.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Func, Sdbl (platform data-model query text), Context; BeginTransaction, CommitTransaction, RollbackTransaction.",
-      "badSigns": "Large cumulative duration or repetitions.",
-      "traps": "HoldConnection and transaction events are not individual SQL statements. SDBL and child DB durations overlap.",
-      "fixes": "Inspect SQL, transaction scope and unexplained platform time.",
+      "meaning": "Operation against the platform data model, including queries and transaction actions.",
+      "read": "Read Func, Sdbl, Context and t:connectID. BeginTransaction, CommitTransaction and RollbackTransaction delimit transactions; inspect nested DB events for the physical SQL. Record duration is microseconds.",
+      "badSigns": "Repeated Sdbl text in a loop, or long transaction intervals with TLOCK waiters; large SDBL intervals unexplained by captured DB work need further profiling.",
+      "traps": "HoldConnection and transaction markers are not SQL statements. Adding SDBL duration to nested DB duration counts the same work twice.",
+      "fixes": "Replace repeated model queries with a batch; move permissible computation outside transactions and inspect the corresponding DB plan.",
+      "cost": "SDBL includes frequent data-model operations and transaction markers; all-properties capture can produce large volumes.",
       "sources": [
         {
           "tag": "[doc]",
@@ -84,21 +87,20 @@
         {
           "tag": "[article: Vladimir Badanov]",
           "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "DBMSSQL": {
-      "meaning": "Microsoft SQL Server SQL execution.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "plansql (planSQLText only)",
-        "dbmslocks (lock annotations only)"
-      ],
-      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
-      "badSigns": "High count, total, max duration; expensive plan or waits.",
-      "traps": "RowsAffected=-1 is not a negative row count. Decode physical names using the actual database structure. Duration alone does not distinguish CPU, I/O and blocking.",
-      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "meaning": "Execution of a SQL statement by Microsoft SQL Server on behalf of 1C.",
+      "read": "Read Sql and parameters with Context; dbpid identifies the DBMS connection. Compare duration in microseconds, returned Rows and RowsAffected. Optional planSQLText explains access; lka/lkp annotate observed blocking.",
+      "badSigns": "A SQL fingerprint dominates cumulative elapsed time, or a slow statement has confirmed blocking or excessive reads in its plan.",
+      "traps": "Published Infostart examples contain RowsAffected=-1; do not interpret it as negative updates. Physical SQL table names require the investigated infobase's database structure; duration alone does not separate CPU, I/O and waits.",
+      "fixes": "Find the BSL query, inspect actual data, statistics, plan and waits, then adjust predicates, indexes or transaction scope and re-measure.",
+      "cost": "SQL text and parameters make frequent DBMSSQL records large; plans and DBMS lock polling add instrumentation cost even when output is filtered.",
       "sources": [
         {
           "tag": "[doc]",
@@ -123,21 +125,20 @@
         {
           "tag": "[article: Microsoft]",
           "url": "https://learn.microsoft.com/en-us/troubleshoot/sql/performance/resolve-blocking-problems-caused-lock-escalation"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "DBPOSTGRS": {
-      "meaning": "PostgreSQL SQL execution.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "plansql (planSQLText only)",
-        "dbmslocks (lock annotations only)"
-      ],
-      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
-      "badSigns": "High count, total, max duration; expensive plan or waits.",
-      "traps": "Plan cost is not seconds. actual time is ms; rows and time are per loop. Estimated plans are not actual execution. Duration alone does not distinguish CPU, I/O and blocking.",
-      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "meaning": "Execution of SQL by PostgreSQL on behalf of the platform.",
+      "read": "Use Sql, Context and dbpid to locate the BSL operation and DBMS connection. duration is microseconds. With optional planSQLText, compare estimated and actual rows and account for loops; actual time is milliseconds.",
+      "badSigns": "Repeated SQL dominates the operation, actual row counts diverge from estimates, or a measured plan spends most time scanning or joining excess data.",
+      "traps": "PostgreSQL cost is an estimate in planner units, not seconds. EXPLAIN ANALYZE executes SQL; platform connection settings affect reproducibility.",
+      "fixes": "Check waits and statistics, push selective restrictions into the 1C query, and validate suitable indexes against the measured plan on comparable data.",
+      "cost": "DBPOSTGRS can dominate log volume. IBS's five-second example still produced hundreds of MB; use plans on test/development per the official methodology.",
       "sources": [
         {
           "tag": "[doc]",
@@ -150,21 +151,20 @@
         {
           "tag": "[article: PostgreSQL Global Development Group]",
           "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "DBV8DBENG": {
-      "meaning": "File database engine operation.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "plansql (planSQLText only)",
-        "dbmslocks (lock annotations only)"
-      ],
-      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
-      "badSigns": "High count, total, max duration; expensive plan or waits.",
-      "traps": "Use file-engine plan notation (FULL SCAN, USING INDEX, NESTED LOOP), not PostgreSQL/SQL Server rules. Duration alone does not distinguish CPU, I/O and blocking.",
-      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "meaning": "Execution of a statement by the file database engine.",
+      "read": "Inspect Func, Sql and Context in the process serving the file infobase. duration is microseconds. Optional planSQLText uses file-engine operators such as FULL SCAN, USING INDEX and NESTED LOOP.",
+      "badSigns": "Repeated long file-engine operations; a FULL SCAN of a large source or nested scans are candidates when measured data volume explains the cost.",
+      "traps": "A scan operator alone does not prove a defect. File-engine plans have their own notation; SQL Server/PostgreSQL plan rules do not directly apply.",
+      "fixes": "Restrict the source data in the 1C query, inspect the file-engine plan and compare query/index alternatives over the whole operation.",
+      "cost": "Capturing every file-engine statement can be voluminous, especially with Sql, Context and plans.",
       "sources": [
         {
           "tag": "[doc]",
@@ -173,18 +173,20 @@
         {
           "tag": "[article: Infobot / Infostart]",
           "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "TLOCK": {
-      "meaning": "Managed transactional lock acquisition, including wait time.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Locks, Regions, WaitConnections, Context, t:connectID.",
-      "badSigns": "Nonempty WaitConnections or repeated long waits.",
-      "traps": "Acquisition duration is not holding lifetime; a region name alone does not prove a whole-register lock. dbmslocks is not required.",
-      "fixes": "Collect short acquisitions and transaction boundaries; check resource intersections and access order.",
+      "meaning": "Managed transactional lock acquisition; elapsed time includes acquisition waits, not the entire time the lock remains held.",
+      "read": "Read Locks for resource values and modes, Regions for namespaces, and WaitConnections for conflicting t:connectID values. Find each participant's SDBL transaction boundaries; duration is microseconds.",
+      "badSigns": "WaitConnections is non-empty, especially when unrelated business keys collide or cumulative acquisition time dominates posting.",
+      "traps": "A short acquisition may hold a resource until a much later commit. Regions alone does not prove a whole-register lock; no WaitConnections is not evidence of a wait.",
+      "fixes": "Capture all acquisitions and transaction boundaries; narrow lock dimensions, shorten transactions and use a consistent resource order after verifying intersections.",
+      "cost": "All TLOCK acquisitions can be frequent; keep them during a short locks capture because a duration cutoff can remove the holder.",
       "sources": [
         {
           "tag": "[doc]",
@@ -198,17 +200,15 @@
           "tag": "[article: Dmitry Chesnokov]",
           "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "TTIMEOUT": {
-      "meaning": "Managed lock wait timeout.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "WaitConnections, t:connectID, SessionID, Context.",
-      "badSigns": "Any occurrence deserves investigation.",
-      "traps": "Duration may be zero; use the associated TLOCK wait. Victim context does not identify the holder.",
-      "fixes": "Collect the locks profile on all participants; shorten the proven conflicting transaction.",
+      "meaning": "The maximum wait for a transactional lock was exceeded.",
+      "read": "Locate the victim with t:connectID, SessionID and Context; follow WaitConnections into TLOCK and SDBL on all participants. Obtain wait duration from the matching TLOCK, in microseconds.",
+      "badSigns": "A TTIMEOUT is already a failed lock wait; repeated instances in the same posting context indicate recurring contention.",
+      "traps": "TTIMEOUT can have zero duration. Its Context identifies the victim, not the transaction that originally acquired the resource.",
+      "fixes": "Use the locks profile to find the holder; shorten its transaction, reduce the protected resource scope and re-test concurrent posting.",
+      "cost": "Timeout records are incident-oriented; the acquisition and transaction evidence needed to explain them costs much more than this event alone.",
       "sources": [
         {
           "tag": "[doc]",
@@ -222,17 +222,15 @@
           "tag": "[article: Dmitry Chesnokov]",
           "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "TDEADLOCK": {
-      "meaning": "Managed-mode deadlock detected.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "DeadlockConnectionIntersections, Context; correlate TLOCK and transactions.",
-      "badSigns": "Any occurrence; repeated contexts suggest a reproducible access-order issue.",
-      "traps": "Not a universal DBMS deadlock event; zero duration is not harmless.",
-      "fixes": "Align resource order and modes; reproduce concurrently and check timeouts and waits too.",
+      "meaning": "Detection of a deadlock in managed locking mode.",
+      "read": "Read DeadlockConnectionIntersections for participant pairs and intersecting resources. Recover their TLOCK acquisitions and SDBL transaction intervals, including short operations.",
+      "badSigns": "Any TDEADLOCK warrants cycle reconstruction; repeated participant contexts point to a reproducible access-order conflict.",
+      "traps": "Zero duration does not imply zero impact. This event does not represent every DBMS deadlock; DBMS cycles require the DBMS deadlock report.",
+      "fixes": "Align resource acquisition order and compatible lock modes in all participating BSL paths; repeat a parallel reproduction and check waits as well as deadlocks.",
+      "cost": "Deadlock incidents themselves are sparse; full unfiltered participant histories increase capture volume.",
       "sources": [
         {
           "tag": "[doc]",
@@ -250,17 +248,15 @@
           "tag": "[article: Dmitry Chesnokov]",
           "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "EXCP": {
-      "meaning": "Exception in platform, application, network or DBMS.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Exception, Descr, Context, OSException, DumpFile; retain the whole cause chain.",
-      "badSigns": "New repeated errors near failed operations or process loss.",
-      "traps": "One business failure can produce multiple component events. [article: Infobot / Infostart] EXCP outside expected filters was observed; [unverified] not a universal contract.",
-      "fixes": "Fix the evidenced defect; preserve version, reproduction and dump for unexplained crashes.",
+      "meaning": "Exception reported by the platform, application, network or DBMS; some exceptions accompany abnormal process termination.",
+      "read": "Preserve the entire Descr cause chain, Exception, OSException, Context and DumpFile when present. Use process/session and time to correlate PROC and EXCPCNTX.",
+      "badSigns": "A new recurring Descr, a failed user operation, or EXCP beside an abnormal PROC termination and dump.",
+      "traps": "Multiple components can log the same failure. Normalized Descr groups similar diagnostics but is not an incident count or a substitute for the full original.",
+      "fixes": "Fix the specific BSL/query/permission or environmental error identified by the cause chain; preserve exact platform version and dump for unexplained crashes.",
+      "cost": "Normally relatively small and infrequent according to the platform docs; repeated exceptions and long stacks can create an error storm.",
       "sources": [
         {
           "tag": "[doc]",
@@ -278,35 +274,29 @@
           "tag": "[article: Andrey Burmistrov]",
           "url": "https://infostart.ru/1c/articles/2718175/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "EXCPCNTX": {
-      "meaning": "Snapshot of operations started but unfinished at an abnormal condition.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "SrcName is the original operation; events are emitted from deepest nesting outward.",
-      "badSigns": "Read with exception and dump.",
-      "traps": "A filter alone does not generate snapshots. [unverified] Exclude snapshots from successful operation totals to avoid double counting.",
-      "fixes": "Inspect the original exception and interrupted stack.",
+      "meaning": "Snapshot of operations that had started but had not finished when an abnormal condition occurred.",
+      "read": "SrcName names the original event type. Read the emitted sequence from deepest nesting outward, together with EXCP, process identity and any dump.",
+      "badSigns": "Unfinished SQL or CALL frames accompanying a crash localize the interrupted operation; inspect the associated exception to classify failure.",
+      "traps": "These are interrupted-operation snapshots. [unverified] Counting them again as completed SQL/CALL work would distort throughput and duration totals.",
+      "fixes": "Investigate the deepest unfinished operation with the original exception; retain the stack and dump when escalating a platform failure.",
+      "cost": "Emission is tied to abnormal conditions rather than every successful call; a deep interrupted stack yields several records.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "QERR": {
-      "meaning": "Query compilation, row/field access restriction or optional external-source NULL validation error.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "query checkActualNullable=true (special NULL check only)"
-      ],
-      "keyProperties": "Descr, Query, Context.",
-      "badSigns": "Repeated errors at the same application location or permissions.",
-      "traps": "Query is not DBMS SQL. Additional NULL validation can substantially slow queries.",
-      "fixes": "Inspect query syntax, permissions and data; query checkActualNullable=true enables special NULL checking.",
+      "meaning": "Query compilation or row/field access restriction error; also used for optional external-source NULL validation failures.",
+      "read": "Read Descr, platform-language Query and Context under the failing user's permissions. Special NULL validation requires query checkActualNullable=true.",
+      "badSigns": "The same Query fails repeatedly, only particular roles fail, or Descr reports a value inconsistent with external-source nullability.",
+      "traps": "QERR diagnoses a query error, not a slow query. Enabling checkActualNullable can substantially slow query execution.",
+      "fixes": "Correct query syntax or intended access rights; for external data reconcile nullable metadata and actual values rather than hiding the diagnostic.",
+      "cost": "Ordinary QERR records follow failures; optional NULL checking adds execution overhead beyond the number of records written.",
       "sources": [
         {
           "tag": "[doc]",
@@ -316,17 +306,15 @@
           "tag": "[article: Infobot / Infostart]",
           "url": "https://infostart.ru/1c/articles/1195695/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "PROC": {
-      "meaning": "Process lifecycle and availability state.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "process, PID, Func and lifecycle description.",
-      "badSigns": "Explicit abnormal termination; unexplained frequent turnover needs corroboration.",
-      "traps": "Normal starts/stops and configured restarts are not crashes. Infrastructure-specific process-count advice is not a universal alert.",
-      "fixes": "Correlate exceptions, monitoring, version and process dumps.",
+      "meaning": "Lifecycle or availability event for an entire platform process, such as start, stop or abnormal termination.",
+      "read": "Read process, PID and the lifecycle action/description; correlate the same process with EXCP, EXCPCNTX, ATTN and the configured restart policy.",
+      "badSigns": "Explicit abnormal termination, or repeated unexplained worker replacement near failed operations.",
+      "traps": "A normal stop/start can be scheduled recycling. Badanov's process-count examples depend on infrastructure and are not universal sizing limits.",
+      "fixes": "For a crash preserve the dump and exact build; for excessive recycling compare cluster limits and OS resource measurements before changing settings.",
+      "cost": "Platform docs classify PROC as relatively infrequent and small; retaining lifecycle history is cheaper than full SQL capture.",
       "sources": [
         {
           "tag": "[doc]",
@@ -336,17 +324,15 @@
           "tag": "[article: Vladimir Badanov]",
           "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "CONN": {
-      "meaning": "Client connection establishment and loss.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Action, client, application, addresses, connection identifiers.",
-      "badSigns": "Many reconnects near a component failure.",
-      "traps": "Session, client connection and DBMS connection are different identities.",
-      "fixes": "Correlate process and network errors.",
+      "meaning": "Establishment or loss of a client connection to the server.",
+      "read": "Read the connection action, client/application, addresses and available identifiers; correlate the interval with SESN and process availability.",
+      "badSigns": "Many clients reconnect beside EXCP or abnormal PROC records, rather than a single expected disconnect.",
+      "traps": "Client connections, infobase sessions and DBMS connections are separate identities; this is not a log of every SQL connection.",
+      "fixes": "Check the failing component and network path, then confirm process health and session restoration using the same reproduction.",
+      "cost": "Usually low volume per the platform docs; a reconnection storm increases the number of CONN records.",
       "sources": [
         {
           "tag": "[doc]",
@@ -360,17 +346,15 @@
           "tag": "[article: Vladimir Badanov]",
           "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "SESN": {
-      "meaning": "Session lifecycle and connection assignment.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "SessionID, Func, connection, Usr.",
-      "badSigns": "[unverified] Unusual actions or repeated recovery warrant correlation.",
-      "traps": "A session can outlive a connection; SessionID may be absent on an unassigned thread.",
-      "fixes": "Check CONN, PROC, EXCP and actual job/session history.",
+      "meaning": "Infobase session lifecycle and assignment of sessions to connections.",
+      "read": "Use SessionID and Func with Usr and connection changes to follow the session across CONN events; inspect job history for scheduled work.",
+      "badSigns": "[unverified] Repeated restoration or termination of the same workload beside CONN/EXCP is a diagnostic lead, not a standalone failure rule.",
+      "traps": "A session can outlive a particular connection. SessionID can be absent when no session is assigned to the thread.",
+      "fixes": "Investigate the associated connection loss or exception; compare scheduled-job execution history before changing job scheduling.",
+      "cost": "SESN volume follows session creation, termination and reassignment; busy short-session workloads can emit many lifecycle records.",
       "sources": [
         {
           "tag": "[doc]",
@@ -380,19 +364,18 @@
           "tag": "[article: Infobot / Infostart]",
           "url": "https://infostart.ru/1c/articles/1195695/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "MEM": {
-      "meaning": "Growth of unfreed dynamic memory fragments between suitable idle checkpoints.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "meaning": "Growth in unfreed dynamic memory of a server process between checkpoints when no calls or scheduled jobs are running.",
+      "read": "Compare sz/szd in bytes and cn/cnd as fragment counts for the same process. The event's duration spans the two eligible idle checkpoints, not a memory allocation call.",
+      "badSigns": "Successive comparable runs leave positive szd/cnd and rising sz/cn; this is a lead for retained-object and dump analysis.",
+      "traps": "Not periodic process RSS sampling. No eligible idle checkpoint or no mem generator can explain absent MEM even during memory growth.",
+      "fixes": "Use LEAKS creation stacks to narrow retention; compare dumps of the same process before and after growth and inspect object lifetimes.",
+      "cost": "The mem generator slows execution, especially parallel workloads; event volume follows observed checkpoint growth rather than a fixed sampling rate.",
       "generatingElements": [
-        "mem"
+        "<mem/>"
       ],
-      "keyProperties": "sz size, szd delta, cn fragment count, cnd count delta.",
-      "badSigns": "[unverified] Repeatable growth after comparable operations.",
-      "traps": "Not periodic RSS; generation depends on no active calls/jobs. Absence does not prove no growth.",
-      "fixes": "Compare the same process before/after; inspect retained objects and dumps.",
       "sources": [
         {
           "tag": "[doc]",
@@ -402,35 +385,32 @@
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
         }
-      ],
-      "cost": "Slows execution, especially parallel workload."
+      ]
     },
     "LEAKS": {
-      "meaning": "Tracked objects retained between checkpoints, with creation stacks.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "meaning": "Objects retained between configured tracking checkpoints, with their types and creation stacks.",
+      "read": "Read Descr for repeated object types and creation sites; relate surviving objects to the procedure or server-call checkpoint configured by leaks/point.",
+      "badSigns": "Objects that are no longer needed accumulate after repeated completion of the same investigated procedure.",
+      "traps": "A surviving object may still be required by application logic. Coverage is limited to tracked types and checkpoints, not every native allocation.",
+      "fixes": "Narrow tracking to the implicated procedure; release unnecessary retained references and compare surviving objects after the same workload.",
+      "cost": "Tracking object creation and checkpoints adds overhead; broad server-call checkpoints and creation stacks can be costly.",
       "generatingElements": [
-        "leaks collect=\"1\" with point checkpoints"
+        "<leaks collect=\"1\"> with configured <point> checkpoints"
       ],
-      "keyProperties": "Descr contains object types and creation stacks.",
-      "badSigns": "[unverified] Repeatable accumulation after the measured section.",
-      "traps": "Retained objects may be intentional; this does not detect all native leaks.",
-      "fixes": "Narrow checkpoint to the implicated procedure and inspect lifetime.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
         }
-      ],
-      "cost": "Adds overhead; narrow to a procedure after localization."
+      ]
     },
     "ATTN": {
-      "meaning": "Cluster health-monitor messages.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Text/type, PID, MemSize, MaxMemSize, MemoryLimits when available.",
-      "badSigns": "Unavailable process or critical memory limit.",
-      "traps": "A failure notification may only report a downstream symptom.",
-      "fixes": "Correlate component log and OS resource measurements.",
+      "meaning": "Message from the cluster health-monitoring subsystem.",
+      "read": "Read the message type/text, PID and available MemSize, MaxMemSize or MemoryLimits; compare with the affected component's PROC/EXCP and OS monitoring.",
+      "badSigns": "A process is reported unavailable or unresponsive, or memory has reached a configured critical limit.",
+      "traps": "A health warning reports a condition, not necessarily its initial cause; fields depend on the particular message and platform version.",
+      "fixes": "Check the affected process's exceptions and resource use; correct the demonstrated memory or availability constraint before adjusting cluster limits.",
+      "cost": "ATTN follows health notifications rather than every query; repeated critical-state messages can add sustained diagnostic volume.",
       "sources": [
         {
           "tag": "[doc]",
@@ -440,17 +420,15 @@
           "tag": "[article: Vladimir Badanov]",
           "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "CLSTR": {
-      "meaning": "Cluster operations and load-distribution changes.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Event, Data; performance update metrics depend on version.",
-      "badSigns": "Load imbalance or repeated moves need investigation.",
-      "traps": "Not every CLSTR event is an error; Data has multiple shapes.",
-      "fixes": "Inspect cluster settings and measured resource constraints.",
+      "meaning": "Operations that change cluster behavior, including load distribution.",
+      "read": "Read Event first, then interpret Data for that subtype and platform version; compare performance update metrics and process assignments with OS measurements.",
+      "badSigns": "Badanov identifies load imbalance and frequent redistribution as reasons to inspect cluster settings and actual resource constraints.",
+      "traps": "Ordinary cluster changes are not errors. Data does not have one schema for every Event; author sizing examples are not platform thresholds.",
+      "fixes": "Compare worker assignment and cluster limits with measured CPU/memory pressure; correct the identified placement or capacity constraint.",
+      "cost": "Volume depends on cluster activity and performance-update messages; wide Data payloads grow with the reported metrics.",
       "sources": [
         {
           "tag": "[doc]",
@@ -460,19 +438,15 @@
           "tag": "[article: Vladimir Badanov]",
           "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "SDGC": {
-      "meaning": "Session-data store cleanup and compaction.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "sessiondatacontext (additional origin context only)"
-      ],
-      "keyProperties": "InstanceID, FilesSize, UsedSize, CopyBytes, Method=Analyze/Compact, LockDuration in ms.",
-      "badSigns": "Growth and maintenance waits coinciding with complaints.",
-      "traps": "Not general BSL memory garbage collection.",
-      "fixes": "Use sessiondatacontext to investigate session-data origins only when needed; it adds overhead.",
+      "meaning": "Cleanup and compaction of the session-data store.",
+      "read": "Follow InstanceID; compare FilesSize, UsedSize and CopyBytes in bytes by Method=Analyze/Compact. LockDuration is milliseconds, unlike record duration in microseconds.",
+      "badSigns": "UsedSize grows across comparable operations, or LockDuration spikes during the reported pause.",
+      "traps": "This is session-store maintenance, not collection of all BSL heap memory. Large FilesSize alone does not identify the code creating session data.",
+      "fixes": "Locate unnecessary session-data updates; temporarily use sessiondatacontext to obtain origins when needed, then reduce excessive changes.",
+      "cost": "Maintenance records are separate from MEM; sessiondatacontext adds diagnostic execution cost and should be temporary.",
       "sources": [
         {
           "tag": "[doc]",
@@ -486,17 +460,15 @@
           "tag": "[doc]",
           "url": "https://dl03.1c.ru/content/Platform/8_5_1_397/1cv8upd_8_5_1_397.htm"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "VRSREQUEST": {
-      "meaning": "Resource interaction request.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "URI, Method, Headers, Body (body size in bytes), vrs-session, sync.",
-      "badSigns": "Large body or delayed interaction.",
-      "traps": "VRS is not a whole business-action measurement and can differ by connection mode. [unverified] Generality across modes is not established. CALL InBytes/OutBytes are disk I/O.",
-      "fixes": "Measure the whole user operation before form opening; reduce unnecessary form data; use WPR/WPA or network tools for unexplained time.",
+      "meaning": "Request to the server for a resource, exposing part of client/server interaction.",
+      "read": "Read URI, Method, Headers and Body, which is the body size in bytes. Use available vrs-session/sync identifiers to locate the matching response.",
+      "badSigns": "Many identical requests within one action, or request Body increasing with unnecessary form collections.",
+      "traps": "Starkov describes VRS correlation; uniform coverage across client modes is [unverified]. VRS intervals do not cover the complete user action.",
+      "fixes": "Combine unnecessary requests and defer form data that is not needed for opening; measure the action from before form creation.",
+      "cost": "Request frequency and recorded headers determine volume; all VRS traffic during interactive use can be numerous.",
       "sources": [
         {
           "tag": "[doc]",
@@ -513,18 +485,20 @@
         {
           "tag": "[article: Autumn Library]",
           "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "VRSRESPONSE": {
-      "meaning": "Resource interaction response.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Status, Phrase, Headers, Body (body size in bytes), available pairing identifiers.",
-      "badSigns": "Large body or delayed interaction.",
-      "traps": "[unverified] HTTP 200 does not prove business success; distinguish transport completion and application result.",
-      "fixes": "Measure the whole user operation before form opening; reduce unnecessary form data; use WPR/WPA or network tools for unexplained time.",
+      "meaning": "Server response to a resource request.",
+      "read": "Inspect Status, Phrase, Headers and Body in bytes. Compare a correctly paired request/response interval with the application CALL interval.",
+      "badSigns": "An error Status, an oversized response, or a long paired interval when the corresponding BSL work is short.",
+      "traps": "[unverified] Transport success such as HTTP 200 does not prove business completion. Pairing by proximity alone can mix concurrent requests.",
+      "fixes": "Reduce transferred form attributes/collections and load them on demand; use network and client profiling for remaining transfer or reconstruction time.",
+      "cost": "Every resource response can add status/header diagnostics; pair with requests in a bounded scenario capture.",
       "sources": [
         {
           "tag": "[doc]",
@@ -541,70 +515,91 @@
         {
           "tag": "[article: Konstmax13]",
           "url": "https://infostart.ru/1c/articles/2819638/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
         }
-      ],
-      "cost": "High event volume is possible; measure this profile on the target workload."
+      ]
     },
     "SCRIPTCIRCREFS": {
-      "meaning": "BSL circular-reference detection.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "meaning": "Diagnostic report of circular references between BSL objects.",
+      "read": "Inspect Context and reported object references to locate the assignments that retain the cycle; reproduce the implicated BSL procedure.",
+      "badSigns": "The same object cycle is reported after a procedure should have released its working objects.",
+      "traps": "Detection requires scriptcircrefs and can substantially slow the application; a cycle report does not quantify all process memory growth.",
+      "fixes": "Remove the retaining reference cycle in the identified BSL objects, repeat the reproduction and disable detection afterward.",
+      "cost": "Circular-reference analysis has substantial execution cost and belongs in a focused temporary capture.",
       "generatingElements": [
-        "scriptcircrefs"
+        "<scriptcircrefs/>"
       ],
-      "keyProperties": "Context and diagnostic object references.",
-      "badSigns": "Reproducible unintended cycles.",
-      "traps": "Very high overhead; use only for a focused investigation.",
-      "fixes": "Remove the retaining cycle and disable detection afterwards.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
         }
-      ],
-      "cost": "Substantial performance loss; focused diagnostics only."
+      ]
     },
     "LIC": {
-      "meaning": "Licensing / hardware-protection diagnostics.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Func, txt or Txt; JSON property spelling can vary.",
-      "badSigns": "Licensing failure supported by diagnostic text.",
-      "traps": "Case is not stable; do not infer failure from event presence.",
-      "fixes": "Read the exact diagnostic and platform licensing configuration.",
+      "meaning": "Licensing lifecycle diagnostics, including license acquisition/release and hardware-identity checks.",
+      "read": "Read Func, res when present, and txt/Txt to distinguish initialization, acquisition, release and monitoring. Preserve the exact failure text.",
+      "badSigns": "A failed license acquisition or hardware-consistency check coincides with inability to start or continue the intended session.",
+      "traps": "Routine successful licensing actions are not faults. Property-name case varies in real JSON; software and hardware license paths differ.",
+      "fixes": "Use the exact diagnostic to check available licenses, licensing configuration and hardware identity; verify the same launch can obtain a license.",
+      "cost": "LIC follows licensing activity and checks, not SQL throughput; repeated unsuccessful acquisition attempts can enlarge the log.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     },
     "HASP": {
-      "meaning": "Licensing / hardware-protection diagnostics.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Func, txt or Txt; JSON property spelling can vary.",
-      "badSigns": "Licensing failure supported by diagnostic text.",
-      "traps": "Case is not stable; do not infer failure from event presence.",
-      "fixes": "Read the exact diagnostic and platform licensing configuration.",
+      "meaning": "One operation against a hardware protection key.",
+      "read": "Decode txt/Txt as operation(inputs)->outputs and inspect its result; correlate LIC and the failing launch to determine user impact.",
+      "badSigns": "Repeated hardware-key access errors accompany a failed license acquisition.",
+      "traps": "A HASP record alone is not a licensing failure. Operation/result codes require the key vendor's documented meanings; case differs in sample properties.",
+      "fixes": "Check hardware-key accessibility and protection software using the reported operation/result, then confirm acquisition through LIC.",
+      "cost": "HASP volume follows key accesses; verbose operation diagnostics can repeat during key lookup or licensing retries.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
         }
-      ],
-      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+      ]
     }
   },
   "properties": {
     "ts": {
-      "meaning": "Event completion timestamp in XML date-time format. Start = completion minus duration.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Event completion timestamp in XML date-time format. Start = completion minus duration.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Completion timestamp in XML date-time notation, for example 2023-08-02T08:48:05.982000.",
+      "read": "Subtract the record's duration in microseconds to recover its start; compare start/end intervals when finding a parent CALL.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "EXCP",
+        "EXCPCNTX",
+        "QERR",
+        "PROC",
+        "CONN",
+        "SESN",
+        "MEM",
+        "LEAKS",
+        "ATTN",
+        "CLSTR",
+        "SDGC",
+        "VRSREQUEST",
+        "VRSRESPONSE",
+        "SCRIPTCIRCREFS",
+        "LIC",
+        "HASP"
+      ],
+      "traps": "Align recorded clocks/time zones before comparing nodes; completion order is not invocation order.",
       "sources": [
         {
           "tag": "[doc]",
@@ -613,28 +608,60 @@
       ]
     },
     "duration": {
-      "meaning": "JSON and modern text record duration in microseconds. XML duration filter uses hundreds of microseconds; generate durationus instead. Historical 8.1 text units differed; transition unverified.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "JSON and modern text record duration in microseconds. XML duration filter uses hundreds of microseconds; generate durationus instead. Historical 8.1 text units differed; transition unverified.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Record elapsed duration in microseconds in JSON and modern text logs; 1000000 means one second.",
+      "read": "Convert to milliseconds by dividing by 1000; use together with ts to place the event in its enclosing interval.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "EXCP",
+        "EXCPCNTX",
+        "QERR",
+        "PROC",
+        "CONN",
+        "SESN",
+        "MEM",
+        "LEAKS",
+        "ATTN",
+        "CLSTR",
+        "SDGC",
+        "VRSREQUEST",
+        "VRSRESPONSE",
+        "SCRIPTCIRCREFS",
+        "LIC",
+        "HASP"
+      ],
+      "traps": "The XML predicate named duration uses 100-microsecond units, unlike record duration. Historical 8.1 text used different units; the exact transition is [unverified].",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Comm/Platform/8_1_11_67/V8AddDoc81.htm"
         }
       ]
     },
     "durationus": {
-      "meaning": "XML filter duration in microseconds; user milliseconds multiplied by 1000.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "XML filter duration in microseconds; user milliseconds multiplied by 1000.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "XML duration-filter value in microseconds, not the JSON record's property name; 5000000 selects five seconds.",
+      "read": "For manage_tech_log thresholdMs multiply milliseconds by 1000. Use zero/no cutoff when short calls or lock acquisitions must remain visible.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "TLOCK"
+      ],
+      "traps": "Filtering on durationus reduces written events; it cannot reconstruct excluded short acquisitions or prove instrumentation is cheap.",
       "sources": [
         {
           "tag": "[doc]",
@@ -643,13 +670,23 @@
       ]
     },
     "Context": {
-      "meaning": "BSL call stack; preserve every frame. Missing context means not collected, not no BSL work.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "BSL call stack; preserve every frame. Missing context means not collected, not no BSL work.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Execution context, generally a multiline BSL stack containing modules, lines and expressions.",
+      "read": "Follow the stack from the immediate operation back to callers; retain all frames when linking SQL to the BSL query or lock acquisition.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "EXCP",
+        "QERR",
+        "SCRIPTCIRCREFS"
+      ],
+      "traps": "Missing or truncated Context cannot establish a complete caller path; inspect the original record. The context property must be captured.",
       "sources": [
         {
           "tag": "[doc]",
@@ -662,13 +699,14 @@
       ]
     },
     "Descr": {
-      "meaning": "Full exception/query diagnostic; normalized text is an aggregation key, not a replacement for the original.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Full exception/query diagnostic; normalized text is an aggregation key, not a replacement for the original.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Free-form diagnostic text; exceptions can contain a nested cause chain, while LEAKS includes retained-object descriptions and creation stacks.",
+      "read": "For EXCP/QERR read the original cause chain before using a normalized group; for LEAKS compare object types and creation sites across checkpoints.",
+      "appearsIn": [
+        "EXCP",
+        "QERR",
+        "LEAKS"
+      ],
+      "traps": "One normalized exception description can group several occurrences or component reports; do not replace the original with the fingerprint.",
       "sources": [
         {
           "tag": "[doc]",
@@ -677,13 +715,14 @@
       ]
     },
     "Sql": {
-      "meaning": "DBMS statement; preserve original separately from normalized fingerprint and parameters.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "DBMS statement; preserve original separately from normalized fingerprint and parameters.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Statement text in the physical database engine's SQL dialect, potentially including parameters and physical table names.",
+      "read": "Use details to retain the exact SQL/parameters, locate its Context, and compare normalized count/total/max before inspecting a plan.",
+      "appearsIn": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG"
+      ],
+      "traps": "Matching normalized SQL does not guarantee identical parameters, data volumes or execution plans.",
       "sources": [
         {
           "tag": "[doc]",
@@ -692,13 +731,12 @@
       ]
     },
     "Query": {
-      "meaning": "Platform query text; not interchangeable with DBMS Sql.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Platform query text; not interchangeable with DBMS Sql.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Query text associated with a platform query error, in the platform query language rather than physical DBMS SQL.",
+      "read": "Read beside QERR.Descr and Context to reproduce the error with the same roles and external-source metadata.",
+      "appearsIn": [
+        "QERR"
+      ],
+      "traps": "Do not send Query text directly to a DBMS as if it were Sql; permissions and platform compilation can fail before SQL execution.",
       "sources": [
         {
           "tag": "[doc]",
@@ -707,103 +745,135 @@
       ]
     },
     "planSQLText": {
-      "meaning": "DBMS-specific plan requiring plansql. PostgreSQL cost is not time; actual time and rows are per loops. EXPLAIN ANALYZE executes the query.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "DBMS-specific plan requiring plansql. PostgreSQL cost is not time; actual time and rows are per loops. EXPLAIN ANALYZE executes the query.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Database-specific execution-plan text generated when plansql is enabled.",
+      "read": "Locate expensive scan/join nodes and compare row estimates with measured rows where available. PostgreSQL actual time is milliseconds and rows/time must be interpreted with loops.",
+      "appearsIn": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG"
+      ],
+      "traps": "Planner cost is not elapsed seconds. EXPLAIN ANALYZE executes the statement; the official PostgreSQL methodology limits plan capture to test/development.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
         }
       ]
     },
     "Memory": {
-      "meaning": "Change in memory allocated but not freed during CALL; signed bytes, not process RSS.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Change in memory allocated but not freed during CALL; signed bytes, not process RSS.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Bytes allocated and not freed over a server call: a call-level memory change rather than process RSS.",
+      "read": "Compare net retention for repeated equivalent CALL contexts; combine with MemoryPeak and same-process checkpoints/dumps to investigate growth.",
+      "appearsIn": [
+        "CALL"
+      ],
+      "traps": "A positive net change can be legitimate retained state; this counter alone does not prove a leak.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
         }
       ]
     },
     "MemoryPeak": {
-      "meaning": "Peak CALL memory in bytes; does not itself prove a leak.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Peak CALL memory in bytes; does not itself prove a leak.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Peak bytes allocated but not freed during one server call.",
+      "read": "Rank CALL occurrences by peak, then inspect their Context, returned data and report/form workload at comparable sizes.",
+      "appearsIn": [
+        "CALL"
+      ],
+      "traps": "A high temporary peak can be released afterward; distinguish allocation pressure from persistent retention.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
         }
       ]
     },
     "CpuTime": {
-      "meaning": "CALL CPU in microseconds, introduced in 8.3.13; missing is unknown.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL CPU in microseconds, introduced in 8.3.13; missing is unknown.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "CPU time consumed by CALL in microseconds; documented since platform 8.3.13.",
+      "read": "Compare CPU and elapsed duration for the same call and its captured children to decide whether to profile computation or investigate waits.",
+      "appearsIn": [
+        "CALL"
+      ],
+      "traps": "An absent CpuTime is unknown, not zero; do not sum resource counters across nested CALLs as independent work.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_13_1690/1cv8upd_8_3_13_1690.htm"
         }
       ]
     },
     "InBytes": {
-      "meaning": "CALL disk bytes read, not network exchange.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL disk bytes read, not network exchange.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Bytes read from disk during a server call, documented with CALL resource counters.",
+      "read": "Compare disk-read changes for the same CALL workload and inspect related queries and storage monitoring.",
+      "appearsIn": [
+        "CALL"
+      ],
+      "traps": "InBytes is disk input, even though some articles interpret it as client/server traffic. Use VRS Body for exchange size.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
         }
       ]
     },
     "OutBytes": {
-      "meaning": "CALL disk bytes written, not network exchange.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL disk bytes written, not network exchange.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Bytes written to disk during a server call.",
+      "read": "Compare writes for equivalent posting/report operations and correlate with transaction and DB activity before examining storage behavior.",
+      "appearsIn": [
+        "CALL"
+      ],
+      "traps": "OutBytes is not response-body or network byte count; nested call counters can overlap.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
         }
       ]
     },
     "Body": {
-      "meaning": "VRS exchange body; do not confuse with CALL disk I/O.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "VRS exchange body; do not confuse with CALL disk I/O.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Size in bytes of the resource request or response body; the value is a size, not the payload text.",
+      "read": "Compare VRSREQUEST input and VRSRESPONSE output sizes per correctly paired interaction to find excessive form transfer.",
+      "appearsIn": [
+        "VRSREQUEST",
+        "VRSRESPONSE"
+      ],
+      "traps": "CALL InBytes/OutBytes describe a different resource: disk I/O.",
       "sources": [
         {
           "tag": "[doc]",
@@ -812,13 +882,19 @@
       ]
     },
     "process": {
-      "meaning": "Executable type; do not confuse with p:processName or PID.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Executable type; do not confuse with p:processName or PID.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Executable/component type such as rphost or 1cv8c, not a numeric PID.",
+      "read": "Identify which component emitted an event before correlating its threads, lifecycle or server/client side of a call.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "PROC",
+        "CONN",
+        "SESN",
+        "EXCP",
+        "ATTN",
+        "CLSTR"
+      ],
+      "traps": "Several processes can have the same process value; retain PID/source directory and time as well.",
       "sources": [
         {
           "tag": "[doc]",
@@ -827,13 +903,17 @@
       ]
     },
     "p:processName": {
-      "meaning": "Server infobase context, often the database name; may be absent on client/file events.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Server infobase context, often the database name; may be absent on client/file events.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Server infobase context, often the database name, stored as text.",
+      "read": "Use an exact value to narrow server events to the investigated infobase and verify capture scope before joining sessions.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "TLOCK",
+        "EXCP"
+      ],
+      "traps": "Client or file-mode events may lack this property; an infobase filter can exclude those events.",
       "sources": [
         {
           "tag": "[doc]",
@@ -842,13 +922,17 @@
       ]
     },
     "OSThread": {
-      "meaning": "OS thread identity scoped to node, process and time.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "OS thread identity scoped to node, process and time.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Operating-system thread identifier represented as a numeric string.",
+      "read": "Within one emitting process and interval, align nested event intervals/depth and identify candidate work on the same thread.",
+      "appearsIn": [
+        "CALL",
+        "SCALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "[unverified] Equal thread numbers from different nodes/processes or distant time windows do not establish one execution chain.",
       "sources": [
         {
           "tag": "[doc]",
@@ -857,13 +941,16 @@
       ]
     },
     "SessionID": {
-      "meaning": "Infobase session; can span connections and may be missing.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Infobase session; can span connections and may be missing.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Infobase session identifier, not a platform or DBMS connection number.",
+      "read": "Follow SESN and CALL activity for the user's session, including changes of connection; narrow time and infobase before requesting chain.",
+      "appearsIn": [
+        "SESN",
+        "CALL",
+        "SDBL",
+        "EXCP",
+        "TTIMEOUT"
+      ],
+      "traps": "May be absent when no session is assigned to a thread; the same session is not a unique call identifier.",
       "sources": [
         {
           "tag": "[doc]",
@@ -872,13 +959,16 @@
       ]
     },
     "t:connectID": {
-      "meaning": "Platform connection, distinct from SessionID, ClientID and dbpid.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Platform connection, distinct from SessionID, ClientID and dbpid.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Platform connection identifier used in transactional-lock participant correlation.",
+      "read": "Follow a TLOCK/TTIMEOUT WaitConnections value to events carrying the matching t:connectID, then inspect their transaction boundaries.",
+      "appearsIn": [
+        "TLOCK",
+        "TTIMEOUT",
+        "SDBL",
+        "CALL",
+        "EXCP"
+      ],
+      "traps": "Do not equate its numeric value with SessionID, ClientID or dbpid.",
       "sources": [
         {
           "tag": "[doc]",
@@ -887,13 +977,13 @@
       ]
     },
     "ClientID": {
-      "meaning": "Interaction client identity; use direction and other identities with CallID.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Interaction client identity; use direction and other identities with CallID.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Remote-interaction client identifier, interpreted with the direction and destination of the call.",
+      "read": "Use SCALL ClientID/DstClientID and matching CALL identities with CallID and interface/method to identify candidate endpoints.",
+      "appearsIn": [
+        "CALL",
+        "SCALL"
+      ],
+      "traps": "A numeric match alone does not prove a distributed call pair; node/process and temporal scope still matter.",
       "sources": [
         {
           "tag": "[doc]",
@@ -906,13 +996,13 @@
       ]
     },
     "CallID": {
-      "meaning": "Remote call id; not globally unique over an archive.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Remote call id; not globally unique over an archive.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Identifier of a remote call, represented as a numeric string.",
+      "read": "Pair compatible SCALL/CALL records using client endpoints, method and interval, then inspect nested work on the receiving side.",
+      "appearsIn": [
+        "CALL",
+        "SCALL"
+      ],
+      "traps": "[unverified] Treat uniqueness over an entire multi-node archive as unproven; preserve endpoint and process scope.",
       "sources": [
         {
           "tag": "[doc]",
@@ -925,13 +1015,15 @@
       ]
     },
     "dbpid": {
-      "meaning": "DBMS connection identity; not a platform connection id.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "DBMS connection identity; not a platform connection id.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Identifier of the DBMS connection executing an operation.",
+      "read": "Map the 1C SQL event to DBMS wait/connection diagnostics; compare lksrc when finding a DBMS blocker.",
+      "appearsIn": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "SDBL",
+        "EXCP"
+      ],
+      "traps": "This is a DBMS identity, not t:connectID; capture time and database are needed when investigating reused connections.",
       "sources": [
         {
           "tag": "[doc]",
@@ -940,13 +1032,16 @@
       ]
     },
     "Usr": {
-      "meaning": "Infobase user. DefUser alone does not prove background execution.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Infobase user. DefUser alone does not prove background execution.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Infobase user name, a textual attribution rather than a job identifier.",
+      "read": "Compare failures under the affected user's roles and data; combine with session, application and job history for scheduled work.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "EXCP",
+        "QERR",
+        "SESN"
+      ],
+      "traps": "DefUser alone is not proof of a background job or its business outcome.",
       "sources": [
         {
           "tag": "[doc]",
@@ -955,13 +1050,16 @@
       ]
     },
     "Func": {
-      "meaning": "Operation name; transaction boundaries matter for lock holding.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Operation name; transaction boundaries matter for lock holding.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Event-specific operation name, including data-model and lifecycle actions.",
+      "read": "For SDBL distinguish BeginTransaction, CommitTransaction, RollbackTransaction and HoldConnection from query work; for other events interpret Func in that event's semantics.",
+      "appearsIn": [
+        "SDBL",
+        "CALL",
+        "PROC",
+        "SESN",
+        "LIC"
+      ],
+      "traps": "Do not count transaction or connection-management functions as executed SQL statements.",
       "sources": [
         {
           "tag": "[doc]",
@@ -970,13 +1068,14 @@
       ]
     },
     "Rows": {
-      "meaning": "Returned rows, not scanned rows/pages.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Returned rows, not scanned rows/pages.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Number of rows returned by a database operation, recorded as a numeric value.",
+      "read": "Compare returned volume to the user's needed result and CALL memory/transfer; inspect the plan separately for actual rows processed at each node.",
+      "appearsIn": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG"
+      ],
+      "traps": "Rows is not scanned rows, pages read or an automatic measure of index efficiency.",
       "sources": [
         {
           "tag": "[doc]",
@@ -985,28 +1084,32 @@
       ]
     },
     "RowsAffected": {
-      "meaning": "Affected row count; -1 may mean unavailable.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Affected row count; -1 may mean unavailable.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Affected-row count; Infostart's published event examples include the value -1.",
+      "read": "Compare known counts with the intended posting/exchange batch size and transaction/lock scope. Treat -1 as unknown for analysis until its meaning for that platform/operation is established.",
+      "appearsIn": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG"
+      ],
+      "traps": "Do not interpret -1 as a negative update count or replace it with zero.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
         }
       ]
     },
     "Locks": {
-      "meaning": "Managed lock resources, values and modes; verify intersection.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Managed lock resources, values and modes; verify intersection.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Managed transactional lock resources, values and modes in the lock acquisition diagnostic.",
+      "read": "Compare waiter and candidate holder resources for overlapping values and conflicting modes; inspect the BSL lock construction in Context.",
+      "appearsIn": [
+        "TLOCK"
+      ],
+      "traps": "A namespace match alone does not establish the same protected keys or prove a whole-register lock.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1015,13 +1118,12 @@
       ]
     },
     "Regions": {
-      "meaning": "Managed lock namespaces; a name alone does not prove a whole-register lock.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Managed lock namespaces; a name alone does not prove a whole-register lock.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Names of managed transactional lock namespaces.",
+      "read": "Group contended business resources, then request Locks, Context and transaction intervals to establish their actual extent.",
+      "appearsIn": [
+        "TLOCK"
+      ],
+      "traps": "Regions naming a register does not mean every record of that register was locked.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1030,13 +1132,13 @@
       ]
     },
     "WaitConnections": {
-      "meaning": "Conflicting platform connections; find matching resources and transaction interval.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Conflicting platform connections; find matching resources and transaction interval.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "List of platform connections conflicting over managed transactional locks.",
+      "read": "Non-empty values identify waiter-side leads: locate matching t:connectID acquisitions and their enclosing transactions across captured processes.",
+      "appearsIn": [
+        "TLOCK",
+        "TTIMEOUT"
+      ],
+      "traps": "TLOCK without WaitConnections is not proof of waiting; a reported connection still needs resource/mode and lifetime checks.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1045,13 +1147,12 @@
       ]
     },
     "DeadlockConnectionIntersections": {
-      "meaning": "Managed deadlock participant pairs and resource intersections.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Managed deadlock participant pairs and resource intersections.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Managed deadlock participant pairs and intersections of the locked resources.",
+      "read": "Recover each listed participant's TLOCK acquisitions and transaction interval to reconstruct resource order in both BSL paths.",
+      "appearsIn": [
+        "TDEADLOCK"
+      ],
+      "traps": "A managed deadlock intersection is not a complete DBMS deadlock graph.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1060,13 +1161,16 @@
       ]
     },
     "lka": {
-      "meaning": "1 means DBMS blocking source; requires dbmslocks.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "1 means DBMS blocking source; requires dbmslocks.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "DBMS blocking-source flag; value 1 means the thread was observed as a source by dbmslocks polling.",
+      "read": "Find the source's lkaid list, match a victim lkpid and inspect transaction history to locate the resource-acquiring operation.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "Annotations attach to a later completed event; its SQL need not be the statement that acquired the lock.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1075,13 +1179,16 @@
       ]
     },
     "lkp": {
-      "meaning": "1 means DBMS blocking victim; requires dbmslocks.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "1 means DBMS blocking victim; requires dbmslocks.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "DBMS blocking-victim flag; value 1 means the thread was observed waiting.",
+      "read": "Read the same record's lkpid and lksrc, then find the source in other working-process logs.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "Observed blocking is not proof of a deadlock cycle; short waits can fall between polls.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1090,13 +1197,16 @@
       ]
     },
     "lkpid": {
-      "meaning": "Victim DBMS poll id; join to an element in source lkaid.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Victim DBMS poll id; join to an element in source lkaid.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Identifier of the DBMS blocking poll attached to a victim, for example 423.",
+      "read": "Join this scalar value to an element of the source lkaid list across worker logs, then check lksrc and context.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "lkpid is a poll identifier, not an OS PID, SQL statement id or platform connection id.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1105,13 +1215,16 @@
       ]
     },
     "lkaid": {
-      "meaning": "Source DBMS poll id list. Poll no more often than once per 2 s on DB access.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Source DBMS poll id list. Poll no more often than once per 2 s on DB access.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Comma-separated list of blocking-poll identifiers on a source thread, for example 271,273,274.",
+      "read": "Split the list and find victim records with corresponding lkpid values; retain each participant's DBMS connection and transaction history.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "The list is populated by dbmslocks observations, polled on DB access no more often than once per two seconds; it is not a continuous trace.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1120,13 +1233,16 @@
       ]
     },
     "lksrc": {
-      "meaning": "Victim annotation identifying source DBMS connection.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Victim annotation identifying source DBMS connection.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "DBMS connection identifier of the blocking source, present on the victim side.",
+      "read": "Use with the victim's lkpid and source's lkaid to identify the holder's dbpid and inspect its earlier transaction operations.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "Do not resolve lksrc as a platform t:connectID or infer the holder solely from nearby timestamps.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1135,13 +1251,16 @@
       ]
     },
     "lkpto": {
-      "meaning": "Seconds since victim state detected, not microseconds.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Seconds since victim state detected, not microseconds.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Seconds elapsed since the thread was detected as a DBMS blocking victim.",
+      "read": "Compare with poll linkage and surrounding event times to understand the observed wait history, then inspect the holder transaction.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "Seconds since detection are neither record microseconds nor a precise timestamp of initial lock acquisition.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1150,13 +1269,16 @@
       ]
     },
     "lkato": {
-      "meaning": "Seconds since source state detected, not microseconds.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Seconds since source state detected, not microseconds.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Seconds elapsed since the thread was detected as a DBMS blocking source.",
+      "read": "Follow matching victims and the source's transaction completion to investigate how long the observed source state persists.",
+      "appearsIn": [
+        "CALL",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "EXCP"
+      ],
+      "traps": "Source-state age begins at detection; it is not the duration of the SQL carrying the annotation.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1165,13 +1287,12 @@
       ]
     },
     "SrcName": {
-      "meaning": "Original operation type in EXCPCNTX; unfinished snapshot.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Original operation type in EXCPCNTX; unfinished snapshot.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Original operation's event type on an EXCPCNTX snapshot.",
+      "read": "Interpret each interrupted frame using the referenced event's semantics; read the EXCPCNTX sequence in descending nesting order.",
+      "appearsIn": [
+        "EXCPCNTX"
+      ],
+      "traps": "SrcName=CALL describes an unfinished operation, not a second completed CALL.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1180,13 +1301,12 @@
       ]
     },
     "LockDuration": {
-      "meaning": "SDGC lock duration in milliseconds.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "SDGC lock duration in milliseconds.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Session-data store lock duration in milliseconds during garbage-collector work.",
+      "read": "For a given SDGC InstanceID compare Analyze/Compact lock time with user pauses and changes in UsedSize/FilesSize.",
+      "appearsIn": [
+        "SDGC"
+      ],
+      "traps": "Do not divide this value by 1000 as if it were record duration in microseconds.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1195,13 +1315,12 @@
       ]
     },
     "sz": {
-      "meaning": "MEM fragment size.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "MEM fragment size.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Bytes of dynamic memory occupied by the process at a MEM checkpoint.",
+      "read": "Compare sz across equivalent idle checkpoints of the same process; combine with szd and retained-object evidence.",
+      "appearsIn": [
+        "MEM"
+      ],
+      "traps": "This is dynamic memory accounting at eligible checkpoints, not total OS RSS.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1210,13 +1329,12 @@
       ]
     },
     "szd": {
-      "meaning": "MEM size delta.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "MEM size delta.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Change in occupied dynamic-memory bytes since the previous MEM event.",
+      "read": "Follow repeated positive deltas after comparable completed operations and inspect LEAKS stacks or before/after dumps.",
+      "appearsIn": [
+        "MEM"
+      ],
+      "traps": "A single positive delta can be useful cached state; it does not establish erroneous retention.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1225,13 +1343,12 @@
       ]
     },
     "cn": {
-      "meaning": "MEM fragment count.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "MEM fragment count.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Count of occupied dynamic-memory fragments at a MEM checkpoint.",
+      "read": "Compare fragment-count growth with sz to distinguish more fragments from a few larger allocations in the same process.",
+      "appearsIn": [
+        "MEM"
+      ],
+      "traps": "Fragment count is not a count of BSL business objects or active sessions.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1240,13 +1357,12 @@
       ]
     },
     "cnd": {
-      "meaning": "MEM count delta.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "MEM count delta.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Change in occupied-fragment count since the previous MEM event.",
+      "read": "Use alongside szd to identify repeated fragment accumulation and select comparable checkpoints for retention analysis.",
+      "appearsIn": [
+        "MEM"
+      ],
+      "traps": "This delta has count units, not bytes; the interval depends on eligible idle checkpoints.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1255,23 +1371,32 @@
       ]
     },
     "txt": {
-      "meaning": "Diagnostic text; property names may vary in case, e.g. LIC txt and HASP Txt.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Diagnostic text; property names may vary in case, e.g. LIC txt and HASP Txt.",
-      "badSigns": "Interpret with the event and captured coverage.",
-      "traps": "Missing values are unknown, never silently zero.",
-      "fixes": "Read the source event and its complete context.",
+      "meaning": "Free-form diagnostic text; hardware-key records can encode operation(inputs)->outputs.",
+      "read": "Read the exact LIC action/result or HASP operation result; retain original spelling and casing when checking vendor documentation.",
+      "appearsIn": [
+        "LIC",
+        "HASP",
+        "TLOCK"
+      ],
+      "traps": "Real samples use txt, Txt or TXT; property lookup must tolerate case variation without rewriting the original diagnostic.",
       "sources": [
         {
           "tag": "[doc]",
           "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
         }
       ]
     },
     "Sdbl": {
-      "meaning": "Query text in the platform database-model language, carried by SDBL. Distinct from DBMS Sql and QERR Query.",
-      "traps": "Transaction and HoldConnection operations can lack query text; do not count them as SQL statements.",
+      "meaning": "Query text in the platform's database-model language, carried by SDBL.",
+      "read": "Use the SDBL Context to find the BSL origin, then compare its nested physical Sql statements to see how the model operation was translated.",
+      "appearsIn": [
+        "SDBL"
+      ],
+      "traps": "Sdbl, QERR Query and DBMS Sql are different language layers, even when they describe the same business operation.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1282,13 +1407,24 @@
   },
   "profiles": {
     "errors": {
-      "meaning": "What failed, and which component lost availability?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Events: EXCP, EXCPCNTX, QERR, PROC, CONN, SESN, ATTN, TTIMEOUT, TDEADLOCK",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Read exceptions first; use locks profile to recover holders.",
+      "meaning": "Diagnose reported failures and loss of component availability without collecting every successful call or SQL statement.",
+      "read": "Use for an exception, failed query, disconnect or crash. Read EXCP/QERR first, correlate PROC/CONN/SESN/ATTN, and treat TTIMEOUT/TDEADLOCK as leads requiring participant history; the cutoff is 0 ms.",
+      "traps": "It does not collect all TLOCK acquisitions or SDBL transaction boundaries, so it cannot identify every holder from an incident alone. Dump generation is separate.",
+      "fixes": "Repair the exact diagnostic's cause; switch to locks when timeout/deadlock participants are missing.",
+      "cost": "Normally smaller than SQL capture per platform docs; long exception chains and error/reconnection storms can still be large.",
+      "events": [
+        "EXCP",
+        "EXCPCNTX",
+        "QERR",
+        "PROC",
+        "CONN",
+        "SESN",
+        "ATTN",
+        "TTIMEOUT",
+        "TDEADLOCK"
+      ],
+      "thresholdMs": 0,
+      "historyHours": 1,
       "sources": [
         {
           "tag": "[doc]",
@@ -1302,33 +1438,21 @@
           "tag": "[article: Infobot / Infostart]",
           "url": "https://infostart.ru/1c/articles/1195695/"
         }
-      ],
-      "events": [
-        "EXCP",
-        "EXCPCNTX",
-        "QERR",
-        "PROC",
-        "CONN",
-        "SESN",
-        "ATTN",
-        "TTIMEOUT",
-        "TDEADLOCK"
-      ],
-      "thresholdMs": 0,
-      "purpose": "What failed, and which component lost availability?",
-      "question": "What failed, and which component lost availability?",
-      "expectedVolume": "Usually less than SQL capture, but an error storm can be large.",
-      "afterwards": "Read exceptions first; use locks profile to recover holders.",
-      "historyHours": 1
+      ]
     },
     "slow-calls": {
-      "meaning": "Which server contexts consume elapsed time?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Events: CALL, SCALL, EXCP",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Group Context, then inspect SQL, CPU and MemoryPeak.",
+      "meaning": "Find receiving server contexts and outgoing calls that exceed the chosen individual-call cutoff.",
+      "read": "Use after a slow operation is localized. The default 1000 ms cutoff selects CALL/SCALL; compare count, total/max duration, Context, CpuTime and MemoryPeak, then inspect EXCP for failure.",
+      "traps": "Short repeated calls are excluded by the default cutoff; nested CALL/SCALL durations overlap, so their totals are not full-user-operation time.",
+      "fixes": "Use scenario to identify whether SQL, lock waits, computation or form exchange dominates the expensive context, then optimize that component.",
+      "cost": "Volume falls as the cutoff rises; frequent long calls with full stacks can remain numerous, and filtering hides accumulated short-call cost.",
+      "events": [
+        "CALL",
+        "SCALL",
+        "EXCP"
+      ],
+      "thresholdMs": 1000,
+      "historyHours": 1,
       "sources": [
         {
           "tag": "[doc]",
@@ -1342,29 +1466,24 @@
           "tag": "[article: Dmitry Chesnokov]",
           "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
-      ],
-      "events": [
-        "CALL",
-        "SCALL",
-        "EXCP"
-      ],
-      "thresholdMs": 1000,
-      "purpose": "Which server contexts consume elapsed time?",
-      "question": "Which server contexts consume elapsed time?",
-      "expectedVolume": "Threshold-dependent; misses accumulated short calls.",
-      "afterwards": "Group Context, then inspect SQL, CPU and MemoryPeak.",
-      "historyHours": 1
+      ]
     },
     "db": {
-      "meaning": "Which SQL patterns cost most?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "optional plansql"
+      "meaning": "Locate expensive physical SQL and platform data-model operations before a focused plan investigation.",
+      "read": "Use when database work dominates. The default 5000 ms cutoff applies to physical DB events; SDBL and EXCP/QERR remain unfiltered. Inspect Sql/Sdbl, Context and count/total/max. Plans and DBMS lock polling are explicit options.",
+      "traps": "The five-second cutoff is a diagnostic choice, not a platform health limit. Gilev's historical example uses ten seconds; IBS uses five. Official PostgreSQL guidance confines plans to test/development, unlike older article profiles.",
+      "fixes": "Find the BSL query and inspect data, parameters, statistics and waits before changing predicates or indexes; lower the cutoff for repeated short SQL.",
+      "cost": "IBS reports hundreds of MB even above five seconds. SQL/parameters enlarge records; optional plans/polling add overhead beyond output volume.",
+      "events": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "SDBL",
+        "EXCP",
+        "QERR"
       ],
-      "keyProperties": "Events: DBMSSQL, DBPOSTGRS, DBV8DBENG, SDBL, EXCP, QERR",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Inspect normalized SQL, count/total/max, BSL context, plans and waits.",
+      "thresholdMs": 5000,
+      "historyHours": 1,
       "sources": [
         {
           "tag": "[doc]",
@@ -1390,32 +1509,25 @@
           "tag": "[article: Evgeny Filippov / IBS]",
           "url": "https://habr.com/ru/companies/ibs/articles/989790/"
         }
-      ],
-      "events": [
-        "DBMSSQL",
-        "DBPOSTGRS",
-        "DBV8DBENG",
-        "SDBL",
-        "EXCP",
-        "QERR"
-      ],
-      "thresholdMs": 5000,
-      "purpose": "Which SQL patterns cost most?",
-      "question": "Which SQL patterns cost most?",
-      "expectedVolume": "IBS reports hundreds of MB even above 5 s; no fixed volume guarantee.",
-      "afterwards": "Inspect normalized SQL, count/total/max, BSL context, plans and waits.",
-      "historyHours": 1
+      ]
     },
     "locks": {
-      "meaning": "Who waits, who holds the intersecting resource, and for which transaction?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [
-        "optional dbmslocks"
+      "meaning": "Reconstruct managed lock waits, transaction lifetimes and optional observed DBMS blocker relationships.",
+      "read": "Use during a short concurrent reproduction on all relevant workers. The 0 ms cutoff keeps TLOCK acquisitions, TTIMEOUT/TDEADLOCK, SDBL boundaries and server SQL; optional dbmslocks adds lka/lkp poll linkage.",
+      "traps": "Filtering short acquisitions loses holders. The bundled event set includes SQL Server/PostgreSQL, not file-engine SQL; add DBV8DBENG when needed. Poll linkage does not prove a DBMS deadlock cycle.",
+      "fixes": "Check WaitConnections, resource values/modes and transaction lifetime; then shorten scope or align resource order. Obtain a DBMS deadlock report for DBMS cycles.",
+      "cost": "High acquisition and SQL frequency can produce a large log; bound the reproduction and retain logs from every participant, including short successful holders.",
+      "events": [
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "SDBL",
+        "EXCP",
+        "DBMSSQL",
+        "DBPOSTGRS"
       ],
-      "keyProperties": "Events: TLOCK, TTIMEOUT, TDEADLOCK, SDBL, EXCP, DBMSSQL, DBPOSTGRS",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Follow WaitConnections and transaction boundaries; join lkpid/lkaid if enabled.",
+      "thresholdMs": 0,
+      "historyHours": 1,
       "sources": [
         {
           "tag": "[doc]",
@@ -1437,34 +1549,28 @@
           "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
           "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
         }
-      ],
-      "events": [
-        "TLOCK",
-        "TTIMEOUT",
-        "TDEADLOCK",
-        "SDBL",
-        "EXCP",
-        "DBMSSQL",
-        "DBPOSTGRS"
-      ],
-      "thresholdMs": 0,
-      "purpose": "Who waits, who holds the intersecting resource, and for which transaction?",
-      "question": "Who waits, who holds the intersecting resource, and for which transaction?",
-      "expectedVolume": "High; collect a short bounded reproduction on all nodes.",
-      "afterwards": "Follow WaitConnections and transaction boundaries; join lkpid/lkaid if enabled.",
-      "historyHours": 1
+      ]
     },
     "memory": {
-      "meaning": "Which calls and retained objects explain memory growth?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "meaning": "Separate high call allocation peaks from persistent object retention in one server process.",
+      "read": "Use after reproducible memory growth. CALL counters localize peaks; mem enables MEM idle-checkpoint counters, and leaks collect=1 with point call=server enables retained-object stacks. The cutoff is 0 ms.",
+      "traps": "MEM is not periodic RSS; no suitable idle checkpoint can explain absence. LEAKS tracks selected objects and surviving objects can be legitimate; compare the same process/workload.",
+      "fixes": "Narrow retained-object tracking to the implicated procedure after localization and compare same-process before/after dumps; reduce unnecessary collections or retained references.",
+      "cost": "mem/leaks instrumentation slows execution, especially parallel workloads; broad checkpoints and creation stacks are more costly than CALL counters alone.",
       "generatingElements": [
-        "mem",
-        "leaks collect=\"1\" with point call=\"server\""
+        "<mem/>",
+        "<leaks collect=\"1\"> with <point call=\"server\"/>"
       ],
-      "keyProperties": "Events: CALL, MEM, LEAKS, ATTN, PROC, EXCP",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Inspect MemoryPeak, sz/szd/cn/cnd, creation stacks; compare same-process dumps.",
+      "events": [
+        "CALL",
+        "MEM",
+        "LEAKS",
+        "ATTN",
+        "PROC",
+        "EXCP"
+      ],
+      "thresholdMs": 0,
+      "historyHours": 1,
       "sources": [
         {
           "tag": "[doc]",
@@ -1478,48 +1584,14 @@
           "tag": "[article: Maxim Starkov]",
           "url": "https://infostart.ru/1c/articles/1407627/"
         }
-      ],
-      "events": [
-        "CALL",
-        "MEM",
-        "LEAKS",
-        "ATTN",
-        "PROC",
-        "EXCP"
-      ],
-      "thresholdMs": 0,
-      "purpose": "Which calls and retained objects explain memory growth?",
-      "question": "Which calls and retained objects explain memory growth?",
-      "expectedVolume": "Expensive instrumentation, especially under parallel load.",
-      "afterwards": "Inspect MemoryPeak, sz/szd/cn/cnd, creation stacks; compare same-process dumps.",
-      "historyHours": 1
+      ]
     },
     "scenario": {
-      "meaning": "What happened inside one reproduced user action?",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Events: CALL, SCALL, VRSREQUEST, VRSRESPONSE, SDBL, DBMSSQL, DBPOSTGRS, DBV8DBENG, TLOCK, TTIMEOUT, TDEADLOCK, EXCP, QERR, EXCPCNTX, PROC, CONN, SESN, ATTN",
-      "badSigns": "Investigate evidence, not universal thresholds.",
-      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
-      "fixes": "Find root call, inspect chain and missing intervals; fix and re-measure.",
-      "sources": [
-        {
-          "tag": "[doc]",
-          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
-        },
-        {
-          "tag": "[doc]",
-          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
-        },
-        {
-          "tag": "[article: Maxim Starkov]",
-          "url": "https://infostart.ru/1c/articles/1407627/"
-        },
-        {
-          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
-          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
-        }
-      ],
+      "meaning": "Explain one complete reproduced user action across calls, data access, locks and resource exchanges.",
+      "read": "Start immediately before one short reproduction and stop immediately after it. At 0 ms, retain CALL/SCALL, VRS request/response, SDBL, database events, managed locks and errors; find the enclosing call and compare child intervals.",
+      "traps": "A server-only capture can miss client transfer/reconstruction and other nodes. historyHours=1 is retention, not automatic capture expiry; an unfinished call may not yet have a completion record.",
+      "fixes": "Follow details then chain, test the demonstrated query/lock/call/form correction and repeat with the same data, timing boundary and concurrency.",
+      "cost": "Potentially the largest bundled profile because it retains short calls and SQL; stop explicitly after the reproduction rather than leaving it as permanent monitoring.",
       "events": [
         "CALL",
         "SCALL",
@@ -1541,22 +1613,35 @@
         "ATTN"
       ],
       "thresholdMs": 0,
-      "purpose": "What happened inside one reproduced user action?",
-      "question": "What happened inside one reproduced user action?",
-      "expectedVolume": "Potentially very high; explicitly stop immediately after one short reproduction.",
-      "afterwards": "Find root call, inspect chain and missing intervals; fix and re-measure.",
-      "historyHours": 1
+      "historyHours": 1,
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        }
+      ]
     }
   },
   "problems": {
     "exceptions": {
-      "meaning": "EXCP grouped by normalized Descr.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "EXCP grouped by normalized Descr.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Inspect full cause chain and Context; fix exact platform/application/environment failure.",
+      "meaning": "A platform, application or infrastructure exception interrupted or threatened the operation.",
+      "evidence": "EXCP Exception/Descr and Context establish the reported failure; the complete cause chain and user outcome establish impact. Several matching component records do not establish several independent incidents.",
+      "investigate": "1. Use get_tech_log mode=details for the exception group and read original Descr. 2. Use mode=chain on an occurrence to find surrounding CALL/SQL. 3. Check affected user, exact version and any linked dump.",
+      "fixes": "Correct the evidenced BSL error, access right, query or environment setting; reproduce under the affected user's data and roles.",
+      "traps": "Normalized Descr is an aggregation key. Removing variable text can merge different incidents, so preserve the original chain before choosing a fix.",
+      "profile": "errors collects EXCP and related lifecycle evidence; use scenario when the successful and failed operation paths must be compared.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1573,13 +1658,12 @@
       ]
     },
     "query-errors": {
-      "meaning": "QERR Descr, Query, Context.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "QERR Descr, Query, Context.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Check query compilation, row/field permissions and optional NULL validation.",
+      "meaning": "The platform cannot compile or authorize a query, or detects an external-source nullability mismatch.",
+      "evidence": "QERR Descr, Query and Context identify the failing query and diagnostic; long DB duration without QERR does not prove a compilation or access error.",
+      "investigate": "1. Read QERR Query/Descr with get_tech_log mode=details. 2. Use mode=chain to locate the caller and roles. 3. Reproduce the query with the same permissions and external-source metadata.",
+      "fixes": "Repair query syntax or the intended row/field access policy; reconcile external nullability metadata with returned data if that check caused the failure.",
+      "traps": "The optional query checkActualNullable check can slow execution substantially; a missing QERR does not prove every external value was validated.",
+      "profile": "errors includes QERR; db adds the surrounding data-model and physical statements when compilation succeeds far enough to execute SQL.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1592,13 +1676,12 @@
       ]
     },
     "process-crashes": {
-      "meaning": "PROC with explicit abnormal/crash evidence; ordinary lifecycle is excluded.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "PROC with explicit abnormal/crash evidence; ordinary lifecycle is excluded.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Correlate EXCP/EXCPCNTX, exact version and dump; normal restart is not proof of a crash.",
+      "meaning": "A platform process terminated abnormally, losing availability or interrupting work.",
+      "evidence": "PROC must explicitly describe abnormal termination; correlate EXCP/EXCPCNTX and DumpFile or OS crash evidence. An ordinary process stop/start alone is not a crash.",
+      "investigate": "1. Inspect the original PROC action using get_tech_log mode=details. 2. Use mode=chain on nearby exception occurrences for interrupted work. 3. Check exact platform build, restart policy and process dump.",
+      "fixes": "Fix the demonstrated application/environment cause; preserve the dump and reproduction for platform support when the crash remains unexplained.",
+      "traps": "Scheduled worker recycling and changed PID are not abnormal-termination proof; distinguish configured replacement from failure.",
+      "profile": "errors captures PROC, EXCP, EXCPCNTX and ATTN; dump generation is a separate diagnostic setting, not supplied by this capture profile.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1615,13 +1698,12 @@
       ]
     },
     "lock-timeouts": {
-      "meaning": "TTIMEOUT plus matching TLOCK and transactions.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "TTIMEOUT plus matching TLOCK and transactions.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Recover holder from all participants; reduce the demonstrated transaction/lock scope.",
+      "meaning": "A transaction failed because its managed lock wait exceeded the allowed time.",
+      "evidence": "TTIMEOUT establishes the timeout. TLOCK WaitConnections, Locks and matching SDBL transaction boundaries are needed to identify the holder; the victim's Context alone does not identify it.",
+      "investigate": "1. Read the timeout occurrence with get_tech_log mode=details. 2. Use mode=chain to follow WaitConnections to candidate holders. 3. Verify intersecting values/modes and their transaction end across all workers.",
+      "fixes": "Shorten the demonstrated holding transaction; move permissible computation out of it and narrow the managed lock to the required keys.",
+      "traps": "TTIMEOUT duration may be zero. Filtering out short successful TLOCK acquisitions can erase the holder even when the long wait remains.",
+      "profile": "locks uses no duration cutoff and captures acquisitions plus transaction boundaries; errors alone detects the timeout but cannot reconstruct its cause.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1638,13 +1720,12 @@
       ]
     },
     "managed-deadlocks": {
-      "meaning": "TDEADLOCK DeadlockConnectionIntersections and TLOCK.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "TDEADLOCK DeadlockConnectionIntersections and TLOCK.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Agree access order and lock modes; repeat a parallel reproduction.",
+      "meaning": "Managed transactions acquired conflicting resources in an order that created a deadlock.",
+      "evidence": "TDEADLOCK DeadlockConnectionIntersections names participant intersections; TLOCK and SDBL history are needed to reconstruct the cycle. A timeout without a cycle is insufficient.",
+      "investigate": "1. Read participant intersections in get_tech_log mode=details. 2. Use mode=chain for each captured participant. 3. Reconstruct resource acquisition order and modes through transaction completion.",
+      "fixes": "Use a consistent register/resource acquisition order in every participating BSL path; choose compatible managed lock modes and shorten transactions.",
+      "traps": "The detected victim is not the only code path requiring repair. TDEADLOCK is managed-mode evidence, not every DBMS deadlock.",
+      "profile": "locks collects short TLOCK acquisitions, TDEADLOCK and SDBL boundaries needed for a concurrent reproduction on all relevant nodes.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1661,17 +1742,20 @@
         {
           "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
           "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
       ]
     },
     "lock-waits": {
-      "meaning": "TLOCK with nonempty WaitConnections grouped by Regions.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "TLOCK with nonempty WaitConnections grouped by Regions.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Intersect resource values and transaction lifetime before naming a holder.",
+      "meaning": "A managed lock acquisition waits for another platform connection.",
+      "evidence": "A TLOCK with non-empty WaitConnections provides waiter evidence; confirm holder identity using t:connectID, intersecting Locks and transaction lifetime. TLOCK without WaitConnections is not a proven wait.",
+      "investigate": "1. Inspect wait-bearing TLOCK in get_tech_log mode=details. 2. Use mode=chain to find listed connections. 3. Compare Locks values/modes and SDBL transaction intervals before assigning responsibility.",
+      "fixes": "Reduce conflicting lock scope, shorten the holder's transaction and keep resource order consistent; repeat posting concurrently on distinct business keys.",
+      "traps": "Regions names a namespace, not the precise protected keys. Acquisition duration is not the entire lock holding interval.",
+      "profile": "locks retains every acquisition; collect every participant rather than only the waiting user's worker.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1688,13 +1772,12 @@
       ]
     },
     "dbms-locks": {
-      "meaning": "lka=1 source; lkp=1 victim; join lkpid to lkaid and inspect lksrc.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "lka=1 source; lkp=1 victim; join lkpid to lkaid and inspect lksrc.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Collect all working processes and a DBMS deadlock graph for a proven cycle. Carrier event need not be the SQL that acquired the lock.",
+      "meaning": "One DBMS connection blocks another, independently of managed-lock diagnostics.",
+      "evidence": "With dbmslocks, lkp=1 identifies an observed victim and lka=1 a source. Join victim lkpid to source lkaid and check lksrc/dbpid. These flags alone do not prove a deadlock cycle.",
+      "investigate": "1. Use get_tech_log mode=details to retain poll/connection fields. 2. Use mode=chain to locate matching source records across workers. 3. Inspect earlier SQL in the source transaction and DBMS wait diagnostics.",
+      "fixes": "Shorten the confirmed blocking transaction, reduce write batches and tune SQL access paths when the plan demonstrates unnecessary locked data.",
+      "traps": "Polling occurs on DB access at most once per two seconds. The carrier event can complete after the blocking observation and need not contain the SQL that acquired the resource.",
+      "profile": "locks with the explicit dbmslocks option adds poll annotations; collect all working processes and DBMS-side evidence for suspected cycles.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1711,13 +1794,12 @@
       ]
     },
     "slow-db": {
-      "meaning": "DBMSSQL, DBPOSTGRS, DBV8DBENG or SDBL with SQL, grouped by normalized SQL.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "DBMSSQL, DBPOSTGRS, DBV8DBENG or SDBL with SQL, grouped by normalized SQL.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Inspect plan, statistics, parameters, data and waits; re-measure after a targeted fix. Do not automatically add an index.",
+      "meaning": "Database work consumes an excessive part of the reproduced operation's elapsed time.",
+      "evidence": "DBMSSQL/DBPOSTGRS/DBV8DBENG duration with Sql and Context establishes expensive statement occurrences. SDBL without statement text is not SQL execution proof; duration alone does not identify CPU, I/O or blocking.",
+      "investigate": "1. Use get_tech_log mode=details to inspect original SQL, parameters and counts. 2. Use mode=chain to locate the BSL caller and overlapping waits. 3. Examine the DBMS plan, statistics and actual data volumes.",
+      "fixes": "Apply the proven query correction: selective virtual-table parameters, suitable index keys, fewer repeated queries or shorter transactions; compare the whole operation afterward.",
+      "traps": "A normalized SQL group can contain different parameters/plans. The official PostgreSQL methodology's roughly 50 percent DB share is an investigation lead, not a universal failure boundary.",
+      "profile": "db defaults to a 5000 ms cutoff for individual statements; use scenario or lower the cutoff when many short statements dominate instead.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1746,13 +1828,12 @@
       ]
     },
     "slow-calls": {
-      "meaning": "CALL grouped by Context with count, total, avg and max elapsed time.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL grouped by Context with count, total, avg and max elapsed time.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Separate DB, lock waits, BSL, serialization and exchanges; batch repeated calls.",
+      "meaning": "A receiving remote call exceeds the response-time budget for the intended user operation.",
+      "evidence": "CALL duration, Context and resource counters identify expensive contexts; nested DB/TLOCK/SCALL and client timing explain components. Elapsed CALL time alone does not prove slow BSL computation.",
+      "investigate": "1. Read representative CALLs with get_tech_log mode=details. 2. Use mode=chain to inspect nested SQL, waits and outgoing calls. 3. Compare CpuTime, MemoryPeak and full-user-operation timing.",
+      "fixes": "Optimize the dominant measured component: batch server work, tune the demonstrated query, shorten conflicting transactions or reduce form serialization.",
+      "traps": "Nested durations overlap. [unverified] Residual time after removing the union of captured child intervals is unexplained time, not automatically BSL CPU.",
+      "profile": "slow-calls selects calls from 1000 ms by default; scenario retains short children and surrounding work for one bounded reproduction.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1777,13 +1858,12 @@
       ]
     },
     "memory-peaks": {
-      "meaning": "CALL with positive MemoryPeak in bytes, ranked by peak.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL with positive MemoryPeak in bytes, ranked by peak.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Large peak is not a proven leak; compare same-process dumps and retained-object checkpoints.",
+      "meaning": "A server call creates high transient memory demand or leaves memory requiring retention analysis.",
+      "evidence": "CALL MemoryPeak ranks peak bytes and Memory shows net change. Repeated MEM sz/szd growth, LEAKS stacks and comparable same-process dumps support retention investigation; one peak or RSS value does not prove a leak.",
+      "investigate": "1. Inspect peak CALL contexts with get_tech_log mode=details. 2. Use mode=chain to relate report/query result sizes. 3. Compare eligible MEM checkpoints, retained objects and same-process dumps before/after the workload.",
+      "fixes": "Reduce unnecessary report/form collections and large intermediate results; release references demonstrated to survive beyond their required lifetime.",
+      "traps": "Dump comparisons from different processes or different workloads are not comparable retention evidence; tracked survivors can still be legitimate cached state.",
+      "profile": "memory enables mem and leaks checkpoints as well as CALL counters; its instrumentation is intended for focused growth investigations.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1800,13 +1880,12 @@
       ]
     },
     "many-calls": {
-      "meaning": "Many CALL/SCALL per user action, including short calls.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Many CALL/SCALL per user action, including short calls.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Batch server work and remove implicit per-row calls.",
+      "meaning": "One user action makes repeated remote calls whose aggregate cost dominates despite short individual durations.",
+      "evidence": "CALL/SCALL counts by Context and MName within the measured action support the hypothesis; compare counts against processed rows and inspect BSL. A duration-filtered capture cannot establish the full call count.",
+      "investigate": "1. Use get_tech_log mode=details to examine repeated contexts/methods. 2. Use mode=chain on representative calls to identify both endpoints. 3. Inspect the BSL loop and compare action sizes.",
+      "fixes": "Combine data and actions into one server call, remove implicit per-row server access and use a context-free server call where form context is unnecessary.",
+      "traps": "[unverified] Call count scaling with rows is a diagnostic hypothesis, not proof of a specific loop until the code is checked.",
+      "profile": "scenario retains short CALL/SCALL; the default slow-calls cutoff would hide the calls needed to establish this pattern.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1823,13 +1902,12 @@
       ]
     },
     "slow-form": {
-      "meaning": "Whole form-opening interval, SQL and VRS body/response.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Whole form-opening interval, SQL and VRS body/response.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Measure before opening; reduce transferred collections and inspect serialization/client work.",
+      "meaning": "Opening a managed form is slow across server execution, context transfer and client reconstruction.",
+      "evidence": "Measure from before form opening; CALL/SQL intervals and paired VRS Body/status reveal components. Short SQL/BSL does not rule out large form-context transfer or client work.",
+      "investigate": "1. Use get_tech_log mode=details for form CALL/SQL and VRS occurrences. 2. Use mode=chain to find corresponding server work. 3. Compare complete opening time and use WPR/WPA or network tools for gaps.",
+      "fixes": "Reduce form attributes and nested collections, load optional data on demand and minimize unnecessary server round trips; re-measure from before opening.",
+      "traps": "Visible row count can be small while hidden form data is large; a timer started inside form code can miss serialization and restoration.",
+      "profile": "scenario captures VRS and calls for a short opening reproduction; obtain client-side logs as well as the server's nodes.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1846,13 +1924,12 @@
       ]
     },
     "slow-posting": {
-      "meaning": "Posting CALL, SQL repetitions, transactions and lock waits.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "Posting CALL, SQL repetitions, transactions and lock waits.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Batch work, filter virtual tables and shorten transactions while preserving correctness.",
+      "meaning": "Document posting is delayed by data queries, transaction work or contention.",
+      "evidence": "The posting CALL Context, repeated SQL, SDBL transaction markers and wait-bearing TLOCK separate candidates. [unverified] Repetition suggests row-by-row work but requires BSL confirmation.",
+      "investigate": "1. Inspect posting SQL and waits with get_tech_log mode=details. 2. Use mode=chain to relate them to the posting transaction. 3. Compare query count, locked resources and a concurrent reproduction.",
+      "fixes": "Batch posting queries, pass applicable virtual-table filters, shorten the transaction and narrow locks while preserving register movement and posting correctness.",
+      "traps": "Posting concurrency and data volume change the outcome; a faster isolated run does not prove the contention defect is fixed.",
+      "profile": "scenario captures the posting call and SQL together; locks provides full participant history when contention is the dominant branch.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1869,17 +1946,20 @@
         {
           "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
           "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
         }
       ]
     },
     "background-jobs": {
-      "meaning": "CALL Func/Module/Meth, JobScheduler application, SQL/errors; compare job history.",
-      "enabledBy": "Event filter and property all; filters only reduce generated data.",
-      "generatingElements": [],
-      "keyProperties": "CALL Func/Module/Meth, JobScheduler application, SQL/errors; compare job history.",
-      "badSigns": "Repetition and impact within the reproduced operation.",
-      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
-      "fixes": "Inspect schedule and concurrency. No completed CALL does not prove no job launch; technical success does not prove business completion.",
+      "meaning": "A background or scheduled job runs slowly, fails or does not produce its expected business result.",
+      "evidence": "CALL Func/Module/Meth and JobScheduler application identify job work; SQL/errors and actual job history establish execution/outcome. DefUser or an absent completed CALL alone does not prove job launch state.",
+      "investigate": "1. Use get_tech_log mode=details for the job's methods and errors. 2. Use mode=chain to inspect SQL/waits in that execution. 3. Compare launch/completion history, schedule and business outputs.",
+      "fixes": "Avoid conflicting schedules, reduce unnecessary parallel work and optimize the demonstrated query or loop in the job's BSL procedure.",
+      "traps": "An active unfinished call may not yet be logged; technical completion does not prove the business operation produced the intended result.",
+      "profile": "scenario is the bundled starting point for a bounded job execution; errors captures failure history when continuous SQL detail is unnecessary.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1904,10 +1984,12 @@
       ]
     },
     "index-scan": {
-      "meaning": "Expensive SQL plus a plan scanning a large source, with actual selectivity/data volume supporting excess reads.",
-      "evidence": "Expensive SQL plus a plan scanning a large source, with actual selectivity/data volume supporting excess reads.",
-      "fixes": "Match index keys to predicates/joins; compare plan, correctness and full-operation measurement.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A query's access path reads substantially more data than the operation needs.",
+      "evidence": "Expensive DB Sql/Context plus a measured plan, selectivity and data volume support an index mismatch. An operator name or low returned Rows alone does not prove excess reads.",
+      "investigate": "1. Read SQL/parameters with get_tech_log mode=details. 2. Use mode=chain to locate the BSL query. 3. Compare estimated versus actual rows, access conditions and candidate index key order.",
+      "fixes": "Align index keys with selective predicates and joins, or rewrite the specific 1C query condition; verify plan and total operation cost after the change.",
+      "traps": "An index suggestion needs the actual query/data/plan; creating indexes automatically from a slow duration can add write cost without fixing the cause.",
+      "profile": "db localizes expensive SQL; request plans separately on test/development and preserve parameters for comparable execution.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1924,10 +2006,12 @@
       ]
     },
     "seq-scan-not-proof": {
-      "meaning": "A Seq Scan alone is insufficient evidence of a fault.",
-      "evidence": "A Seq Scan alone is insufficient evidence of a fault.",
-      "fixes": "Compare data size, fraction selected and actual costs before creating an index.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A sequential scan has been mistaken for sufficient proof of a query defect.",
+      "evidence": "DBPOSTGRS planSQLText may show Seq Scan, but table size, selected fraction and actual work determine whether it is expensive. The presence of Seq Scan alone proves only the chosen access method.",
+      "investigate": "1. Inspect the plan and SQL in get_tech_log mode=details. 2. Use mode=chain to find the operation's contribution. 3. Compare actual rows, loops and measured alternatives on representative data.",
+      "fixes": "Keep an efficient scan when it serves the data volume; change predicates/indexes only after a measured alternative improves the whole operation.",
+      "traps": "PostgreSQL cost is not seconds; an estimated plan without actual execution cannot establish measured time or returned rows.",
+      "profile": "db with optional test/development plans supplies the access-path candidate; a small-table scan can remain healthy despite appearing in the capture.",
       "sources": [
         {
           "tag": "[article: Evgeny Filippov / IBS]",
@@ -1940,10 +2024,12 @@
       ]
     },
     "temp-table-index": {
-      "meaning": "Repeated temporary-table use with expensive plan joins/lookups.",
-      "evidence": "Repeated temporary-table use with expensive plan joins/lookups.",
-      "fixes": "Index the temporary result by used keys; include index creation cost in whole-batch measurement.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "Repeated access to a temporary result lacks a useful access path for the batch's joins or lookups.",
+      "evidence": "Repeated temporary-table SQL and an expensive plan join/lookup support this candidate; confirm the originating BSL query batch and used keys. A temporary table name by itself proves no inefficiency.",
+      "investigate": "1. Use get_tech_log mode=details to preserve the complete SQL batch and parameters. 2. Use mode=chain to locate its query context. 3. Check reuse and measure creation, indexing and consumption together.",
+      "fixes": "Materialize the necessary intermediate result and use the 1C query INDEX BY clause for the keys actually reused; compare whole-batch cost including index creation.",
+      "traps": "Normalized temporary-table renumbering is only a grouping aid. An index can cost more to build than it saves for a small or single-use result.",
+      "profile": "db collects batch statements; lower its cutoff or use scenario so short table/index creation costs remain in the comparison.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1952,10 +2038,12 @@
       ]
     },
     "virtual-table-filter": {
-      "meaning": "Expensive SQL and BSL query filtering outside virtual-table parameters.",
-      "evidence": "Expensive SQL and BSL query filtering outside virtual-table parameters.",
-      "fixes": "Push applicable restrictions into parameters and verify result semantics.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A query processes too much virtual-table data before applying useful restrictions.",
+      "evidence": "SQL/Context leading to a BSL virtual-table query with applicable restrictions outside its parameters supports the candidate; verify its plan and semantics. Long duration alone does not identify this construction.",
+      "investigate": "1. Inspect physical SQL and Context in get_tech_log mode=details. 2. Use mode=chain to locate the originating query. 3. Compare virtual-table parameters and outer predicates on representative balances/turnovers.",
+      "fixes": "Pass applicable restrictions into the virtual-table parameters in the 1C query and verify identical business results, including periods and dimensions.",
+      "traps": "Moving a condition can change balance/turnover semantics; optimize only restrictions valid for that virtual table's parameter contract.",
+      "profile": "db finds expensive virtual-table expansions; include SDBL Context and obtain the original BSL query to validate parameter placement.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1964,10 +2052,12 @@
       ]
     },
     "subquery-joins": {
-      "meaning": "SQL/context identifies joins to complex subqueries or virtual tables.",
-      "evidence": "SQL/context identifies joins to complex subqueries or virtual tables.",
-      "fixes": "Materialize appropriate intermediate results, index them and compare total cost.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A join to a complex subquery or virtual table produces an expensive expanded database plan.",
+      "evidence": "DB Sql/Context and the BSL query identify the construction; measured plan rows/loops establish cost. The mere presence of a subquery is not proof it needs materialization.",
+      "investigate": "1. Use get_tech_log mode=details for SQL and available plan. 2. Use mode=chain to identify the full query batch. 3. Compare join estimates and intermediate result sizes.",
+      "fixes": "Materialize suitable intermediate data in temporary tables, index the reused keys and compare total batch execution with equivalent results.",
+      "traps": "Splitting a query adds materialization work; evaluating only the final SELECT hides temporary-result creation costs.",
+      "profile": "db localizes costly joins; use a sufficiently low cutoff to retain every phase of a candidate temporary-table rewrite.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1976,10 +2066,12 @@
       ]
     },
     "query-predicates": {
-      "meaning": "Expanded SQL, heavy joins or ineffective access with OR, expressions or composite references.",
-      "evidence": "Expanded SQL, heavy joins or ineffective access with OR, expressions or composite references.",
-      "fixes": "Rewrite the demonstrated predicate/type restriction; verify result and plan.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A query predicate causes avoidable expansion or prevents an efficient selective access path.",
+      "evidence": "Expanded SQL/Context and a measured plan must lead to a specific OR condition, computation or composite-reference dereference in the BSL query. A complex-looking expression alone is insufficient.",
+      "investigate": "1. Read original SQL/parameters with get_tech_log mode=details. 2. Use mode=chain to locate the BSL predicate. 3. Compare its types, selectivity and plan against a semantically equivalent rewrite.",
+      "fixes": "Rewrite the demonstrated condition, constrain composite references to the required type and simplify index-blocking calculations where equivalent; check result and plan.",
+      "traps": "Do not mechanically split every OR or add every possible reference type; preserve NULL, type and duplicate-result semantics.",
+      "profile": "db captures the expanded SQL; keep Context and inspect the source query because physical SQL alone obscures platform reference semantics.",
       "sources": [
         {
           "tag": "[doc]",
@@ -1988,10 +2080,12 @@
       ]
     },
     "n-plus-one-sql": {
-      "meaning": "[unverified] Repeated normalized SQL inside one CALL with frequency growing with processed rows.",
-      "evidence": "[unverified] Repeated normalized SQL inside one CALL with frequency growing with processed rows.",
-      "fixes": "Confirm a query loop in code and replace it with an appropriate batch query.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A BSL operation issues a database query repeatedly for individual items instead of retrieving a suitable set.",
+      "evidence": "[unverified] Repeated normalized Sql within one CALL, with count growing as processed rows grow, is a candidate. Confirm the loop in BSL; unrelated calls sharing a fingerprint are insufficient.",
+      "investigate": "1. Use get_tech_log mode=details to inspect SQL count and original parameters. 2. Use mode=chain to place repetitions inside one call. 3. Inspect the Context's BSL loop and compare two input sizes.",
+      "fixes": "Replace the query inside the loop with a batch/set query over the needed keys, then process the resulting selection or indexed temporary result.",
+      "traps": "Literal normalization can merge distinct per-item statements; repetition establishes frequency, not redundant work or an automatic right to cache results.",
+      "profile": "scenario or db with thresholdMs=0 retains the short statements; the default five-second db cutoff can hide the whole pattern.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2004,10 +2098,12 @@
       ]
     },
     "long-transaction": {
-      "meaning": "Long BeginTransaction-to-Commit/Rollback interval, held resources and waiting connections.",
-      "evidence": "Long BeginTransaction-to-Commit/Rollback interval, held resources and waiting connections.",
-      "fixes": "Move permissible calculations outside the transaction and reduce scope while preserving correctness.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A transaction holds resources while performing work that prolongs contention.",
+      "evidence": "SDBL BeginTransaction through CommitTransaction/RollbackTransaction establishes an interval; matched TLOCK/DBMS victims demonstrate impact. A long CALL alone is not a transaction boundary.",
+      "investigate": "1. Inspect transaction Func markers using get_tech_log mode=details. 2. Use mode=chain to follow the connection through SQL and lock acquisition. 3. Check waiters before commit and identify movable computation.",
+      "fixes": "Move permissible calculations and external work outside the transaction, reduce batch size and keep the protected read/write sequence as short as correctness permits.",
+      "traps": "Short SQL does not imply short lock holding. Missing begin/end markers or filtered history prevents a complete holding-time conclusion.",
+      "profile": "locks keeps SDBL boundaries and acquisitions without a duration cutoff; collect the holder even when it belongs to another worker.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2020,10 +2116,12 @@
       ]
     },
     "wide-managed-lock": {
-      "meaning": "[unverified] Locks values show broad scope and independent business keys collide; lock code corroborates.",
-      "evidence": "[unverified] Locks values show broad scope and independent business keys collide; lock code corroborates.",
-      "fixes": "Specify dimensions and values; Regions alone is not evidence of whole-register locking.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A managed lock protects a wider business-key range than the operation requires.",
+      "evidence": "TLOCK Locks must show broad values/modes and unrelated keys must conflict; verify BSL lock construction and transaction lifetime. Regions containing a register name is insufficient.",
+      "investigate": "1. Use get_tech_log mode=details to read complete Locks and Context. 2. Use mode=chain for waiter and candidate holder. 3. Compare requested lock dimensions with the actual business keys.",
+      "fixes": "Specify the required register dimensions/values in managed locks and shorten their transaction lifetime; validate concurrent operations on different keys.",
+      "traps": "[unverified] A whole-register-lock diagnosis remains a hypothesis until resource coverage and the code setting it are confirmed.",
+      "profile": "locks captures resource values and short acquisitions; preserve Context and all participant processes to test the scope hypothesis.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2036,10 +2134,12 @@
       ]
     },
     "lock-escalation": {
-      "meaning": "SQL participants plus lock_escalation Extended Event and a blocking table S/X lock.",
-      "evidence": "SQL participants plus lock_escalation Extended Event and a blocking table S/X lock.",
-      "fixes": "Use shorter transactions, smaller batches and efficient queries; disabling escalation is not the first automatic fix.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "SQL Server converts many fine-grained locks into a broader lock that blocks other work.",
+      "evidence": "TJ SQL/connection evidence localizes the candidate; Microsoft requires lock_escalation Extended Events and a blocking table S/X lock to confirm it. A table lock or TJ lka flag alone is insufficient.",
+      "investigate": "1. Inspect affected SQL with get_tech_log mode=details. 2. Use mode=chain to link the transaction and victims. 3. Correlate SQL Server lock_escalation events and the blocking lock mode/resource.",
+      "fixes": "Use shorter transactions, smaller modification batches and efficient selective queries; preserve posting/exchange correctness while reducing locked data.",
+      "traps": "Do not disable lock escalation as an automatic first fix. A table lock can arise for reasons other than escalation.",
+      "profile": "locks with dbmslocks links observed DBMS participants; collect SQL Server Extended Events separately for escalation proof.",
       "sources": [
         {
           "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
@@ -2052,10 +2152,12 @@
       ]
     },
     "dbms-deadlock": {
-      "meaning": "DBMS error plus the DBMS deadlock report; lka/lkp alone does not prove a cycle.",
-      "evidence": "DBMS error plus the DBMS deadlock report; lka/lkp alone does not prove a cycle.",
-      "fixes": "Inspect actual resources/access order, fix the evidenced SQL or code, and reproduce concurrently.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "Database transactions formed a deadlock cycle detected by the DBMS.",
+      "evidence": "EXCP with a DBMS deadlock diagnostic plus SQL Server xml_deadlock_report or PostgreSQL deadlock log establishes the DBMS cycle. lka/lkp identifies blocking but cannot prove a cycle.",
+      "investigate": "1. Read the DBMS exception and SQL in get_tech_log mode=details. 2. Use mode=chain to locate participant contexts. 3. Read the DBMS graph/log to reconstruct resources and access order.",
+      "fixes": "Change the participating BSL/SQL paths to acquire resources in a consistent order; shorten transactions and validate under concurrent load.",
+      "traps": "TDEADLOCK concerns managed locking; its absence does not rule out a SQL Server/PostgreSQL deadlock, and the selected victim is not the whole cause.",
+      "profile": "locks with dbmslocks captures 1C-side participants; obtain the DBMS deadlock report in addition to this profile.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2064,10 +2166,12 @@
       ]
     },
     "dynamic-list": {
-      "meaning": "[unverified] Repeated slow opening/scrolling requests with list context.",
-      "evidence": "[unverified] Repeated slow opening/scrolling requests with list context.",
-      "fixes": "Inspect actual SQL, user filters, sorting and permissions; optimize that query.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A dynamic list opens or scrolls slowly under its real filters, sort order and access rights.",
+      "evidence": "Repeated slow SQL during list opening/scrolling and Context leading to that list establish the candidate. [unverified] The exact list-specific cause still needs source-query, filter and rights inspection.",
+      "investigate": "1. Use get_tech_log mode=details for the slow list SQL. 2. Use mode=chain to identify the list call. 3. Reproduce with the problem user's filters, sorting and roles and inspect the plan.",
+      "fixes": "Optimize the actual list query, selective predicates and suitable indexes; remove unnecessary fetched data or repeated server access where shown by evidence.",
+      "traps": "A fast administrator run does not validate the affected user's access restrictions and data; avoid changing list behavior from one SQL fingerprint alone.",
+      "profile": "scenario records opening/scrolling calls and their SQL; db narrows to a persistent expensive list statement after localization.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2084,22 +2188,30 @@
       ]
     },
     "large-report-result": {
-      "meaning": "CALL memory peak and SQL/report context show unnecessary processing.",
-      "evidence": "CALL memory peak and SQL/report context show unnecessary processing.",
-      "fixes": "Restrict data and inspect data-composition settings; verify report correctness.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "A report processes or materializes more data than its output needs, increasing memory and elapsed time.",
+      "evidence": "CALL MemoryPeak and SQL/result volumes in the report's Context support the candidate; inspect the data composition schema/settings and required output. A peak alone does not prove a leak or an unnecessary result.",
+      "investigate": "1. Read report CALL and SQL with get_tech_log mode=details. 2. Use mode=chain to relate the query batch and materialization. 3. Compare data composition filters, grouping and actual output size.",
+      "fixes": "Push valid report restrictions into the query/data composition settings, reduce unnecessary intermediate rows and verify totals and business output after the change.",
+      "traps": "The IT Expertise example is one ERP report investigation, not a universal memory threshold; compare equivalent settings and data volumes.",
+      "profile": "scenario captures one report with SQL and CALL counters; memory adds retention diagnostics only when growth persists after report completion.",
       "sources": [
         {
           "tag": "[article: IT Expertise team]",
           "url": "https://infostart.ru/1c/articles/1662406/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
         }
       ]
     },
     "session-data-growth": {
-      "meaning": "UsedSize/FilesSize growth and long SDGC LockDuration.",
-      "evidence": "UsedSize/FilesSize growth and long SDGC LockDuration.",
-      "fixes": "Find change sources; enable costly sessiondatacontext temporarily if needed.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "Session-data storage expands or its cleanup/compaction holds the store long enough to affect users.",
+      "evidence": "SDGC UsedSize/FilesSize over time for the same InstanceID and LockDuration establish growth/maintenance timing; correlate pauses. Large FilesSize alone does not locate the writer.",
+      "investigate": "1. Use get_tech_log mode=details for related CALL groups. 2. Use mode=events with event=SDGC, then mode=chain on its occurrenceId to inspect nearby work; SDGC has no automatic summary group. 3. Temporarily collect sessiondatacontext to locate changes.",
+      "fixes": "Reduce unnecessary session-data changes identified by the diagnostic context; compare UsedSize and compaction lock time after an equivalent workload.",
+      "traps": "LockDuration uses milliseconds. SDGC is session storage maintenance, not a BSL heap-leak detector; sessiondatacontext adds overhead.",
+      "profile": "No bundled profile includes SDGC by default: add event SDGC to scenario; sessiondatacontext is a separate explicit diagnostic configuration.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2112,10 +2224,12 @@
       ]
     },
     "exchange-table-writes": {
-      "meaning": "SQL/context identifies exchange change tables and confirmed blocking.",
-      "evidence": "SQL/context identifies exchange change tables and confirmed blocking.",
-      "fixes": "Revisit batching and change registration while validating exchange integrity.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "Mass changes and exchange change registration produce heavy writes or DBMS contention.",
+      "evidence": "SQL and Context must identify exchange change tables and matching DBMS blockers; confirm the registration path. A slow write alone does not establish that exchange registration caused it.",
+      "investigate": "1. Inspect write SQL/Context with get_tech_log mode=details. 2. Use mode=chain for transaction and DBMS participants. 3. Check change-table batches and the application's registration logic.",
+      "fixes": "Review modification batching and exchange registration frequency, shorten demonstrated blocking transactions and validate exchange integrity and delivery after the change.",
+      "traps": "Borisenko and Grimuta's case is workload-specific; suppressing change registration can damage exchange correctness and is not a generic optimization.",
+      "profile": "locks with dbmslocks collects write/blocking evidence; lower filtering in db if frequent short registration writes are also relevant.",
       "sources": [
         {
           "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
@@ -2124,10 +2238,12 @@
       ]
     },
     "unexplained-gap": {
-      "meaning": "Short recorded operations but a long unexplained interval.",
-      "evidence": "Short recorded operations but a long unexplained interval.",
-      "fixes": "Inspect code between events, serialization and external waits; expand capture/instrumentation.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "The full user operation is longer than the work explained by captured event intervals.",
+      "evidence": "A measured action interval and shorter CALL/SQL/lock intervals establish missing explanation, not idle CPU. Check filtered, unfinished and uncollected work before attributing the gap.",
+      "investigate": "1. Use get_tech_log mode=details for enclosing call times. 2. Use mode=chain to inspect coverage and child intervals. 3. Expand client/server capture and instrument the code or external operation spanning the gap.",
+      "fixes": "Optimize the demonstrated code, form serialization or external wait after profiling; add focused timing around code not explained by TJ.",
+      "traps": "[unverified] Subtract the union of overlapping child intervals, not their sum; unexplained time is not proven BSL CPU or proof the server was idle.",
+      "profile": "scenario with no duration cutoff preserves short events; include client logs and verify all nodes before diagnosing an unrecorded interval.",
       "sources": [
         {
           "tag": "[doc]",
@@ -2140,10 +2256,12 @@
       ]
     },
     "bottleneck-moved": {
-      "meaning": "Time/resource distribution changed after a fix and the operation is slow again.",
-      "evidence": "Time/resource distribution changed after a fix and the operation is slow again.",
-      "fixes": "Repeat diagnosis; removing one limit can expose another.",
-      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "meaning": "After one constraint is removed, another component limits the operation's response time.",
+      "evidence": "Comparable before/after whole-operation measurements and changed CALL/SQL/wait/resource distribution support the shift. A later slow run with different data or concurrency is insufficient.",
+      "investigate": "1. Use get_tech_log mode=details on comparable pre/post groups. 2. Use mode=chain for representative calls in both captures. 3. Recompare SQL share, waits, memory and client timing under equal conditions.",
+      "fixes": "Re-run diagnosis and optimize the newly demonstrated constraint; retain the earlier correctness checks and repeat the same full user operation.",
+      "traps": "Badanov's hardware case illustrates a possible shift, not a guarantee that every optimization exposes another defect; account for changed workload.",
+      "profile": "scenario is the common comparison capture; add locks or memory instrumentation only when the new distribution indicates that resource.",
       "sources": [
         {
           "tag": "[article: Vladimir Badanov]",
@@ -2218,7 +2336,7 @@
       ]
     },
     "disk-not-network": {
-      "note": "CALL InBytes/OutBytes are disk I/O despite contrary article interpretations. VRS Body is exchange data.",
+      "note": "CALL InBytes/OutBytes are disk I/O despite contrary article interpretations. VRS Body is the request/response body size in bytes, not the body text.",
       "sources": [
         {
           "tag": "[doc]",
