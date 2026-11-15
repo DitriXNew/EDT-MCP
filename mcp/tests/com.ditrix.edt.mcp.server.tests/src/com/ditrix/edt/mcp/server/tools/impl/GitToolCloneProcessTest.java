@@ -218,7 +218,7 @@ public class GitToolCloneProcessTest
         assertTrue("a credential nobody can give must fail fast, took " + seconds + " s", seconds < 60); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
         assertTrue("git's own message says why: " + result, result.get("output").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
-            .toLowerCase(java.util.Locale.ROOT).matches("(?s).*(authentication|username|terminal prompts|401).*")); //$NON-NLS-1$
+            .toLowerCase(java.util.Locale.ROOT).matches("(?s).*(authentication|username|password|terminal prompts|401).*")); // Linux git: "unable to get password from user" //$NON-NLS-1$
         assertFalse("the target is never created", Files.exists(target, LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
         assertNoStagingBeside(target);
     }
