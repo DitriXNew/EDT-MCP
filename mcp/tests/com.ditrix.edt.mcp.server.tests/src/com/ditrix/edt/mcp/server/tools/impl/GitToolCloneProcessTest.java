@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -392,6 +393,38 @@ public class GitToolCloneProcessTest
         String warnings = result.get("warnings").toString(); //$NON-NLS-1$
         assertTrue(warnings, warnings.contains(".edt-mcp-clone-")); //$NON-NLS-1$
         assertTrue(Files.isDirectory(target.resolve(".git"))); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #944 (round 5): while a clone runs, its claim covers its staging directory - no other
+     * clone of this server may target a path inside it.
+     */
+    @Test(timeout = 120_000)
+    public void testARunningClonesClaimCoversItsStagingDirectory() throws Exception
+    {
+        HangingRemote remote = hangingRemote();
+        Path parent = scratchFolder();
+        Path target = parent.resolve("clone"); //$NON-NLS-1$
+
+        JsonObject started = startClone("clone " + remote.url + " '" + target + "'", target, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            TimeUnit.MINUTES.toMillis(10), 0);
+        assertTrue("git reached the remote", remote.connected.await(30, TimeUnit.SECONDS)); //$NON-NLS-1$
+        Path staging;
+        try (Stream<Path> siblings = Files.list(parent))
+        {
+            staging = siblings.filter(p -> p.getFileName().toString().startsWith(".edt-mcp-clone-")) //$NON-NLS-1$
+                .findFirst().orElseThrow();
+        }
+        try
+        {
+            assertNull("a path inside the running clone's staging directory is held", //$NON-NLS-1$
+                GitCloneTarget.claim(staging.toRealPath().resolve("other"))); //$NON-NLS-1$
+        }
+        finally
+        {
+            jobs.cancel(started.get("jobId").getAsString()); //$NON-NLS-1$
+            jobs.await(started.get("jobId").getAsString(), 30_000); //$NON-NLS-1$
+        }
     }
 
     // ---- helpers ----

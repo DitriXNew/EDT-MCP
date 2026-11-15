@@ -39,7 +39,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * <li>the target's PARENT exists - this tool creates nothing above it, only its staging directory beside
  * the target and, at the end, the target itself;</li>
  * <li>the target is NEW - nothing is at that path yet, not even an empty directory: the clone arrives
- * there in one atomic rename ({@link #install}), and nothing of the target's is ever merged or rolled back;</li>
+ * there in one rename that never replaces anything ({@link #install}), and nothing of the target's is ever merged or rolled back;</li>
  * <li>it is not inside, and does not contain, the folder of an EDT workspace project;</li>
  * <li>it is not inside a git work tree, judged by the same walk {@code git init} uses
  * ({@link GitRepositoryResolver#enclosingRepository}): a clone there nests one repository inside
@@ -181,6 +181,11 @@ public final class GitCloneTarget
                 + "exist. This tool creates nothing above the target: create '" + parent //$NON-NLS-1$
                 + "' first, or name a target whose parent exists."); //$NON-NLS-1$
         }
+        String inStaging = stagingPathRefusal(spelled);
+        if (inStaging != null)
+        {
+            return Checked.refused(inStaging);
+        }
         String occupied = existingTargetRefusal(spelled);
         if (occupied != null)
         {
@@ -198,6 +203,11 @@ public final class GitCloneTarget
             return Checked.refused("The real location of the clone target '" + spelled + "' could not be " //$NON-NLS-1$ //$NON-NLS-2$
                 + "resolved, so this tool cannot tell where the clone would land. The clone is refused " //$NON-NLS-1$
                 + "rather than run blind: check the path (and any link or junction on it) in a terminal."); //$NON-NLS-1$
+        }
+        String realInStaging = stagingPathRefusal(real);
+        if (realInStaging != null)
+        {
+            return Checked.refused(realInStaging);
         }
         String projectRefusal = projectRefusal(spelled, real, projects);
         if (projectRefusal != null)
@@ -230,9 +240,28 @@ public final class GitCloneTarget
     }
 
     /**
+     * Why {@code target} is refused for being - or lying under - a clone's staging directory
+     * ({@link #STAGING_PREFIX}): such a path belongs to a clone of this tool (running, or left behind)
+     * and can never be a legitimate target; a clone there would have its work removed by that clone's
+     * rollback, or remove it.
+     */
+    private static String stagingPathRefusal(Path target)
+    {
+        for (Path segment : target)
+        {
+            if (segment.toString().startsWith(STAGING_PREFIX))
+            {
+                return "The clone target '" + target + "' is, or lies inside, a staging directory of another " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "clone ('" + segment + "'). Such a path is never a clone target: pick a new path outside it."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
+    }
+
+    /**
      * Why {@code target} cannot be cloned into because something is already there, or {@code null}
      * when nothing is. Only a NEW directory is accepted - an existing one, even an empty one, is
-     * refused: the clone is then installed with ONE atomic rename, and nothing of the target's has to be
+     * refused: the clone is then installed with ONE non-replacing rename, and nothing of the target's has to be
      * judged, merged or rolled back.
      */
     private static String existingTargetRefusal(Path target)
@@ -311,6 +340,7 @@ public final class GitCloneTarget
     public static final class Claim implements AutoCloseable
     {
         private final Path real;
+        private volatile Path staging;
         private volatile BooleanSupplier alive;
         private boolean released;
 
@@ -336,6 +366,25 @@ public final class GitCloneTarget
         {
             BooleanSupplier check = alive;
             return check == null || check.getAsBoolean();
+        }
+
+        /**
+         * Extends the claim to the clone's staging directory, so no other clone of this server can target
+         * a path inside it (which this clone's rollback would remove) while the claim is held.
+         *
+         * @param container the staging directory
+         */
+        public void coverStaging(Path container)
+        {
+            staging = container;
+        }
+
+        /** @return whether {@code path} overlaps the target or the staging directory this claim holds */
+        boolean overlaps(Path path)
+        {
+            Path held = staging;
+            return real.startsWith(path) || path.startsWith(real)
+                || (held != null && (held.startsWith(path) || path.startsWith(held)));
         }
 
         /** Releases the claim; idempotent. */
@@ -367,7 +416,7 @@ public final class GitCloneTarget
             for (Iterator<Claim> it = CLAIMS.iterator(); it.hasNext();)
             {
                 Claim held = it.next();
-                if (!held.real.startsWith(real) && !real.startsWith(held.real))
+                if (!held.overlaps(real))
                 {
                     continue;
                 }
@@ -392,7 +441,7 @@ public final class GitCloneTarget
      * git clones into {@code <container>/repo}, where the container is a fresh, uniquely named sibling of
      * the target that THIS run creates - never into the target itself. Everything a failed, cancelled or
      * timed-out clone left behind is then inside a directory that is provably this run's own, so taking
-     * it back never touches the target. Only a clone that succeeded is moved into place, with one atomic
+     * it back never touches the target. Only a clone that succeeded is moved into place, with one non-replacing
      * rename ({@link #install}).
      * <p>
      * The container's identity is fixed when it is created: a marker file holding a random token, and -
@@ -426,6 +475,12 @@ public final class GitCloneTarget
 
         /** Test seam: how the emptied container itself is deleted. */
         public volatile ContainerDelete containerDelete = Files::deleteIfExists;
+
+        /** Test seam: runs right after the install's rename, before the emptied container is cleaned up. */
+        volatile Runnable afterInstallMove = () -> { };
+
+        /** Test seam: runs at the start of the emptied-container cleanup, after ownership was proved. */
+        volatile Runnable beforeEmptyCheck = () -> { };
 
         /** Test seam: how the container's presence is read (without following links). */
         volatile Presence presence = GitCloneTarget::presenceOf;
@@ -743,14 +798,16 @@ public final class GitCloneTarget
         }
     }
     /**
-     * Moves a successful clone into its NEW target with one atomic rename of {@code <container>/repo},
-     * never replacing anything: the container must still be this run's ({@link Staging#unchanged}) and
+     * Moves a successful clone into its NEW target with one rename of {@code <container>/repo} that never
+     * replaces anything (atomic on Windows; on POSIX a check for the target, then the rename): the container must still be this run's ({@link Staging#unchanged}) and
      * {@code repo} a plain directory (not a link or junction swapped in after git exited), both read
      * without following links just before the rename. The emptied container is removed afterwards; when
-     * that fails the clone is still in place and the leftover is reported, not hidden.
+     * that fails - or the container can no longer be proved this run's, in which case nothing is deleted -
+     * the clone is still in place and the leftover is reported, not hidden.
      * <p>
-     * Declared residual: on POSIX an atomic rename replaces an EMPTY directory created at the target in
-     * the window since the check (which loses nothing); and the checks are made, then the rename runs.
+     * Declared residual: on POSIX an empty directory created at the target between the move's own check and
+     * its rename(2) is replaced (no no-replace rename is reachable from Java 17 without native code); and
+     * the checks are made, then the rename runs.
      *
      * @param staging the staging directory holding the clone
      * @param checked the checked target
@@ -782,12 +839,31 @@ public final class GitCloneTarget
         }
         try
         {
-            Files.move(staging.repository(), target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            // NOT ATOMIC_MOVE: that is rename(2) on POSIX, which silently REPLACES an empty directory, and
+            // MOVEFILE_REPLACE_EXISTING on Windows. A plain move never replaces: Windows moves with
+            // MoveFileEx(0), which fails if the target exists, atomically; POSIX checks for the target
+            // (FileAlreadyExistsException) and then renames - the window between the two is the declared
+            // residual. The staging directory is the target's sibling, so this stays one rename on the same
+            // file system (a non-empty directory is never copied across: DirectoryNotEmptyException).
+            Files.move(staging.repository(), target);
         }
         catch (IOException | RuntimeException e)
         {
             return Installed.refused("The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
                 + "): something was created there while it ran."); //$NON-NLS-1$
+        }
+        staging.afterInstallMove.run();
+        Boolean present = staging.presence.of(staging.path());
+        if (Boolean.FALSE.equals(present))
+        {
+            return Installed.done(); // already gone: nothing is left over
+        }
+        if (present == null || !staging.unchanged())
+        {
+            // Cannot be proved this run's any more: nothing is deleted, the path is reported.
+            Activator.logWarning("git clone: cloned to " + target + ", but the staging directory " //$NON-NLS-1$ //$NON-NLS-2$
+                + staging.path() + " can no longer be proved to be this clone's; it is left in place"); //$NON-NLS-1$
+            return Installed.doneWithLeftover(staging.path());
         }
         if (!removeEmptyContainer(staging))
         {
@@ -854,6 +930,7 @@ public final class GitCloneTarget
     private static boolean removeEmptyContainer(Staging staging)
     {
         Path container = staging.path();
+        staging.beforeEmptyCheck.run();
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(container))
         {
             for (Path entry : entries)
@@ -863,6 +940,10 @@ public final class GitCloneTarget
                     return false; // more than the marker: keep the proof for the next attempt
                 }
             }
+        }
+        catch (java.nio.file.NoSuchFileException e)
+        {
+            return true; // gone already (another program removed it): nothing is left over
         }
         catch (IOException | RuntimeException e) // NOSONAR not readable now: keep the proof, report a leftover
         {

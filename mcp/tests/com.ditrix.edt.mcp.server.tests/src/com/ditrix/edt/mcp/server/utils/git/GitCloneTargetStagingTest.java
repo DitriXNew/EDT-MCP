@@ -343,6 +343,134 @@ public class GitCloneTargetStagingTest
         assertEquals(Boolean.TRUE, GitCloneTarget.presenceOf(staging.path()));
     }
 
+    /**
+     * Codex P1 on #944 (round 5): the install never replaces a target - not even an EMPTY directory another
+     * program created at the target after the check (rename(2) with ATOMIC_MOVE would on POSIX).
+     */
+    @Test
+    public void testTheInstallRefusesATargetCreatedEmptyAfterTheCheck() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        Path theirs = Files.createDirectory(checked.real());
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertFalse("an existing target is never replaced", installed.ok()); //$NON-NLS-1$
+        try (Stream<Path> inside = Files.list(theirs))
+        {
+            assertEquals("their directory is untouched", 0, inside.count()); //$NON-NLS-1$
+        }
+        assertTrue("the clone is still in staging", Files.isDirectory(staging.repository().resolve(".git"))); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P2 on #944 (round 5): the cleanup after a successful install proves the container again - one
+     * replaced meanwhile (even one holding only a marker) is left alone and reported as a leftover.
+     */
+    @Test
+    public void testTheCleanupAfterInstallLeavesAReplacedContainerAlone() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        Path theirMarker = staging.path().resolve(GitCloneTarget.Staging.MARKER);
+        staging.afterInstallMove = () -> {
+            try
+            {
+                deleteTree(staging.path());
+                Files.createDirectory(staging.path());
+                Files.write(theirMarker, "another clone's token".getBytes(StandardCharsets.US_ASCII)); //$NON-NLS-1$
+            }
+            catch (IOException e)
+            {
+                throw new IllegalStateException(e);
+            }
+        };
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertTrue(installed.ok());
+        assertEquals("the replaced container is reported", staging.path(), installed.stagingLeftover()); //$NON-NLS-1$
+        assertEquals("and nothing in it is deleted", "another clone's token", //$NON-NLS-1$ //$NON-NLS-2$
+            new String(Files.readAllBytes(theirMarker), StandardCharsets.US_ASCII));
+    }
+
+    /** Codex P2 on #944 (round 5): a container already gone after the install is no leftover. */
+    @Test
+    public void testAContainerGoneAfterTheInstallIsNoLeftover() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        staging.afterInstallMove = () -> deleteQuietlyForTest(staging.path());
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertTrue(installed.ok());
+        assertNull("nothing is left over", installed.stagingLeftover()); //$NON-NLS-1$
+    }
+
+    /** ...and the same when it disappears between the proof and the listing of what it holds. */
+    @Test
+    public void testAContainerGoneBeforeItsListingIsNoLeftover() throws Exception
+    {
+        Path parent = freeFolder();
+        GitCloneTarget.Checked checked = checked(parent.resolve("repo")); //$NON-NLS-1$
+        GitCloneTarget.Staging staging = GitCloneTarget.createStaging(checked);
+        Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
+        staging.beforeEmptyCheck = () -> deleteQuietlyForTest(staging.path());
+
+        GitCloneTarget.Installed installed = GitCloneTarget.install(staging, checked);
+
+        assertTrue(installed.ok());
+        assertNull("a NoSuchFileException there means already removed", installed.stagingLeftover()); //$NON-NLS-1$
+    }
+
+    /**
+     * Codex P1 on #944 (round 5): a path inside a clone's staging directory - running or left behind - is
+     * never a clone target, and an active clone's claim covers its staging directory too.
+     */
+    @Test
+    public void testAPathInsideAStagingDirectoryIsNeverATarget() throws Exception
+    {
+        Path parent = freeFolder();
+        Path stagingLike = Files.createDirectory(parent.resolve(GitCloneTarget.STAGING_PREFIX + "abcd1234-repo")); //$NON-NLS-1$
+        String inside = GitCloneTarget.check(stagingLike.resolve("other"), List.of()).refusal(); //$NON-NLS-1$
+        assertNotNull(inside);
+        assertTrue(inside, inside.contains("staging directory")); //$NON-NLS-1$
+        String itself = GitCloneTarget.check(parent.resolve(GitCloneTarget.STAGING_PREFIX + "new"), List.of()).refusal(); //$NON-NLS-1$
+        assertTrue(String.valueOf(itself), String.valueOf(itself).contains("staging directory")); //$NON-NLS-1$
+
+        Path target = parent.resolve("repo"); //$NON-NLS-1$
+        try (GitCloneTarget.Claim claim = GitCloneTarget.claim(target))
+        {
+            claim.coverStaging(stagingLike);
+            assertNull("a target inside the claimed staging is held", //$NON-NLS-1$
+                GitCloneTarget.claim(stagingLike.resolve("other"))); //$NON-NLS-1$
+            assertNull(GitCloneTarget.claim(stagingLike));
+            try (GitCloneTarget.Claim unrelated = GitCloneTarget.claim(parent.resolve("elsewhere"))) //$NON-NLS-1$
+            {
+                assertNotNull("an unrelated target is free", unrelated); //$NON-NLS-1$
+            }
+        }
+    }
+
+    private static void deleteQuietlyForTest(Path dir)
+    {
+        try
+        {
+            deleteTree(dir);
+        }
+        catch (IOException e)
+        {
+            throw new IllegalStateException(e);
+        }
+    }
     /** Replaces the (empty) directory {@code dir} with a link to {@code to}: a junction on Windows. */
     private static void swapForLink(Path dir, Path to)
     {

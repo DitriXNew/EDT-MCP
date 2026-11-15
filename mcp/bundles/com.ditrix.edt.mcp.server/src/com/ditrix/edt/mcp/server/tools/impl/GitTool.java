@@ -1262,6 +1262,7 @@ public class GitTool implements IMcpTool
             display.set(2 + clone.directoryIndex(), directory.toString());
             String safeCommand = redactCredentialUrls(String.join(" ", display)); //$NON-NLS-1$
             CloneControl control = controls.get();
+            control.claim = claim;
             AtomicReference<String> outcome = new AtomicReference<>();
             BackgroundJobs.JobSnapshot started;
             try
@@ -1368,6 +1369,11 @@ public class GitTool implements IMcpTool
                 .put(KEY_CLEANED_UP, !replaced).toJson();
             control.finished(json);
             return new CloneRun(false, json, error);
+        }
+        if (control.claim != null)
+        {
+            // No other clone of this server may target a path inside this staging directory meanwhile.
+            control.claim.coverStaging(staging.path());
         }
         List<String> run = new ArrayList<>(argv);
         run.set(2 + clone.directoryIndex(), staging.repository().toString());
@@ -1505,6 +1511,9 @@ public class GitTool implements IMcpTool
 
         /** How long a cancel waits for the rollback; a test shortens it. */
         volatile long cancelWaitMillis = CLONE_CANCEL_WAIT_MILLIS;
+
+        /** The target's claim, extended to the staging directory once it exists (null in a direct test run). */
+        volatile GitCloneTarget.Claim claim;
 
         /** Test seam: runs once the staging directory exists, before it is proved and handed to git. */
         volatile Runnable beforeGit = () -> { };
