@@ -77,13 +77,11 @@ public class GitToolInitTest
     // ---- the whitelist ----
 
     @Test
-    public void testInitIsWhitelistedAndCloneStaysRefused() throws Exception
+    public void testInitIsWhitelisted() throws Exception
     {
         assertTrue(GitTool.ALLOWED_SUBCOMMANDS.contains("init")); //$NON-NLS-1$
         assertEquals(List.of("git", "init"), GitTool.parseCommand("init")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(List.of("git", "init"), GitTool.parseCommand("git init")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        String clone = rejection("clone https://example.com/r.git"); //$NON-NLS-1$
-        assertTrue(clone, clone.contains("'clone' is not supported")); //$NON-NLS-1$
     }
 
     // ---- the grammar: what is accepted ----

@@ -133,13 +133,12 @@ public class GitToolTest
     @Test
     public void testParseRejectsNonWhitelistedSubcommand()
     {
-        // config = arbitrary exec (core.sshCommand / aliases); clean/reset = data loss; clone out of
-        // scope (init is accepted with its own grammar - GitToolInitTest); rebase omitted because its
-        // --exec/-x runs a command per step.
+        // config = arbitrary exec (core.sshCommand / aliases); clean/reset = data loss; init and clone
+        // are accepted with their own grammars (GitToolInitTest, GitToolCloneTest); rebase omitted
+        // because its --exec/-x runs a command per step.
         assertRejected("config core.sshCommand=evil"); //$NON-NLS-1$
         assertRejected("clean -fdx"); //$NON-NLS-1$
         assertRejected("reset --hard HEAD~5"); //$NON-NLS-1$
-        assertRejected("clone https://evil/x.git"); //$NON-NLS-1$
         assertRejected("rebase -x /bin/sh"); //$NON-NLS-1$
         assertRejected("gc"); //$NON-NLS-1$
     }
