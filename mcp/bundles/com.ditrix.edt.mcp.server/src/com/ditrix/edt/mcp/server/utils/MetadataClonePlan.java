@@ -118,7 +118,7 @@ public final class MetadataClonePlan
         if (parts.length != 2 || !SUPPORTED.contains(parts[0]) || parts[1].isBlank())
         {
             return "Unsupported source '" + fqn + "'. Pass one top object as Type.Name (e.g. Catalog.Name) "
-                + "in a plain configuration project; Type is one of " + KIND_LIST + ".";
+                + "in a configuration or extension project; Type is one of " + KIND_LIST + ".";
         }
         if (newName != null && (newName.isBlank() || !StringUtils.isValidName(newName)))
         {
@@ -195,6 +195,14 @@ public final class MetadataClonePlan
             throw new IllegalArgumentException("Unsupported source '" + fqn
                 + "'. Use " + KIND_LIST + ".");
         }
+        if (ExtensionServices.isAdopted(object))
+        {
+            String address = object.eClass().getName() + "." + object.getName();
+            throw new Refusal(address + " is adopted from the base configuration (objectBelonging=Adopted); "
+                + "only the extension's own objects can be cloned inside it. Clone the object in the base "
+                + "configuration project and adopt the clone with adopt_metadata_object, or create a new own "
+                + "object in the extension with create_metadata.");
+        }
         if (object instanceof CommonModule && ((CommonModule)object).isGlobal())
         {
             throw new Refusal("CommonModule." + object.getName() + " is global (global=true): "
@@ -269,6 +277,28 @@ public final class MetadataClonePlan
         return warnings;
     }
 
+    /**
+     * EDT's {@code extension-md-object-prefix} check: an own object of an extension project whose name does not
+     * start with the extension's {@code namePrefix} (compared case-sensitively, skipped for an empty prefix).
+     * Without {@code newName} EDT's free name keeps the source name's start, so the source name decides.
+     *
+     * @return the warning, or {@code null} when the clone name carries the prefix
+     */
+    public static String prefixWarning(Configuration extension, MdObject source, String newName)
+    {
+        String prefix = extension.getNamePrefix();
+        String name = newName == null ? source.getName() : newName;
+        // An empty prefix is a prefix of every name: EDT skips it, and so does startsWith.
+        if (prefix == null || name.startsWith(prefix))
+        {
+            return null;
+        }
+        return (newName == null ? "EDT's automatic clone name starts with the source name '" + name + "', which"
+            : "newName '" + name + "'") + " does not start with the extension's namePrefix '" + prefix
+            + "'; EDT's check extension-md-object-prefix flags such an own object. Preview again with a newName "
+            + "that starts with '" + prefix + "'.";
+    }
+
     public static void checkName(Configuration config, MdObject source, String newName)
     {
         if (newName != null && MetadataTypeUtils.findObject(config, source.eClass().getName(), newName) != null)
@@ -278,15 +308,31 @@ public final class MetadataClonePlan
         }
     }
 
-    /** Source, disk bytes, destination names and selected owners are hashed in the same read. */
+    /** {@link #capture(IProject, IBmModel, Configuration, MdObject, String, List, IProjectFileSystemSupport,
+     * boolean, boolean)} in a configuration project. */
     public static MetadataClonePlan capture(IProject project, IBmModel model, Configuration config,
         MdObject source, String newName, List<JsonObject> transfer, IProjectFileSystemSupport fs,
         boolean scanReferences)
+    {
+        return capture(project, model, config, source, newName, transfer, fs, scanReferences, false);
+    }
+
+    /**
+     * Source, disk bytes, destination names and selected owners are hashed in the same read.
+     *
+     * @param extensionProject whether {@code config} belongs to an extension project: the clone name is then
+     *     checked against the extension's {@code namePrefix}
+     */
+    public static MetadataClonePlan capture(IProject project, IBmModel model, Configuration config,
+        MdObject source, String newName, List<JsonObject> transfer, IProjectFileSystemSupport fs,
+        boolean scanReferences, boolean extensionProject)
     {
         checkName(config, source, newName);
         String fqn = source.eClass().getName() + "." + source.getName();
         Map<String, EObject> graph = graph(source);
         StringBuilder content = new StringBuilder(fqn).append('\n').append(newName).append('\n');
+        // The destination's project kind decides whether the copy keeps extension properties.
+        content.append("extensionProject=").append(extensionProject).append('\n');
         appendModel(content, graph);
         appendModel(content, Collections.singletonMap("configuration", config));
         IFile rootFile = fs.getFile(source);
@@ -330,6 +376,13 @@ public final class MetadataClonePlan
                     + "' does not reference the source. Use an eligible owner from a fresh preview.");
             }
             MdObject owner = MetadataNodeResolver.resolveAddress(MetadataScope.ofConfiguration(config), ownerFqn, false);
+            if (!"supported".equals(relation.get("transferSupport").getAsString()))
+            {
+                throw new Refusal("Transfer '" + kind + "' owner '" + relation.get("owner").getAsString()
+                    + "' is adopted from the base configuration; the clone is never written into an adopted "
+                    + "object's content or rights. Leave it out of transfer (it stays in notCopied) and add the "
+                    + "clone with modify_metadata if the extension should extend that owner.");
+            }
             String refusal = VendorSupportGuard.refusalFor(owner, MetadataScope.ofConfiguration(config),
                 ownerFqn, ownerFqn, "modified");
             if (refusal != null)
@@ -381,10 +434,16 @@ public final class MetadataClonePlan
         grouped.sort(java.util.Comparator.comparing(item -> item.getAsJsonObject().get("kind").getAsString()));
         JsonArray incoming = new JsonArray();
         grouped.forEach(incoming::add);
+        List<String> warnings = new ArrayList<>(kindWarnings(source));
+        String prefix = extensionProject ? prefixWarning(config, source, newName) : null;
+        if (prefix != null)
+        {
+            warnings.add(prefix);
+        }
         return new MetadataClonePlan(fqn, content.toString(), incoming, complete, files, topFqns,
             rootFile.getParent().getProjectRelativePath().toPortableString(),
             rootFile.getProjectRelativePath().toPortableString(), String.valueOf(source.getUuid()),
-            graph.size(), kindWarnings(source));
+            graph.size(), warnings);
     }
 
     private static boolean sourcePath(String path, String folder)
@@ -582,7 +641,10 @@ public final class MetadataClonePlan
         return new ArrayList<>(fqns);
     }
 
-    /** Authored object rows only: role default flags do not mean an authored row exists. */
+    /**
+     * Authored object rows only: role default flags do not mean an authored row exists. An owner an extension
+     * adopted from its base configuration is reported only: the clone is never written into an adopted object.
+     */
     public static JsonArray transferRelations(Configuration config, MdObject source)
     {
         JsonArray result = new JsonArray();
@@ -598,7 +660,7 @@ public final class MetadataClonePlan
                 {
                     if (row.getObject() == source)
                     {
-                        result.add(relation("roleRights", "Role." + role.getName()));
+                        result.add(relation("roleRights", "Role." + role.getName(), role));
                         break;
                     }
                 }
@@ -611,7 +673,7 @@ public final class MetadataClonePlan
     {
         if (subsystem.getContent().contains(source))
         {
-            result.add(relation("subsystem", SubsystemUtils.lineage(subsystem).chainFqn()));
+            result.add(relation("subsystem", SubsystemUtils.lineage(subsystem).chainFqn(), subsystem));
         }
         for (Subsystem child : subsystem.getSubsystems())
         {
@@ -619,12 +681,12 @@ public final class MetadataClonePlan
         }
     }
 
-    private static JsonObject relation(String kind, String owner)
+    private static JsonObject relation(String kind, String owner, MdObject ownerObject)
     {
         JsonObject result = new JsonObject();
         result.addProperty("kind", kind);
         result.addProperty("owner", owner);
-        result.addProperty("transferSupport", "supported");
+        result.addProperty("transferSupport", ExtensionServices.isAdopted(ownerObject) ? "reportedOnly" : "supported");
         return result;
     }
 

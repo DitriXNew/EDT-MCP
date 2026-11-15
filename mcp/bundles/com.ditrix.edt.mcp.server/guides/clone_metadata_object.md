@@ -1,4 +1,4 @@
-Clone one Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, CommonModule or Role inside a plain configuration project, including its owned forms, commands, modules, templates, predefined items, enum values, register fields and role rights model. Extensions, external-objects projects, Configuration, global common modules and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
+Clone one Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, ScheduledJob, CommonModule or Role inside a configuration project, or one of an extension's own objects inside that extension, including its owned forms, commands, modules, templates, predefined items, enum values, register fields and role rights model. Adopted sources, external-objects projects, Configuration, global common modules and nested members are refused. Only TYPE tokens are bilingual; names are programmatic identifiers, never synonyms.
 
 ## Preview and confirm
 
@@ -24,7 +24,7 @@ After reviewing incoming owners, preview the selected scope:
 
 `newName` is optional. When present it must be an unused 1C identifier in the source's metadata collection, compared without case. It is assigned before attachment: there is no temporary auto-named object and no rename/refactoring of the source. Omit it to use EDT's free-name algorithm; always use the returned actual `fqn` in later calls.
 
-The operation uses the exported native paste copier behind `IModelObjectCopySupport`, retaining its graph, external-resource, type-reference and identity handling. The service's private factory accepts no name and opens its own transaction, so the tool configures its public `AttachingModelObjectCopier` inside one global BM write. It retains the plain-configuration filters and additional-index identity handling. Predefined item ids follow native paste unchanged; they are not metadata UUIDs. Compare them with navigator Copy/Paste during live acceptance.
+The operation uses the exported native paste copier behind `IModelObjectCopySupport`, retaining its graph, external-resource, type-reference and identity handling. The service's private factory accepts no name and opens its own transaction, so the tool configures its public `AttachingModelObjectCopier` inside one global BM write. It retains the configuration copier's filters (the `extension` block and `objectBelonging` are copied only in an extension project, as in EDT) and its additional-index identity handling. Predefined item ids follow native paste unchanged; they are not metadata UUIDs. Compare them with navigator Copy/Paste during live acceptance.
 
 ## Kind notes
 
@@ -33,6 +33,10 @@ The operation uses the exported native paste copier behind `IModelObjectCopySupp
 - **ScheduledJob:** the clone keeps `methodName` and `use`. When the source is enabled, the warning says both jobs will run the same method; disable one with `modify_metadata`.
 - **CommonModule:** the module text is copied unchanged, so calls inside it like `Source.Method(` still call the source; `codeReferences` lists them with the `CommonModule.Source` forms. A global module (`global=true`) is refused: its clone would duplicate exported methods in the global context.
 - **Role:** the rights model (`Rights.rights`), its RLS restrictions and templates and the role flags are copied to the clone. Other roles and subsystems are not changed unless selected in `transfer`.
+
+## Extensions
+
+In an extension project only the extension's own objects are cloned; the clone stays in the same extension. An adopted source (`objectBelonging=Adopted`) is refused: clone it in the base configuration and adopt the clone with `adopt_metadata_object`. Subsystem and role owners the extension adopted are reported with `transferSupport=reportedOnly` and stay in `notCopied`; selecting one is refused, so the clone is never written into an adopted object. The warning names a clone name that does not start with the extension's `namePrefix` (EDT's `extension-md-object-prefix` check); without `newName` the automatic name keeps the source name's start.
 
 ## Incoming relations
 

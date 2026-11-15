@@ -31,7 +31,7 @@ public class NativeMetadataCloneTest
         when(services.getInstance(com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator.class)).thenReturn(generator);
         when(generator.generateStandaloneObjectFqn(any(), any())).thenReturn("Catalog.Copy");
         IBmTransaction tx = mock(IBmTransaction.class);
-        NativeMetadataClone copier = new NativeMetadataClone(services, tx, mock(IBmModel.class),
+        NativeMetadataClone copier = new NativeMetadataClone(services, tx, mock(IBmModel.class), null,
             MdClassFactory.eINSTANCE.createCatalog(), "Copy");
         var root = mock(com._1c.g5.v8.bm.core.IBmObject.class, withSettings().extraInterfaces(MdObject.class));
         when(root.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
@@ -81,7 +81,7 @@ public class NativeMetadataCloneTest
             Injector services = mock(Injector.class);
             when(services.getInstance(any(Class.class))).thenAnswer(call -> mock((Class)call.getArgument(0)));
             NativeMetadataClone copier = new NativeMetadataClone(services, mock(IBmTransaction.class),
-                mock(IBmModel.class), source, "Requested");
+                mock(IBmModel.class), null, source, "Requested");
             assertEquals(type, "Requested", copier.generateMdCopyName(source, target,
                 MdClassFactory.eINSTANCE.createConfiguration(), null, new CopyContext()));
         }

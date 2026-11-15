@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.core.naming.ISymbolicNameService;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IEditingLanguageManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.MdPlugin;
@@ -43,10 +44,16 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
 {
     private final MdObject source;
     private final String newName;
+    private final boolean extensionProject;
     private Consumer<MdObject> onRootAttached = object -> { };
     private final Set<String> attachedTopFqns = new LinkedHashSet<>();
 
-    NativeMetadataClone(Injector services, IBmTransaction tx, IBmModel model,
+    /**
+     * @param destination the configuration the clone is attached to; like EDT's configuration copier, the
+     *     copy keeps the {@code extension} block and {@code objectBelonging} exactly when that configuration
+     *     belongs to an extension project
+     */
+    NativeMetadataClone(Injector services, IBmTransaction tx, IBmModel model, Configuration destination,
         MdObject source, String newName)
     {
         super(services.getInstance(IV8ProjectManager.class), services.getInstance(IModelObjectFactory.class),
@@ -57,16 +64,25 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
             services.getInstance(ISymbolicNameService.class), tx, model);
         this.source = source;
         this.newName = newName;
+        IV8ProjectManager projects = services.getInstance(IV8ProjectManager.class);
+        this.extensionProject = destination != null && projects != null
+            && projects.getProject(destination) instanceof IExtensionProject;
     }
 
     /** The service's private factory cannot select a name or join an existing BM transaction. */
-    public static NativeMetadataClone create(IBmTransaction tx, IBmModel model, MdObject source,
-        String newName, Consumer<MdObject> onRootAttached)
+    public static NativeMetadataClone create(IBmTransaction tx, IBmModel model, Configuration destination,
+        MdObject source, String newName, Consumer<MdObject> onRootAttached)
     {
         NativeMetadataClone copier = new NativeMetadataClone(MdPlugin.getDefault().getInjector(), tx, model,
-            source, newName);
+            destination, source, newName);
         copier.onRootAttached = onRootAttached;
         return copier;
+    }
+
+    /** Whether the destination is an extension project (EDT's {@code extensionProject} copier flag). */
+    public boolean isExtensionProject()
+    {
+        return extensionProject;
     }
 
     @Override
@@ -144,11 +160,13 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
         super.copyAttribute(original, from, target, to, parent, reference, copyContext);
     }
 
+    // EDT's ConfigurationAwareModelObjectCopier drops the extension block and objectBelonging only outside an
+    // extension project; inside one it copies both.
     @Override
     protected boolean shouldCopyContainment(EObject original, EReference from, EObject target,
         EReference to, CopyContext copyContext)
     {
-        return from != MdClassPackage.Literals.MD_OBJECT__EXTENSION
+        return (extensionProject || from != MdClassPackage.Literals.MD_OBJECT__EXTENSION)
             && super.shouldCopyContainment(original, from, target, to, copyContext);
     }
 
@@ -156,7 +174,7 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
     protected boolean shouldCopyAttribute(EAttribute from, EObject original, EAttribute to,
         EObject target, CopyContext copyContext)
     {
-        return from != MdClassPackage.Literals.MD_OBJECT__OBJECT_BELONGING
+        return (extensionProject || from != MdClassPackage.Literals.MD_OBJECT__OBJECT_BELONGING)
             && super.shouldCopyAttribute(from, original, to, target, copyContext);
     }
 
