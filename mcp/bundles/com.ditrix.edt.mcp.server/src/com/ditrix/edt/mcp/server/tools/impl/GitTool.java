@@ -32,10 +32,12 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Config;
+import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.jgit.storage.file.FileBasedConfig;
@@ -130,13 +132,35 @@ public class GitTool implements IMcpTool
      * rejected with an actionable error (extend deliberately). Deliberately EXCLUDED: {@code config}
      * (sets {@code core.sshCommand} / aliases = arbitrary exec), {@code clean} / {@code gc} /
      * {@code reset} (irrecoverable data loss), {@code filter-branch} / {@code submodule} /
-     * {@code worktree} / {@code daemon} / {@code credential} / {@code init} / {@code clone}.
+     * {@code worktree} / {@code daemon} / {@code credential} / {@code clone}.
+     * <p>
+     * {@code init} is IN, on its own terms (#934): it is the one subcommand that runs where there is
+     * NO repository yet, so it takes the project's own folder instead of a resolved repository
+     * ({@link #executeInit}), refuses a project that already belongs to one, and accepts only the
+     * narrow grammar of {@link #checkInitGrammar}.
      */
     static final Set<String> ALLOWED_SUBCOMMANDS = Set.of(
         "status", "diff", "log", "show", "blame", "ls-files", "rev-parse", "describe", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
         "add", "restore", "commit", "stash", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "fetch", "pull", "push", "merge", "cherry-pick", "revert", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-        "branch", "checkout", "switch", "tag", "remote"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "branch", "checkout", "switch", "tag", "remote", "init"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+    /** The subcommand that creates a repository in the project folder (#934). */
+    static final String INIT = "init"; //$NON-NLS-1$
+
+    /** {@code git init}'s long option for the initial branch, spelled in full. */
+    private static final String INITIAL_BRANCH_OPTION = "--initial-branch"; //$NON-NLS-1$
+
+    /** The result key that carries what to do after a successful {@code init}. */
+    private static final String KEY_NEXT_STEP = "nextStep"; //$NON-NLS-1$
+
+    /**
+     * What a successful {@code init} leaves to the user. Connecting the project to EGit is EGit's
+     * {@code ConnectProviderOperation}, an internal ({@code x-friends}) API, so this tool does not do it.
+     */
+    static final String INIT_NEXT_STEP = "The repository is created but EDT does not use it yet: connect the " //$NON-NLS-1$
+        + "project with Team -> Share Project -> Git in EDT (it finds this repository in the project " //$NON-NLS-1$
+        + "folder), then commit."; //$NON-NLS-1$
 
     /**
      * Long options that could make git execute an arbitrary program or operate on a different
@@ -269,7 +293,10 @@ public class GitTool implements IMcpTool
      */
     private static final Set<String> LOGGABLE_ARGUMENT_SUBCOMMANDS = Set.of(
         "restore", "checkout", "switch", "add", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "branch", "remote", "revert", "cherry-pick"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "branch", "remote", "revert", "cherry-pick", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // init's accepted grammar is -q and a branch NAME (checkInitGrammar); its preview adds the
+        // folder the repository is created in - a path, the record of where it happened.
+        INIT);
 
     /** How long the MCP call waits for the post-command workspace refresh before returning. */
     private static final long REFRESH_WAIT_SECONDS = 30;
@@ -660,6 +687,8 @@ public class GitTool implements IMcpTool
                 + "and CR are kept as-is, and C1 (0x80-0x9F) is not touched; text that literally spells " //$NON-NLS-1$
                 + "\\x01 is indistinguishable from the byte") //$NON-NLS-1$
             .booleanProperty(KEY_TRUNCATED, "Present and true when 'output' was truncated to the size cap") //$NON-NLS-1$
+            .stringProperty(KEY_NEXT_STEP, "Present after a successful 'init': how to connect the new " //$NON-NLS-1$
+                + "repository to the project in EDT") //$NON-NLS-1$
             .build();
     }
 
@@ -699,6 +728,11 @@ public class GitTool implements IMcpTool
         catch (CommandRejectedException e)
         {
             return ToolResult.error(e.getMessage()).toJson();
+        }
+        if (INIT.equals(argv.get(1)))
+        {
+            // The one subcommand with no repository to resolve: it runs in the project FOLDER.
+            return executeInit(projectName, argv);
         }
 
         GitRepositoryResolver.Resolution resolution = null;
@@ -817,6 +851,272 @@ public class GitTool implements IMcpTool
             return ToolResult.error(storedRefusal).toJson();
         }
         return null;
+    }
+
+    /**
+     * {@code git init} for a project (#934): creates a repository in the project's own folder.
+     * <p>
+     * It cannot take the path every other subcommand takes, because that path starts by resolving
+     * the repository and there is none yet. In its place {@link GitRepositoryResolver#resolveInitTarget}
+     * resolves the project folder and REFUSES when the project already belongs to a repository - an
+     * EGit mapping or a {@code .git} up the tree - since {@code init} there would nest one repository
+     * in another. Then the same order as {@link #execute}: consent last, the bounded process, and the
+     * workspace refresh, which here makes Eclipse see the new {@code .git} folder.
+     * <p>
+     * EGit is not connected: its {@code ConnectProviderOperation} is internal API ({@code x-friends}),
+     * so a successful answer names that step instead ({@link #INIT_NEXT_STEP}).
+     *
+     * @param projectName the EDT project whose folder becomes the work tree
+     * @param argv the validated argument vector ({@code git init ...})
+     * @return the result JSON
+     */
+    private String executeInit(String projectName, List<String> argv)
+    {
+        try
+        {
+            GitRepositoryResolver.InitTarget target = GitRepositoryResolver.resolveInitTarget(projectName);
+            if (!target.ok())
+            {
+                return target.errorJson();
+            }
+            File folder = target.folder();
+            String consentError = requireConsent(initConsentPreview(argv, folder));
+            if (consentError != null)
+            {
+                return consentError;
+            }
+            long startedAt = System.nanoTime();
+            // No branch change: init moves no branch, so it refreshes like every non-branch command (null).
+            return runInit(argv, folder, () -> refreshWorkTree(folder, startedAt, null));
+        }
+        catch (Exception e) // NOSONAR unattended-safety: no exception may escape the tool (CLAUDE.md #8)
+        {
+            Activator.logError("git: init failed for project '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Failed to run git init for '" + projectName + "': " + e.getMessage()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Runs a validated {@code git init} in {@code folder}, then {@code afterProcess}; a successful
+     * answer carries {@link #INIT_NEXT_STEP}. The seam the process tests drive: everything
+     * {@link #executeInit} adds before it needs an EDT project or a human.
+     *
+     * @param argv the validated argument vector ({@code git init ...})
+     * @param folder the project folder to create the repository in
+     * @param afterProcess the workspace refresh, or {@code null}
+     * @return the result JSON
+     */
+    String runInit(List<String> argv, File folder, Runnable afterProcess)
+    {
+        // Straight to the process: init changes no branch ({@link #changesBranch} is false for it), so
+        // there is no binding lock to take and no branch change to register.
+        String output = runGitProcess(argv, folder, result -> result.put(KEY_NEXT_STEP, INIT_NEXT_STEP));
+        if (afterProcess != null)
+        {
+            afterProcess.run();
+        }
+        return output;
+    }
+
+    /**
+     * The preview a human sees before {@code git init} runs. Unlike the other subcommands' preview
+     * it names the FOLDER: what is being decided is where a repository appears, and the command
+     * alone ({@code init -b main}) does not say that.
+     *
+     * @param argv the validated argument vector ({@code git init ...})
+     * @param folder the project folder the repository is created in
+     * @return the preview to put in front of the gate
+     */
+    static ConsentPreview initConsentPreview(List<String> argv, File folder)
+    {
+        return new ConsentPreview("git " + INIT, //$NON-NLS-1$
+            "'git init' creates a new git repository (a '.git' folder) in the project folder '" + folder //$NON-NLS-1$
+                + "'. Files already there stay untouched and untracked.", //$NON-NLS-1$
+            1, argv.size() > 2 ? List.of(folder.getPath(), renderArguments(argv.subList(1, argv.size())))
+                : List.of(folder.getPath()));
+    }
+
+    /**
+     * Refuses anything in a {@code git init} command but the two options it may carry here.
+     * <p>
+     * An ALLOW-list, unlike the deny-list every other subcommand gets: {@code init} takes no
+     * operand this tool would want (the repository goes in the project folder, nowhere else), and
+     * most of its options put the repository elsewhere or make it one the EDT side cannot use, so
+     * listing the good ones is both shorter and safe by default:
+     * <ul>
+     * <li>{@code -q} / {@code --quiet};</li>
+     * <li>{@code -b <name>} / {@code --initial-branch=<name>}, also {@code -b<name>},
+     * {@code --initial-branch <name>} and a cluster such as {@code -qb <name>} - the letters are read
+     * the way git reads them, so everything after {@code b} is the name.</li>
+     * </ul>
+     * Refused: a directory operand, {@code --bare} and {@code --separate-git-dir} (the repository
+     * would not be the project folder's), {@code --shared} (permissions), {@code --object-format}
+     * (a SHA-256 repository: the bundled JGit 6.8 opens one but cannot read a single object - measured
+     * as {@code MissingObjectException} on the first commit), {@code --template} (already blocked for
+     * every subcommand), and any other or abbreviated option. A branch name must not start with
+     * {@code -} (it would read as a forgotten value) and must make a valid ref under
+     * {@code refs/heads/}.
+     *
+     * @param args the tokens after {@code init}
+     * @throws CommandRejectedException naming the token and what is accepted instead
+     */
+    static void checkInitGrammar(List<String> args) throws CommandRejectedException
+    {
+        for (int i = 0; i < args.size(); i++)
+        {
+            String token = args.get(i);
+            if ("-q".equals(token) || "--quiet".equals(token)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                continue;
+            }
+            if (INITIAL_BRANCH_OPTION.equals(token))
+            {
+                i++;
+                checkInitialBranch(i < args.size() ? args.get(i) : null);
+                continue;
+            }
+            if (token.startsWith(INITIAL_BRANCH_OPTION + '='))
+            {
+                checkInitialBranch(token.substring(INITIAL_BRANCH_OPTION.length() + 1));
+                continue;
+            }
+            if (token.startsWith("--")) //$NON-NLS-1$
+            {
+                throw initOptionRefused(safeToken(token));
+            }
+            if (token.length() < 2 || token.charAt(0) != '-')
+            {
+                throw new CommandRejectedException("'git init' takes no directory or other operand here: " //$NON-NLS-1$
+                    + "the repository is always created in the project's own folder (projectName). Drop " //$NON-NLS-1$
+                    + "the operand; to create it elsewhere, use a project located there."); //$NON-NLS-1$
+            }
+            i = checkInitCluster(token, args, i);
+        }
+    }
+
+    /**
+     * One short-option cluster of {@code git init}: any number of {@code q}, then optionally
+     * {@code b}, whose value is the rest of the cluster or, when that is empty, the next token.
+     *
+     * @return the index of the last token consumed
+     */
+    private static int checkInitCluster(String token, List<String> args, int index)
+        throws CommandRejectedException
+    {
+        for (int c = 1; c < token.length(); c++)
+        {
+            char letter = token.charAt(c);
+            if (letter == 'q')
+            {
+                continue;
+            }
+            if (letter == 'b')
+            {
+                String attached = token.substring(c + 1);
+                if (!attached.isEmpty())
+                {
+                    checkInitialBranch(attached);
+                    return index;
+                }
+                int next = index + 1;
+                checkInitialBranch(next < args.size() ? args.get(next) : null);
+                return next;
+            }
+            throw initOptionRefused("-" + letter); //$NON-NLS-1$
+        }
+        return index;
+    }
+
+    /** Refuses an initial branch name that is missing, looks like an option, or is not a valid branch. */
+    private static void checkInitialBranch(String name) throws CommandRejectedException
+    {
+        if (name == null || name.isEmpty() || name.startsWith("-")) //$NON-NLS-1$
+        {
+            throw new CommandRejectedException("'git init -b' / '--initial-branch' needs a branch name " //$NON-NLS-1$
+                + "right after it, e.g. 'init -b main'; the name must not start with '-'."); //$NON-NLS-1$
+        }
+        // 'HEAD' passes the ref-name rules and git 2.35 creates refs/heads/HEAD from it (measured), a
+        // branch 'git branch' itself refuses to name - so it is refused here.
+        if (Constants.HEAD.equals(name) || !Repository.isValidRefName(Constants.R_HEADS + name))
+        {
+            throw new CommandRejectedException("The initial branch name given to 'git init' is not a " //$NON-NLS-1$
+                + "valid git branch name (no spaces, control characters, '..', '~', '^', ':', '?', '*', " //$NON-NLS-1$
+                + "'[' or '\\', and it must not end with '/' or '.lock'). Pass a plain name such as 'main'."); //$NON-NLS-1$
+        }
+    }
+
+    private static CommandRejectedException initOptionRefused(String option)
+    {
+        return new CommandRejectedException("The option '" + option + "' is not accepted for 'git init'. " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Only -q/--quiet and -b <name>/--initial-branch=<name> are, spelled in full: the " //$NON-NLS-1$
+            + "repository is always the project folder's own (no --bare, --separate-git-dir), " //$NON-NLS-1$
+            + "--shared changes file permissions, and --object-format=sha256 makes a repository " //$NON-NLS-1$
+            + "the git integration in EDT cannot read."); //$NON-NLS-1$
+    }
+
+    /**
+     * The process a validated command runs as: the command with the non-interactive config, run in
+     * {@code workTree}, stderr merged, the hardened environment - and, for {@code init}, the
+     * repository-format pins of {@link #applyInitDefaults}. Package-visible so a test can see what
+     * the process would get without running it.
+     *
+     * @param argv the validated argument vector ({@code git} first)
+     * @param workTree the directory git runs in
+     * @return the configured, not yet started process builder
+     */
+    static ProcessBuilder processFor(List<String> argv, File workTree)
+    {
+        ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
+        builder.directory(workTree);
+        builder.redirectErrorStream(true);
+        hardenEnv(builder.environment(), workTree, argv.get(0));
+        if (argv.size() > 1 && INIT.equals(argv.get(1)))
+        {
+            applyInitDefaults(builder.command(), builder.environment());
+        }
+        return builder;
+    }
+
+    /**
+     * The {@code -c} pins {@code init} runs with (#934), each a setting of the MACHINE that would make
+     * {@code init} create what its grammar refuses on the command line:
+     * <ul>
+     * <li>{@code core.sharedRepository=false} - a {@code core.sharedRepository} in the user's or the
+     * system configuration makes a plain {@code init} a shared one (measured on git 2.35:
+     * {@code group} writes {@code sharedrepository = 1} and {@code receive.denyNonFastforwards}), the
+     * same as the refused {@code --shared};</li>
+     * <li>{@code init.defaultObjectFormat=sha1} and {@code init.defaultRefFormat=files} - the
+     * configuration spellings of {@code --object-format} / {@code --ref-format}; git versions that
+     * do not know them ignore them.</li>
+     * </ul>
+     * Command-line configuration overrides every configuration file. The other defaults stay the
+     * user's, as in their terminal: {@code init.defaultBranch}, {@code init.templateDir} (the hooks
+     * a template installs run with the user's authority anyway, like every repository hook here).
+     */
+    private static final List<String> INIT_CONFIG_PINS = List.of(
+        "-c", "core.sharedRepository=false", //$NON-NLS-1$ //$NON-NLS-2$
+        "-c", "init.defaultObjectFormat=sha1", //$NON-NLS-1$ //$NON-NLS-2$
+        "-c", "init.defaultRefFormat=files"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Pins the format of the repository {@code init} creates, whatever the machine's environment and
+     * configuration say: the {@link #INIT_CONFIG_PINS} after the executable, and the environment
+     * variables that choose the format ({@code GIT_DEFAULT_HASH}, {@code GIT_DEFAULT_REF_FORMAT}) set
+     * to the defaults. The hash matters most: a SHA-256 repository is one the bundled JGit 6.8 opens but
+     * cannot read a single object of (measured), and {@code GIT_DEFAULT_HASH=sha256} in EDT's
+     * environment produced exactly that from a plain {@code init} (measured on git 2.35). The variables
+     * are SET rather than removed: in git's own precedence a variable wins over its configuration key
+     * ({@code init.defaultObjectFormat} / {@code init.defaultRefFormat}), so setting both leaves the
+     * same answer whichever of the two a given git version consults.
+     *
+     * @param command the command to run ({@code git} first), modified in place
+     * @param env the process environment, modified in place
+     */
+    static void applyInitDefaults(List<String> command, Map<String, String> env)
+    {
+        command.addAll(1, INIT_CONFIG_PINS);
+        env.put("GIT_DEFAULT_HASH", "sha1"); //$NON-NLS-1$ //$NON-NLS-2$
+        env.put("GIT_DEFAULT_REF_FORMAT", "files"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== parser (security-critical) ====================
@@ -989,6 +1289,10 @@ public class GitTool implements IMcpTool
             throw new CommandRejectedException("git subcommand '" //$NON-NLS-1$
                 + redactCredentialUrls(subcommand) + "' is not supported. " //$NON-NLS-1$
                 + "Supported: " + String.join(", ", new TreeSet<>(ALLOWED_SUBCOMMANDS)) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (INIT.equals(subcommand))
+        {
+            checkInitGrammar(tokens.subList(1, tokens.size()));
         }
         List<String> argv = new ArrayList<>(tokens.size() + 1);
         argv.add("git"); //$NON-NLS-1$
@@ -3311,14 +3615,20 @@ public class GitTool implements IMcpTool
     /** {@link #runGit}'s process, under {@link BranchBindingLock} when the subcommand needs it. */
     private String runGitProcess(List<String> argv, File workTree)
     {
-        ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
-        builder.directory(workTree);
-        builder.redirectErrorStream(true);
-        // Started BEFORE hardenEnv: that call may run the core.sshCommand probe, whose own timeout
-        // would otherwise be added to the command's - a stalled config would push a fetch past the
-        // 120 s the guide promises.
+        return runGitProcess(argv, workTree, null);
+    }
+
+    /**
+     * {@link #runGitProcess(List, File)}, with {@code onSuccess} given the result of a process that exited 0
+     * before it is serialised - how a subcommand adds a field of its own ({@link #runInit}).
+     */
+    private String runGitProcess(List<String> argv, File workTree, Consumer<ToolResult> onSuccess)
+    {
+        // Started BEFORE hardenEnv (inside processFor): that call may run the core.sshCommand probe,
+        // whose own timeout would otherwise be added to the command's - a stalled config would push a
+        // fetch past the 120 s the guide promises.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-        hardenEnv(builder.environment(), workTree, argv.get(0));
+        ProcessBuilder builder = processFor(argv, workTree);
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
         // Echoed back in every result and error: redacted like the output, so a credential that
@@ -3369,6 +3679,10 @@ public class GitTool implements IMcpTool
             if (captured.truncated)
             {
                 result.put(KEY_TRUNCATED, true);
+            }
+            if (exitCode == 0 && onSuccess != null)
+            {
+                onSuccess.accept(result);
             }
             return result.toJson();
         }
@@ -3601,8 +3915,19 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
+        return requireConsent(consentPreview(destructiveForm, argv));
+    }
+
+    /**
+     * Asks the destructive-consent gate with {@code preview}.
+     *
+     * @param preview what the human sees
+     * @return an error JSON when consent was refused, or {@code null} when the command may run
+     */
+    private static String requireConsent(ConsentPreview preview)
+    {
         DestructiveConsentGate.ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview(destructiveForm, argv));
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
         if (decision == DestructiveConsentGate.ConsentDecision.ALLOW)
         {
             return null;
