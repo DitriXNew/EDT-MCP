@@ -457,7 +457,7 @@ public class GitToolCloneTest
         Files.createDirectories(staging.repository().resolve(".git")); //$NON-NLS-1$
         Files.write(staging.repository().resolve("a.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertNull(GitCloneTarget.install(staging, checked));
+        assertNull(GitCloneTarget.install(staging, checked).refusal());
         assertTrue(Files.isDirectory(checked.real().resolve(".git"))); //$NON-NLS-1$
         assertTrue(Files.exists(checked.real().resolve("a.txt"))); //$NON-NLS-1$
         assertFalse("the staging directory is gone", Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS)); //$NON-NLS-1$
@@ -479,7 +479,7 @@ public class GitToolCloneTest
         Files.write(staging.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
         Path theirs = Files.write(target.resolve("theirs.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertNull(GitCloneTarget.install(staging, checked));
+        assertNull(GitCloneTarget.install(staging, checked).refusal());
         assertTrue(Files.isDirectory(target.resolve(".git"))); //$NON-NLS-1$
         assertEquals("theirs", new String(Files.readAllBytes(theirs), StandardCharsets.UTF_8)); //$NON-NLS-1$
         assertFalse(Files.exists(staging.path(), LinkOption.NOFOLLOW_LINKS));
@@ -491,7 +491,7 @@ public class GitToolCloneTest
         Files.createDirectories(other.repository().resolve(".git")); //$NON-NLS-1$
         Files.write(other.repository().resolve("a.txt"), "clone".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
         Path clash = Files.write(second.resolve("a.txt"), "theirs".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        String refusal = GitCloneTarget.install(other, secondChecked);
+        String refusal = GitCloneTarget.install(other, secondChecked).refusal();
         assertNotNull(refusal);
         assertTrue(refusal, refusal.contains("left as it was")); //$NON-NLS-1$
         assertEquals("theirs", new String(Files.readAllBytes(clash), StandardCharsets.UTF_8)); //$NON-NLS-1$

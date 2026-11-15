@@ -332,7 +332,103 @@ public class GitToolCloneProcessTest
         assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS));
     }
 
+    /**
+     * Codex P1 on #944 (round 3): git is handed the staging path only while it is provably this run's -
+     * a container swapped for a link before git starts is refused, git never runs, and nothing lands
+     * where the link points.
+     */
+    @Test(timeout = 120_000)
+    public void testAContainerSwappedBeforeGitStartsIsNeverHandedToGit() throws Exception
+    {
+        String url = serveRepositoryWithOneCommit();
+        Path parent = scratchFolder();
+        Path outside = Files.createDirectory(parent.resolve("outside")); //$NON-NLS-1$
+        Path target = parent.resolve("clone"); //$NON-NLS-1$
+        GitTool.CloneControl control = new GitTool.CloneControl();
+        control.beforeGit = () -> {
+            try (Stream<Path> siblings = Files.list(parent))
+            {
+                Path container = siblings.filter(p -> p.getFileName().toString().startsWith(".edt-mcp-clone-")) //$NON-NLS-1$
+                    .findFirst().orElseThrow();
+                deleteTree(container);
+                link(container, outside);
+            }
+            catch (Exception e)
+            {
+                throw new IllegalStateException(e);
+            }
+        };
+
+        GitTool.CloneRun run = runDirectly(new ArrayList<>(List.of("git", "clone", url, target.toString())), //$NON-NLS-1$ //$NON-NLS-2$
+            target, control);
+
+        assertFalse(run.json(), run.success());
+        JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
+        assertTrue(result.toString(), result.get("error").getAsString().contains("git was not started")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.toString(), result.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
+        try (Stream<Path> written = Files.list(outside))
+        {
+            assertEquals("git wrote nothing where the link points", 0, written.count()); //$NON-NLS-1$
+        }
+        assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS));
+    }
+
+    /**
+     * Codex P2 on #944 (round 3): an entry an install could not take back out of the target makes the
+     * clone NOT cleaned up, and is named.
+     */
+    @Test(timeout = 120_000)
+    public void testAnInstallLeftoverInTheTargetIsReportedAsNotCleanedUp() throws Exception
+    {
+        String url = serveRepositoryWithOneCommit();
+        Path target = Files.createDirectory(scratchFolder().resolve("clone")); //$NON-NLS-1$
+        GitTool.CloneControl control = new GitTool.CloneControl();
+        List<Path> replaced = new ArrayList<>();
+        control.afterInstallMove = moved -> {
+            if (replaced.isEmpty() && Files.isRegularFile(moved, LinkOption.NOFOLLOW_LINKS))
+            {
+                try
+                {
+                    Files.delete(moved);
+                    Files.write(moved, "another program's file, longer".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+                    replaced.add(moved);
+                }
+                catch (IOException e)
+                {
+                    throw new IllegalStateException(e);
+                }
+            }
+        };
+
+        GitTool.CloneRun run = runDirectly(new ArrayList<>(List.of("git", "clone", url, target.toString())), //$NON-NLS-1$ //$NON-NLS-2$
+            target, control);
+
+        assertFalse(run.json(), run.success());
+        assertEquals("a regular file of the clone was replaced", 1, replaced.size()); //$NON-NLS-1$
+        JsonObject result = JsonParser.parseString(run.json()).getAsJsonObject();
+        assertFalse("a leftover in the target is not a clean rollback: " + result, //$NON-NLS-1$
+            result.get("cleanedUp").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.toString(), result.get("error").getAsString().contains(replaced.get(0).toString()));
+        assertTrue("the replacement stays", Files.exists(replaced.get(0))); //$NON-NLS-1$
+    }
+
     // ---- helpers ----
+
+    /** A link at {@code link} to {@code to}: a junction on Windows. */
+    private static void link(Path link, Path to) throws Exception
+    {
+        if (java.io.File.separatorChar == '\\')
+        {
+            Process mklink = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), to.toString()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                .redirectErrorStream(true).start();
+            mklink.getInputStream().readAllBytes();
+            Assume.assumeTrue("mklink /J failed", mklink.waitFor() == 0); //$NON-NLS-1$
+        }
+        else
+        {
+            Files.createSymbolicLink(link, to);
+        }
+    }
 
     /** Drives the run seam for {@code argv} (whose last token is the target) without a job. */
     private GitTool.CloneRun runDirectly(List<String> argv, Path target, GitTool.CloneControl control) throws Exception

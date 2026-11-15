@@ -1357,18 +1357,38 @@ public class GitTool implements IMcpTool
         {
             Activator.logError(GitFailureLog.typesOnly("git clone: creating the staging directory failed", e), null); //$NON-NLS-1$
             control.conclude();
-            String error = "The clone could not start: its staging directory beside '" + directory //$NON-NLS-1$
-                + "' could not be created (" + e.getClass().getSimpleName() + "). Nothing was written; " //$NON-NLS-1$ //$NON-NLS-2$
-                + "check that this user may create a directory there, then retry."; //$NON-NLS-1$
+            boolean replaced = e instanceof GitCloneTarget.StagingReplacedException;
+            String error = replaced
+                ? "The clone could not start: " + e.getMessage() + ". git was not started; the target '" + directory //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' was not touched." //$NON-NLS-1$
+                : "The clone could not start: its staging directory beside '" + directory //$NON-NLS-1$
+                    + "' could not be created (" + e.getClass().getSimpleName() + "). Nothing was written; " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "check that this user may create a directory there, then retry."; //$NON-NLS-1$
             String json = ToolResult.error(error).put(KEY_COMMAND, safeCommand).put(KEY_DIRECTORY, directory.toString())
-                .put(KEY_CLEANED_UP, true).toJson();
+                .put(KEY_CLEANED_UP, !replaced).toJson();
             control.finished(json);
             return new CloneRun(false, json, error);
         }
         List<String> run = new ArrayList<>(argv);
         run.set(2 + clone.directoryIndex(), staging.repository().toString());
         AtomicBoolean exitedZero = new AtomicBoolean();
-        String json = control.stopRequested() ? ToolResult.error("git was not started.").toJson() //$NON-NLS-1$
+        control.beforeGit.run();
+        // git is handed the staging path only while it is provably this run's container: a link or junction
+        // swapped in for it would make git write wherever that points.
+        boolean replacedBeforeGit = !staging.unchanged();
+        String json;
+        if (replacedBeforeGit)
+        {
+            control.conclude();
+            String error = "The staging directory '" + staging.path() + "' was replaced by something else (a link, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "a junction or another directory) before git started, so git was not started and nothing in it " //$NON-NLS-1$
+                + "was touched; check that path by hand. The target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
+            String refused = ToolResult.error(error).put(KEY_COMMAND, safeCommand).put(KEY_DIRECTORY, directory.toString())
+                .put(KEY_CLEANED_UP, false).toJson();
+            control.finished(refused);
+            return new CloneRun(false, refused, error);
+        }
+        json = control.stopRequested() ? ToolResult.error("git was not started.").toJson() //$NON-NLS-1$
             : runGitProcess(run, staging.path().getParent().toFile(), timeoutMillis, result -> exitedZero.set(true),
                 control.watch());
         control.afterGit.run();
@@ -1379,10 +1399,13 @@ public class GitTool implements IMcpTool
         {
             boolean treeGone = control.watch().awaitExit(CLONE_EXIT_WAIT_MILLIS);
             String notInstalled = null;
+            List<Path> leftInTarget = List.of();
             if (exitedZero.get() && treeGone && control.conclude())
             {
-                notInstalled = GitCloneTarget.install(staging, target);
-                if (notInstalled == null)
+                GitCloneTarget.Installed installed = GitCloneTarget.install(staging, target, control.afterInstallMove);
+                notInstalled = installed.refusal();
+                leftInTarget = installed.leftInTarget();
+                if (installed.ok())
                 {
                     JsonObject result = JsonParser.parseString(json).getAsJsonObject();
                     result.addProperty(KEY_COMMAND, safeCommand);
@@ -1399,7 +1422,8 @@ public class GitTool implements IMcpTool
                 }
             }
             boolean cancelled = !control.conclude() && control.stopRequested();
-            return rollBack(json, notInstalled, staging, directory, safeCommand, treeGone, cancelled, control);
+            return rollBack(json, notInstalled, leftInTarget, staging, directory, safeCommand, treeGone, cancelled,
+                control);
         }
         finally
         {
@@ -1411,12 +1435,21 @@ public class GitTool implements IMcpTool
     }
 
     /** Takes a clone's staging directory back and builds the failure answer. */
-    private static CloneRun rollBack(String processJson, String notInstalled, GitCloneTarget.Staging staging,
-        Path directory, String safeCommand, boolean treeGone, boolean cancelled, CloneControl control)
+    private static CloneRun rollBack(String processJson, String notInstalled, List<Path> leftInTarget,
+        GitCloneTarget.Staging staging, Path directory, String safeCommand, boolean treeGone, boolean cancelled,
+        CloneControl control)
     {
-        boolean clean = treeGone && staging.remove();
+        // Entries an install could not take back out of the target are a leftover like any other.
+        boolean removed = treeGone && staging.remove();
+        boolean clean = removed && leftInTarget.isEmpty();
         String cleanup;
-        if (clean)
+        if (!leftInTarget.isEmpty())
+        {
+            cleanup = " Remove the entries listed above from the target '" + directory + "' by hand" //$NON-NLS-1$ //$NON-NLS-2$
+                + (removed ? "; the rest of the clone was removed." //$NON-NLS-1$
+                    : ", and the staging directory '" + staging.path() + "' too."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else if (clean)
         {
             cleanup = " The partial clone was removed (it was written to the staging directory '" + staging.path() //$NON-NLS-1$
                 + "'); the target '" + directory + "' was not touched."; //$NON-NLS-1$ //$NON-NLS-2$
@@ -1477,6 +1510,12 @@ public class GitTool implements IMcpTool
 
         /** How long a cancel waits for the rollback; a test shortens it. */
         volatile long cancelWaitMillis = CLONE_CANCEL_WAIT_MILLIS;
+
+        /** Test seam: runs once the staging directory exists, before it is proved and handed to git. */
+        volatile Runnable beforeGit = () -> { };
+
+        /** Test seam: runs after each entry an install moves into an existing target. */
+        volatile java.util.function.Consumer<Path> afterInstallMove = moved -> { };
 
         /** Test seam: runs right after git's process has ended, before the worker concludes. */
         volatile Runnable afterGit = () -> { };

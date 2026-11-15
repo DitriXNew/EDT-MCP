@@ -430,14 +430,19 @@ public final class GitCloneTarget
 
         private final Path container;
         private final Object fileKey;
+        private final java.nio.file.attribute.FileTime created;
         private final String token;
 
-        private Staging(Path container, Object fileKey, String token)
+        private Staging(Path container, Origin origin, String token)
         {
             this.container = container;
-            this.fileKey = fileKey;
+            this.fileKey = origin.fileKey;
+            this.created = origin.created;
             this.token = token;
         }
+
+        /** Test seam: how the emptied container itself is deleted. */
+        volatile ContainerDelete containerDelete = Files::deleteIfExists;
 
         /** @return the container directory this run created (a real path) */
         public Path path()
@@ -455,13 +460,14 @@ public final class GitCloneTarget
          * Whether the container is still the directory this run created: a plain directory (neither a
          * link nor a junction) with the recorded file key, holding the marker with this run's token.
          */
-        boolean unchanged()
+        public boolean unchanged()
         {
             try
             {
                 BasicFileAttributes now = Files.readAttributes(container, BasicFileAttributes.class,
                     LinkOption.NOFOLLOW_LINKS);
-                if (!isPlainDirectory(now) || !java.util.Objects.equals(fileKey, now.fileKey()))
+                if (!isPlainDirectory(now) || !java.util.Objects.equals(fileKey, now.fileKey())
+                    || !created.equals(now.creationTime()))
                 {
                     return false;
                 }
@@ -551,21 +557,104 @@ public final class GitCloneTarget
      */
     static Staging createStaging(Checked checked, MarkerWriter writer) throws IOException
     {
+        return createStaging(checked, created -> { }, writer);
+    }
+
+    /** What a directory was right after this run created it, read without following links. */
+    private static final class Origin
+    {
+        final Object fileKey;
+        final java.nio.file.attribute.FileTime created;
+
+        private Origin(Object fileKey, java.nio.file.attribute.FileTime created)
+        {
+            this.fileKey = fileKey;
+            this.created = created;
+        }
+
+        /** @return the origin of {@code dir}, or {@code null} when it is not a plain directory */
+        static Origin of(Path dir) throws IOException
+        {
+            BasicFileAttributes attrs = Files.readAttributes(dir, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return isPlainDirectory(attrs) ? new Origin(attrs.fileKey(), attrs.creationTime()) : null;
+        }
+
+        /** @return {@code true} when {@code dir} is still that plain directory */
+        boolean matches(Path dir)
+        {
+            try
+            {
+                Origin now = of(dir);
+                return now != null && java.util.Objects.equals(fileKey, now.fileKey) && created.equals(now.created);
+            }
+            catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably ours
+            {
+                return false;
+            }
+        }
+    }
+
+    /** Thrown when the fresh container is no longer the directory this run created. */
+    public static final class StagingReplacedException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        StagingReplacedException(Path container)
+        {
+            super("the staging directory '" + container + "' was replaced by something else (a link, a junction " //$NON-NLS-1$ //$NON-NLS-2$
+                + "or another directory) while it was being set up, so nothing in it was touched; check that " //$NON-NLS-1$
+                + "path by hand"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * {@link #createStaging(Checked, MarkerWriter)} with a second seam, run right after the directory is
+     * created. The fresh directory is proved a plain directory (not a link, not a junction) and its
+     * origin - file key where the platform has one, creation time - recorded BEFORE anything is written
+     * into it; the marker goes in only while it still matches, and the finished container must pass
+     * {@link Staging#unchanged}. A cleanup after a failure touches nothing unless the directory still
+     * matches that origin; otherwise {@link StagingReplacedException} reports it, nothing removed.
+     */
+    static Staging createStaging(Checked checked, java.util.function.Consumer<Path> afterCreate, MarkerWriter writer)
+        throws IOException
+    {
         Path parent = checked.real().getParent();
         String name = STAGING_PREFIX + java.util.UUID.randomUUID().toString().substring(0, 8) + "-" //$NON-NLS-1$
             + checked.real().getFileName();
         Path created = Files.createDirectory(parent.resolve(name));
+        Origin origin = Origin.of(created);
+        if (origin == null)
+        {
+            throw new StagingReplacedException(created);
+        }
+        afterCreate.accept(created);
         String token = java.util.UUID.randomUUID().toString();
         try
         {
+            if (!origin.matches(created))
+            {
+                throw new StagingReplacedException(created);
+            }
             writer.write(created.resolve(Staging.MARKER), token);
-            BasicFileAttributes attrs = Files.readAttributes(created, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            return new Staging(created, attrs.fileKey(), token);
+            Staging staging = new Staging(created, origin, token);
+            if (!staging.unchanged())
+            {
+                throw new StagingReplacedException(created);
+            }
+            return staging;
         }
         catch (IOException | RuntimeException e)
         {
-            // Only what this call just made: the marker, if it was written, then the directory, with a
-            // non-recursive delete that fails rather than remove anything another program put there.
+            // Only what this call just made, and only while the directory is provably the one it made:
+            // the marker, if it was written, then the directory, with a non-recursive delete that fails
+            // rather than remove anything another program put there.
+            if (!origin.matches(created))
+            {
+                Activator.logWarning("git clone: the half-made staging directory " + created //$NON-NLS-1$
+                    + " was replaced; nothing in it was touched"); //$NON-NLS-1$
+                throw e instanceof StagingReplacedException ? (StagingReplacedException)e
+                    : new StagingReplacedException(created);
+            }
             try
             {
                 Files.deleteIfExists(created.resolve(Staging.MARKER));
@@ -578,6 +667,13 @@ public final class GitCloneTarget
             }
             throw e;
         }
+    }
+
+    /** How the emptied container is deleted; a test passes one that fails. */
+    @FunctionalInterface
+    interface ContainerDelete
+    {
+        boolean delete(Path container) throws IOException;
     }
 
     private static void writeMarker(Path marker, String token) throws IOException
@@ -638,9 +734,55 @@ public final class GitCloneTarget
      * @param checked the checked target
      * @return {@code null} when the clone is in place, else why not (the clone is still in staging)
      */
-    public static String install(Staging staging, Checked checked)
+    public static Installed install(Staging staging, Checked checked)
     {
         return install(staging, checked, moved -> { });
+    }
+
+    /** The outcome of {@link #install}: done, or why not and what was left in the target. */
+    public static final class Installed
+    {
+        private final String refusal;
+        private final List<Path> leftInTarget;
+
+        private Installed(String refusal, List<Path> leftInTarget)
+        {
+            this.refusal = refusal;
+            this.leftInTarget = List.copyOf(leftInTarget);
+        }
+
+        static Installed done()
+        {
+            return new Installed(null, List.of());
+        }
+
+        static Installed refused(String refusal)
+        {
+            return new Installed(refusal, List.of());
+        }
+
+        static Installed refused(String refusal, List<Path> leftInTarget)
+        {
+            return new Installed(refusal, leftInTarget);
+        }
+
+        /** @return {@code true} when the clone is in place */
+        public boolean ok()
+        {
+            return refusal == null;
+        }
+
+        /** @return why the clone is not in place, or {@code null} */
+        public String refusal()
+        {
+            return refusal;
+        }
+
+        /** @return entries of the clone (or not provably not) still in the target after a failed install */
+        public List<Path> leftInTarget()
+        {
+            return leftInTarget;
+        }
     }
 
     /** One entry moved into an existing target, and what it was right after the move. */
@@ -682,19 +824,6 @@ public final class GitCloneTarget
             modified = attrs.lastModifiedTime();
         }
 
-        /** @return the identity, or {@code null} when it cannot be read (then nothing can match it) */
-        static EntryIdentity ofOrNull(Path path)
-        {
-            try
-            {
-                return of(path);
-            }
-            catch (IOException | RuntimeException e) // NOSONAR unreadable: not provable later either
-            {
-                return null;
-            }
-        }
-
         static EntryIdentity of(Path path) throws IOException
         {
             return new EntryIdentity(Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
@@ -706,8 +835,15 @@ public final class GitCloneTarget
             try
             {
                 EntryIdentity now = of(path);
-                return directory == now.directory && regular == now.regular && link == now.link && other == now.other
-                    && java.util.Objects.equals(fileKey, now.fileKey) && size == now.size && modified.equals(now.modified);
+                boolean sameKind = directory == now.directory && regular == now.regular && link == now.link
+                    && other == now.other;
+                if (fileKey != null)
+                {
+                    // A file key (POSIX: device and inode) survives a rename and names the entry itself; a
+                    // moved directory's own times may change with its '..' entry, so they are not compared.
+                    return sameKind && fileKey.equals(now.fileKey) && (directory || size == now.size);
+                }
+                return sameKind && now.fileKey == null && size == now.size && modified.equals(now.modified);
             }
             catch (IOException | RuntimeException e) // NOSONAR gone or unreadable: not provably the moved entry
             {
@@ -717,13 +853,13 @@ public final class GitCloneTarget
     }
 
     /** {@link #install(Staging, Checked)} with a seam run after each entry moved into an existing target. */
-    static String install(Staging staging, Checked checked, java.util.function.Consumer<Path> afterMove)
+    public static Installed install(Staging staging, Checked checked, java.util.function.Consumer<Path> afterMove)
     {
         Path target = checked.real();
         if (!staging.unchanged())
         {
-            return "The staging directory '" + staging.path() + "' is no longer the one this clone created, " //$NON-NLS-1$ //$NON-NLS-2$
-                + "so the clone was not moved to '" + target + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return Installed.refused("The staging directory '" + staging.path() + "' is no longer the one this clone created, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "so the clone was not moved to '" + target + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (!checked.existed())
         {
@@ -731,12 +867,12 @@ public final class GitCloneTarget
             {
                 Files.move(staging.repository(), target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
                 removeEmptyContainer(staging);
-                return null;
+                return Installed.done();
             }
             catch (IOException | RuntimeException e)
             {
-                return "The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
-                    + "): something was created there while it ran."; //$NON-NLS-1$
+                return Installed.refused("The clone could not be moved to '" + target + "' (" + e.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
+                    + "): something was created there while it ran."); //$NON-NLS-1$
             }
         }
         try
@@ -744,34 +880,42 @@ public final class GitCloneTarget
             BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
             if (!isPlainDirectory(attrs))
             {
-                return "The clone target '" + target + "' is no longer a plain directory (it was replaced while " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "the clone ran), so the clone was not moved into it."; //$NON-NLS-1$
+                return Installed.refused("The clone target '" + target + "' is no longer a plain directory (it was replaced while " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the clone ran), so the clone was not moved into it."); //$NON-NLS-1$
             }
         }
         catch (IOException | RuntimeException e)
         {
-            return "The clone target '" + target + "' could not be read any more, so the clone was not moved " //$NON-NLS-1$ //$NON-NLS-2$
-                + "into it."; //$NON-NLS-1$
+            return Installed.refused("The clone target '" + target + "' could not be read any more, so the clone was not moved " //$NON-NLS-1$ //$NON-NLS-2$
+                + "into it."); //$NON-NLS-1$
         }
         List<Moved> moved = new ArrayList<>();
+        List<Path> unproved = new ArrayList<>();
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(staging.repository()))
         {
             for (Path entry : entries)
             {
                 Path destination = target.resolve(entry.getFileName().toString());
+                EntryIdentity before = EntryIdentity.of(entry); // what this run is about to move
                 Files.move(entry, destination); // no REPLACE_EXISTING: never over an entry of that name
-                moved.add(new Moved(destination, EntryIdentity.ofOrNull(destination)));
                 afterMove.accept(destination);
+                if (!before.matches(destination))
+                {
+                    // Not provably what was moved: not recorded as the clone's, and the install stops.
+                    unproved.add(destination);
+                    throw new IOException("an entry moved into the target was replaced right after the move"); //$NON-NLS-1$
+                }
+                moved.add(new Moved(destination, before));
             }
         }
         catch (IOException | RuntimeException e)
         {
-            List<Path> leftInTarget = new ArrayList<>();
+            List<Path> leftInTarget = new ArrayList<>(unproved);
             for (Moved back : moved)
             {
                 // Only an entry that is provably still the one moved goes back; another program's
                 // replacement stays where it is, named for recovery by hand.
-                if (back.identity == null || !back.identity.matches(back.destination))
+                if (!back.identity.matches(back.destination))
                 {
                     leftInTarget.add(back.destination);
                     continue;
@@ -789,11 +933,12 @@ public final class GitCloneTarget
                 + "): something was written there while it ran."; //$NON-NLS-1$
             if (leftInTarget.isEmpty())
             {
-                return why + " The target was left as it was."; //$NON-NLS-1$
+                return Installed.refused(why + " The target was left as it was.", leftInTarget); //$NON-NLS-1$
             }
-            return why + " These entries could not be taken back, because they could not be moved or are no " //$NON-NLS-1$
-                + "longer the ones this clone put there - check and remove them by hand: " //$NON-NLS-1$
-                + String.join(", ", leftInTarget.stream().map(Path::toString).toArray(String[]::new)) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            return Installed.refused(why + " These entries could not be taken back, because they could not be " //$NON-NLS-1$
+                + "moved or are not provably the ones this clone put there - check and remove them by hand: " //$NON-NLS-1$
+                + String.join(", ", leftInTarget.stream().map(Path::toString).toArray(String[]::new)) + ".", //$NON-NLS-1$ //$NON-NLS-2$
+                leftInTarget);
         }
         try
         {
@@ -804,7 +949,7 @@ public final class GitCloneTarget
             Activator.logWarning("git clone: the emptied staging directory " + staging.repository() + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         removeEmptyContainer(staging);
-        return null;
+        return Installed.done();
     }
 
     /**
@@ -843,23 +988,18 @@ public final class GitCloneTarget
         {
             return false;
         }
-        for (int attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++)
+        // ONE try: the marker - the proof of ownership - is gone now, so a retry could no longer tell this
+        // container from one swapped in during the pause. A failure is reported, with the path.
+        try
         {
-            try
-            {
-                Files.deleteIfExists(container);
-                return true;
-            }
-            catch (IOException | RuntimeException e) // NOSONAR a handle Windows has not released yet, or content
-            {
-                if (attempt == CLEANUP_ATTEMPTS || !pause())
-                {
-                    break;
-                }
-            }
+            staging.containerDelete.delete(container);
+            return true;
         }
-        Activator.logWarning("git clone: the staging directory " + container + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
-        return false;
+        catch (IOException | RuntimeException e) // NOSONAR a handle Windows has not released yet, or content
+        {
+            Activator.logWarning("git clone: the emptied staging directory " + container + " could not be removed"); //$NON-NLS-1$ //$NON-NLS-2$
+            return false;
+        }
     }
 
     /** A real directory: not a link, not a junction or other reparse point (Java reports those as "other"). */
