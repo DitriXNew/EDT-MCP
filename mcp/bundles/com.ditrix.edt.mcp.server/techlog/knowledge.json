@@ -1,0 +1,2702 @@
+{
+  "events": {
+    "CALL": {
+      "meaning": "Incoming remote call at the receiving component.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Context, Func, CallID, ClientID, t:clientID, SessionID, t:connectID, Usr; CpuTime in us; Memory/MemoryPeak in bytes; InBytes/OutBytes are disk I/O.",
+      "badSigns": "Large duration, CPU, memory peak or many repetitions.",
+      "traps": "Nested calls overlap: do not sum them as independent work. A CALL is not necessarily one user action.",
+      "fixes": "Locate the expensive component and repeat the same scenario.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: 1C-Rarus]",
+          "url": "https://rarus.ru/downloads/4431/1c-rarus-monitoring-proizvoditelnosti-2023-08-29.pdf"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_13_1690/1cv8upd_8_3_13_1690.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "SCALL": {
+      "meaning": "Outgoing remote call; the destination need not be a DBMS.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CallID, ClientID, DstClientID, IName, MName, Interface, Method, Context.",
+      "badSigns": "Long receiver wait or many short calls.",
+      "traps": "[unverified] SCALL minus CALL duration is not proven pure network time; pair identities and boundaries first.",
+      "fixes": "Batch repeated calls; inspect the receiver.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "SDBL": {
+      "meaning": "Platform data-model operation, including queries and transaction boundaries.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Func, Sdbl (platform data-model query text), Context; BeginTransaction, CommitTransaction, RollbackTransaction.",
+      "badSigns": "Large cumulative duration or repetitions.",
+      "traps": "HoldConnection and transaction events are not individual SQL statements. SDBL and child DB durations overlap.",
+      "fixes": "Inspect SQL, transaction scope and unexplained platform time.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "DBMSSQL": {
+      "meaning": "Microsoft SQL Server SQL execution.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "plansql (planSQLText only)",
+        "dbmslocks (lock annotations only)"
+      ],
+      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
+      "badSigns": "High count, total, max duration; expensive plan or waits.",
+      "traps": "RowsAffected=-1 is not a negative row count. Decode physical names using the actual database structure. Duration alone does not distinguish CPU, I/O and blocking.",
+      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        },
+        {
+          "tag": "[article: Konstmax13]",
+          "url": "https://infostart.ru/1c/articles/2819638/"
+        },
+        {
+          "tag": "[article: Microsoft]",
+          "url": "https://learn.microsoft.com/en-us/troubleshoot/sql/performance/resolve-blocking-problems-caused-lock-escalation"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "DBPOSTGRS": {
+      "meaning": "PostgreSQL SQL execution.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "plansql (planSQLText only)",
+        "dbmslocks (lock annotations only)"
+      ],
+      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
+      "badSigns": "High count, total, max duration; expensive plan or waits.",
+      "traps": "Plan cost is not seconds. actual time is ms; rows and time are per loop. Estimated plans are not actual execution. Duration alone does not distinguish CPU, I/O and blocking.",
+      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "DBV8DBENG": {
+      "meaning": "File database engine operation.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "plansql (planSQLText only)",
+        "dbmslocks (lock annotations only)"
+      ],
+      "keyProperties": "Sql, Context, dbpid, Rows, RowsAffected, planSQLText; plans require plansql; lock annotations require dbmslocks.",
+      "badSigns": "High count, total, max duration; expensive plan or waits.",
+      "traps": "Use file-engine plan notation (FULL SCAN, USING INDEX, NESTED LOOP), not PostgreSQL/SQL Server rules. Duration alone does not distinguish CPU, I/O and blocking.",
+      "fixes": "Inspect BSL context, data volumes, plan, statistics and waits before changing indexes.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "TLOCK": {
+      "meaning": "Managed transactional lock acquisition, including wait time.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Locks, Regions, WaitConnections, Context, t:connectID.",
+      "badSigns": "Nonempty WaitConnections or repeated long waits.",
+      "traps": "Acquisition duration is not holding lifetime; a region name alone does not prove a whole-register lock. dbmslocks is not required.",
+      "fixes": "Collect short acquisitions and transaction boundaries; check resource intersections and access order.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "TTIMEOUT": {
+      "meaning": "Managed lock wait timeout.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "WaitConnections, t:connectID, SessionID, Context.",
+      "badSigns": "Any occurrence deserves investigation.",
+      "traps": "Duration may be zero; use the associated TLOCK wait. Victim context does not identify the holder.",
+      "fixes": "Collect the locks profile on all participants; shorten the proven conflicting transaction.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "TDEADLOCK": {
+      "meaning": "Managed-mode deadlock detected.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "DeadlockConnectionIntersections, Context; correlate TLOCK and transactions.",
+      "badSigns": "Any occurrence; repeated contexts suggest a reproducible access-order issue.",
+      "traps": "Not a universal DBMS deadlock event; zero duration is not harmless.",
+      "fixes": "Align resource order and modes; reproduce concurrently and check timeouts and waits too.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "EXCP": {
+      "meaning": "Exception in platform, application, network or DBMS.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Exception, Descr, Context, OSException, DumpFile; retain the whole cause chain.",
+      "badSigns": "New repeated errors near failed operations or process loss.",
+      "traps": "One business failure can produce multiple component events. [article: Infobot / Infostart] EXCP outside expected filters was observed; [unverified] not a universal contract.",
+      "fixes": "Fix the evidenced defect; preserve version, reproduction and dump for unexplained crashes.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/status/"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[article: Andrey Burmistrov]",
+          "url": "https://infostart.ru/1c/articles/2718175/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "EXCPCNTX": {
+      "meaning": "Snapshot of operations started but unfinished at an abnormal condition.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "SrcName is the original operation; events are emitted from deepest nesting outward.",
+      "badSigns": "Read with exception and dump.",
+      "traps": "A filter alone does not generate snapshots. [unverified] Exclude snapshots from successful operation totals to avoid double counting.",
+      "fixes": "Inspect the original exception and interrupted stack.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "QERR": {
+      "meaning": "Query compilation, row/field access restriction or optional external-source NULL validation error.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "query checkActualNullable=true (special NULL check only)"
+      ],
+      "keyProperties": "Descr, Query, Context.",
+      "badSigns": "Repeated errors at the same application location or permissions.",
+      "traps": "Query is not DBMS SQL. Additional NULL validation can substantially slow queries.",
+      "fixes": "Inspect query syntax, permissions and data; query checkActualNullable=true enables special NULL checking.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "PROC": {
+      "meaning": "Process lifecycle and availability state.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "process, PID, Func and lifecycle description.",
+      "badSigns": "Explicit abnormal termination; unexplained frequent turnover needs corroboration.",
+      "traps": "Normal starts/stops and configured restarts are not crashes. Infrastructure-specific process-count advice is not a universal alert.",
+      "fixes": "Correlate exceptions, monitoring, version and process dumps.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "CONN": {
+      "meaning": "Client connection establishment and loss.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Action, client, application, addresses, connection identifiers.",
+      "badSigns": "Many reconnects near a component failure.",
+      "traps": "Session, client connection and DBMS connection are different identities.",
+      "fixes": "Correlate process and network errors.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "SESN": {
+      "meaning": "Session lifecycle and connection assignment.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "SessionID, Func, connection, Usr.",
+      "badSigns": "[unverified] Unusual actions or repeated recovery warrant correlation.",
+      "traps": "A session can outlive a connection; SessionID may be absent on an unassigned thread.",
+      "fixes": "Check CONN, PROC, EXCP and actual job/session history.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "MEM": {
+      "meaning": "Growth of unfreed dynamic memory fragments between suitable idle checkpoints.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "mem"
+      ],
+      "keyProperties": "sz size, szd delta, cn fragment count, cnd count delta.",
+      "badSigns": "[unverified] Repeatable growth after comparable operations.",
+      "traps": "Not periodic RSS; generation depends on no active calls/jobs. Absence does not prove no growth.",
+      "fixes": "Compare the same process before/after; inspect retained objects and dumps.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        }
+      ],
+      "cost": "Slows execution, especially parallel workload."
+    },
+    "LEAKS": {
+      "meaning": "Tracked objects retained between checkpoints, with creation stacks.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "leaks collect=\"1\" with point checkpoints"
+      ],
+      "keyProperties": "Descr contains object types and creation stacks.",
+      "badSigns": "[unverified] Repeatable accumulation after the measured section.",
+      "traps": "Retained objects may be intentional; this does not detect all native leaks.",
+      "fixes": "Narrow checkpoint to the implicated procedure and inspect lifetime.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ],
+      "cost": "Adds overhead; narrow to a procedure after localization."
+    },
+    "ATTN": {
+      "meaning": "Cluster health-monitor messages.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Text/type, PID, MemSize, MaxMemSize, MemoryLimits when available.",
+      "badSigns": "Unavailable process or critical memory limit.",
+      "traps": "A failure notification may only report a downstream symptom.",
+      "fixes": "Correlate component log and OS resource measurements.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "CLSTR": {
+      "meaning": "Cluster operations and load-distribution changes.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Event, Data; performance update metrics depend on version.",
+      "badSigns": "Load imbalance or repeated moves need investigation.",
+      "traps": "Not every CLSTR event is an error; Data has multiple shapes.",
+      "fixes": "Inspect cluster settings and measured resource constraints.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "SDGC": {
+      "meaning": "Session-data store cleanup and compaction.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "sessiondatacontext (additional origin context only)"
+      ],
+      "keyProperties": "InstanceID, FilesSize, UsedSize, CopyBytes, Method=Analyze/Compact, LockDuration in ms.",
+      "badSigns": "Growth and maintenance waits coinciding with complaints.",
+      "traps": "Not general BSL memory garbage collection.",
+      "fixes": "Use sessiondatacontext to investigate session-data origins only when needed; it adds overhead.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://dl03.1c.ru/content/Platform/8_5_1_397/1cv8upd_8_5_1_397.htm"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "VRSREQUEST": {
+      "meaning": "Resource interaction request.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "URI, Method, Headers, Body (body size in bytes), vrs-session, sync.",
+      "badSigns": "Large body or delayed interaction.",
+      "traps": "VRS is not a whole business-action measurement and can differ by connection mode. [unverified] Generality across modes is not established. CALL InBytes/OutBytes are disk I/O.",
+      "fixes": "Measure the whole user operation before form opening; reduce unnecessary form data; use WPR/WPA or network tools for unexplained time.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "VRSRESPONSE": {
+      "meaning": "Resource interaction response.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Status, Phrase, Headers, Body (body size in bytes), available pairing identifiers.",
+      "badSigns": "Large body or delayed interaction.",
+      "traps": "[unverified] HTTP 200 does not prove business success; distinguish transport completion and application result.",
+      "fixes": "Measure the whole user operation before form opening; reduce unnecessary form data; use WPR/WPA or network tools for unexplained time.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Konstmax13]",
+          "url": "https://infostart.ru/1c/articles/2819638/"
+        }
+      ],
+      "cost": "High event volume is possible; measure this profile on the target workload."
+    },
+    "SCRIPTCIRCREFS": {
+      "meaning": "BSL circular-reference detection.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "scriptcircrefs"
+      ],
+      "keyProperties": "Context and diagnostic object references.",
+      "badSigns": "Reproducible unintended cycles.",
+      "traps": "Very high overhead; use only for a focused investigation.",
+      "fixes": "Remove the retaining cycle and disable detection afterwards.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ],
+      "cost": "Substantial performance loss; focused diagnostics only."
+    },
+    "LIC": {
+      "meaning": "Licensing / hardware-protection diagnostics.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Func, txt or Txt; JSON property spelling can vary.",
+      "badSigns": "Licensing failure supported by diagnostic text.",
+      "traps": "Case is not stable; do not infer failure from event presence.",
+      "fixes": "Read the exact diagnostic and platform licensing configuration.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    },
+    "HASP": {
+      "meaning": "Licensing / hardware-protection diagnostics.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Func, txt or Txt; JSON property spelling can vary.",
+      "badSigns": "Licensing failure supported by diagnostic text.",
+      "traps": "Case is not stable; do not infer failure from event presence.",
+      "fixes": "Read the exact diagnostic and platform licensing configuration.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ],
+      "cost": "Incident/lifecycle volume is usually lower, but storms can be large; no fixed guarantee."
+    }
+  },
+  "properties": {
+    "ts": {
+      "meaning": "Event completion timestamp in XML date-time format. Start = completion minus duration.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Event completion timestamp in XML date-time format. Start = completion minus duration.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "duration": {
+      "meaning": "JSON and modern text record duration in microseconds. XML duration filter uses hundreds of microseconds; generate durationus instead. Historical 8.1 text units differed; transition unverified.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "JSON and modern text record duration in microseconds. XML duration filter uses hundreds of microseconds; generate durationus instead. Historical 8.1 text units differed; transition unverified.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "durationus": {
+      "meaning": "XML filter duration in microseconds; user milliseconds multiplied by 1000.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "XML filter duration in microseconds; user milliseconds multiplied by 1000.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Context": {
+      "meaning": "BSL call stack; preserve every frame. Missing context means not collected, not no BSL work.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "BSL call stack; preserve every frame. Missing context means not collected, not no BSL work.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        }
+      ]
+    },
+    "Descr": {
+      "meaning": "Full exception/query diagnostic; normalized text is an aggregation key, not a replacement for the original.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Full exception/query diagnostic; normalized text is an aggregation key, not a replacement for the original.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Sql": {
+      "meaning": "DBMS statement; preserve original separately from normalized fingerprint and parameters.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "DBMS statement; preserve original separately from normalized fingerprint and parameters.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Query": {
+      "meaning": "Platform query text; not interchangeable with DBMS Sql.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Platform query text; not interchangeable with DBMS Sql.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "planSQLText": {
+      "meaning": "DBMS-specific plan requiring plansql. PostgreSQL cost is not time; actual time and rows are per loops. EXPLAIN ANALYZE executes the query.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "DBMS-specific plan requiring plansql. PostgreSQL cost is not time; actual time and rows are per loops. EXPLAIN ANALYZE executes the query.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Memory": {
+      "meaning": "Change in memory allocated but not freed during CALL; signed bytes, not process RSS.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Change in memory allocated but not freed during CALL; signed bytes, not process RSS.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "MemoryPeak": {
+      "meaning": "Peak CALL memory in bytes; does not itself prove a leak.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Peak CALL memory in bytes; does not itself prove a leak.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "CpuTime": {
+      "meaning": "CALL CPU in microseconds, introduced in 8.3.13; missing is unknown.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL CPU in microseconds, introduced in 8.3.13; missing is unknown.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "InBytes": {
+      "meaning": "CALL disk bytes read, not network exchange.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL disk bytes read, not network exchange.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "OutBytes": {
+      "meaning": "CALL disk bytes written, not network exchange.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL disk bytes written, not network exchange.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Body": {
+      "meaning": "VRS exchange body; do not confuse with CALL disk I/O.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "VRS exchange body; do not confuse with CALL disk I/O.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "process": {
+      "meaning": "Executable type; do not confuse with p:processName or PID.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Executable type; do not confuse with p:processName or PID.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "p:processName": {
+      "meaning": "Server infobase context, often the database name; may be absent on client/file events.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Server infobase context, often the database name; may be absent on client/file events.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "OSThread": {
+      "meaning": "OS thread identity scoped to node, process and time.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "OS thread identity scoped to node, process and time.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "SessionID": {
+      "meaning": "Infobase session; can span connections and may be missing.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Infobase session; can span connections and may be missing.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "t:connectID": {
+      "meaning": "Platform connection, distinct from SessionID, ClientID and dbpid.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Platform connection, distinct from SessionID, ClientID and dbpid.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "ClientID": {
+      "meaning": "Interaction client identity; use direction and other identities with CallID.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Interaction client identity; use direction and other identities with CallID.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        }
+      ]
+    },
+    "CallID": {
+      "meaning": "Remote call id; not globally unique over an archive.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Remote call id; not globally unique over an archive.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        }
+      ]
+    },
+    "dbpid": {
+      "meaning": "DBMS connection identity; not a platform connection id.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "DBMS connection identity; not a platform connection id.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Usr": {
+      "meaning": "Infobase user. DefUser alone does not prove background execution.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Infobase user. DefUser alone does not prove background execution.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Func": {
+      "meaning": "Operation name; transaction boundaries matter for lock holding.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Operation name; transaction boundaries matter for lock holding.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Rows": {
+      "meaning": "Returned rows, not scanned rows/pages.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Returned rows, not scanned rows/pages.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "RowsAffected": {
+      "meaning": "Affected row count; -1 may mean unavailable.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Affected row count; -1 may mean unavailable.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Locks": {
+      "meaning": "Managed lock resources, values and modes; verify intersection.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Managed lock resources, values and modes; verify intersection.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Regions": {
+      "meaning": "Managed lock namespaces; a name alone does not prove a whole-register lock.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Managed lock namespaces; a name alone does not prove a whole-register lock.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "WaitConnections": {
+      "meaning": "Conflicting platform connections; find matching resources and transaction interval.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Conflicting platform connections; find matching resources and transaction interval.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "DeadlockConnectionIntersections": {
+      "meaning": "Managed deadlock participant pairs and resource intersections.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Managed deadlock participant pairs and resource intersections.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lka": {
+      "meaning": "1 means DBMS blocking source; requires dbmslocks.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "1 means DBMS blocking source; requires dbmslocks.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lkp": {
+      "meaning": "1 means DBMS blocking victim; requires dbmslocks.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "1 means DBMS blocking victim; requires dbmslocks.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lkpid": {
+      "meaning": "Victim DBMS poll id; join to an element in source lkaid.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Victim DBMS poll id; join to an element in source lkaid.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lkaid": {
+      "meaning": "Source DBMS poll id list. Poll no more often than once per 2 s on DB access.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Source DBMS poll id list. Poll no more often than once per 2 s on DB access.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lksrc": {
+      "meaning": "Victim annotation identifying source DBMS connection.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Victim annotation identifying source DBMS connection.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lkpto": {
+      "meaning": "Seconds since victim state detected, not microseconds.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Seconds since victim state detected, not microseconds.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "lkato": {
+      "meaning": "Seconds since source state detected, not microseconds.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Seconds since source state detected, not microseconds.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "SrcName": {
+      "meaning": "Original operation type in EXCPCNTX; unfinished snapshot.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Original operation type in EXCPCNTX; unfinished snapshot.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "LockDuration": {
+      "meaning": "SDGC lock duration in milliseconds.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "SDGC lock duration in milliseconds.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "sz": {
+      "meaning": "MEM fragment size.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "MEM fragment size.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "szd": {
+      "meaning": "MEM size delta.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "MEM size delta.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "cn": {
+      "meaning": "MEM fragment count.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "MEM fragment count.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "cnd": {
+      "meaning": "MEM count delta.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "MEM count delta.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "txt": {
+      "meaning": "Diagnostic text; property names may vary in case, e.g. LIC txt and HASP Txt.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Diagnostic text; property names may vary in case, e.g. LIC txt and HASP Txt.",
+      "badSigns": "Interpret with the event and captured coverage.",
+      "traps": "Missing values are unknown, never silently zero.",
+      "fixes": "Read the source event and its complete context.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "Sdbl": {
+      "meaning": "Query text in the platform database-model language, carried by SDBL. Distinct from DBMS Sql and QERR Query.",
+      "traps": "Transaction and HoldConnection operations can lack query text; do not count them as SQL statements.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    }
+  },
+  "profiles": {
+    "errors": {
+      "meaning": "What failed, and which component lost availability?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Events: EXCP, EXCPCNTX, QERR, PROC, CONN, SESN, ATTN, TTIMEOUT, TDEADLOCK",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Read exceptions first; use locks profile to recover holders.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ],
+      "events": [
+        "EXCP",
+        "EXCPCNTX",
+        "QERR",
+        "PROC",
+        "CONN",
+        "SESN",
+        "ATTN",
+        "TTIMEOUT",
+        "TDEADLOCK"
+      ],
+      "thresholdMs": 0,
+      "purpose": "What failed, and which component lost availability?",
+      "question": "What failed, and which component lost availability?",
+      "expectedVolume": "Usually less than SQL capture, but an error storm can be large.",
+      "afterwards": "Read exceptions first; use locks profile to recover holders.",
+      "historyHours": 1
+    },
+    "slow-calls": {
+      "meaning": "Which server contexts consume elapsed time?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Events: CALL, SCALL, EXCP",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Group Context, then inspect SQL, CPU and MemoryPeak.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ],
+      "events": [
+        "CALL",
+        "SCALL",
+        "EXCP"
+      ],
+      "thresholdMs": 1000,
+      "purpose": "Which server contexts consume elapsed time?",
+      "question": "Which server contexts consume elapsed time?",
+      "expectedVolume": "Threshold-dependent; misses accumulated short calls.",
+      "afterwards": "Group Context, then inspect SQL, CPU and MemoryPeak.",
+      "historyHours": 1
+    },
+    "db": {
+      "meaning": "Which SQL patterns cost most?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "optional plansql"
+      ],
+      "keyProperties": "Events: DBMSSQL, DBPOSTGRS, DBV8DBENG, SDBL, EXCP, QERR",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Inspect normalized SQL, count/total/max, BSL context, plans and waits.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/setupquerytj/"
+        },
+        {
+          "tag": "[article: Dmitry Yukhtimovsky]",
+          "url": "https://pgconf.ru/rmedia/2017/04/03/20170316H3_Yukhtimovsky.pdf"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        }
+      ],
+      "events": [
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "SDBL",
+        "EXCP",
+        "QERR"
+      ],
+      "thresholdMs": 5000,
+      "purpose": "Which SQL patterns cost most?",
+      "question": "Which SQL patterns cost most?",
+      "expectedVolume": "IBS reports hundreds of MB even above 5 s; no fixed volume guarantee.",
+      "afterwards": "Inspect normalized SQL, count/total/max, BSL context, plans and waits.",
+      "historyHours": 1
+    },
+    "locks": {
+      "meaning": "Who waits, who holds the intersecting resource, and for which transaction?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "optional dbmslocks"
+      ],
+      "keyProperties": "Events: TLOCK, TTIMEOUT, TDEADLOCK, SDBL, EXCP, DBMSSQL, DBPOSTGRS",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Follow WaitConnections and transaction boundaries; join lkpid/lkaid if enabled.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ],
+      "events": [
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "SDBL",
+        "EXCP",
+        "DBMSSQL",
+        "DBPOSTGRS"
+      ],
+      "thresholdMs": 0,
+      "purpose": "Who waits, who holds the intersecting resource, and for which transaction?",
+      "question": "Who waits, who holds the intersecting resource, and for which transaction?",
+      "expectedVolume": "High; collect a short bounded reproduction on all nodes.",
+      "afterwards": "Follow WaitConnections and transaction boundaries; join lkpid/lkaid if enabled.",
+      "historyHours": 1
+    },
+    "memory": {
+      "meaning": "Which calls and retained objects explain memory growth?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [
+        "mem",
+        "leaks collect=\"1\" with point call=\"server\""
+      ],
+      "keyProperties": "Events: CALL, MEM, LEAKS, ATTN, PROC, EXCP",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Inspect MemoryPeak, sz/szd/cn/cnd, creation stacks; compare same-process dumps.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        }
+      ],
+      "events": [
+        "CALL",
+        "MEM",
+        "LEAKS",
+        "ATTN",
+        "PROC",
+        "EXCP"
+      ],
+      "thresholdMs": 0,
+      "purpose": "Which calls and retained objects explain memory growth?",
+      "question": "Which calls and retained objects explain memory growth?",
+      "expectedVolume": "Expensive instrumentation, especially under parallel load.",
+      "afterwards": "Inspect MemoryPeak, sz/szd/cn/cnd, creation stacks; compare same-process dumps.",
+      "historyHours": 1
+    },
+    "scenario": {
+      "meaning": "What happened inside one reproduced user action?",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Events: CALL, SCALL, VRSREQUEST, VRSRESPONSE, SDBL, DBMSSQL, DBPOSTGRS, DBV8DBENG, TLOCK, TTIMEOUT, TDEADLOCK, EXCP, QERR, EXCPCNTX, PROC, CONN, SESN, ATTN",
+      "badSigns": "Investigate evidence, not universal thresholds.",
+      "traps": "Thresholds are configurable diagnostic choices, not platform standards. Rotation size is not a total disk cap.",
+      "fixes": "Find root call, inspect chain and missing intervals; fix and re-measure.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        }
+      ],
+      "events": [
+        "CALL",
+        "SCALL",
+        "VRSREQUEST",
+        "VRSRESPONSE",
+        "SDBL",
+        "DBMSSQL",
+        "DBPOSTGRS",
+        "DBV8DBENG",
+        "TLOCK",
+        "TTIMEOUT",
+        "TDEADLOCK",
+        "EXCP",
+        "QERR",
+        "EXCPCNTX",
+        "PROC",
+        "CONN",
+        "SESN",
+        "ATTN"
+      ],
+      "thresholdMs": 0,
+      "purpose": "What happened inside one reproduced user action?",
+      "question": "What happened inside one reproduced user action?",
+      "expectedVolume": "Potentially very high; explicitly stop immediately after one short reproduction.",
+      "afterwards": "Find root call, inspect chain and missing intervals; fix and re-measure.",
+      "historyHours": 1
+    }
+  },
+  "problems": {
+    "exceptions": {
+      "meaning": "EXCP grouped by normalized Descr.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "EXCP grouped by normalized Descr.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Inspect full cause chain and Context; fix exact platform/application/environment failure.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        }
+      ]
+    },
+    "query-errors": {
+      "meaning": "QERR Descr, Query, Context.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "QERR Descr, Query, Context.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Check query compilation, row/field permissions and optional NULL validation.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ]
+    },
+    "process-crashes": {
+      "meaning": "PROC with explicit abnormal/crash evidence; ordinary lifecycle is excluded.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "PROC with explicit abnormal/crash evidence; ordinary lifecycle is excluded.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Correlate EXCP/EXCPCNTX, exact version and dump; normal restart is not proof of a crash.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ]
+    },
+    "lock-timeouts": {
+      "meaning": "TTIMEOUT plus matching TLOCK and transactions.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "TTIMEOUT plus matching TLOCK and transactions.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Recover holder from all participants; reduce the demonstrated transaction/lock scope.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ]
+    },
+    "managed-deadlocks": {
+      "meaning": "TDEADLOCK DeadlockConnectionIntersections and TLOCK.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "TDEADLOCK DeadlockConnectionIntersections and TLOCK.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Agree access order and lock modes; repeat a parallel reproduction.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ]
+    },
+    "lock-waits": {
+      "meaning": "TLOCK with nonempty WaitConnections grouped by Regions.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "TLOCK with nonempty WaitConnections grouped by Regions.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Intersect resource values and transaction lifetime before naming a holder.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ]
+    },
+    "dbms-locks": {
+      "meaning": "lka=1 source; lkp=1 victim; join lkpid to lkaid and inspect lksrc.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "lka=1 source; lkp=1 victim; join lkpid to lkaid and inspect lksrc.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Collect all working processes and a DBMS deadlock graph for a proven cycle. Carrier event need not be the SQL that acquired the lock.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ]
+    },
+    "slow-db": {
+      "meaning": "DBMSSQL, DBPOSTGRS, DBV8DBENG or SDBL with SQL, grouped by normalized SQL.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "DBMSSQL, DBPOSTGRS, DBV8DBENG or SDBL with SQL, grouped by normalized SQL.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Inspect plan, statistics, parameters, data and waits; re-measure after a targeted fix. Do not automatically add an index.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        }
+      ]
+    },
+    "slow-calls": {
+      "meaning": "CALL grouped by Context with count, total, avg and max elapsed time.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL grouped by Context with count, total, avg and max elapsed time.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Separate DB, lock waits, BSL, serialization and exchanges; batch repeated calls.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        }
+      ]
+    },
+    "memory-peaks": {
+      "meaning": "CALL with positive MemoryPeak in bytes, ranked by peak.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL with positive MemoryPeak in bytes, ranked by peak.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Large peak is not a proven leak; compare same-process dumps and retained-object checkpoints.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        }
+      ]
+    },
+    "many-calls": {
+      "meaning": "Many CALL/SCALL per user action, including short calls.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Many CALL/SCALL per user action, including short calls.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Batch server work and remove implicit per-row calls.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ]
+    },
+    "slow-form": {
+      "meaning": "Whole form-opening interval, SQL and VRS body/response.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Whole form-opening interval, SQL and VRS body/response.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Measure before opening; reduce transferred collections and inspect serialization/client work.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
+        }
+      ]
+    },
+    "slow-posting": {
+      "meaning": "Posting CALL, SQL repetitions, transactions and lock waits.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "Posting CALL, SQL repetitions, transactions and lock waits.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Batch work, filter virtual tables and shorten transactions while preserving correctness.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        },
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ]
+    },
+    "background-jobs": {
+      "meaning": "CALL Func/Module/Meth, JobScheduler application, SQL/errors; compare job history.",
+      "enabledBy": "Event filter and property all; filters only reduce generated data.",
+      "generatingElements": [],
+      "keyProperties": "CALL Func/Module/Meth, JobScheduler application, SQL/errors; compare job history.",
+      "badSigns": "Repetition and impact within the reproduced operation.",
+      "traps": "Nested durations overlap; evidence is not a complete causal proof.",
+      "fixes": "Inspect schedule and concurrency. No completed CALL does not prove no job launch; technical success does not prove business completion.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: IT Expertise team]",
+          "url": "https://infostart.ru/1c/articles/1662406/"
+        },
+        {
+          "tag": "[article: Konstmax13]",
+          "url": "https://infostart.ru/1c/articles/2819638/"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ]
+    },
+    "index-scan": {
+      "meaning": "Expensive SQL plus a plan scanning a large source, with actual selectivity/data volume supporting excess reads.",
+      "evidence": "Expensive SQL plus a plan scanning a large source, with actual selectivity/data volume supporting excess reads.",
+      "fixes": "Match index keys to predicates/joins; compare plan, correctness and full-operation measurement.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        },
+        {
+          "tag": "[article: Dmitry Yukhtimovsky]",
+          "url": "https://pgconf.ru/rmedia/2017/04/03/20170316H3_Yukhtimovsky.pdf"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        }
+      ]
+    },
+    "seq-scan-not-proof": {
+      "meaning": "A Seq Scan alone is insufficient evidence of a fault.",
+      "evidence": "A Seq Scan alone is insufficient evidence of a fault.",
+      "fixes": "Compare data size, fraction selected and actual costs before creating an index.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        }
+      ]
+    },
+    "temp-table-index": {
+      "meaning": "Repeated temporary-table use with expensive plan joins/lookups.",
+      "evidence": "Repeated temporary-table use with expensive plan joins/lookups.",
+      "fixes": "Index the temporary result by used keys; include index creation cost in whole-batch measurement.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        }
+      ]
+    },
+    "virtual-table-filter": {
+      "meaning": "Expensive SQL and BSL query filtering outside virtual-table parameters.",
+      "evidence": "Expensive SQL and BSL query filtering outside virtual-table parameters.",
+      "fixes": "Push applicable restrictions into parameters and verify result semantics.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        }
+      ]
+    },
+    "subquery-joins": {
+      "meaning": "SQL/context identifies joins to complex subqueries or virtual tables.",
+      "evidence": "SQL/context identifies joins to complex subqueries or virtual tables.",
+      "fixes": "Materialize appropriate intermediate results, index them and compare total cost.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        }
+      ]
+    },
+    "query-predicates": {
+      "meaning": "Expanded SQL, heavy joins or ineffective access with OR, expressions or composite references.",
+      "evidence": "Expanded SQL, heavy joins or ineffective access with OR, expressions or composite references.",
+      "fixes": "Rewrite the demonstrated predicate/type restriction; verify result and plan.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        }
+      ]
+    },
+    "n-plus-one-sql": {
+      "meaning": "[unverified] Repeated normalized SQL inside one CALL with frequency growing with processed rows.",
+      "evidence": "[unverified] Repeated normalized SQL inside one CALL with frequency growing with processed rows.",
+      "fixes": "Confirm a query loop in code and replace it with an appropriate batch query.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        }
+      ]
+    },
+    "long-transaction": {
+      "meaning": "Long BeginTransaction-to-Commit/Rollback interval, held resources and waiting connections.",
+      "evidence": "Long BeginTransaction-to-Commit/Rollback interval, held resources and waiting connections.",
+      "fixes": "Move permissible calculations outside the transaction and reduce scope while preserving correctness.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[article: Microsoft]",
+          "url": "https://learn.microsoft.com/en-us/troubleshoot/sql/performance/resolve-blocking-problems-caused-lock-escalation"
+        }
+      ]
+    },
+    "wide-managed-lock": {
+      "meaning": "[unverified] Locks values show broad scope and independent business keys collide; lock code corroborates.",
+      "evidence": "[unverified] Locks values show broad scope and independent business keys collide; lock code corroborates.",
+      "fixes": "Specify dimensions and values; Regions alone is not evidence of whole-register locking.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        }
+      ]
+    },
+    "lock-escalation": {
+      "meaning": "SQL participants plus lock_escalation Extended Event and a blocking table S/X lock.",
+      "evidence": "SQL participants plus lock_escalation Extended Event and a blocking table S/X lock.",
+      "fixes": "Use shorter transactions, smaller batches and efficient queries; disabling escalation is not the first automatic fix.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        },
+        {
+          "tag": "[article: Microsoft]",
+          "url": "https://learn.microsoft.com/en-us/troubleshoot/sql/performance/resolve-blocking-problems-caused-lock-escalation"
+        }
+      ]
+    },
+    "dbms-deadlock": {
+      "meaning": "DBMS error plus the DBMS deadlock report; lka/lkp alone does not prove a cycle.",
+      "evidence": "DBMS error plus the DBMS deadlock report; lka/lkp alone does not prove a cycle.",
+      "fixes": "Inspect actual resources/access order, fix the evidenced SQL or code, and reproduce concurrently.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        }
+      ]
+    },
+    "dynamic-list": {
+      "meaning": "[unverified] Repeated slow opening/scrolling requests with list context.",
+      "evidence": "[unverified] Repeated slow opening/scrolling requests with list context.",
+      "fixes": "Inspect actual SQL, user filters, sorting and permissions; optimize that query.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/standards/i8105842.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/v8std/src/500/i8100487.htm"
+        }
+      ]
+    },
+    "large-report-result": {
+      "meaning": "CALL memory peak and SQL/report context show unnecessary processing.",
+      "evidence": "CALL memory peak and SQL/report context show unnecessary processing.",
+      "fixes": "Restrict data and inspect data-composition settings; verify report correctness.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[article: IT Expertise team]",
+          "url": "https://infostart.ru/1c/articles/1662406/"
+        }
+      ]
+    },
+    "session-data-growth": {
+      "meaning": "UsedSize/FilesSize growth and long SDGC LockDuration.",
+      "evidence": "UsedSize/FilesSize growth and long SDGC LockDuration.",
+      "fixes": "Find change sources; enable costly sessiondatacontext temporarily if needed.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://dl03.1c.ru/content/Platform/8_5_1_397/1cv8upd_8_5_1_397.htm"
+        }
+      ]
+    },
+    "exchange-table-writes": {
+      "meaning": "SQL/context identifies exchange change tables and confirmed blocking.",
+      "evidence": "SQL/context identifies exchange change tables and confirmed blocking.",
+      "fixes": "Revisit batching and change registration while validating exchange integrity.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ]
+    },
+    "unexplained-gap": {
+      "meaning": "Short recorded operations but a long unexplained interval.",
+      "evidence": "Short recorded operations but a long unexplained interval.",
+      "fixes": "Inspect code between events, serialization and external waits; expand capture/instrumentation.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        }
+      ]
+    },
+    "bottleneck-moved": {
+      "meaning": "Time/resource distribution changed after a fix and the operation is slow again.",
+      "evidence": "Time/resource distribution changed after a fix and the operation is slow again.",
+      "fixes": "Repeat diagnosis; removing one limit can expose another.",
+      "traps": "A candidate needs corroboration and a repeat measurement.",
+      "sources": [
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ]
+    }
+  },
+  "gotchas": {
+    "generation": {
+      "note": "Event/property filters only reduce output. MEM needs mem; LEAKS needs leaks and checkpoints; plans need plansql; DBMS lock annotations need dbmslocks.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "plans-disagreement": {
+      "note": "[doc] PostgreSQL methodology restricts plansql to test/development servers. [article: Dmitry Yukhtimovsky] and [article: Nikolay Kuznetsov] older profiles collect plans with slow SQL. Preserve both recommendations and dates (2017 / 2024-2026); do not call plans cheap permanent monitoring.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: Dmitry Yukhtimovsky]",
+          "url": "https://pgconf.ru/rmedia/2017/04/03/20170316H3_Yukhtimovsky.pdf"
+        },
+        {
+          "tag": "[article: Nikolay Kuznetsov]",
+          "url": "https://infostart.ru/1c/articles/2020498/"
+        }
+      ]
+    },
+    "units-disagreement": {
+      "note": "[article: badcasedaily / OTUS] uses Dur; not documented as equivalent to duration/durationus. [article: Konstmax13] corrected filter units on 2026-10-23. Generate durationus, never Dur. [doc] Historical 8.1 used ten-thousandths of a second; exact transition remains [unverified].",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: badcasedaily / OTUS]",
+          "url": "https://habr.com/ru/companies/otus/articles/1018102/"
+        },
+        {
+          "tag": "[article: Konstmax13]",
+          "url": "https://infostart.ru/1c/articles/2819638/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Comm/Platform/8_1_11_67/V8AddDoc81.htm"
+        }
+      ]
+    },
+    "invalid-examples": {
+      "note": "[article: Nikolay Kuznetsov] includes a leading space in SDBL and system nested under log. Documented token is SDBL; system belongs under config.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Nikolay Kuznetsov]",
+          "url": "https://infostart.ru/1c/articles/2020498/"
+        }
+      ]
+    },
+    "disk-not-network": {
+      "note": "CALL InBytes/OutBytes are disk I/O despite contrary article interpretations. VRS Body is exchange data.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
+        }
+      ]
+    },
+    "absence": {
+      "note": "Absent does not mean healthy: disabled event, duration filtering, generation settings, missing node, active unfinished call and version can all explain absence.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ]
+    },
+    "identities": {
+      "note": "[unverified] Correlation must scope node, process, infobase and interval. Equal numbers across SessionID, t:connectID, ClientID and dbpid do not link identities.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Infobot / Infostart]",
+          "url": "https://infostart.ru/1c/articles/1195695/"
+        }
+      ]
+    },
+    "nested-time": {
+      "note": "[unverified] Use union of child intervals for residual time; summing nested durations double counts. Residual time is unexplained by captured events, not proven BSL CPU.",
+      "sources": [
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ]
+    },
+    "ibsrv": {
+      "note": "[article: Autumn Library] observed file-mode code without CALL and ibsrv CALL depth 0 without t:clientID on macOS 8.3.27. Generality on Windows/Linux and other releases is [unverified]. Never assume only rphost directories.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://1c-dn.com/library/tutorials/1c_enterprise_administrator_guide_file_mode_8_3_27/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ]
+    },
+    "file-lock-matrix": {
+      "note": "[unverified] No sufficient basis for asserting TLOCK/TTIMEOUT/TDEADLOCK never occur in every file, web and ibsrv mode. Verify each mode/version.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://1c-dn.com/library/tutorials/1c_enterprise_administrator_guide_file_mode_8_3_27/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ]
+    },
+    "cost": {
+      "note": "No universal MB/day, negligible-overhead, memory, row or process-count thresholds are established. Filters reduce recorded volume, not necessarily instrumentation cost. More than 20 log elements is discouraged.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/setupquerytj/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        },
+        {
+          "tag": "[article: Vladimir Badanov]",
+          "url": "https://infostart.ru/journal/news/mir-1s/pochemu-novyy-server-mozhet-ne-reshit-problemu-nizkoy-proizvoditelnosti-1s-prakticheskiy-razbor_2775773/"
+        }
+      ]
+    },
+    "retention": {
+      "note": "history is hours; 0 disables automatic deletion, not logging. rotationsize is MB per file, not a total directory cap. Gilev short 2-hour, IBS week and analytic long-retention advice serve different tasks.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/setupquerytj/"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        }
+      ]
+    },
+    "versions": {
+      "note": "JSON/placement/new rotation arrived in 8.3.25. CALL memory/I/O expanded in 8.3.5; CpuTime in 8.3.13. 8.5.1 filter-unit confirmation does not prove every property unchanged.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://1c-dn.com/blog/Enhancements-for-Enterprise-Cloud-Environments/"
+        },
+        {
+          "tag": "[article: Konstmax13]",
+          "url": "https://infostart.ru/1c/articles/2819638/"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_13_1690/1cv8upd_8_3_13_1690.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://downloads.v8.1c.ru/content/Platform/8_3_5_1119/1cv8upd.htm"
+        }
+      ]
+    },
+    "source-access": {
+      "note": "ITS lock and deadlock methodologies were available as indexed excerpts (direct 403); gilev.ru pages via index (redirect loops); Burmistrov via index (429); PGConf PDF text only, XML images not transcribed. Books and 2012 attachments were not read; no claims from their unseen contents.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106006.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://v8.1c.ru/metod/books/42721.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://v8.1c.ru/metod/books/61555.htm"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/setupquerytj/"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/status/"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/timeoutlock/"
+        },
+        {
+          "tag": "[article: Dmitry Yukhtimovsky]",
+          "url": "https://pgconf.ru/rmedia/2017/04/03/20170316H3_Yukhtimovsky.pdf"
+        },
+        {
+          "tag": "[article: Andrey Burmistrov]",
+          "url": "https://infostart.ru/1c/articles/2718175/"
+        },
+        {
+          "tag": "[article: Dorzhi Tsydenov]",
+          "url": "https://infostart.ru/1c/articles/162790/"
+        }
+      ]
+    },
+    "json-unknowns": {
+      "note": "[unverified] Duplicate keys and malformed property names need real-corpus verification. This parser rejects duplicate case-insensitive keys rather than repairing semantics. Unknown event kinds remain readable.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Andrey Burmistrov]",
+          "url": "https://infostart.ru/1c/articles/2718175/"
+        },
+        {
+          "tag": "[article: Autumn Library]",
+          "url": "https://autumn-library.github.io/single-page/opentelemetry-v8-logs"
+        }
+      ]
+    },
+    "causality": {
+      "note": "[unverified] Keep fact, diagnostic hypothesis, missing evidence and recommendation separate. lka/lkp proves observed blocking, not a deadlock cycle. Carrier event may not be the resource-acquiring SQL.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/instructions/i8106005.htm"
+        },
+        {
+          "tag": "[article: Gilev team]",
+          "url": "https://www.gilev.ru/status/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        },
+        {
+          "tag": "[article: Victoria Dorokhina / product team]",
+          "url": "https://infostart.ru/journal/news/mir-1s/orkestrator-1s-v2-2-parsing-tekhnologicheskogo-zhurnala-topologiya-landshafta-1s-i-oblegchennaya-ver_2066803/"
+        }
+      ]
+    },
+    "service-account": {
+      "note": "A service-account cluster does not read the interactive user LOCALAPPDATA. Configuration lookup: version bin/conf, user LOCALAPPDATA/1C/1cv8/conf, ConfLocation, ALLUSERSPROFILE/1C/1cv8/conf. Earlier files shadow later ones.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://1c-dn.com/library/tutorials/1c_enterprise_administrator_guide_file_mode_8_3_27/"
+        }
+      ]
+    },
+    "capture-window": {
+      "note": "Scenario is a short manual bounded reproduction: start, reproduce once, stop immediately; history is retention, not automatic capture expiry.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Maxim Starkov]",
+          "url": "https://infostart.ru/1c/articles/1407627/"
+        },
+        {
+          "tag": "[article: Mikhail Vinnichenko and Andrey Cheranev]",
+          "url": "https://rarus.ru/publications/20210127-ot-ekspertov-lagi-v-tekhnologicheskom-loge-1c-458537/"
+        }
+      ]
+    },
+    "plans-execution": {
+      "note": "EXPLAIN ANALYZE really executes SQL. Do not automatically replay data-changing statements. Reproduce platform connection settings; historic SET lists are not current universal defaults.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: PostgreSQL Global Development Group]",
+          "url": "https://www.postgresql.org/docs/18/using-explain.html"
+        }
+      ]
+    },
+    "instrumentation": {
+      "note": "mem, leaks, scriptcircrefs, query NULL validation and sessiondatacontext add overhead. Full Windows dumps can be large; history does not delete dumps. Linux/macOS dumps use OS facilities.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105985.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://dl03.1c.ru/content/Platform/8_5_1_397/1cv8upd_8_5_1_397.htm"
+        }
+      ]
+    },
+    "methodology-scope": {
+      "note": "[doc] Classify whether the slowdown affects all users, one user, the whole system or one function; reproduce on comparable problem-user data. PostgreSQL methodology uses DB time share around 50 percent as a reason to inspect SQL, not a universal failure boundary. [unverified] Nested interval overlap must be removed before interpreting ratios. Use full-user-operation timing, including form serialization/client work outside the BSL timer.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105983.htm"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8105902.htm"
+        }
+      ]
+    }
+  },
+  "elements": {
+    "log": {
+      "meaning": "JSON/plain dedicated location, retention hours and size rotation MB.",
+      "reason": "Separate capture ownership and JSON parser compatibility.",
+      "cost": "Size rotation does not cap total disk usage.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://1c-dn.com/blog/Enhancements-for-Enterprise-Cloud-Environments/"
+        }
+      ]
+    },
+    "event": {
+      "meaning": "OR between event branches, AND between predicates in a branch.",
+      "reason": "Collect selected profile events; filters only reduce generated data.",
+      "cost": "Volume depends on event frequency; no fixed overhead guarantee.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "property": {
+      "meaning": "all retains available context and correlation properties.",
+      "reason": "Preserve evidence for details and chains.",
+      "cost": "Larger records; diagnostic values can be sensitive.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "durationus": {
+      "meaning": "Minimum microseconds (user milliseconds multiplied by 1000).",
+      "reason": "Reduce recorded long-call/DB volume; keep errors and locks unfiltered.",
+      "cost": "Short parents and aggregate cost of short DB calls can be hidden.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Dmitry Chesnokov]",
+          "url": "https://rarus.ru/publications/20240828-ot-ekspertov-1c-performance-monitor-bash-part-01-686290/"
+        },
+        {
+          "tag": "[article: Evgeny Filippov / IBS]",
+          "url": "https://habr.com/ru/companies/ibs/articles/989790/"
+        }
+      ]
+    },
+    "infobase": {
+      "meaning": "Exact p:processName filter on every branch.",
+      "reason": "Restrict a server capture to the requested infobase.",
+      "cost": "Excludes client/file events lacking that property.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "plansql": {
+      "meaning": "Generate planSQLText on DB events.",
+      "reason": "Explicit plans option.",
+      "cost": "[doc] PostgreSQL methodology: test/development only. Older articles differ; plan generation can be expensive even with output filters.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/content/metod8dev/src/developers/scalability/troubleshooting/i8106011.htm"
+        },
+        {
+          "tag": "[article: Dmitry Yukhtimovsky]",
+          "url": "https://pgconf.ru/rmedia/2017/04/03/20170316H3_Yukhtimovsky.pdf"
+        }
+      ]
+    },
+    "dbmslocks": {
+      "meaning": "Generate lka/lkp and poll identifiers.",
+      "reason": "Explicit DBMS lock option.",
+      "cost": "Extra DBMS queries no more often than once every 2 seconds on DB access; not a complete deadlock graph.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        },
+        {
+          "tag": "[article: Stanislav Borisenko and Artem Grimuta]",
+          "url": "https://rarus.ru/publications/20240328-ot-ekspertov-1c-db-blokirovki-eskalaciya-647228/"
+        }
+      ]
+    },
+    "mem": {
+      "meaning": "Generate MEM counters.",
+      "reason": "Memory profile or requested MEM event.",
+      "cost": "Slows execution, especially parallel workload.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "leaks": {
+      "meaning": "Track retained objects at server point checkpoints.",
+      "reason": "Memory profile or requested LEAKS event.",
+      "cost": "Adds overhead; narrow to a procedure after localization.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    },
+    "scriptcircrefs": {
+      "meaning": "Check BSL circular references.",
+      "reason": "Explicit requested SCRIPTCIRCREFS event.",
+      "cost": "Substantial performance loss; focused diagnostics only.",
+      "sources": [
+        {
+          "tag": "[doc]",
+          "url": "https://its.1c.ru/db/v8327doc#bookmark:adm:TI000000397"
+        }
+      ]
+    }
+  }
+}

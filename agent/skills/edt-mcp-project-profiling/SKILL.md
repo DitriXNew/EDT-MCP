@@ -55,3 +55,22 @@ linked to the intended run.
 Report the exact target and scenario, conditions, observed duration and
 candidate hotspots, partial-result and attribution limits, cleanup status, and
 the next validation experiment for any proposed optimization.
+
+## Technological-log investigation
+
+After profiling identifies a candidate, use `get_tech_log` in describe mode to
+choose errors, slow-calls, db, locks, memory or scenario. Read the chosen profile,
+event and problem entries with their sources and cost/coverage caveats. Use
+`manage_tech_log` preview before start; preserve the previewed dedicated location,
+obtain the shared write consent, reproduce once briefly, then stop even on a
+failed reproduction. Config written and observed log-file pickup are separate
+facts; service-account clusters need their own configuration and all-node logs.
+
+Run `get_tech_log` summary, follow a groupId into details and an occurrenceId into
+chain. Use events for raw filters and describe(problem=...) for evidence and
+remediation references. Missing events, filtered parents, unknown identities and
+uncollected nodes remain explicit; candidates do not establish causality. Never
+sum nested CALL/SDBL/DB durations as independent time. A code fix still needs
+separate authority; after the fix, repeat the same profiling/scenario and data
+volume to demonstrate the effect. Report stop/byte-exact config restoration and
+remaining evidence gaps with the measurement.

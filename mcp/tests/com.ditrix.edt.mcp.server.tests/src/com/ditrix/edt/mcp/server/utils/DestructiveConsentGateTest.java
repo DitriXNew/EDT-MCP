@@ -310,7 +310,7 @@ public class DestructiveConsentGateTest
             Set.of("clone_metadata_object", "delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "delete_infobase", "update_database", "infobase_sessions", "infobase_extensions", "standalone_server", "modify_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "dcs", "git", "business_process_route_map", "project_checks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                "merge_rules", "evaluate_expression"), //$NON-NLS-1$ //$NON-NLS-2$
+                "merge_rules", "evaluate_expression", "manage_tech_log"), //$NON-NLS-1$ //$NON-NLS-2$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
@@ -333,7 +333,7 @@ public class DestructiveConsentGateTest
         // absent from ToolAnnotationClassifier.DESTRUCTIVE_TOOLS, so classify() answers "an
         // ordinary write"; merge_rules is IN that list, and its entry there says why.
         Set<String> conditionallyDestructive =
-            Set.of("modify_metadata", "dcs", "git", "evaluate_expression", "project_checks"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Set.of("modify_metadata", "dcs", "git", "evaluate_expression", "project_checks", "manage_tech_log"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {
             boolean classifiedDestructive =
