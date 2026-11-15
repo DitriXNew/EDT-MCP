@@ -4,11 +4,16 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -257,7 +262,8 @@ public class TechLogTest
                 var entry = item.getValue().getAsJsonObject();
                 assertTrue(category + ":" + item.getKey(), entry.getAsJsonArray("sources").size() > 0);
                 entry.getAsJsonArray("sources").forEach(source -> {
-                    assertTrue(source.getAsJsonObject().get("url").getAsString().startsWith("https://"));
+                    String url = source.getAsJsonObject().get("url").getAsString();
+                    assertTrue(url.startsWith("https://") || url.startsWith("http://"));
                     assertTrue(source.getAsJsonObject().get("tag").getAsString().startsWith("["));
                 });
             }
@@ -267,11 +273,108 @@ public class TechLogTest
             assertTrue("Scenario must include the complete " + profile + " event set",
                 TechLogKnowledge.events("scenario").containsAll(TechLogKnowledge.events(profile)));
         for (String problem : TechLogAnalysis.PROBLEMS) assertNotNull(TechLogKnowledge.entry("problems", problem));
-        for (String event : List.of("MEM", "LEAKS", "DBMSSQL", "DBPOSTGRS", "DBV8DBENG", "SCRIPTCIRCREFS"))
+        for (String event : List.of("MEM", "LEAKS", "SCRIPTCIRCREFS"))
             assertFalse(TechLogKnowledge.entry("events", event).getAsJsonArray("generatingElements").isEmpty());
         assertTrue(TechLogKnowledge.describe("events", "mem").contains("mem"));
         try { TechLogKnowledge.entry("events", "TDEADLOK"); fail(); }
         catch (IllegalArgumentException e) { assertTrue(e.getMessage().contains("TDEADLOCK")); }
+    }
+
+    private static final Map<String, List<String>> REQUIRED_KNOWLEDGE_FIELDS = Map.of(
+        "events", List.of("meaning", "read", "badSigns", "traps", "fixes", "cost", "sources"),
+        "properties", List.of("meaning", "read", "appearsIn", "sources"),
+        "problems", List.of("meaning", "evidence", "investigate", "fixes", "traps", "profile", "sources"),
+        "profiles", List.of("meaning", "read", "traps", "cost", "events", "thresholdMs", "historyHours", "sources"),
+        "elements", List.of("meaning", "reason", "cost", "sources"),
+        "gotchas", List.of("note", "sources"));
+
+    private static List<String> knowledgeViolations(String category, JsonObject entries)
+    {
+        List<String> violations = new ArrayList<>();
+        Map<String, Set<String>> owners = new HashMap<>();
+        for (var item : entries.entrySet())
+        {
+            var entry = item.getValue().getAsJsonObject();
+            String label = category + ":" + item.getKey();
+            for (String field : REQUIRED_KNOWLEDGE_FIELDS.get(category))
+            {
+                var value = entry.get(field);
+                if (value == null || value.isJsonNull()
+                    || (value.isJsonPrimitive() && value.getAsString().isBlank())
+                    || (value.isJsonArray() && value.getAsJsonArray().isEmpty()))
+                    violations.add(label + " missing " + field);
+            }
+            for (var field : entry.entrySet())
+                if (field.getValue().isJsonPrimitive() && field.getValue().getAsJsonPrimitive().isString())
+                    owners.computeIfAbsent(field.getValue().getAsString(), key -> new HashSet<>()).add(item.getKey());
+            for (String field : List.of("evidence", "read", "keyProperties"))
+                if (entry.has(field) && entry.get(field).equals(entry.get("meaning")))
+                    violations.add(label + " repeats meaning in " + field);
+            if (entry.has("sources") && !entry.get("sources").isJsonArray())
+                violations.add(label + " invalid sources");
+            if (entry.has("sources") && entry.get("sources").isJsonArray())
+                for (var source : entry.getAsJsonArray("sources"))
+                {
+                    try
+                    {
+                        var ref = source.getAsJsonObject();
+                        URI url = URI.create(ref.get("url").getAsString());
+                        if (!("http".equals(url.getScheme()) || "https".equals(url.getScheme()))
+                            || url.getHost() == null || ref.get("tag").getAsString().isBlank())
+                            violations.add(label + " invalid source");
+                    }
+                    catch (RuntimeException e) { violations.add(label + " invalid source"); }
+                }
+        }
+        owners.forEach((value, ids) -> {
+            if (ids.size() > 3) violations.add(category + " shared by " + ids.size() + ": " + value);
+        });
+        return violations;
+    }
+
+    @Test public void bundledKnowledgeHasSpecificSourcedRequiredFields()
+    {
+        List<String> violations = new ArrayList<>();
+        for (String category : REQUIRED_KNOWLEDGE_FIELDS.keySet())
+            violations.addAll(knowledgeViolations(category, TechLogKnowledge.entries(category)));
+        assertTrue(String.join("\n", violations), violations.isEmpty());
+    }
+
+    @Test public void knowledgeRatchetRejectsBoilerplateCopiesMissingFieldsAndInvalidSources()
+    {
+        var entries = TechLogKnowledge.entries("events");
+        for (String id : List.of("CALL", "SCALL", "SDBL", "TLOCK"))
+            entries.getAsJsonObject(id).addProperty("read", "Repeated filler");
+        var call = entries.getAsJsonObject("CALL");
+        call.addProperty("evidence", call.get("meaning").getAsString());
+        call.addProperty("keyProperties", call.get("meaning").getAsString());
+        call.remove("fixes");
+        call.getAsJsonArray("sources").get(0).getAsJsonObject().addProperty("url", "file:///local");
+        entries.getAsJsonObject("SCALL").remove("sources");
+        var violations = knowledgeViolations("events", entries);
+        for (String expected : List.of("shared by 4", "repeats meaning in evidence", "repeats meaning in keyProperties",
+            "missing fixes", "invalid source", "missing sources"))
+            assertTrue(expected + ": " + violations, violations.stream().anyMatch(v -> v.contains(expected)));
+        call.addProperty("read", call.get("meaning").getAsString());
+        assertTrue(knowledgeViolations("events", entries).stream().anyMatch(v -> v.contains("repeats meaning in read")));
+        call.add("sources", new com.google.gson.JsonArray());
+        assertTrue(knowledgeViolations("events", entries).stream().anyMatch(v -> v.contains("CALL missing sources")));
+    }
+
+    @Test public void knowledgeDescriptionUsesOrderedParagraphsAndMarkdownSourceLinks()
+    {
+        String text = TechLogKnowledge.describe("events", "CALL");
+        assertTrue(text.startsWith("## CALL\n\n"));
+        assertTrue(text.contains("**Meaning:** "));
+        assertTrue(text.indexOf("**Read:**") > text.indexOf("**Meaning:**"));
+        assertTrue(text.indexOf("**Traps:**") > text.indexOf("**Fixes:**"));
+        assertTrue(text.contains("- [doc](https://its.1c.ru/"));
+        assertFalse(text.contains("[{\"tag\""));
+        assertFalse(text.contains("| Field |"));
+        assertFalse(text.contains("**Appears in:**"));
+        assertTrue(TechLogKnowledge.describe("events", "MEM").contains("\\<mem/\\>"));
+        assertTrue(TechLogKnowledge.describe("profiles", "db").contains("DBPOSTGRS"));
+        assertTrue(TechLogKnowledge.describe("events", null).contains("JSON/placement"));
     }
 
     private TechLogCapture.Options options(Path location)

@@ -60,19 +60,53 @@ public final class TechLogKnowledge
                 + ". Use event, property, profile or problem with mode=describe.\n\n"
                 + "Capture: manage_tech_log mode=preview, then start with consent. JSON requires platform 8.3.25+.\n\n"
                 + "Service-account clusters do not read your LOCALAPPDATA configuration. Collect every relevant node.\n\n"
-                + render("gotchas", DATA.getAsJsonObject("gotchas"));
+                + gotchas();
         return render(id, entry(category, id));
+    }
+
+    private static String gotchas()
+    {
+        StringBuilder out = new StringBuilder();
+        DATA.getAsJsonObject("gotchas").entrySet().forEach(item ->
+            out.append(render(item.getKey(), item.getValue().getAsJsonObject())));
+        return out.toString();
     }
 
     private static String render(String title, JsonObject object)
     {
         StringBuilder out = new StringBuilder("## " + MarkdownUtils.escapeMarkdown(title) + "\n\n");
-        out.append(MarkdownUtils.tableHeader("Field", "Reference"));
-        for (var field : object.entrySet())
+        String[][] fields = {
+            {"meaning", "Meaning"}, {"read", "Read"}, {"appearsIn", "Appears in"},
+            {"evidence", "Evidence"}, {"badSigns", "Bad signs"}, {"investigate", "Investigate"},
+            {"fixes", "Fixes"}, {"traps", "Traps"}, {"profile", "Profile"}, {"cost", "Cost"},
+            {"generatingElements", "Generating elements"}, {"events", "Events"},
+            {"thresholdMs", "Minimum duration (ms)"}, {"historyHours", "Retention (hours)"},
+            {"reason", "Reason"}, {"note", "Note"}
+        };
+        for (String[] field : fields)
         {
-            JsonElement value = field.getValue();
-            out.append(MarkdownUtils.tableRow(field.getKey(), value.isJsonPrimitive()
-                ? value.getAsString() : value.toString()));
+            JsonElement value = object.get(field[0]);
+            if (value == null || value.isJsonNull()) continue;
+            List<String> parts = new ArrayList<>();
+            if (value.isJsonArray()) value.getAsJsonArray().forEach(item -> parts.add(item.getAsString()));
+            else parts.add(value.getAsString());
+            String text = String.join(", ", parts);
+            if (!text.isBlank()) out.append("**").append(field[1]).append(":** ")
+                .append(MarkdownUtils.escapeMarkdown(text)).append("\n\n");
+        }
+        if (object.has("sources") && !object.getAsJsonArray("sources").isEmpty())
+        {
+            out.append("**Sources:**\n\n");
+            for (JsonElement source : object.getAsJsonArray("sources"))
+            {
+                JsonObject ref = source.getAsJsonObject();
+                String tag = ref.get("tag").getAsString();
+                if (tag.startsWith("[") && tag.endsWith("]")) tag = tag.substring(1, tag.length() - 1);
+                String url = ref.get("url").getAsString().replace("(", "%28").replace(")", "%29");
+                out.append("- [").append(MarkdownUtils.escapeMarkdown(tag)).append("](")
+                    .append(url).append(")\n");
+            }
+            out.append('\n');
         }
         return out.toString();
     }
