@@ -21,7 +21,7 @@ public class ToolSettingsMergedMigrationsTest
         {
             PreferenceStore store = stored(23, preset, Set.of("get_profiling_results", "owner_disabled"));
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("get_profiling_results", "manage_profiling_results", "owner_disabled"), disabled(store));
+            assertEquals(Set.of("get_profiling_results", "manage_profiling_results", "manage_tech_log", "owner_disabled"), disabled(store));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             // An owner opting in after migration keeps that choice on subsequent starts.
             store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "get_profiling_results,owner_disabled");
@@ -44,7 +44,7 @@ public class ToolSettingsMergedMigrationsTest
             PreferenceStore store = stored(15, preset, Set.of("owner_disabled", "obsolete_owner_tool"));
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = new HashSet<>(Set.of("owner_disabled", "obsolete_owner_tool",
-                "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results"));
+                "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"));
             if (preset.equals("analysis-only"))
             {
                 expected.add("open_editor");
@@ -63,8 +63,8 @@ public class ToolSettingsMergedMigrationsTest
             PreferenceStore store = stored(16, preset, Set.of("owner_disabled", "obsolete_owner_tool"));
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = preset.equals("analysis-only")
-                ? Set.of("owner_disabled", "obsolete_owner_tool", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results")
-                : Set.of("owner_disabled", "obsolete_owner_tool", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results");
+                ? Set.of("owner_disabled", "obsolete_owner_tool", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")
+                : Set.of("owner_disabled", "obsolete_owner_tool", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log");
             assertEquals(preset, expected, disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
@@ -79,8 +79,8 @@ public class ToolSettingsMergedMigrationsTest
             PreferenceStore store = stored(16, preset, Set.of("owner_disabled", "business_process_route_map"));
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = preset.equals("analysis-only")
-                ? Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results")
-                : Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results");
+                ? Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")
+                : Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log");
             assertEquals(expected, disabled(store));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         }
@@ -101,7 +101,7 @@ public class ToolSettingsMergedMigrationsTest
             assertEquals(Set.of("sort_metadata"), additions.get(21));
             assertEquals(Set.of("edt_dialog"), additions.get(22));
             assertEquals(Set.of("standalone_server"), additions.get(23));
-            assertEquals(Set.of("manage_profiling_results"), additions.get(24));
+            assertEquals(Set.of("manage_profiling_results", "manage_tech_log"), additions.get(24));
         }
         assertEquals(Set.of("open_editor"),
             ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION.get(19));
@@ -122,7 +122,7 @@ public class ToolSettingsMergedMigrationsTest
             }
         });
         ToolSettingsService.ensureMigratedForTest(store);
-        assertEquals(List.of(Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results")),
+        assertEquals(List.of(Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")),
             published);
         assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
@@ -136,7 +136,7 @@ public class ToolSettingsMergedMigrationsTest
     public void anAlreadyCompleteDisabledSetNeedsOnlyTheVersionStamp()
     {
         PreferenceStore store = stored(15, "analysis-only",
-            Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results"));
+            Set.of("owner_disabled", "business_process_route_map", "project_checks", "infobase_extensions", "clone_metadata_object", "sort_metadata", "open_editor", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"));
         String before = store.getString(PreferenceConstants.PREF_DISABLED_TOOLS);
         List<String> writes = new ArrayList<>();
         store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
@@ -155,7 +155,7 @@ public class ToolSettingsMergedMigrationsTest
             List<String> writes = new ArrayList<>();
             store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results"), disabled(store));
+            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
@@ -182,10 +182,10 @@ public class ToolSettingsMergedMigrationsTest
                 }
             });
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results"), disabled(store));
-            assertEquals("edt_dialog,manage_profiling_results,obsolete_owner_tool,owner_disabled,sort_metadata,standalone_server",
+            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabled(store));
+            assertEquals("edt_dialog,manage_profiling_results,manage_tech_log,obsolete_owner_tool,owner_disabled,sort_metadata,standalone_server",
                 store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
-            assertEquals(List.of(Set.of("owner_disabled", "obsolete_owner_tool", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results")), published);
+            assertEquals(List.of(Set.of("owner_disabled", "obsolete_owner_tool", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")), published);
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
@@ -205,7 +205,7 @@ public class ToolSettingsMergedMigrationsTest
             List<String> writes = new ArrayList<>();
             store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "edt_dialog", "standalone_server", "manage_profiling_results"), disabled(store));
+            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabled(store));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
                 PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
@@ -224,7 +224,7 @@ public class ToolSettingsMergedMigrationsTest
             List<String> writes = new ArrayList<>();
             store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "standalone_server", "manage_profiling_results"), disabled(store));
+            assertEquals(Set.of("owner_disabled", "obsolete_owner_tool", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabled(store));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(List.of(PreferenceConstants.PREF_DISABLED_TOOLS,
                 PreferenceConstants.PREF_TOOL_PREFS_MIGRATION), writes);
@@ -258,8 +258,8 @@ public class ToolSettingsMergedMigrationsTest
             store.addPropertyChangeListener(event -> writes.add(event.getProperty()));
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = preset.equals("analysis-only")
-                ? Set.of("owner_disabled", "obsolete_owner_tool", "open_editor", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results")
-                : Set.of("owner_disabled", "obsolete_owner_tool", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results");
+                ? Set.of("owner_disabled", "obsolete_owner_tool", "open_editor", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")
+                : Set.of("owner_disabled", "obsolete_owner_tool", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log");
             assertEquals(preset, expected, disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
@@ -278,7 +278,7 @@ public class ToolSettingsMergedMigrationsTest
         {
             PreferenceStore store = stored(17, preset, Set.of("owner_disabled", "open_editor"));
             ToolSettingsService.ensureMigratedForTest(store);
-            assertEquals(preset, Set.of("owner_disabled", "open_editor", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results"), disabled(store));
+            assertEquals(preset, Set.of("owner_disabled", "open_editor", "infobase_extensions", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabled(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             assertEquals(24, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
         }

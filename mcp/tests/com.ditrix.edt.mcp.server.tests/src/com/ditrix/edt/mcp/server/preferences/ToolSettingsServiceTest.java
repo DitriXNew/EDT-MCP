@@ -795,7 +795,7 @@ public class ToolSettingsServiceTest
             store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset);
             ToolSettingsService.ensureMigratedForTest(store);
             Set<String> expected = preset.equals("analysis-only") || preset.equals("code-review")
-                ? Set.of("owner_disabled", "manage_tech_log") : Set.of("owner_disabled");
+                ? Set.of("owner_disabled", "manage_profiling_results", "manage_tech_log") : Set.of("owner_disabled");
             assertEquals(preset, expected, disabledTools(store));
             assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
             store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "owner_disabled");

@@ -130,6 +130,7 @@ public final class InputSchemaCompactor
         keep.put("get_profiling_results", asSet("mode", "measurementId", "top", "minFrequency", "limit", "offset",
             "baseId", "comparedId", "responseFormat", "applicationId"));
         keep.put("manage_profiling_results", asSet("mode", "measurementId", "exportPath", "exportFormat", "importPath"));
+        keep.put("manage_tech_log", asSet("mode", "location", "outputPath"));
         keep.put("stop_profiling", asSet("name"));
         // Conditional press arguments and exact-label semantics are absent from scalar schemas.
         keep.put("edt_dialog", asSet("dialogId", "button"));
