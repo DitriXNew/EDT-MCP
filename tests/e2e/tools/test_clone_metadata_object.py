@@ -4,6 +4,7 @@ The orchestrator owns fixture resets. Every apply checks disk before another MCP
 """
 import os
 import hashlib
+import time
 import copy
 import xml.etree.ElementTree as ET
 
@@ -11,6 +12,8 @@ from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_no_diff, assert_tree_unchanged, tree_snapshot, read_disk,
     e2e_test, PROJECT, PROJECT_DIR, TESTS_PROJECT, wait_for_project_ready,
+    E2ECallTimeout, EXT_OBJECTS_PROJECT, REPO_ROOT, TESTS_PROJECT_REL, assert_no_diff_rel, diff_rel,
+    read_fixture_file, restore_extension_fixture, settle_or_fail, status_porcelain_rel,
 )
 
 
@@ -534,7 +537,8 @@ def test_clone_negative_contract():
         ({"fqn": "Catalog.Catalog", "transfer": [{"kind": "exchangePlan", "owner": "ExchangePlan.X"}]},
          ["exchangePlan"], ["reported only"]),
         ({"fqn": "Catalog.DoesNotExist819"}, ["DoesNotExist819"], ["get_metadata_objects"]),
-        ({"projectName": TESTS_PROJECT, "fqn": "Catalog.Catalog"}, [TESTS_PROJECT], ["plain configuration"]),
+        ({"projectName": EXT_OBJECTS_PROJECT, "fqn": "Catalog.Catalog"}, [EXT_OBJECTS_PROJECT],
+         ["configuration or extension project"]),
     ]
     for arguments, names, suggests in cases:
         message = assert_error(call("clone_metadata_object", {"projectName": PROJECT, **arguments}), "invalid clone")
@@ -543,3 +547,224 @@ def test_clone_negative_contract():
     message = assert_error(call("clone_metadata_object", {}), "required arguments")
     assert_error_quality(message, names=["projectName"], suggests=["required", "list_projects"])
     assert_no_diff()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Extension project (issue #933 PR-2): an extension's OWN objects clone inside that extension.
+# The fixture extension owns Catalog.tests_ExtOnly, Role.tests_DefaultRole (with a rights row for
+# that catalog) and CommonModule.tests_MathHelper; it adopts Catalog.Catalog and CommonModule.Calc.
+# Mutating tests restore the extension themselves (restore_extension_fixture), like adopt's tests.
+# ──────────────────────────────────────────────────────────────────────────────
+_EXT_SOURCE = "Catalog.tests_ExtOnly"
+_EXT_CONFIGURATION = "src/Configuration/Configuration.mdo"
+_EXT_ROLE_RIGHTS = "src/Roles/tests_DefaultRole/Rights.rights"
+_ADOPTED_SUBSYSTEM = "Subsystem.Subsystem"
+_OWN_SUBSYSTEM = "Subsystem.tests_E2ECloneGroup"
+# "ОбщийМодуль" - the Russian type token, written as escapes like the Java tests.
+_RU_COMMON_MODULE = "ОбщийМодуль"
+
+
+def _ext_clone(**arguments):
+    return call("clone_metadata_object", {"projectName": TESTS_PROJECT, **arguments})
+
+
+def _ext_bytes(path):
+    with open(os.path.join(REPO_ROOT, *TESTS_PROJECT_REL.split("/"), *path.split("/")), "rb") as stream:
+        return stream.read()
+
+
+def _ext_xml(path):
+    return ET.fromstring(read_fixture_file(TESTS_PROJECT_REL, path))
+
+
+def _ext_state():
+    return status_porcelain_rel(TESTS_PROJECT_REL), diff_rel(TESTS_PROJECT_REL)
+
+
+def _ext_preview(**arguments):
+    result = _ext_clone(**arguments)
+    assert_ok(result, "extension clone preview")
+    data = result.structured
+    assert isinstance(data, dict) and data.get("action") == "preview", data
+    assert data["writtenProjects"] == [], data
+    return data
+
+
+def _ext_apply(preview, **arguments):
+    result = _ext_clone(**arguments, confirm=True, expectedHash=preview["contentHash"])
+    assert_ok(result, "native clone inside the extension")
+    data = result.structured
+    assert data["action"] == "cloned" and data["persisted"] is True, data
+    assert data["writtenProjects"] == [TESTS_PROJECT], "the clone writes the extension and nothing else: %r" % data
+    assert data["resources"] and all(row["verified"] for row in data["resources"]), data
+    return data
+
+
+def _ext_registered(tag, fqn):
+    return fqn in [node.text for node in _ext_xml(_EXT_CONFIGURATION).findall(tag)]
+
+
+def _child_tags(root):
+    return [child.tag for child in root]
+
+
+def _support(data, kind, owner):
+    rows = [row for row in data["incomingRelations"] if row["kind"] == kind and row["owner"] == owner]
+    assert len(rows) == 1, "expected one %s relation for %s: %r" % (kind, owner, data["incomingRelations"])
+    return rows[0]["transferSupport"]
+
+
+def _settled_ext_preview(timeout=120, **arguments):
+    """The preview once the extension's files and the preview's contentHash both hold still for 10 s.
+    Right after an adoption and a write into the adopted object EDT may still change the extension's
+    model and files once after list_projects reports ready (measured on the stand: an identical preview
+    repeated 15 s later had a new hash, and the extension's files changed under a refused call); the hash
+    rightly refuses a confirm across that change, so the test waits it out instead of racing it."""
+    deadline = time.time() + timeout
+    previous = (_ext_state(), _ext_preview(**arguments))
+    while True:
+        time.sleep(10)
+        current = (_ext_state(), _ext_preview(**arguments))
+        if current[0] == previous[0] and current[1]["contentHash"] == previous[1]["contentHash"]:
+            return current[1]
+        assert time.time() < deadline, "the extension kept changing for %ss after its seeds" % timeout
+        previous = current
+
+
+def _restoring_extension(ctx, body):
+    try:
+        body()
+    except E2ECallTimeout:
+        # NO cleanup: the timed-out call may still be writing these files; the orchestrator aborts.
+        raise
+    except BaseException:
+        restore_extension_fixture(ctx)
+        raise
+    else:
+        restore_extension_fixture(ctx)
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_extension_own_object_stays_own_and_transfers_only_into_own_owners():
+    """An own catalog of the extension clones inside the extension with EDT's extension semantics:
+    the copy is an own (Native) object of the same shape as the source, registered in the extension's
+    Configuration.mdo. Its own subsystem and own role are transferable; the adopted base subsystem that
+    lists it is reportedOnly, refused when selected, and never written."""
+    def body():
+        assert_ok(call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": _OWN_SUBSYSTEM}),
+                  "seed an own subsystem of the extension")
+        assert_ok(call("modify_metadata", {"projectName": TESTS_PROJECT, "fqn": _OWN_SUBSYSTEM,
+                  "properties": [{"name": "content", "value": [_EXT_SOURCE]}]}), "own subsystem lists the source")
+        assert_ok(call("adopt_metadata_object", {"projectName": PROJECT, "fqn": _ADOPTED_SUBSYSTEM,
+                  "extensionProjectName": TESTS_PROJECT}), "adopt the base subsystem into the extension")
+        assert_ok(call("modify_metadata", {"projectName": TESTS_PROJECT, "fqn": _ADOPTED_SUBSYSTEM,
+                  "properties": [{"name": "content", "value": [_EXT_SOURCE]}]}), "adopted subsystem lists the source")
+        settle_or_fail("the extension clone preview")
+        base = _settled_ext_preview(fqn=_EXT_SOURCE, newName="tests_E2ECloneCopy")
+        source_path = "src/Catalogs/tests_ExtOnly/tests_ExtOnly.mdo"
+        adopted_path = "src/Subsystems/Subsystem/Subsystem.mdo"
+        source_bytes = _ext_bytes(source_path)
+        adopted_bytes = _ext_bytes(adopted_path)
+        source = ET.fromstring(source_bytes)
+        assert base["sourceFqn"] == _EXT_SOURCE, base
+        assert _support(base, "subsystem", _OWN_SUBSYSTEM) == "supported"
+        assert _support(base, "roleRights", "Role.tests_DefaultRole") == "supported"
+        assert _support(base, "subsystem", _ADOPTED_SUBSYSTEM) == "reportedOnly"
+        assert "namePrefix" not in base["warning"], "a prefixed newName carries no prefix warning: %r" % base
+
+        before = _ext_state()
+        refused = assert_error(_ext_clone(fqn=_EXT_SOURCE, newName="tests_E2ECloneCopy",
+                                          transfer=[{"kind": "subsystem", "owner": _ADOPTED_SUBSYSTEM}]),
+                               "selecting an adopted owner")
+        assert_error_quality(refused, names=[_ADOPTED_SUBSYSTEM, "adopted"], suggests=["notCopied"])
+        assert "resync_to_disk" not in refused, "an adopted owner is not a stale source: " + refused
+        after = _ext_state()
+        assert after == before, "a refused selection writes nothing into the extension:\nBEFORE %s\nAFTER %s" % (
+            before[0], after[0])
+
+        selection = [{"kind": "subsystem", "owner": _OWN_SUBSYSTEM},
+                     {"kind": "roleRights", "owner": "Role.tests_DefaultRole"}]
+        preview = _settled_ext_preview(fqn=_EXT_SOURCE, newName="tests_E2ECloneCopy", transfer=selection)
+        data = _ext_apply(preview, fqn=_EXT_SOURCE, newName="tests_E2ECloneCopy", transfer=selection)
+        assert data["fqn"] == "Catalog.tests_E2ECloneCopy", data
+        assert data["transferred"] == selection, data
+        assert any(row["owner"] == _ADOPTED_SUBSYSTEM for row in data["notCopied"]), data
+        assert_no_diff("a clone inside the extension must not touch the base project")
+
+        # Disk first. The clone is an own object exactly like its source: no objectBelonging and no
+        # extension block, the same element sequence, new identities.
+        root = _ext_xml("src/Catalogs/tests_E2ECloneCopy/tests_E2ECloneCopy.mdo")
+        assert root.findtext("name") == "tests_E2ECloneCopy"
+        assert root.attrib["uuid"] != source.attrib["uuid"]
+        assert root.find("objectBelonging") is None and root.find("extension") is None, \
+            ET.tostring(root, encoding="unicode")
+        assert _child_tags(root) == _child_tags(source), (_child_tags(root), _child_tags(source))
+        assert root.find("attributes/name").text == "ExtValue"
+        assert root.find("attributes").attrib["uuid"] != source.find("attributes").attrib["uuid"]
+        assert _ext_bytes(source_path) == source_bytes, "the source must stay byte-identical"
+        assert _ext_registered("catalogs", "Catalog.tests_E2ECloneCopy")
+        own = _ext_xml("src/Subsystems/tests_E2ECloneGroup/tests_E2ECloneGroup.mdo")
+        assert {node.text for node in own.findall("content")} == {_EXT_SOURCE, "Catalog.tests_E2ECloneCopy"}
+        assert _ext_bytes(adopted_path) == adopted_bytes, "the adopted subsystem must never be written"
+        rights = {node.findtext("{*}name"): node for node in _ext_xml(_EXT_ROLE_RIGHTS).findall("{*}object")}
+        assert {_EXT_SOURCE, "Catalog.tests_E2ECloneCopy"} <= set(rights), set(rights)
+        _assert_rights_copy(rights[_EXT_SOURCE], rights["Catalog.tests_E2ECloneCopy"], "Catalog.tests_E2ECloneCopy")
+
+        details = call("get_metadata_details", {"projectName": TESTS_PROJECT,
+                                                "objectFqns": ["Catalog.tests_E2ECloneCopy"], "full": True})
+        assert_ok(details, "clone read-back from the extension model")
+        assert_contains(details.text, "ExtValue", "the owned attribute resolves from the cloned model")
+    _restoring_extension("an extension clone with transfers", body)
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_extension_role_and_common_module_keep_rights_and_text():
+    """An own role clones with its rights model (and stays out of the extension's defaultRoles); an own
+    common module clones with its module text byte for byte."""
+    def body():
+        source_rights = _ext_bytes(_EXT_ROLE_RIGHTS)
+        role = _ext_apply(_ext_preview(fqn="Role.tests_DefaultRole", newName="tests_E2ERoleCopy"),
+                          fqn="Role.tests_DefaultRole", newName="tests_E2ERoleCopy")
+        assert role["fqn"] == "Role.tests_E2ERoleCopy", role
+        clone_rights = "src/Roles/tests_E2ERoleCopy/Rights.rights"
+        assert any(row["file"] == clone_rights and row["verified"] for row in role["resources"]), role
+        assert ET.tostring(_ext_xml(clone_rights), encoding="unicode") == ET.tostring(
+            ET.fromstring(source_rights), encoding="unicode"), "the clone carries the same rights model"
+        assert _ext_bytes(_EXT_ROLE_RIGHTS) == source_rights, "source rights unchanged"
+        assert _ext_registered("roles", "Role.tests_E2ERoleCopy")
+        assert not _ext_registered("defaultRoles", "Role.tests_E2ERoleCopy"), "a clone never joins defaultRoles"
+
+        module_path = "src/CommonModules/tests_MathHelper/Module.bsl"
+        module_bytes = _ext_bytes(module_path)
+        # The Russian TYPE token addresses the same own module.
+        preview = _ext_preview(fqn=_RU_COMMON_MODULE + ".tests_MathHelper", newName="tests_E2EMathCopy")
+        assert preview["sourceFqn"] == "CommonModule.tests_MathHelper", preview
+        data = _ext_apply(preview, fqn=_RU_COMMON_MODULE + ".tests_MathHelper", newName="tests_E2EMathCopy")
+        assert _ext_bytes("src/CommonModules/tests_E2EMathCopy/Module.bsl") == module_bytes, \
+            "module text is copied unchanged"
+        assert _ext_bytes(module_path) == module_bytes, "source module unchanged"
+        assert _ext_xml("src/CommonModules/tests_E2EMathCopy/tests_E2EMathCopy.mdo").findtext("server") == "true"
+        assert _ext_registered("commonModules", data["fqn"])
+    _restoring_extension("extension role and common module clones", body)
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_extension_refuses_adopted_sources_and_warns_about_the_prefix():
+    """Adopted base objects are not the extension's own objects: refused finally, in both TYPE-token
+    languages, with nothing written. A newName without the extension's namePrefix previews with
+    EDT's extension-md-object-prefix warning."""
+    assert_no_diff_rel(TESTS_PROJECT_REL, "the extension fixture starts clean")
+    for fqn, address in (("Catalog.Catalog", "Catalog.Catalog"),
+                         (_RU_COMMON_MODULE + ".Calc", "CommonModule.Calc")):
+        message = assert_error(_ext_clone(fqn=fqn, newName="tests_E2EAdoptedCopy"), "adopted source " + fqn)
+        assert_error_quality(message, names=[address, "objectBelonging=Adopted"],
+                             suggests=["base configuration", "adopt_metadata_object"])
+        assert "resync_to_disk" not in message, "an adopted source is not a stale source: " + message
+    assert_no_diff_rel(TESTS_PROJECT_REL, "a refused adopted source writes nothing")
+    warned = _ext_preview(fqn=_EXT_SOURCE, newName="E2ENoPrefixCopy")
+    assert "namePrefix 'tests_'" in warned["warning"] and "'E2ENoPrefixCopy'" in warned["warning"], warned
+    assert "extension-md-object-prefix" in warned["warning"], warned
+    automatic = _ext_preview(fqn=_EXT_SOURCE)
+    assert "namePrefix" not in automatic["warning"], "the automatic name keeps the source's prefix: %r" % automatic
+    assert_no_diff_rel(TESTS_PROJECT_REL, "previews write nothing")
+    assert_no_diff("previews in the extension never touch the base")

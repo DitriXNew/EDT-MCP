@@ -83,7 +83,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         JsonObject schema = JsonParser.parseString(JsonSchemaBuilder.object()
-            .stringProperty(McpKeys.PROJECT_NAME, "Plain configuration project; source and clone stay in this project", true)
+            .stringProperty(McpKeys.PROJECT_NAME, "Configuration or extension project (an extension's own objects only); "
+                + "source and clone stay in this project", true)
             .stringProperty("fqn", "Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, "
                 + "ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; "
                 + "Name is a programmatic identifier, not a synonym", true)
@@ -180,13 +181,15 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             return ToolResult.error("EDT's project manager is unavailable. Wait for the project to load "
                 + "or restart EDT, then preview again.").toJson();
         }
-        if (ctx.scope.isExternalObjects()
-            || Activator.getDefault().getV8ProjectManager().getProject(ctx.project) instanceof IExtensionProject)
+        if (ctx.scope.isExternalObjects())
         {
-            return ToolResult.error("Project '" + projectName + "' is not a plain configuration project. "
-                + "Use list_projects and select a base configuration; extensions and external-objects projects "
+            return ToolResult.error("Project '" + projectName + "' is an external-objects project. "
+                + "Use list_projects and select a configuration or extension project; external-objects projects "
                 + "are unsupported by clone_metadata_object.").toJson();
         }
+        // EDT's configuration copier asks the same question to keep extension properties of the copy.
+        boolean extensionProject =
+            Activator.getDefault().getV8ProjectManager().getProject(ctx.project) instanceof IExtensionProject;
         BmModelResolver.Resolution resolution = BmModelResolver.resolve(ctx.project);
         if (!resolution.isAvailable())
         {
@@ -217,7 +220,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 checkDestination(config, source, newName);
                 MetadataCloneDiskVerifier.verifyOwned(ctx.project, MetadataClonePlan.graph(source), fs);
                 MetadataCloneDiskVerifier.verifyOwned(ctx.project, java.util.Collections.singletonMap("", config), fs);
-                return MetadataClonePlan.capture(ctx.project, model, config, source, newName, transfer, fs, true);
+                return MetadataClonePlan.capture(ctx.project, model, config, source, newName, transfer, fs, true,
+                    extensionProject);
             });
         }
         catch (RuntimeException e)
@@ -264,7 +268,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 MdObject source = MetadataClonePlan.source(config, fqn);
                 checkDestination(config, source, newName);
                 MetadataClonePlan current = MetadataClonePlan.capture(ctx.project, model, config, source,
-                    newName, transfer, fs, false);
+                    newName, transfer, fs, false, extensionProject);
                 if (!ContentHash.matches(current.fingerprint, expectedHash))
                 {
                     throw new IllegalArgumentException("Preview scope changed. Run clone_metadata_object without "
@@ -272,7 +276,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 }
                 WriteScope.recordUndeterminable("native copy may write external files before failure", List.of(projectName));
                 started.set(true);
-                NativeMetadataClone copier = NativeMetadataClone.create(tx, model, source, newName,
+                NativeMetadataClone copier = NativeMetadataClone.create(tx, model, config, source, newName,
                     attached -> actualFqn.set(attached.eClass().getName() + "." + attached.getName()));
                 MdObject clone = (MdObject)copier.copy(source, config, MetadataClonePlan.collection(config, source));
                 if (!(clone instanceof IBmObject) || model.getEngine().getCurrentTransaction() != tx)
