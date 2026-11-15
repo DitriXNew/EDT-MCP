@@ -24,20 +24,31 @@ with refactoring, broad load generation, or unrelated runtime activity.
 1. Define the question and resolve an active, unambiguous debug target with
    `debug_status`; route launch or Attach preparation to
    `edt-mcp-project-runtime-debug` when needed.
-2. Establish an attributable profiling window using current help and existing
-   `get_profiling_results` state. Keep the global profiling surface quiescent
-   through the final result read; if result identity cannot be matched
-   independently, treat the global result as unattributed.
+2. Record existing measurements with `get_profiling_results` in `mode=list`.
+   Resolve measurement UUIDs independently of `applicationId`, which selects only
+   the active-profiling flag. Keep the profiling window quiescent for attribution.
 3. Call `start_profiling` and claim ownership only when its result confirms
    this task started the profiling window. If profiling was already active, do
    not stop or replace it; stop and report that an attributable window could
    not be established without disrupting another owner. Otherwise execute only
    the bounded scenario and call `stop_profiling` for that task-owned window on
-   success, failure, timeout, or interruption.
-4. Read `get_profiling_results` in that protected window, correlate candidate
-   methods/lines with exact source, and repeat only for a controlled comparison.
-5. Treat returned profiling rows as potentially partial; do not make absolute
-   hotspot or completeness claims unless the measurement proves them.
+   success, failure, timeout, or interruption. Optionally supply a unique `name`.
+   Retain the returned `measurementId`; an asynchronous timeout or ambiguous
+   arrival means no measurement was named. Check `mode=list` before proceeding.
+4. Read the exact `measurementId` with the default Markdown summary. Times are
+   in ms; own (pure) time is additive, while inclusive line sums may double-count
+   recursion. Follow `showing N of M` notices: narrow module/method filters or use
+   `mode=lines` with `limit`/`offset` for more rows. Correlate with exact source.
+5. Compare only controlled runs using `mode=compare`, `baseId` and `comparedId`.
+   Rank absolute own-time changes, account for unmatched elements, and avoid
+   completeness claims from bounded tops. Methods match by name; lines by number
+   and trimmed text, so edits can break line matching.
+6. Use the separate write tool `manage_profiling_results` to export full CSV or
+   native EDT results only to authorized absolute host paths;
+   export/import require their own tool permission, the shared consent gate and a
+   writable Tools preset. `get_profiling_results` only reads measurements.
+   CSV files must be new with existing parents; native measurement subfolders
+   must be new. Import skips loaded UUIDs. Do not overwrite existing evidence.
 
 ## Authority rule
 

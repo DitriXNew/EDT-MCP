@@ -62,6 +62,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetOutgoingStructuresTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProfilingResultsTool;
+import com.ditrix.edt.mcp.server.tools.impl.ManageProfilingResultsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetServerStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetSubsystemContentTool;
@@ -234,6 +235,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new StartProfilingTool());
         catalogue.add(new StopProfilingTool());
         catalogue.add(new GetProfilingResultsTool());
+        catalogue.add(new ManageProfilingResultsTool());
 
         // BSL code analysis tools
         catalogue.add(new ReadModuleSourceTool());

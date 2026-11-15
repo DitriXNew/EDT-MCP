@@ -90,6 +90,7 @@ public final class HostToolCapabilities
         define("debug_status", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("start_profiling", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("stop_profiling", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
+        define("manage_profiling_results", Capability.HEADLESS, "Typed core/file services; consent uses the existing host gate");
         define("get_profiling_results", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("read_module_source", Capability.HEADLESS_DEGRADED, "ReadModuleSourceToolTest verifies whole/range reads of English/Cyrillic paths without entering the UI footer; optional interception enrichment remains windowed");
         define("open_editor", Capability.WINDOWED_ONLY, "Real headless call with navigation enabled fails in EditorNavigation.open -> BoundedUiCall.workbenchExecutorOrNull: EDT UI is unavailable");

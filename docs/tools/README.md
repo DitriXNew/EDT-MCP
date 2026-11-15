@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**108 tools.**
+**109 tools.**
 
 ## Core
 
@@ -102,11 +102,12 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Profiling
 
-> Performance profiling: start/stop a measurement and read the results.
+> Performance profiling: start/stop, inspect, compare and exchange measurements.
 
 | Tool | Description |
 |------|-------------|
-| [`get_profiling_results`](get_profiling_results.md) | Identify performance hotspots in executed BSL code. Returns the MOST RECENT measurement session GLOBALLY - applicationId only changes the reported active-sta… |
+| [`get_profiling_results`](get_profiling_results.md) | Read-only Markdown summary (default), measurement list, paged lines and comparison. Select a UUID with `measurementId`; `applicationId` only scopes the active flag. |
+| [`manage_profiling_results`](manage_profiling_results.md) | Export complete CSV/EDT measurements or import native EDT folders with `mode`. Requires separate write permission, consent, a writable preset and absolute host paths; never overwrites. |
 | [`start_profiling`](start_profiling.md) | Measure execution time and coverage of BSL code in a debug session. Parameters and examples: get_tool_guide('start_profiling'). |
 | [`stop_profiling`](stop_profiling.md) | Finish measuring BSL performance in a debug session. Parameters and examples: get_tool_guide('stop_profiling'). |
 

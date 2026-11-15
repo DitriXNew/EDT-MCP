@@ -3415,56 +3415,71 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Identify performance hotspots in executed BSL code. Returns the MOST RECENT measurement session GLOBALLY - applicationId only changes the reported active-state flag, so the results may belong to a different application than the one asked about. Parameters and examples: get_tool_guide('get_profiling_results').",
+    "description": "Inspect BSL performance measurements: summary, list, paged lines and comparison.",
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Selects the active-profiling flag only, not the measurement.",
+          "type": "string"
+        },
+        "baseId": {
+          "description": "Required for compare; measurement UUID from mode=list.",
+          "type": "string"
+        },
+        "comparedId": {
+          "description": "Compared UUID; default: measurementId or latest.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Page size: 1..100, default 50 (list/lines/compare lines).",
+          "type": "integer"
+        },
+        "measurementId": {
+          "description": "Measurement UUID; default: latest by session date. Use mode=list.",
+          "type": "string"
+        },
+        "methodFilter": {
           "type": "string"
         },
         "minFrequency": {
+          "description": "Minimum line calls: 0..2147483647, default 1.",
           "type": "integer"
+        },
+        "mode": {
+          "description": "Default: summary.",
+          "enum": [
+            "summary",
+            "list",
+            "lines",
+            "compare"
+          ],
+          "type": "string"
         },
         "moduleFilter": {
           "type": "string"
         },
+        "offset": {
+          "description": "Page offset: nonnegative integer, default 0.",
+          "type": "integer"
+        },
         "responseFormat": {
+          "description": "Lines only: concise (default) omits method/source columns.",
           "enum": [
             "concise",
             "detailed"
           ],
           "type": "string"
+        },
+        "top": {
+          "description": "Summary/compare top size: 1..20, default 10.",
+          "type": "integer"
         }
       },
       "required": [],
       "type": "object"
     },
     "name": "get_profiling_results",
-    "outputSchema": {
-      "properties": {
-        "count": {
-          "type": "integer"
-        },
-        "message": {
-          "type": "string"
-        },
-        "profilingActive": {
-          "type": "boolean"
-        },
-        "results": {
-          "items": {
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -4589,6 +4604,51 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Export BSL performance measurements or import native EDT measurements. Requires consent and a writable preset; use absolute paths on the EDT host. Never overwrites. Parameters and examples: get_tool_guide('manage_profiling_results').",
+    "inputSchema": {
+      "properties": {
+        "exportFormat": {
+          "description": "Default: csv. Never overwrites.",
+          "enum": [
+            "csv",
+            "edt"
+          ],
+          "type": "string"
+        },
+        "exportPath": {
+          "description": "Export only, required: absolute new CSV file (parent must exist) or EDT directory.",
+          "type": "string"
+        },
+        "importPath": {
+          "description": "Import only, required: absolute directory holding EDT measurement folders.",
+          "type": "string"
+        },
+        "measurementId": {
+          "description": "Export UUID; default: latest by session date. Use get_profiling_results mode=list.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Default: export.",
+          "enum": [
+            "export",
+            "import"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "manage_profiling_results",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -6298,10 +6358,14 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Finish measuring BSL performance in a debug session. Parameters and examples: get_tool_guide('stop_profiling').",
+    "description": "Stop BSL performance measurement and optionally name the newly collected measurement.",
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional measurement name; a new UUID must arrive within 5 seconds.",
           "type": "string"
         }
       },
@@ -6319,7 +6383,13 @@
         "applicationId": {
           "type": "string"
         },
+        "measurementId": {
+          "type": "string"
+        },
         "message": {
+          "type": "string"
+        },
+        "name": {
           "type": "string"
         },
         "stopped": {

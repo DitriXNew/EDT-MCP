@@ -60,7 +60,7 @@ public enum ToolGroup
         "wait_for_break", //$NON-NLS-1$
         "get_variables", "set_variable", "step", "resume", "debug_pause", "evaluate_expression", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "debug_yaxunit_tests", "debug_status", "start_profiling", "stop_profiling", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "get_profiling_results"), //$NON-NLS-1$
+        "get_profiling_results", "manage_profiling_results"), //$NON-NLS-1$
 
     BSL_CODE("bslCode", "BSL Code", //$NON-NLS-1$ //$NON-NLS-2$
         "Module source reading/writing, structure, search, call hierarchy, navigation, and forms", //$NON-NLS-1$
