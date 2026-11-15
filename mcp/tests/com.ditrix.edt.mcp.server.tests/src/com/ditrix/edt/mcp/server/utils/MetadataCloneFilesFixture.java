@@ -64,6 +64,7 @@ public final class MetadataCloneFilesFixture
         when(sourceFile.getParent()).thenReturn(folder);
         when(folder.getProjectRelativePath()).thenReturn(new Path("src/Catalogs/Source"));
         when(folder.getParent()).thenReturn(collection);
+        when(collection.getProjectRelativePath()).thenReturn(new Path("src/Catalogs"));
         when(collection.getFolder(any(org.eclipse.core.runtime.IPath.class))).thenReturn(mock(IFolder.class));
     }
 
