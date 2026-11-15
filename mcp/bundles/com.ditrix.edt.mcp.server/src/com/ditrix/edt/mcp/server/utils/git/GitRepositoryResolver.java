@@ -247,6 +247,49 @@ public final class GitRepositoryResolver
      */
     public static String existingRepositoryRefusal(File folder, String projectName)
     {
+        Enclosing enclosing = enclosingRepository(folder, "git init", "project '" + projectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        switch (enclosing.kind())
+        {
+            case REAL_PATH_UNRESOLVED:
+                return "The real location of the folder of project '" + projectName + "' (" + folder //$NON-NLS-1$ //$NON-NLS-2$
+                    + ") could not be resolved, so this tool cannot tell whether it lies inside a git repository. " //$NON-NLS-1$
+                    + "'git init' is refused rather than run blind: check the folder (and any link or junction " //$NON-NLS-1$
+                    + "on its path) in a terminal."; //$NON-NLS-1$
+            case ENTRY:
+                return nestedRepositoryMessage(projectName, enclosing.root(),
+                    enclosing.atStart() ? "the project folder already holds a '.git' entry" //$NON-NLS-1$
+                        : "the project folder lies inside that repository"); //$NON-NLS-1$
+            case UNREADABLE:
+                return "A git repository was found above the folder of project '" + projectName //$NON-NLS-1$
+                    + "' (" + folder + "), but it could not be opened, so this tool cannot tell whether " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the project already belongs to it. 'git init' is refused rather than run blind: " //$NON-NLS-1$
+                    + "check that repository and the git configuration in a terminal."; //$NON-NLS-1$
+            case FOUND:
+                return nestedRepositoryMessage(projectName, enclosing.root(),
+                    "the project folder lies inside that repository"); //$NON-NLS-1$
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * What git would find at or above {@code folder}: the judgement {@code git init} and
+     * {@code git clone} both need before they create a repository there (#934), with the wording
+     * left to each of them.
+     * <p>
+     * The walk is the one {@link #existingRepositoryRefusal} documents: a {@code .git} entry of any
+     * kind (not followed, a broken one included) in the folder or in any folder above it, on the
+     * folder's REAL path first and then on its spelling; then a repository JGit finds without such an
+     * entry (a bare one); and a repository up the tree that cannot be opened, which is not "none". A
+     * real path that cannot be resolved is its own answer, so the caller fails closed.
+     *
+     * @param folder an existing folder
+     * @param operation the git operation asking, for the log line (e.g. {@code git init})
+     * @param subject what the folder is, for the log line (e.g. {@code project 'Sales'})
+     * @return the verdict (never {@code null})
+     */
+    public static Enclosing enclosingRepository(File folder, String operation, String subject)
+    {
         File lexical = folder.getAbsoluteFile();
         File real;
         try
@@ -256,43 +299,82 @@ public final class GitRepositoryResolver
         catch (IOException | RuntimeException e)
         {
             Activator.logError(GitFailureLog.typesOnly(
-                "git init: resolving the real path failed for project '" + projectName + "'", e), null); //$NON-NLS-1$ //$NON-NLS-2$
-            return "The real location of the folder of project '" + projectName + "' (" + folder //$NON-NLS-1$ //$NON-NLS-2$
-                + ") could not be resolved, so this tool cannot tell whether it lies inside a git repository. " //$NON-NLS-1$
-                + "'git init' is refused rather than run blind: check the folder (and any link or junction " //$NON-NLS-1$
-                + "on its path) in a terminal."; //$NON-NLS-1$
+                operation + ": resolving the real path failed for " + subject, e), null); //$NON-NLS-1$
+            return new Enclosing(Enclosing.Kind.REAL_PATH_UNRESOLVED, null, false);
         }
         for (File start : real.equals(lexical) ? List.of(real) : List.of(real, lexical))
         {
             File holder = nearestDotGitHolder(start);
             if (holder != null)
             {
-                return nestedRepositoryMessage(projectName, holder,
-                    holder.equals(start) ? "the project folder already holds a '.git' entry" //$NON-NLS-1$
-                        : "the project folder lies inside that repository"); //$NON-NLS-1$
+                return new Enclosing(Enclosing.Kind.ENTRY, holder, holder.equals(start));
             }
         }
-        Discovery discovery = discoverFromLocation(real, projectName);
+        Discovery discovery = discoverFromLocationFor(real, subject);
         if (discovery.configUnreadable())
         {
-            return "A git repository was found above the folder of project '" + projectName //$NON-NLS-1$
-                + "' (" + folder + "), but it could not be opened, so this tool cannot tell whether " //$NON-NLS-1$ //$NON-NLS-2$
-                + "the project already belongs to it. 'git init' is refused rather than run blind: " //$NON-NLS-1$
-                + "check that repository and the git configuration in a terminal."; //$NON-NLS-1$
+            return new Enclosing(Enclosing.Kind.UNREADABLE, null, false);
         }
         Repository found = discovery.repository();
         if (found == null)
         {
-            return null;
+            return new Enclosing(Enclosing.Kind.NONE, null, false);
         }
         try
         {
-            return nestedRepositoryMessage(projectName, repositoryRoot(real, found),
-                "the project folder lies inside that repository"); //$NON-NLS-1$
+            return new Enclosing(Enclosing.Kind.FOUND, repositoryRoot(real, found), false);
         }
         finally
         {
             found.close();
+        }
+    }
+
+    /** The outcome of {@link #enclosingRepository}. */
+    public static final class Enclosing
+    {
+        /** What was found. */
+        public enum Kind
+        {
+            /** No repository at or above the folder. */
+            NONE,
+            /** The folder's real path could not be resolved: nothing is known. */
+            REAL_PATH_UNRESOLVED,
+            /** A {@code .git} entry in the folder or above it; {@link #root()} is the folder holding it. */
+            ENTRY,
+            /** A repository JGit found without a {@code .git} entry on the walk; {@link #root()} names it. */
+            FOUND,
+            /** A repository above the folder that could not be opened. */
+            UNREADABLE
+        }
+
+        private final Kind kind;
+        private final File root;
+        private final boolean atStart;
+
+        Enclosing(Kind kind, File root, boolean atStart)
+        {
+            this.kind = kind;
+            this.root = root;
+            this.atStart = atStart;
+        }
+
+        /** @return what was found */
+        public Kind kind()
+        {
+            return kind;
+        }
+
+        /** @return the root of the repository found ({@link Kind#ENTRY} / {@link Kind#FOUND}), else {@code null} */
+        public File root()
+        {
+            return root;
+        }
+
+        /** @return {@code true} when the {@code .git} entry is in the folder itself rather than above it */
+        public boolean atStart()
+        {
+            return atStart;
         }
     }
 
@@ -555,6 +637,12 @@ public final class GitRepositoryResolver
      */
     static Discovery discoverFromLocation(File location, String projectName)
     {
+        return discoverFromLocationFor(location, "project '" + projectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** {@link #discoverFromLocation} with the log line's subject spelled by the caller. */
+    private static Discovery discoverFromLocationFor(File location, String subject)
+    {
         try
         {
             Repository discovered = discoverFromDirectory(location);
@@ -563,8 +651,7 @@ public final class GitRepositoryResolver
         catch (IOException | IllegalArgumentException e)
         {
             Activator.logError(GitFailureLog.typesOnly(
-                "git-branch tools: git-dir discovery failed for project '" //$NON-NLS-1$
-                    + projectName + "'", e), null); //$NON-NLS-1$
+                "git-branch tools: git-dir discovery failed for " + subject, e), null); //$NON-NLS-1$
             return Discovery.unreadable();
         }
     }
