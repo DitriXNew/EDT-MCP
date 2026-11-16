@@ -79,8 +79,9 @@ public class StartProfilingTool implements IMcpTool
         if (applicationId == null) { return; }
         if (target == null)
         {
-            // No live session: a flag its own session set cannot still be on.
-            if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget)
+            // A lookup miss proves nothing by itself (a relaunch may not be registered yet): drop the flag
+            // only when its own target has ended.
+            if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget owner && ended(owner))
             {
                 ACTIVE_APPLICATION_IDS.remove(applicationId);
             }
@@ -100,6 +101,21 @@ public class StartProfilingTool implements IMcpTool
         {
             ACTIVE_APPLICATION_IDS.remove(applicationId);
         }
+    }
+
+    /** A target is ended when it reports so or its launch has left the launch manager. */
+    static boolean ended(IDebugTarget target)
+    {
+        org.eclipse.debug.core.DebugPlugin debug = org.eclipse.debug.core.DebugPlugin.getDefault();
+        return ended(target, launch -> debug != null
+            && java.util.Arrays.asList(debug.getLaunchManager().getLaunches()).contains(launch));
+    }
+
+    static boolean ended(IDebugTarget target, java.util.function.Predicate<org.eclipse.debug.core.ILaunch> registered)
+    {
+        if (target.isTerminated()) { return true; }
+        org.eclipse.debug.core.ILaunch launch = target.getLaunch();
+        return launch == null || launch.isTerminated() || !registered.test(launch);
     }
 
     /**

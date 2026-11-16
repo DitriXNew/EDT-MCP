@@ -130,6 +130,21 @@ public class StartProfilingToolTest
         assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
     }
 
+    /** A lookup miss alone keeps the flag of a target whose launch is still live (a relaunch race). */
+    @Test
+    public void lookupMissKeepsTheFlagOfALiveOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget owner = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        org.eclipse.debug.core.ILaunch launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        org.mockito.Mockito.when(owner.getLaunch()).thenReturn(launch);
+        assertFalse(StartProfilingTool.ended(owner, l -> l == launch));
+        assertTrue(StartProfilingTool.ended(owner, l -> false));
+        org.mockito.Mockito.when(launch.isTerminated()).thenReturn(true);
+        assertTrue(StartProfilingTool.ended(owner, l -> l == launch));
+        org.mockito.Mockito.when(owner.isTerminated()).thenReturn(true);
+        assertTrue(StartProfilingTool.ended(owner, l -> true));
+    }
+
     private static org.eclipse.debug.core.model.IDebugTarget target()
     {
         return (org.eclipse.debug.core.model.IDebugTarget)java.lang.reflect.Proxy.newProxyInstance(

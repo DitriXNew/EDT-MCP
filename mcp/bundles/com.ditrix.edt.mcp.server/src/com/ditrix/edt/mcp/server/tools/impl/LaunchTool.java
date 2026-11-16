@@ -2047,11 +2047,32 @@ public class LaunchTool implements IMcpTool
      */
     static void endOrphanedLaunch(org.eclipse.debug.core.ILaunch launch, boolean registered)
     {
+        endOrphanedLaunch(launch, registered, l -> {
+            DebugPlugin debug = DebugPlugin.getDefault();
+            if (debug != null)
+            {
+                debug.getLaunchManager().addLaunch(l);
+            }
+        });
+    }
+
+    static void endOrphanedLaunch(org.eclipse.debug.core.ILaunch launch, boolean registered,
+        java.util.function.Consumer<org.eclipse.debug.core.ILaunch> reRegister)
+    {
         if (launch != null && !registered && launch.hasChildren())
         {
             Activator.logInfo("launch: terminating a client its removed launch left behind: " //$NON-NLS-1$
                 + launch.getLaunchConfiguration());
-            LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, null);
+            if (!LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, null))
+            {
+                // Unconfirmed: register it again so terminate_launch and the launch guard can still find it.
+                Activator.logWarning("launch: the client of a removed launch did not confirm termination; " //$NON-NLS-1$
+                    + "re-registered it so it stays discoverable: " + launch.getLaunchConfiguration()); //$NON-NLS-1$
+                if (!launch.isTerminated())
+                {
+                    reRegister.accept(launch);
+                }
+            }
         }
     }
 

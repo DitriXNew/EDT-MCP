@@ -221,6 +221,20 @@ public class LaunchToolTest
         verify(empty, never()).terminate();
     }
 
+    /** A removed launch whose client does not confirm termination is registered again, never dropped. */
+    @Test
+    public void unconfirmedOrphanIsRegisteredAgain() throws Exception
+    {
+        ILaunch stuck = mock(ILaunch.class);
+        when(stuck.hasChildren()).thenReturn(true);
+        when(stuck.canTerminate()).thenReturn(true);
+        when(stuck.isTerminated()).thenReturn(false);
+        List<ILaunch> registered = new ArrayList<>();
+        LaunchTool.endOrphanedLaunch(stuck, false, registered::add);
+        verify(stuck).terminate();
+        assertEquals(List.of(stuck), registered);
+    }
+
     @Test
     public void testName()
     {
