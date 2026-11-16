@@ -235,6 +235,94 @@ public class LaunchToolTest
         assertEquals(List.of(stuck), registered);
     }
 
+    private static ILaunchConfiguration named(String name)
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getName()).thenReturn(name);
+        return config;
+    }
+
+    /** An unbound configuration answers its project's default application, and only that one. */
+    @Test
+    public void unboundConfigurationMatchesTheDefaultApplicationOnly()
+    {
+        ILaunchConfiguration thin = named("IRP thin");
+        LaunchTool.UnboundChoice match = LaunchTool.chooseUnboundConfig(List.of(thin), "app-1", "app-1");
+        assertSame(thin, match.config());
+        assertNull(match.error());
+
+        LaunchTool.UnboundChoice other = LaunchTool.chooseUnboundConfig(List.of(thin), "app-2", "app-1");
+        assertNull(other.config());
+        assertNull(other.error());
+        assertTrue(other.hint(), other.hint().contains("[IRP thin]") && other.hint().contains("app-1"));
+
+        LaunchTool.UnboundChoice unknown = LaunchTool.chooseUnboundConfig(List.of(thin), "app-1", null);
+        assertNull(unknown.config());
+        assertTrue(unknown.hint(), unknown.hint().contains("launchConfigurationName"));
+
+        LaunchTool.UnboundChoice several =
+            LaunchTool.chooseUnboundConfig(List.of(thin, named("IRP thick")), "app-1", "app-1");
+        assertNull(several.config());
+        assertTrue(several.error(), several.error().contains("[IRP thin, IRP thick]")
+            && several.error().contains("launchConfigurationName"));
+    }
+
+    /** restartIfRunning never cancels a start in progress: that interrupts EDT's infobase load. */
+    @Test
+    public void restartRefusesALaunchEdtIsStillStarting() throws Exception
+    {
+        ILaunchConfiguration config = named("IRP thin");
+        ILaunch starting = mock(ILaunch.class);
+        when(starting.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(starting.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        when(starting.getLaunchConfiguration()).thenReturn(config);
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        org.eclipse.core.runtime.jobs.Job job = new org.eclipse.core.runtime.jobs.Job("Launching IRP thin")
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                running.countDown();
+                try
+                {
+                    release.await(10, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return monitor.isCanceled() ? Status.CANCEL_STATUS : Status.OK_STATUS;
+            }
+
+            @Override
+            public boolean belongsTo(Object family)
+            {
+                return config.equals(family);
+            }
+        };
+        job.schedule();
+        try
+        {
+            assertTrue(running.await(5, TimeUnit.SECONDS));
+            String result = new LaunchTool().handleExistingClientSession(
+                new ExistingClientSession(starting, null, "debug"), "launch:IRP thin", true,
+                new AlreadyRunningContext("unused"));
+            assertNotNull(result);
+            assertTrue(result, result.contains("still starting") && result.contains("force=true"));
+            assertFalse("the start must not be cancelled", job.getResult() != null
+                && job.getResult().getSeverity() == IStatus.CANCEL);
+            String already = LaunchTool.alreadyRunningMessage(starting);
+            assertTrue(already, already.contains("still starting (state: starting)"));
+        }
+        finally
+        {
+            release.countDown();
+            job.join();
+        }
+        assertEquals(IStatus.OK, job.getResult().getSeverity());
+    }
+
     @Test
     public void testName()
     {

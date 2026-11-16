@@ -4,6 +4,13 @@ Turns on 1C line-level performance measurement for a running debug session: once
 - You want to know which lines actually execute during a scenario, or where the time goes.
 - Measuring coverage of a YAXUnit run or a manual test (start it, exercise the code, stop, read results).
 
+## Recipe: measure a slow action
+1. `list_configurations`, then `launch({"launchConfigurationName":"<name>"})` (debug mode is the default).
+2. Poll `debug_status` until the launch's `state` is `running`. `starting`/`synchronizing` can last minutes while EDT loads the configuration into the infobase; do not terminate or relaunch meanwhile.
+3. `start_profiling({"applicationId":"<from debug_status>"})`.
+4. Reproduce the action in the client (TestClient tools, or ask the user), then `stop_profiling`.
+5. `get_profiling_results` for the hot lines and methods.
+
 ## Parameter details
 - `applicationId` (required) - the running debug session to profile. Get it from `get_applications` or `debug_status`; a `debug_yaxunit_tests` / `launch` run provides one.
 

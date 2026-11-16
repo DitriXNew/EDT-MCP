@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -532,5 +533,29 @@ public class EdtDialogToolTest
         assertFalse(dialog.get("answerable").getAsBoolean());
         assertTrue(press(dialog, "Run without update").contains("ask the user"));
         verify(button, never()).notifyListeners(anyInt(), any());
+    }
+    /** An error dialog with only OK (and its Details toggle) blocks EDT but decides nothing: OK may close it. */
+    @Test
+    public void informationalDialogIsAnswerableWithOkOnly()
+    {
+        Button[] buttons = question("Error", "OK", "&Details >>");
+        JsonObject dialog = list();
+        assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        assertTrue(dialog.get("reason").getAsString().contains("only OK"));
+        assertTrue(press(dialog, "&Details >>").contains("only OK can be pressed"));
+        verify(buttons[1], never()).notifyListeners(anyInt(), any());
+        assertTrue(press(list(), "OK").contains("\"success\":true"));
+        verify(buttons[0]).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    /** A second choice, a duplicated OK, or an unread control tree keeps the dialog human-only. */
+    @Test
+    public void okWithAChoiceIsNotInformational()
+    {
+        assertQuestionRefuses(question("Error", "OK", "Cancel"));
+        assertQuestionRefuses(question("Error", "OK", "OK"));
+        assertFalse(EdtDialogs.acknowledgeOnly(Map.of("OK", List.of(new Object())), false));
+        assertTrue(EdtDialogs.acknowledgeOnly(Map.of("OK", List.of(new Object())), true));
+        assertFalse(EdtDialogs.acknowledgeOnly(Map.of(), true));
     }
 }

@@ -13,13 +13,13 @@ Shows the active debug launches and whether each is currently suspended - the "w
 ## When to use
 - You don't know the `applicationId` of a running debug session and need it for `wait_for_break` / `resume`.
 - To check whether a launch is suspended (and at which line) before stepping or reading variables.
-- To confirm a `launch` (or an attach) is actually running.
+- To confirm a `launch` (or an attach) is actually running: poll until its `state` is `running`.
 
 ## Parameter details
 - `applicationId` - optional filter to a single launch; omit to list all active EDT debug launches.
 
 ## What you get
-JSON: `launches` - each with `applicationId` (a real id, or a synthetic `attach:<configName>` for attach launches), `launchConfiguration` name and `configurationType`, `mode`/`debug`, `project`, whether it is `suspended`, the `threadCount`, and `suspendedAt` (the top frame name and line) when paused. Plus a `count`, a `registry` snapshot and `recentLaunchFailures` — failures of fire-and-forget launches from the last hour ({`launchConfiguration`, `applicationId`, `message`, `ageSeconds`}), filtered by `applicationId` like the launches. This is where a `launch` that already answered `status: "launching"` reports what went wrong afterwards, including an external-changes conflict its policy declined to resolve or a launch delegate that returned after cancelling its monitor.
+JSON: `launches` - each with `applicationId` (a real id, or a synthetic `attach:<configName>` for attach launches), `launchConfiguration` name and `configurationType`, `mode`/`debug`, `project`, whether it is `suspended`, the `threadCount`, and `suspendedAt` (the top frame name and line) when paused, and a `state`: `starting` (no 1C client yet), `synchronizing` (EDT is loading the configuration into the infobase; minutes on a large configuration), `running` (a client or debug target exists) or `abandoned` (the start ended without a client). A launch that is not running also has a `stateNote` saying what to do; never terminate a `starting`/`synchronizing` launch to "unstick" it. Plus a `count`, a `registry` snapshot and `recentLaunchFailures` — failures of fire-and-forget launches from the last hour ({`launchConfiguration`, `applicationId`, `message`, `ageSeconds`}), filtered by `applicationId` like the launches. This is where a `launch` that already answered `status: "launching"` reports what went wrong afterwards, including an external-changes conflict its policy declined to resolve or a launch delegate that returned after cancelling its monitor.
 
 ## Notes & gotchas
 - Only EDT/1C debug launches are listed; unrelated Java/Ant launches are filtered out.

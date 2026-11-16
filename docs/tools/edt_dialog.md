@@ -32,8 +32,10 @@ The allowlist reuses EDT-MCP's existing English/Russian recognition for
 **Application update** and **Infobase configuration changes**. It also recognizes the
 exclusive-lock question: **Action selection** (or its Russian title) with exactly the
 Cancel, Retry and Dynamic update buttons in English, Russian or Ukrainian.
-Other dialogs, including **Restructure data** and other **Action selection** questions, carry
-`answerable:false` and `reason:"ask the user to answer it in EDT"`. Destructive-consent
+An informational dialog with nothing to decide — its only action is **OK**, an error dialog's
+Details toggle aside — is answerable with OK only (`reason` says so): read its `message`, then
+press OK to unblock EDT. Other dialogs, including **Restructure data** and other **Action
+selection** questions, carry `answerable:false` and `reason:"ask the user to answer it in EDT"`. Destructive-consent
 and user-signal dialogs are always human-only, even if their titles match the allowlist.
 
 **Update then run** applies the same native update as `launch(updateBeforeLaunch=true)`.

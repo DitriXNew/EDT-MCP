@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.StartingLaunches;
 
 /**
  * Lists EDT launch configurations — runtime-client, Attach (RemoteRuntime /
@@ -82,7 +83,8 @@ public class ListConfigurationsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("configurations", //$NON-NLS-1$
-                "Matching launch configurations with their state.") //$NON-NLS-1$
+                "Matching launch configurations. running is true only once a 1C client or debug target " //$NON-NLS-1$
+                    + "exists; a live launch also has state starting|synchronizing|running|abandoned.") //$NON-NLS-1$
             .integerProperty("count", "Number of configurations returned.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -190,12 +192,19 @@ public class ListConfigurationsTool implements IMcpTool
         }
 
         ILaunch liveLaunch = appId != null ? liveByAppId.get(appId) : null;
-        boolean running = liveLaunch != null;
-        entry.put("running", running); //$NON-NLS-1$
-        if (running)
+        StartingLaunches.Phase phase = liveLaunch != null ? StartingLaunches.phase(liveLaunch) : null;
+        entry.put("running", phase == StartingLaunches.Phase.RUNNING); //$NON-NLS-1$
+        if (phase != null)
         {
+            // A launch with no client yet is starting, not running; say which.
+            entry.put("state", phase.token()); //$NON-NLS-1$
             entry.put("mode", liveLaunch.getLaunchMode()); //$NON-NLS-1$
             entry.put("suspended", anyThreadSuspended(liveLaunch)); //$NON-NLS-1$
+            String note = StartingLaunches.note(phase);
+            if (note != null)
+            {
+                entry.put("stateNote", note); //$NON-NLS-1$
+            }
         }
         return entry;
     }

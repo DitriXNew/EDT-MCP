@@ -336,6 +336,38 @@ public final class LaunchConfigUtils
     }
 
     /**
+     * Returns the configurations of {@code configType} for {@code projectName} that carry no application
+     * binding: EDT launches such a configuration against the project's default application.
+     *
+     * @param launchManager the launch manager
+     * @param configType the configuration type to search
+     * @param projectName the project the configuration must name
+     * @return the unbound configurations, possibly empty
+     */
+    public static List<ILaunchConfiguration> findUnboundLaunchConfigs(ILaunchManager launchManager,
+            ILaunchConfigurationType configType, String projectName)
+    {
+        List<ILaunchConfiguration> unbound = new ArrayList<>();
+        try
+        {
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(configType))
+            {
+                String bound = readAttribute(config, ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+                if (projectName.equals(readAttribute(config, ATTR_PROJECT_NAME, "")) //$NON-NLS-1$
+                    && (bound == null || bound.isEmpty()))
+                {
+                    unbound.add(config);
+                }
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error searching launch configurations", e); //$NON-NLS-1$
+        }
+        return unbound;
+    }
+
+    /**
      * Tells whether {@code config}'s {@code project + applicationId} attributes match the given
      * pair exactly. A {@link CoreException} while reading the attributes is logged and treated as
      * "no match" (so the caller skips this configuration and continues searching).
