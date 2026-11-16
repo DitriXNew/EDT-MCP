@@ -124,6 +124,10 @@ public class StartProfilingToolTest
         assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
         StartProfilingTool.reconcile("app", relaunched); //$NON-NLS-1$
         assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        // No live session at all (terminated while profiling): start_profiling must not answer "already active".
+        StartProfilingTool.markActive("app", first); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", null); //$NON-NLS-1$
+        assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
     }
 
     private static org.eclipse.debug.core.model.IDebugTarget target()

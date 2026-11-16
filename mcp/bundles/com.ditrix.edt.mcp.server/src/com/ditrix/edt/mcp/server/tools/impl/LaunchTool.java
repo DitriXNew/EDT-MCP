@@ -2041,17 +2041,36 @@ public class LaunchTool implements IMcpTool
             + "launch in EDT's Debug view."; //$NON-NLS-1$
 
     /**
-     * Eclipse removes a cancelled launch even after its delegate started the client, which would leave that
-     * client running and undiscoverable; the cancelled job terminates it instead, whoever is still waiting.
+     * Eclipse removes a cancelled launch even after its delegate started the client, and an abandoned launch
+     * then throws; a client of a launch no longer registered is undiscoverable, so this tool's launch job
+     * terminates it whatever way the call ended and whoever is still waiting.
      */
-    static void endCancelledLaunch(org.eclipse.debug.core.ILaunch launch, IProgressMonitor monitor)
+    static void endOrphanedLaunch(org.eclipse.debug.core.ILaunch launch, boolean registered)
     {
-        if (launch != null && monitor != null && monitor.isCanceled() && !LaunchLifecycleUtils.emptyLaunch(launch))
+        if (launch != null && !registered && launch.hasChildren())
         {
-            Activator.logInfo("launch: terminating a client started by a cancelled launch: " //$NON-NLS-1$
+            Activator.logInfo("launch: terminating a client its removed launch left behind: " //$NON-NLS-1$
                 + launch.getLaunchConfiguration());
             LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, null);
         }
+    }
+
+    /** Whether the launch manager still lists the launch. */
+    static boolean isRegistered(org.eclipse.debug.core.ILaunch launch)
+    {
+        DebugPlugin debug = DebugPlugin.getDefault();
+        if (debug == null || launch == null)
+        {
+            return false;
+        }
+        for (org.eclipse.debug.core.ILaunch registered : debug.getLaunchManager().getLaunches())
+        {
+            if (registered == launch)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Records a launch whose delegate has returned inside this tool's launch job. */
@@ -2709,12 +2728,12 @@ public class LaunchTool implements IMcpTool
         // The counter is global, so movement proves only that a dialog appeared while this call ran.
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         InfobaseAuthDialogSuppressor.markActivityStart();
+        // Every launch the delegate returned, kept even when the call then throws.
+        java.util.List<org.eclipse.debug.core.ILaunch> started = new java.util.ArrayList<>();
         try
         {
-            org.eclipse.debug.core.ILaunch started = StandaloneServerStateRecovery.launchWithRecovery(config,
-                launchMode, monitor, () -> abandonedLaunchMessage(config.getName(), abortReason.reason()));
-            endCancelledLaunch(started, monitor);
-            recordFinishedLaunch(started);
+            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
+                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add);
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
@@ -2785,6 +2804,11 @@ public class LaunchTool implements IMcpTool
         }
         finally
         {
+            for (org.eclipse.debug.core.ILaunch launch : started)
+            {
+                endOrphanedLaunch(launch, isRegistered(launch));
+                recordFinishedLaunch(launch);
+            }
             InfobaseAuthDialogSuppressor.markActivityEnd();
             if (autoConfirmerArmed)
             {

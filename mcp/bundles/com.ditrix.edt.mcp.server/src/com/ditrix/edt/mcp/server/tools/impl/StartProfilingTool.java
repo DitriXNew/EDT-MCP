@@ -76,7 +76,16 @@ public class StartProfilingTool implements IMcpTool
      */
     static void reconcile(String applicationId, IDebugTarget target)
     {
-        if (applicationId == null || target == null) { return; }
+        if (applicationId == null) { return; }
+        if (target == null)
+        {
+            // No live session: a flag its own session set cannot still be on.
+            if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget)
+            {
+                ACTIVE_APPLICATION_IDS.remove(applicationId);
+            }
+            return;
+        }
         Boolean enabled;
         try { enabled = ProfilingSupport.enabled(ProfilingSupport.service(), target); }
         catch (RuntimeException e) { enabled = null; }
