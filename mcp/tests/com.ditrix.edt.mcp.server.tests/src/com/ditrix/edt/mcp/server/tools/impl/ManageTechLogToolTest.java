@@ -71,7 +71,8 @@ public class ManageTechLogToolTest
         String r = tool(ConsentDecision.REJECT, false, asks).execute(Map.of("mode", "stop"));
         assertTrue(r, r.contains("declined"));
         try { assertArrayEquals(before, Files.readAllBytes(target)); } catch (Exception e) { throw new AssertionError(e); }
-        assertTrue(allow.execute(Map.of("mode", "stop")).contains("byte-exactly")); assertFalse(Files.exists(target));
+        String stopped = allow.execute(Map.of("mode", "stop"));
+        assertTrue(stopped, stopped.contains("byte-exactly") && !stopped.contains("WARNING")); assertFalse(Files.exists(target));
     }
     @Test public void exportConsentAndNonOverwriteAndBomCsv() throws Exception
     {

@@ -59,7 +59,7 @@ public class ManageTechLogTool implements IMcpTool
 
     @Override public String execute(Map<String, String> params)
     {
-        String warning = capture.warning();
+        String warning = "";
         try
         {
             String mode = str(JsonUtils.extractStringArgument(params, "mode"), "preview");
@@ -95,6 +95,8 @@ public class ManageTechLogTool implements IMcpTool
                 }
                 default -> throw new IllegalArgumentException("Unknown mode '" + mode + "'; use preview, start, status, stop or export");
             }
+            // start/status/stop report the capture state themselves; a pre-operation warning would be stale.
+            if (List.of("preview", "export").contains(mode)) warning = capture.warning();
             if (JsonUtils.isErrorResponse(result))
             {
                 var error = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
@@ -103,7 +105,7 @@ public class ManageTechLogTool implements IMcpTool
             }
             return warning + result;
         }
-        catch (Exception e) { return ToolResult.error(warning + "manage_tech_log: " + e.getMessage()
+        catch (Exception e) { return ToolResult.error(capture.warning() + "manage_tech_log: " + e.getMessage()
             + ". Inspect mode=status; use mode=preview or get_tool_guide('manage_tech_log') before retrying writes.").toJson(); }
     }
 

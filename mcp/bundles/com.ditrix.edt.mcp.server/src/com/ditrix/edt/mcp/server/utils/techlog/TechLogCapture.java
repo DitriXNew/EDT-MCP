@@ -231,6 +231,7 @@ public final class TechLogCapture
     /** Gate runs inside the cross-process mutex after the exact affected bytes have been computed. */
     public synchronized String start(Options o, Supplier<String> refusal) throws Exception
     {
+        boolean createdDirectory = !Files.isDirectory(target.getParent());
         Files.createDirectories(target.getParent());
         try (FileChannel channel = lockChannel();
             var held = channel.tryLock())
@@ -256,6 +257,7 @@ public final class TechLogCapture
             manifest.addProperty("startTime", Instant.now().toString()); manifest.addProperty("targetConfigPath", target.toString());
             manifest.addProperty("backupPath", original == null ? "" : backup.toString());
             manifest.addProperty("location", o.location().toString()); manifest.addProperty("originalExisted", original != null);
+            manifest.addProperty("createdDirectory", createdDirectory);
             manifest.addProperty("originalHash", original == null ? "" : digest(original));
             manifest.addProperty("writtenHash", digest(generated)); manifest.addProperty("status", "prepared");
             JsonObject overrides = new JsonObject();
@@ -332,6 +334,7 @@ public final class TechLogCapture
             atomicWrite(location.resolve("edt-mcp-capture.json"), json(m));
             Files.deleteIfExists(state());
             if (original != null) Files.delete(Path.of(m.get("backupPath").getAsString()));
+            else if (m.has("createdDirectory") && m.get("createdDirectory").getAsBoolean()) deleteIfEmpty(target.getParent());
             return "Stopped; original config restored byte-exactly (original absence restored when applicable). Log files kept. "
                 + "Platform pickup may take ≤60 s.\n\nNext: get_tech_log {\"mode\":\"summary\",\"path\":\""
                 + location.toString().replace("\\", "\\\\") + "\"}";
@@ -381,6 +384,11 @@ public final class TechLogCapture
             ? target.resolveSibling("logcfg.xml.edt-mcp-" + id + ".bak").toString() : "";
         if (!expectedBackup.equals(m.get("backupPath").getAsString()))
             throw new IOException("Capture backup identity mismatch; inspect " + state());
+    }
+    private static void deleteIfEmpty(Path directory) throws IOException
+    {
+        try (var entries = Files.list(directory)) { if (entries.findAny().isPresent()) return; }
+        Files.deleteIfExists(directory);
     }
     private static byte[] json(JsonObject object)
     { return new GsonBuilder().setPrettyPrinting().create().toJson(object).getBytes(StandardCharsets.UTF_8); }

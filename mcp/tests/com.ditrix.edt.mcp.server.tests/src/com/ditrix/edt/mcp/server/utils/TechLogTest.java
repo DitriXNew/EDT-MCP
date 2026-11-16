@@ -221,6 +221,13 @@ public class TechLogTest
         assertTrue(TechLogAnalysis.summary(i, 1, 0).contains("showing 1-1 of"));
     }
 
+    @Test public void guidsAreOneLiteralInGroupingKeys()
+    {
+        assertEquals(TechLogAnalysis.normalizeSql("9db1fa37-b455-4f3f-b8dd-7de0ea7d6da3: file not found"),
+            TechLogAnalysis.normalizeSql("12345678-ba49-4321-ac67-fcd6f2180121: file not found"));
+        assertEquals("?: file not found", TechLogAnalysis.normalizeSql("9db1fa37-b455-4f3f-b8dd-7de0ea7d6da3: file not found"));
+    }
+
     @Test public void coverageExplainsAbsentWithAndWithoutManifest() throws Exception
     {
         var i = TechLogReader.read(file(event("EXCP", "1") + "\n"), 1, 10, null, null);
@@ -228,8 +235,9 @@ public class TechLogTest
         JsonObject m = new JsonObject(); m.addProperty("profile", "errors");
         var events = new com.google.gson.JsonArray(); TechLogKnowledge.events("errors").forEach(events::add); m.add("events", events); i.manifest = m;
         String result = TechLogAnalysis.coverage(i);
-        assertTrue(result.contains("Not enabled by profile errors")); assertTrue(result.contains("Enabled; none occurred")); assertTrue(result.contains("Absent ≠ no problem"));
-        i.limited = true; assertTrue(TechLogAnalysis.coverage(i).contains("scan incomplete"));
+        assertTrue(result.contains("Not enabled by profile errors")); assertTrue(result.contains("Enabled, none occurred"));
+        assertTrue(result, result.contains("- Present: EXCP 1")); assertTrue(result.contains("Absent ≠ no problem"));
+        i.limited = true; assertTrue(TechLogAnalysis.coverage(i).contains("before the scan stopped"));
     }
 
     @Test public void chainHasParentNestedSqlAndObservedDbmsSourceAndExplicitLimits() throws Exception
@@ -414,6 +422,18 @@ public class TechLogTest
         try { c.stop(() -> null); fail(); } catch (IOException e) { assertTrue(e.getMessage().contains("foreign edits")); }
         assertEquals("foreign edit", Files.readString(config)); Files.write(config, ours);
         c.stop(() -> null); assertFalse(Files.exists(config));
+    }
+
+    @Test public void stopRemovesTheConfigDirectoryOnlyWhenStartCreatedIt() throws Exception
+    {
+        Path created = temporary.getRoot().toPath().resolve("new-conf");
+        var c = new TechLogCapture(created.resolve("logcfg.xml"), List.of());
+        c.start(options(temporary.getRoot().toPath().resolve("capture-new")), () -> null);
+        c.stop(() -> null); assertFalse(Files.exists(created));
+        Path existing = Files.createDirectories(temporary.getRoot().toPath().resolve("old-conf"));
+        var d = new TechLogCapture(existing.resolve("logcfg.xml"), List.of());
+        d.start(options(temporary.getRoot().toPath().resolve("capture-old")), () -> null);
+        d.stop(() -> null); assertTrue(Files.isDirectory(existing));
     }
 
     @Test public void missingActiveRecordRecoversFromOwnManifestAfterCrash() throws Exception

@@ -34,7 +34,7 @@ public final class TechLogAnalysis
     private static final Pattern SQL_TOKEN = Pattern.compile(
         "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|[NEXB]?'(?:''|\\\\.|[^'\\\\])*'|"
         + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|"
-        + "#tt\\d+|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
+        + "#tt\\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
         Pattern.CASE_INSENSITIVE);
 
     private TechLogAnalysis() { }
@@ -188,19 +188,33 @@ public final class TechLogAnalysis
         catch (RuntimeException e) { /* Foreign/old manifest: do not invent enablement. */ }
         StringBuilder out = new StringBuilder("## Coverage\n\n" + index.manifestNote
             + "\n\nAbsent ≠ no problem. Duration/infobase filters, unfinished operations, generating elements, version and missing nodes can hide evidence.\n\n");
-        if (index.manifest != null) out.append("Capture settings: ")
-            .append(MarkdownUtils.escapeMarkdown(index.manifest.toString())).append("\n\n");
-        out.append(MarkdownUtils.tableHeader("Event", "Observed", "Interpretation"));
+        if (index.manifest != null) out.append("Capture settings: ").append(MarkdownUtils.escapeMarkdown(captureSettings(index.manifest))).append("\n\n");
         Set<String> names = new TreeSet<>(TechLogKnowledge.entries("events").keySet()); names.addAll(index.kinds.keySet());
+        List<String> present = new ArrayList<>(), silent = new ArrayList<>(), off = new ArrayList<>();
         for (String kind : names)
         {
             int count = index.kinds.getOrDefault(kind, 0);
-            String reason = count > 0 ? "Present" : !known ? "Absent; capture enablement unknown"
-                : !enabled.contains(kind) ? "Not enabled by profile " + profile
-                : index.limited ? "Enabled; scan incomplete" : "Enabled; none occurred in collected, filtered data";
-            out.append(MarkdownUtils.tableRow(kind, "" + count, reason));
+            if (count > 0) present.add(kind + " " + count);
+            else if (known && !enabled.contains(kind)) off.add(kind);
+            else silent.add(kind);
         }
+        out.append("- Present: ").append(present.isEmpty() ? "none" : String.join(", ", present)).append("\n");
+        out.append("- ").append(!known ? "Absent, capture enablement unknown: "
+            : index.limited ? "Enabled, none seen before the scan stopped: " : "Enabled, none occurred in the collected data: ")
+            .append(silent.isEmpty() ? "none" : String.join(", ", silent)).append("\n");
+        if (known) out.append("- Not enabled by profile ").append(profile).append(": ")
+            .append(off.isEmpty() ? "none" : String.join(", ", off)).append("\n");
         return out.toString();
+    }
+
+    private static String captureSettings(com.google.gson.JsonObject m)
+    {
+        StringBuilder out = new StringBuilder();
+        for (String key : List.of("profile", "startTime", "stopTime", "status"))
+            if (m.has(key)) out.append(key).append('=').append(m.get(key).getAsString()).append("; ");
+        if (m.has("overrides")) m.getAsJsonObject("overrides").entrySet()
+            .forEach(e -> out.append(e.getKey()).append('=').append(e.getValue().isJsonPrimitive() ? e.getValue().getAsString() : e.getValue().toString()).append("; "));
+        return out.toString().trim();
     }
 
     public static List<Event> details(Index index, String groupId)
@@ -318,7 +332,8 @@ public final class TechLogAnalysis
             Map<String, String> p = session.read(e.pointer());
             out.append(MarkdownUtils.tableRow(e.id(), e.end().toString(), ms(e.durationUs()), e.name(), e.process(),
                 e.session(), get(p, "Usr"), e.connection(), get(p, "Context"), get(p, "Sql") + get(p, "Sdbl") + get(p, "Query"),
-                get(p, "planSQLText"), p.toString() + " @ " + e.pointer()));
+                get(p, "planSQLText"), p.toString() + " @ " + e.pointer().source().file().getFileName()
+                + (e.pointer().source().member().isEmpty() ? "" : "!" + e.pointer().source().member()) + "#" + e.pointer().offset()));
         }
         return out.toString();
     }
