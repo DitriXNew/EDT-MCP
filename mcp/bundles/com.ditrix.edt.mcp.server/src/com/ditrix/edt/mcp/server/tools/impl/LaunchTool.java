@@ -466,7 +466,7 @@ public class LaunchTool implements IMcpTool
                 LaunchLifecycleUtils.resolveExistingClientSession(effectiveAppId);
             if (existingByName != null)
             {
-                AlreadyRunningContext ctx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
+                AlreadyRunningContext ctx = new AlreadyRunningContext(alreadyRunningMessage(existingByName.launch));
                 ctx.launchConfiguration = config.getName();
                 ctx.configurationType = typeId;
                 ctx.attach = Boolean.valueOf(isAttach);
@@ -1552,24 +1552,8 @@ public class LaunchTool implements IMcpTool
                 return existingSessionResult;
             }
 
-            // Update database before launch if requested. Routes through the
-            // shared LaunchLifecycleUtils.updateApplicationIfNeeded so launch analyses
-            // "does the IB need updating?" the same way the YAXUnit tools
-            // do: skip on UPDATED, wait on BEING_UPDATED, incremental-update otherwise.
-            // For a STANDALONE-SERVER application the programmatic update is SKIPPED
-            // and deferred to the launch delegate's coordinated path instead — see
-            // runPreLaunchUpdateStep.
-            if (appManager != null && application != null)
-            {
-                String updateError = runPreLaunchUpdateStep(project, applicationId,
-                    appManager, updateBeforeLaunch, policy);
-                if (updateError != null)
-                {
-                    return ToolResult.error(updateError).toJson();
-                }
-            }
-
-            // Get launch manager
+            // Resolve the launch configuration BEFORE the database update, so a missing
+            // configuration refuses at once instead of after a long update.
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
             if (launchManager == null)
             {
@@ -1593,10 +1577,27 @@ public class LaunchTool implements IMcpTool
             {
                 ToolResult errorResult = ToolResult.error("No launch configuration found for project '" //$NON-NLS-1$
                     + projectName + "' and application '" + applicationName + "' (" //$NON-NLS-1$ //$NON-NLS-2$
-                    + applicationId + "). Create a runtime-client launch configuration in EDT, " //$NON-NLS-1$
-                    + "or pass launchConfigurationName to start an Attach configuration."); //$NON-NLS-1$
+                    + applicationId + "). Create one with create_launch_config, " //$NON-NLS-1$
+                    + "or pass launchConfigurationName to start an existing configuration."); //$NON-NLS-1$
                 errorResult.put("availableConfigurations", listAvailableConfigs(launchManager)); //$NON-NLS-1$
                 return errorResult.toJson();
+            }
+
+            // Update database before launch if requested. Routes through the
+            // shared LaunchLifecycleUtils.updateApplicationIfNeeded so launch analyses
+            // "does the IB need updating?" the same way the YAXUnit tools
+            // do: skip on UPDATED, wait on BEING_UPDATED, incremental-update otherwise.
+            // For a STANDALONE-SERVER application the programmatic update is SKIPPED
+            // and deferred to the launch delegate's coordinated path instead — see
+            // runPreLaunchUpdateStep.
+            if (appManager != null && application != null)
+            {
+                String updateError = runPreLaunchUpdateStep(project, applicationId,
+                    appManager, updateBeforeLaunch, policy);
+                if (updateError != null)
+                {
+                    return ToolResult.error(updateError).toJson();
+                }
             }
 
             final String configName = matchingConfig.getName();
@@ -1806,7 +1807,7 @@ public class LaunchTool implements IMcpTool
         {
             ILaunchConfiguration activeConfig = existingByApp.launch != null
                 ? existingByApp.launch.getLaunchConfiguration() : null;
-            AlreadyRunningContext runningCtx = new AlreadyRunningContext(ALREADY_RUNNING_MESSAGE);
+            AlreadyRunningContext runningCtx = new AlreadyRunningContext(alreadyRunningMessage(existingByApp.launch));
             runningCtx.project = projectName;
             runningCtx.attach = Boolean.FALSE;
             if (activeConfig != null)
@@ -1995,11 +1996,164 @@ public class LaunchTool implements IMcpTool
                 + "target: applicationId=" + applicationId); //$NON-NLS-1$
             LaunchLifecycleUtils.terminateExistingSessionAndWait(session.liveTarget, applicationId);
         }
+        else if (LaunchLifecycleUtils.emptyLaunch(session.launch))
+        {
+            // Still starting (or cancelled at a dialog): nothing to terminate yet, so the old
+            // launch would go on to start a second client next to the new one. Cancel its job.
+            Activator.logInfo("launch restartIfRunning: cancelling a still-starting launch: applicationId=" //$NON-NLS-1$
+                + applicationId);
+            String refusal = cancelStartingLaunch(session.launch, applicationId, CANCEL_WAIT_MS);
+            if (refusal != null)
+            {
+                return ToolResult.error(refusal).toJson();
+            }
+        }
         else
         {
             Activator.logInfo("launch restartIfRunning: terminating existing client launch " //$NON-NLS-1$
                 + "(mode=" + session.mode + "): applicationId=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
             LaunchLifecycleUtils.terminateExistingLaunchAndWait(session.launch, applicationId);
+        }
+        return null;
+    }
+
+    /** Launches returned by this tool's launch job: their delegate has finished, so an empty one is dead. */
+    private static final java.util.Set<org.eclipse.debug.core.ILaunch> FINISHED_LAUNCHES =
+        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
+
+    /** How long restartIfRunning waits for a cancelled launch job to stop. */
+    static final long CANCEL_WAIT_MS = 30_000;
+
+    static final String STARTING_NOT_STOPPED_MESSAGE =
+        "The previous launch of this configuration is still starting and did not stop within " //$NON-NLS-1$
+            + CANCEL_WAIT_MS / 1000 + " s of being cancelled (a database update, or an EDT dialog - check " //$NON-NLS-1$
+            + "edt_dialog action=list). It stays cancelled, and a client it still starts is terminated when " //$NON-NLS-1$
+            + "it ends; retry restartIfRunning=true then."; //$NON-NLS-1$
+
+    static final String CLIENT_NOT_STOPPED_MESSAGE =
+        "The previous launch started a 1C client while being cancelled, and that client did not confirm " //$NON-NLS-1$
+            + "termination. No new client was started; retry terminate_launch, then launch."; //$NON-NLS-1$
+
+    static final String FOREIGN_STARTING_MESSAGE =
+        "The existing launch of this configuration has no 1C client yet and was not started by this tool " //$NON-NLS-1$
+            + "(EDT's UI), so it may still be starting and cannot be cancelled safely. Wait for its client " //$NON-NLS-1$
+            + "(or answer its dialog - edt_dialog action=list) and retry restartIfRunning=true, or remove the " //$NON-NLS-1$
+            + "launch in EDT's Debug view."; //$NON-NLS-1$
+
+    /**
+     * Eclipse removes a cancelled launch even after its delegate started the client, and an abandoned launch
+     * then throws; a client of a launch no longer registered is undiscoverable, so this tool's launch job
+     * terminates it whatever way the call ended and whoever is still waiting.
+     */
+    static void endOrphanedLaunch(org.eclipse.debug.core.ILaunch launch, boolean registered)
+    {
+        endOrphanedLaunch(launch, registered, l -> {
+            DebugPlugin debug = DebugPlugin.getDefault();
+            if (debug != null)
+            {
+                debug.getLaunchManager().addLaunch(l);
+            }
+        });
+    }
+
+    static void endOrphanedLaunch(org.eclipse.debug.core.ILaunch launch, boolean registered,
+        java.util.function.Consumer<org.eclipse.debug.core.ILaunch> reRegister)
+    {
+        if (launch != null && !registered && launch.hasChildren())
+        {
+            Activator.logInfo("launch: terminating a client its removed launch left behind: " //$NON-NLS-1$
+                + launch.getLaunchConfiguration());
+            if (!LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, null))
+            {
+                // Unconfirmed: register it again so terminate_launch and the launch guard can still find it.
+                Activator.logWarning("launch: the client of a removed launch did not confirm termination; " //$NON-NLS-1$
+                    + "re-registered it so it stays discoverable: " + launch.getLaunchConfiguration()); //$NON-NLS-1$
+                if (!launch.isTerminated())
+                {
+                    reRegister.accept(launch);
+                }
+            }
+        }
+    }
+
+    /** Whether the launch manager still lists the launch. */
+    static boolean isRegistered(org.eclipse.debug.core.ILaunch launch)
+    {
+        DebugPlugin debug = DebugPlugin.getDefault();
+        if (debug == null || launch == null)
+        {
+            return false;
+        }
+        for (org.eclipse.debug.core.ILaunch registered : debug.getLaunchManager().getLaunches())
+        {
+            if (registered == launch)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Records a launch whose delegate has returned inside this tool's launch job. */
+    static void recordFinishedLaunch(org.eclipse.debug.core.ILaunch launch)
+    {
+        if (launch != null)
+        {
+            FINISHED_LAUNCHES.add(launch);
+        }
+    }
+
+    /**
+     * Ends a launch that has no client yet. This tool's launch job for the configuration is cancelled and
+     * awaited (the delegate checks the monitor before starting the client, and Eclipse removes a cancelled
+     * launch even when a client did start), so a client started past that check is terminated, not
+     * orphaned. An empty launch whose delegate has not returned in this tool's job may still be starting
+     * elsewhere and is left alone.
+     *
+     * @return {@code null} once the old launch is gone, else the refusal text
+     */
+    static String cancelStartingLaunch(org.eclipse.debug.core.ILaunch launch, String applicationId, long waitMs)
+    {
+        ILaunchConfiguration config = launch.getLaunchConfiguration();
+        org.eclipse.core.runtime.jobs.IJobManager jobs = Job.getJobManager();
+        if (config != null && jobs.find(config).length > 0)
+        {
+            jobs.cancel(config);
+            long deadline = System.nanoTime() + waitMs * 1_000_000L;
+            while (jobs.find(config).length > 0)
+            {
+                if (System.nanoTime() >= deadline)
+                {
+                    return STARTING_NOT_STOPPED_MESSAGE;
+                }
+                try
+                {
+                    Thread.sleep(100);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return STARTING_NOT_STOPPED_MESSAGE;
+                }
+            }
+        }
+        if (!FINISHED_LAUNCHES.contains(launch))
+        {
+            return FOREIGN_STARTING_MESSAGE;
+        }
+        if (!LaunchLifecycleUtils.emptyLaunch(launch)
+            && !LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, applicationId))
+        {
+            return CLIENT_NOT_STOPPED_MESSAGE;
+        }
+        DebugPlugin debug = DebugPlugin.getDefault();
+        if (debug != null)
+        {
+            debug.getLaunchManager().removeLaunch(launch);
+        }
+        if (applicationId != null && !applicationId.isEmpty())
+        {
+            com.ditrix.edt.mcp.server.utils.DebugSessionRegistry.get().forgetApplication(applicationId);
         }
         return null;
     }
@@ -2052,6 +2206,29 @@ public class LaunchTool implements IMcpTool
             return already;
         }
     }
+
+    /** Short-circuit for a session whose debug target outlived its exited 1C client process. */
+    static final String CLIENT_EXITED_MESSAGE =
+        "The launch still holds a debug session, but its 1C client process has exited; EDT has not " //$NON-NLS-1$
+            + "finished ending the session (seen after terminating while profiling). terminate_launch " //$NON-NLS-1$
+            + "may time out on it; pass restartIfRunning=true to replace it."; //$NON-NLS-1$
+
+    /** The already-running message, naming the exited-client case instead of claiming a live client. */
+    static String alreadyRunningMessage(org.eclipse.debug.core.ILaunch launch)
+    {
+        if (LaunchLifecycleUtils.emptyLaunch(launch))
+        {
+            return EMPTY_LAUNCH_MESSAGE;
+        }
+        return LaunchLifecycleUtils.clientExited(launch) ? CLIENT_EXITED_MESSAGE : ALREADY_RUNNING_MESSAGE;
+    }
+
+    /** Short-circuit for a launch that has neither a client process nor a debug target yet. */
+    static final String EMPTY_LAUNCH_MESSAGE =
+        "The launch is registered but has no 1C client process or debug target: it is still starting " //$NON-NLS-1$
+            + "(a database update, or an EDT dialog - check edt_dialog action=list) or was cancelled at a " //$NON-NLS-1$
+            + "dialog. Pass restartIfRunning=true to replace it (a launch started from EDT's UI must finish starting " //$NON-NLS-1$
+            + "first)."; //$NON-NLS-1$
 
     /** Default short-circuit message for a still-running client session. */
     private static final String ALREADY_RUNNING_MESSAGE =
@@ -2110,8 +2287,9 @@ public class LaunchTool implements IMcpTool
         // path stops a real client, never a debug server.
         ExistingClientSession session = new ExistingClientSession(existing.getLaunch(), existing,
             ILaunchManager.DEBUG_MODE);
-        AlreadyRunningContext ctx = new AlreadyRunningContext(
-            "Debug session is already running (detected via EDT's debug target manager — e.g. a " //$NON-NLS-1$
+        AlreadyRunningContext ctx = new AlreadyRunningContext(LaunchLifecycleUtils.clientExited(existing.getLaunch())
+            ? CLIENT_EXITED_MESSAGE
+            : "Debug session is already running (detected via EDT's debug target manager — e.g. a " //$NON-NLS-1$
                 + "UI-started 'Debug As' session) — skipped re-launch to avoid the 'Debug session " //$NON-NLS-1$
                 + "already exists' modal. Call terminate_launch first, or pass " //$NON-NLS-1$
                 + "restartIfRunning=true, to start a fresh session."); //$NON-NLS-1$
@@ -2410,6 +2588,13 @@ public class LaunchTool implements IMcpTool
                     return runLaunchJobBody(config, autoConfirmUpdateDialog, policy, portPolicy,
                         launchMode, monitor);
                 }
+
+                @Override
+                public boolean belongsTo(Object family)
+                {
+                    // restartIfRunning cancels a still-starting launch of the same configuration.
+                    return config.equals(family);
+                }
             };
             job.setPriority(Job.INTERACTIVE);
             McpJobs.schedule(job);
@@ -2438,7 +2623,7 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null);
+            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null));
             return null;
         }
         catch (CoreException e)
@@ -2564,10 +2749,12 @@ public class LaunchTool implements IMcpTool
         // The counter is global, so movement proves only that a dialog appeared while this call ran.
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         InfobaseAuthDialogSuppressor.markActivityStart();
+        // Every launch the delegate returned, kept even when the call then throws.
+        java.util.List<org.eclipse.debug.core.ILaunch> started = new java.util.ArrayList<>();
         try
         {
             StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
-                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()));
+                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add);
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
@@ -2638,6 +2825,11 @@ public class LaunchTool implements IMcpTool
         }
         finally
         {
+            for (org.eclipse.debug.core.ILaunch launch : started)
+            {
+                endOrphanedLaunch(launch, isRegistered(launch));
+                recordFinishedLaunch(launch);
+            }
             InfobaseAuthDialogSuppressor.markActivityEnd();
             if (autoConfirmerArmed)
             {

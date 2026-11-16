@@ -29,8 +29,11 @@ import java.io.StringReader;
 public final class TechLogReader
 {
     public static final int MAX_EVENTS = 200_000;
+    /** Upper bounds of the caller-chosen read budgets. */
+    public static final int MAX_BUDGET_MB = 512, MAX_BUDGET_SECONDS = 30;
     private static final int MAX_LINE = 4 * 1024 * 1024;
     private static final long CACHE_WEIGHT = 256L * 1024 * 1024;
+    private static final java.util.Set<String> IDENTITY_KEYS = java.util.Set.of("ts", "duration", "name", "depth", "level", "process");
     private static final Map<String, Index> CACHE = new LinkedHashMap<>(8, .75f, true);
 
     private TechLogReader() { }
@@ -62,6 +65,7 @@ public final class TechLogReader
         public long bytesRead, totalBytes, weight;
         public int files, readEvents, rejected, incompleteTail;
         public boolean limited;
+        public int budgetSeconds, skippedFiles;
         public String limitReason = "";
         public JsonObject manifest;
         public String manifestNote = "No capture manifest: enabled events, thresholds and other nodes are unknown.";
@@ -77,7 +81,9 @@ public final class TechLogReader
     public static Map<String, String> parse(String line)
     {
         if (line.startsWith("\ufeff")) line = line.substring(1);
-        if (line.matches("\\d{2}:\\d{2}\\..*") || line.matches("\\d{4}-\\d{2}-\\d{2}T[^,]+,.*"))
+        // Both text-format shapes start with a digit; a JSON line never does.
+        if (!line.isEmpty() && line.charAt(0) >= '0' && line.charAt(0) <= '9'
+            && (line.matches("\\d{2}:\\d{2}\\..*") || line.matches("\\d{4}-\\d{2}-\\d{2}T[^,]+,.*")))
             throw new TextFormatException();
         Map<String, String> values = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         try (JsonReader reader = new JsonReader(new StringReader(line)))
@@ -87,10 +93,16 @@ public final class TechLogReader
             while (reader.hasNext())
             {
                 String key = reader.nextName();
-                if (values.containsKey(key)) throw new IllegalArgumentException("Duplicate property " + key);
                 if (reader.peek() != JsonToken.STRING)
                     throw new IllegalArgumentException("Expected string value for " + key);
-                values.put(key, reader.nextString());
+                String value = reader.nextString();
+                // The platform repeats some keys (SDBL "Func":"Transaction","Func":"CommitTransaction"; CONN t:clientID).
+                // Identity keys stay strict: a second ts/duration/name would make the event ambiguous.
+                String previous = values.get(key);
+                if (previous != null && IDENTITY_KEYS.contains(key.toLowerCase(java.util.Locale.ROOT)))
+                    throw new IllegalArgumentException("Duplicate property " + key);
+                if (previous == null) values.put(key, value);
+                else if (!previous.equals(value)) values.put(key, previous + ", " + value);
             }
             reader.endObject();
             if (reader.peek() != JsonToken.END_DOCUMENT) throw new IllegalArgumentException("Trailing JSON data");
@@ -212,7 +224,7 @@ public final class TechLogReader
             Index cached = CACHE.get(signature);
             if (cached != null) { loadManifest(cached, path); return cached; }
         }
-        Index index = new Index(); index.sources = List.copyOf(sources);
+        Index index = new Index(); index.sources = List.copyOf(sources); index.budgetSeconds = budgetSeconds;
         index.weight = sources.size() * 1024L;
         index.totalBytes = sources.stream().mapToLong(Source::expanded).sum();
         index.files = (int)sources.stream().map(Source::file).distinct().count();
@@ -220,6 +232,7 @@ public final class TechLogReader
         for (Source source : sources)
         {
             if (index.limited) break;
+            if (endsBefore(source, lower)) { index.skippedFiles++; continue; }
             try (var zip = source.member().isEmpty() ? null : new ZipFile(source.file().toFile());
                 InputStream input = new BufferedInputStream(zip == null ? Files.newInputStream(source.file())
                     : zip.getInputStream(zip.getEntry(source.member()))))
@@ -247,6 +260,61 @@ public final class TechLogReader
         return index;
     }
 
+    private static final java.util.regex.Pattern TS = java.util.regex.Pattern.compile("\"ts\"\\s*:\\s*\"([^\"]+)\"");
+
+    /** The platform's hourly file name, yyMMddHH.log, in the producer's local clock. */
+    private static final java.util.regex.Pattern HOUR_FILE = java.util.regex.Pattern.compile(
+        "(\\d{2})(\\d{2})(\\d{2})(\\d{2})\\.log", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * A plain file of an hour that ended by 'from' holds no event of the window, so its bytes cost no budget.
+     * The platform files each event under the hour it ends in (the text format stores only minutes and
+     * seconds, so the name is the event's own hour), in the same clock as 'ts'. Any line order is covered.
+     * A file whose tail holds an event outside its named hour does not follow that layout and is read.
+     */
+    static boolean endsBefore(Source source, LocalDateTime lower)
+    {
+        if (lower == LocalDateTime.MIN || !source.member().isEmpty()) return false;
+        LocalDateTime hour = namedHour(source.file().getFileName().toString());
+        if (hour == null || hour.plusHours(1).isAfter(lower)) return false;
+        try (RandomAccessFile file = new RandomAccessFile(source.file().toFile(), "r"))
+        {
+            long start = Math.max(0, file.length() - 65536);
+            byte[] tail = new byte[(int)(file.length() - start)];
+            file.seek(start); file.readFully(tail);
+            String[] lines = new String(tail, StandardCharsets.UTF_8).split("\n");
+            boolean seen = false;
+            // The first line of a mid-file tail is partial.
+            for (int i = start == 0 ? 0 : 1; i < lines.length; i++)
+            {
+                var match = TS.matcher(lines[i]);
+                if (!match.find()) continue;
+                try
+                {
+                    LocalDateTime end = time(match.group(1));
+                    if (end.isBefore(hour) || !end.isBefore(hour.plusHours(1))) return false;
+                    seen = true;
+                }
+                catch (RuntimeException e) { return false; }
+            }
+            return seen;
+        }
+        catch (IOException e) { return false; }
+    }
+
+    /** The hour a platform log file is named after, or null for any other name. */
+    public static LocalDateTime namedHour(String fileName)
+    {
+        var match = HOUR_FILE.matcher(fileName);
+        if (!match.matches()) return null;
+        try
+        {
+            return LocalDateTime.of(2000 + Integer.parseInt(match.group(1)), Integer.parseInt(match.group(2)),
+                Integer.parseInt(match.group(3)), Integer.parseInt(match.group(4)), 0);
+        }
+        catch (java.time.DateTimeException e) { return null; }
+    }
+
     private static void loadManifest(Index index, Path path)
     {
         Path manifest = (Files.isDirectory(path) ? path : path.getParent()).resolve("edt-mcp-capture.json");
@@ -264,35 +332,68 @@ public final class TechLogReader
         }
     }
 
+    /** Names the limit that stopped the scan and the remedy that can lift it; the fixed caps cannot be raised.
+     *  Files are not scanned in time order, so the indexed span is no resume point. */
+    public static String limitReason(Index index, long budget, long deadline)
+    {
+        String narrow = "narrow from/to to a shorter window or point path at one file";
+        if (Thread.currentThread().isInterrupted()) return "Request interrupted; repeat the call";
+        if (index.events.size() >= MAX_EVENTS)
+            return "Fixed index cap of " + MAX_EVENTS + " events reached (raising readBudgetMb does not lift it); " + narrow;
+        if (index.weight >= CACHE_WEIGHT / 2)
+            return "Fixed index memory cap of " + CACHE_WEIGHT / 2 / (1024 * 1024) + " MB reached; " + narrow;
+        if (index.bytesRead >= budget)
+            return "Read budget of " + budget / (1024 * 1024) + " MB reached; " + (budget < MAX_BUDGET_MB * 1024L * 1024
+                ? "raise get_tech_log readBudgetMb (up to " + MAX_BUDGET_MB + ") or " : "") + narrow;
+        if (System.nanoTime() >= deadline)
+            return "Time budget reached; " + (index.budgetSeconds < MAX_BUDGET_SECONDS
+                ? "raise get_tech_log readBudgetSeconds (up to " + MAX_BUDGET_SECONDS + ") or " : "") + narrow;
+        return "Read stopped early; " + narrow;
+    }
+
     private static void scan(InputStream input, Source source, Index index, long budget, long deadline,
         LocalDateTime lower, LocalDateTime upper) throws IOException
     {
         long position = 0;
+        // Chunked reads with one reused line buffer: a per-byte read and a fresh buffer per line dominated the scan.
+        byte[] buffer = new byte[65536];
+        int pos = 0, limit = 0;
+        ByteArrayOutputStream line = new ByteArrayOutputStream(4096);
         while (true)
         {
             if (index.bytesRead >= budget || System.nanoTime() >= deadline || index.events.size() >= MAX_EVENTS
                 || index.weight >= CACHE_WEIGHT / 2 || Thread.currentThread().isInterrupted())
             {
                 index.limited = true;
-                index.limitReason = "Read byte/time/index-memory budget reached or request interrupted";
+                index.limitReason = limitReason(index, budget, deadline);
                 return;
             }
             long offset = position;
-            ByteArrayOutputStream line = new ByteArrayOutputStream();
+            line.reset();
             boolean newline = false, oversized = false;
-            int value;
-            while ((value = input.read()) != -1)
+            while (true)
             {
-                position++; index.bytesRead++;
-                if (value == '\n') { newline = true; break; }
-                if (line.size() < MAX_LINE) line.write(value); else oversized = true;
-                if ((position & 4095) == 0 && (index.bytesRead >= budget || System.nanoTime() >= deadline
-                    || Thread.currentThread().isInterrupted()))
-                { index.limited = true; index.limitReason = "Read byte/time budget reached within a line"; return; }
+                if (pos == limit)
+                {
+                    limit = Math.max(0, input.read(buffer, 0, buffer.length));
+                    pos = 0;
+                    if (limit == 0) break;
+                }
+                int end = pos;
+                while (end < limit && buffer[end] != '\n') end++;
+                int keep = Math.min(end - pos, MAX_LINE - line.size());
+                line.write(buffer, pos, keep);
+                if (keep < end - pos) oversized = true;
+                position += end - pos; index.bytesRead += end - pos;
+                if (end < limit) { position++; index.bytesRead++; pos = end + 1; newline = true; break; }
+                pos = limit;
+                if (index.bytesRead >= budget || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted())
+                { index.limited = true; index.limitReason = limitReason(index, budget, deadline); return; }
             }
             if (position == offset) break;
             String text = line.toString(StandardCharsets.UTF_8);
-            if (text.isBlank()) continue;
+            // A freshly created log holds only its BOM; that is an empty file, not an unfinished record.
+            if (text.replace("\ufeff", "").isBlank()) continue;
             try
             {
                 if (oversized) throw new IllegalArgumentException("Line exceeds 4 MB; narrow capture properties");
@@ -356,13 +457,15 @@ public final class TechLogReader
         return parent.toString();
     }
 
+    private static final java.util.regex.Pattern PRODUCER_PID = java.util.regex.Pattern.compile("^[A-Za-z0-9]+_(\\d+)(?:_|\\.log|$)");
+
     private static String processId(Source source, Map<String, String> properties)
     {
         // Plain files and size rotations encode producer PID; folders do so in the parent name.
         Path file = logical(source);
         for (String name : List.of(file.getFileName().toString(), file.getParent().toString().replace('\\', '/').replaceAll(".*/", "")))
         {
-            var match = java.util.regex.Pattern.compile("^[A-Za-z0-9]+_(\\d+)(?:_|\\.log|$)").matcher(name);
+            var match = PRODUCER_PID.matcher(name);
             if (match.find()) return match.group(1);
         }
         return !get(properties, "PID").isBlank() ? get(properties, "PID") : source.file().getFileName().toString();

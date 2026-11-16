@@ -87,6 +87,32 @@ public class LaunchLifecycleUtilsSessionTest
         return launch;
     }
 
+    // ==================== clientExited ====================
+
+    /** A launch whose every process exited is reported as such, not as a running client. */
+    @Test
+    public void clientExitedOnlyWhenEveryStartedProcessHasExited()
+    {
+        org.eclipse.debug.core.model.IProcess dead = mock(org.eclipse.debug.core.model.IProcess.class);
+        when(dead.isTerminated()).thenReturn(true);
+        org.eclipse.debug.core.model.IProcess alive = mock(org.eclipse.debug.core.model.IProcess.class);
+        ILaunch exited = mock(ILaunch.class);
+        when(exited.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { dead });
+        ILaunch running = mock(ILaunch.class);
+        when(running.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { dead, alive });
+        ILaunch noProcess = mock(ILaunch.class);
+        when(noProcess.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        assertTrue(LaunchLifecycleUtils.clientExited(exited));
+        assertFalse(LaunchLifecycleUtils.clientExited(running));
+        assertFalse("an attach/idle launch never started a process", LaunchLifecycleUtils.clientExited(noProcess));
+        assertFalse(LaunchLifecycleUtils.clientExited(null));
+        when(noProcess.getDebugTargets()).thenReturn(new IDebugTarget[0]);
+        assertTrue(LaunchLifecycleUtils.emptyLaunch(noProcess));
+        when(exited.getDebugTargets()).thenReturn(new IDebugTarget[0]);
+        assertFalse("a launch that started a process is not empty", LaunchLifecycleUtils.emptyLaunch(exited));
+        assertFalse(LaunchLifecycleUtils.emptyLaunch(null));
+    }
+
     // ==================== firstLiveClientThreadTarget ====================
 
     @Test

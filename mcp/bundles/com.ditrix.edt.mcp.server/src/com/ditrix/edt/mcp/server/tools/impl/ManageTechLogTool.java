@@ -53,7 +53,9 @@ public class ManageTechLogTool implements IMcpTool
             .integerProperty("rotationMb", "Per-file size rotation MB, default 100, range 1..1024; not total disk cap.")
             .stringProperty("path", "Absolute input log path; required for export.")
             .stringProperty("outputPath", "New absolute CSV file; required for export, never overwritten.")
-            .enumProperty("exportKind", "CSV rows, default events.", "events", "groups").build();
+            .enumProperty("exportKind", "CSV rows, default events.", "events", "groups")
+            .stringProperty("from", "Export window ISO lower bound, as in get_tech_log.")
+            .stringProperty("to", "Export window ISO upper bound, as in get_tech_log.").build();
     }
     @Override public ResponseType getResponseType() { return ResponseType.MARKDOWN; }
 
@@ -75,6 +77,8 @@ public class ManageTechLogTool implements IMcpTool
             String path = JsonUtils.extractStringArgument(params, "path");
             String output = JsonUtils.extractStringArgument(params, "outputPath");
             String exportKind = str(JsonUtils.extractStringArgument(params, "exportKind"), "events");
+            String from = JsonUtils.extractStringArgument(params, "from");
+            String to = JsonUtils.extractStringArgument(params, "to");
             if (List.of("start", "stop", "export").contains(mode) && isReadOnly())
                 return ToolResult.error(warning + "A read-only preset refuses manage_tech_log mode=" + mode
                     + ". Use preview/status or get_tech_log; select a writable Tools preset in EDT preferences for capture/export.").toJson();
@@ -83,7 +87,7 @@ public class ManageTechLogTool implements IMcpTool
             {
                 case "status" -> result = capture.status();
                 case "stop" -> result = capture.stop(() -> consent("Restore original logcfg.xml", capture.target().toString()));
-                case "export" -> result = export(path, output, exportKind);
+                case "export" -> result = export(path, output, exportKind, from, to);
                 case "preview", "start" -> {
                     int ms = threshold == null ? TechLogKnowledge.entry("profiles", profile).get("thresholdMs").getAsInt()
                         : exact("thresholdMs", threshold);
@@ -126,24 +130,27 @@ public class ManageTechLogTool implements IMcpTool
             : ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
     }
 
-    private String export(String path, String outputPath, String kind) throws Exception
+    private String export(String path, String outputPath, String kind, String from, String to) throws Exception
     {
         if (path == null || outputPath == null) throw new IllegalArgumentException("export requires path and outputPath; use a new absolute CSV destination");
         Path output = Path.of(outputPath);
         if (!output.isAbsolute() || Files.exists(output))
             throw new IllegalArgumentException("outputPath '" + outputPath + "' must be a new absolute file; never overwrite existing files");
         if (!List.of("events", "groups").contains(kind)) throw new IllegalArgumentException("exportKind '" + kind + "' must be events or groups");
-        var index = TechLogReader.read(Path.of(path), 64, 10, null, null);
+        // A consented one-off write reads with the largest budgets; a capped window is exported in parts.
+        var index = TechLogReader.read(Path.of(path), TechLogReader.MAX_BUDGET_MB, TechLogReader.MAX_BUDGET_SECONDS, from, to);
         if (index.limited || index.rejected > 0 || index.incompleteTail > 0)
             throw new IllegalArgumentException("Export input incomplete/rejected: " + TechLogAnalysis.header(index)
-                + "; narrow path or finish the capture before exporting");
+                + (index.limited ? "Export the log in from/to windows"
+                    : index.incompleteTail > 0 ? "A file ends mid-record; stop the capture and let the writer finish before exporting"
+                    : "Rejected records cannot be exported; point path at files without the corrupt samples above"));
         String denied = consent("Export technological log CSV", outputPath); if (denied != null) return denied;
         boolean created = false;
         try
         {
             // CREATE_NEW remains the final race-safe no-overwrite barrier after consent.
             try (BufferedWriter writer = Files.newBufferedWriter(output, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
-                var reads = new TechLogReader.ReadSession(64, 10))
+                var reads = new TechLogReader.ReadSession(TechLogReader.MAX_BUDGET_MB, TechLogReader.MAX_BUDGET_SECONDS))
             {
                 created = true; writer.write('\ufeff');
                 if (kind.equals("events"))

@@ -319,6 +319,17 @@ public final class StandaloneServerStateRecovery
     public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
         IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
     {
+        return launchWithRecovery(config, mode, monitor, abandonedMessage, null);
+    }
+
+    /**
+     * Same, handing every launch the delegate returns to {@code onLaunched} before it is classified, so a
+     * caller can still reach a started client when the call then throws.
+     */
+    public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage,
+        java.util.function.Consumer<ILaunch> onLaunched) throws CoreException
+    {
         Target target = resolveTarget(config);
         beginOperation();
         try
@@ -335,7 +346,7 @@ public final class StandaloneServerStateRecovery
             }
             try
             {
-                return launchOnce(config, mode, monitor, abandonedMessage);
+                return launchOnce(config, mode, monitor, abandonedMessage, onLaunched);
             }
             catch (CoreException | RuntimeException e)
             {
@@ -348,7 +359,7 @@ public final class StandaloneServerStateRecovery
                 {
                     throw e;
                 }
-                return relaunchAfterStop(config, mode, monitor, abandonedMessage, e, refusal,
+                return relaunchAfterStop(config, mode, monitor, abandonedMessage, onLaunched, e, refusal,
                     target);
             }
         }
@@ -379,10 +390,15 @@ public final class StandaloneServerStateRecovery
 
     /** Runs one synchronous delegate call and rejects only a cancellation attributable to it. */
     private static ILaunch launchOnce(ILaunchConfiguration config, String mode,
-        IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
+        IProgressMonitor monitor, Supplier<String> abandonedMessage,
+        java.util.function.Consumer<ILaunch> onLaunched) throws CoreException
     {
         AttributableCancel attributable = new AttributableCancel(monitor);
         ILaunch launch = config.launch(mode, attributable);
+        if (onLaunched != null)
+        {
+            onLaunched.accept(launch);
+        }
         if (attributable.wasCanceledByLaunchingThread())
         {
             String message = abandonedMessage == null ? null : abandonedMessage.get();
@@ -410,7 +426,8 @@ public final class StandaloneServerStateRecovery
      * @throws CoreException when the server could not be stopped or the retry failed too
      */
     private static ILaunch relaunchAfterStop(ILaunchConfiguration config, String mode,
-        IProgressMonitor monitor, Supplier<String> abandonedMessage, Exception failure,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage,
+        java.util.function.Consumer<ILaunch> onLaunched, Exception failure,
         String refusal, Target target)
         throws CoreException
     {
@@ -436,7 +453,7 @@ public final class StandaloneServerStateRecovery
         }
         try
         {
-            return launchOnce(config, mode, monitor, abandonedMessage);
+            return launchOnce(config, mode, monitor, abandonedMessage, onLaunched);
         }
         catch (CoreException | RuntimeException retry)
         {

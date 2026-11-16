@@ -36,34 +36,74 @@ public final class TechLogAnalysis
     private static final Pattern SQL_TOKEN = Pattern.compile(
         "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|[NEXB]?'(?:''|\\\\.|[^'\\\\])*'|"
         + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|"
-        + "#tt\\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
+        + "#t(?:t\\d+|[0-9a-f]{32})(?![\\w])|(?<![\\w])\\d+:[0-9a-f]{32}(?![\\w])|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
         Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern PARAMETERS = Pattern.compile("(?is)\\n\\s*(?:Parameters|Params)\\s*:.*$");
+    private static final Pattern QUOTED_OR_SPACE = Pattern.compile("\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|\\s+");
 
     private TechLogAnalysis() { }
 
     public static String normalizeSql(String sql)
     {
         // SQL parameter dumps follow the statement; retain original in the pointed event.
-        sql = sql.replaceAll("(?is)\\n\\s*(?:Parameters|Params)\\s*:.*$", "");
-        var matcher = SQL_TOKEN.matcher(sql);
-        StringBuilder out = new StringBuilder();
+        var parameters = PARAMETERS.matcher(sql);
+        if (parameters.find()) sql = sql.substring(0, parameters.start());
+        // lookingAt only where a token can start: find() would try every alternative at every position.
+        var matcher = SQL_TOKEN.matcher(sql).useTransparentBounds(true).useAnchoringBounds(false);
+        StringBuilder out = new StringBuilder(Math.min(sql.length(), 1 << 16));
         Map<String, String> tables = new LinkedHashMap<>();
         int last = 0;
-        while (matcher.find())
+        for (int at = 0; at < sql.length();)
         {
-            out.append(sql.substring(last, matcher.start()).toLowerCase(Locale.ROOT).replaceAll("\\s+", " "));
+            if (!tokenMayStart(sql, at) || !matcher.region(at, sql.length()).lookingAt()) { at++; continue; }
+            appendCollapsed(out, sql, last, matcher.start());
             String token = matcher.group(), replacement;
             if (token.startsWith("--") || token.startsWith("/*")) replacement = " ";
             else if (token.startsWith("\"") || token.startsWith("[")) replacement = token;
-            else if (token.toLowerCase(Locale.ROOT).startsWith("#tt"))
+            // MSSQL #ttN and file-infobase #t<32 hex> temp tables; numbering keeps self-joins apart.
+            else if (token.startsWith("#"))
                 replacement = tables.computeIfAbsent(token.toLowerCase(Locale.ROOT), k -> "#temp" + (tables.size() + 1));
             else replacement = "?";
             out.append(replacement);
-            last = matcher.end();
+            last = at = matcher.end();
         }
-        out.append(sql.substring(last).toLowerCase(Locale.ROOT).replaceAll("\\s+", " "));
-        return Pattern.compile("\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|\\s+").matcher(out)
+        appendCollapsed(out, sql, last, sql.length());
+        return QUOTED_OR_SPACE.matcher(out.toString())
             .replaceAll(m -> m.group().isBlank() ? " " : java.util.regex.Matcher.quoteReplacement(m.group())).trim();
+    }
+
+    /** A superset of the first characters SQL_TOKEN can match at, honouring its look-behinds. */
+    static boolean tokenMayStart(String s, int i)
+    {
+        char c = s.charAt(i);
+        if ("-/'$\"[#@&".indexOf(c) >= 0) return true;
+        int n = s.length();
+        boolean uuid = i + 8 < n && s.charAt(i + 8) == '-';
+        if (c >= '0' && c <= '9')
+            return uuid || i == 0 || !isWord(s.charAt(i - 1)) || c == '0' && i + 1 < n && (s.charAt(i + 1) | 0x20) == 'x';
+        char lower = (char)(c | 0x20);
+        if ("nexb".indexOf(lower) >= 0 && i + 1 < n && s.charAt(i + 1) == '\'') return true;
+        return lower >= 'a' && lower <= 'f' && uuid;
+    }
+
+    private static boolean isWord(char c)
+    { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'; }
+
+    /** Lower-cases and collapses \s runs (the ASCII regex class) to one space, without a regex per segment. */
+    private static void appendCollapsed(StringBuilder out, String s, int from, int to)
+    {
+        if (from >= to) return;
+        String segment = s.substring(from, to).toLowerCase(Locale.ROOT);
+        boolean space = false;
+        for (int i = 0; i < segment.length(); i++)
+        {
+            char c = segment.charAt(i);
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\f' || c == '\r') { space = true; continue; }
+            if (space) { out.append(' '); space = false; }
+            out.append(c);
+        }
+        if (space) out.append(' ');
     }
 
     public static String hash(String key)
@@ -147,7 +187,7 @@ public final class TechLogAnalysis
             .append("Groups: ").append(all.size()).append(Pagination.pageNotice(start, end - start, all.size())).append("\n\n")
             .append(MarkdownUtils.tableHeader("groupId", "problemId (describe)", "Pattern / context", "Count", "Total ms", "Avg ms", "Max ms", "Peak bytes"));
         for (Group g : all.subList(start, end))
-            out.append(MarkdownUtils.tableRow(g.id, g.problem, g.key, "" + g.occurrences.size(), ms(g.totalUs),
+            out.append(MarkdownUtils.tableRow(g.id, g.problem, clip(g.key, MAX_PATTERN_CHARS), "" + g.occurrences.size(), ms(g.totalUs),
                 ms(g.totalUs / g.occurrences.size()), ms(g.maxUs), "" + g.memoryPeak));
         out.append("\n");
         if (omitted > 0) out.append(omitted).append(" slow groups under 1 ms omitted; manage_tech_log mode=export exportKind=groups lists every group.\n\n");
@@ -167,15 +207,16 @@ public final class TechLogAnalysis
         }
         String text = "Files: " + index.files + "; events read: " + index.readEvents + "; events indexed: " + index.events.size() + "; rejected: " + index.rejected
             + "; incomplete-tail: " + index.incompleteTail + ". Read " + mb(index.bytesRead) + " of " + mb(index.totalBytes)
-            + " MB (expanded JSON bytes, including zip members).\n\nTime span: " + first + " → " + last
+            + " MB (expanded JSON bytes, including zip members)"
+            + (index.skippedFiles > 0 ? "; " + index.skippedFiles + " file(s) of hours ended before from skipped unread" : "")
+            + ".\n\nTime span: " + first + " → " + last
             + ". Event times are local to the machine that wrote them.\n\nProcesses: " + MarkdownUtils.escapeMarkdown(processes.toString())
             + (index.infobases.isEmpty() ? index.processNames.isEmpty()
                 ? "; infobase: not recorded (file infobases do not write IB)"
                 : "; IB not recorded; p:processName: " + MarkdownUtils.escapeMarkdown(index.processNames.toString())
                     + " (infobase names for server processes)"
                 : "; infobases: " + MarkdownUtils.escapeMarkdown(index.infobases.toString())) + ".\n";
-        if (index.limited) text += "\nINCOMPLETE: " + index.limitReason
-            + ". Narrow from/to (reduces index/output, still scans bytes), use a subdirectory/file or increase readBudgetMb/readBudgetSeconds.\n";
+        if (index.limited) text += "\nINCOMPLETE: " + index.limitReason + ".\n";
         if (index.rejected > 0) text += "\nCorrupt samples (showing " + index.errors.size() + " of " + index.rejected
             + "): " + MarkdownUtils.escapeMarkdown(String.join("; ", index.errors)) + "\n";
         return text;
@@ -361,12 +402,22 @@ public final class TechLogAnalysis
         List<String> columns = new ArrayList<>(List.of("occurrenceId", "End time", "Duration ms", "Event", "Process", "Session", "User", "Connection", "Context", "SQL / query", "Plan", "All properties / provenance"));
         if (anchorStart != null) columns.add(1, "Offset from anchor start ms");
         out.append(MarkdownUtils.tableHeader(columns.toArray(String[]::new)));
+        int rendered = 0;
         for (Event e : events.subList(start, end))
         {
+            if (rendered > 0 && out.length() > MAX_OUTPUT_CHARS)
+            {
+                out.append("\nOutput budget reached after ").append(rendered).append(" rows; continue with offset=")
+                    .append(start + rendered).append(".\n");
+                break;
+            }
             Map<String, String> p = session.read(e.pointer());
+            Map<String, String> clipped = new java.util.LinkedHashMap<>();
+            p.forEach((key, value) -> clipped.put(key, clip(value, MAX_PROPERTY_CHARS)));
             List<String> cells = new ArrayList<>(List.of(e.id(), e.end().toString(), ms(e.durationUs()), e.name(), e.process(),
-                e.session(), get(p, "Usr"), e.connection(), get(p, "Context"), get(p, "Sql") + get(p, "Sdbl") + get(p, "Query"),
-                get(p, "planSQLText"), p.toString() + " @ " + e.pointer().source().file().getFileName()
+                e.session(), get(p, "Usr"), e.connection(), clip(get(p, "Context"), MAX_TEXT_CHARS),
+                clip(get(p, "Sql") + get(p, "Sdbl") + get(p, "Query"), MAX_TEXT_CHARS),
+                clip(get(p, "planSQLText"), MAX_TEXT_CHARS), clipped + " @ " + e.pointer().source().file().getFileName()
                 + (e.pointer().source().member().isEmpty() ? "" : "!" + e.pointer().source().member()) + "#" + e.pointer().offset()));
             if (anchorStart != null)
             {
@@ -375,8 +426,18 @@ public final class TechLogAnalysis
                 cells.add(1, (delta.isNegative() ? "" : "+") + ms(microseconds) + " ms");
             }
             out.append(MarkdownUtils.tableRow(cells.toArray(String[]::new)));
+            rendered++;
         }
         return out.toString();
+    }
+
+    /** Real queries run to tens of KB; cells keep a prefix and the length, the CSV export keeps the full text. */
+    public static final int MAX_PATTERN_CHARS = 400, MAX_TEXT_CHARS = 4000, MAX_PROPERTY_CHARS = 300, MAX_OUTPUT_CHARS = 80_000;
+
+    static String clip(String text, int max)
+    {
+        if (text == null || text.length() <= max) return text;
+        return text.substring(0, max) + "… [" + text.length() + " chars; full text: manage_tech_log mode=export]";
     }
 
     public static String ms(double microseconds) { return String.format(Locale.ROOT, "%.3f", microseconds / 1000); }

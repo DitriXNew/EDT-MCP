@@ -115,6 +115,102 @@ public class StartProfilingToolTest
     }
 
     @Test
+    public void flagFromAnEarlierSessionOfTheSameApplicationIdIsDropped()
+    {
+        // A relaunch keeps the applicationId; the flag must follow the target, not the id.
+        org.eclipse.debug.core.model.IDebugTarget first = target(), relaunched = target();
+        StartProfilingTool.markActive("app", first); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", first); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", relaunched); //$NON-NLS-1$
+        assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        // No live session at all (terminated while profiling): start_profiling must not answer "already active".
+        StartProfilingTool.markActive("app", first); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", null); //$NON-NLS-1$
+        assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+    }
+
+    /** A stop acts on the live target that owns the flag, not on whichever target discovery returned. */
+    @Test
+    public void stopActsOnTheLiveOwnerNotTheLookedUpTarget()
+    {
+        org.eclipse.debug.core.model.IDebugTarget owner = target(), lookedUp = target(), gone = target();
+        java.util.function.Predicate<org.eclipse.debug.core.model.IDebugTarget> ended = t -> t == gone;
+        assertEquals(owner, StartProfilingTool.profiledTarget(owner, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(gone, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(null, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(new Object(), lookedUp, ended));
+        assertEquals(owner, StartProfilingTool.profiledTarget(owner, null, ended));
+    }
+
+    /** EDT's own state for the looked-up target replaces only a missing, same, unknown or ended owner. */
+    @Test
+    public void readableStateNeverOverridesALiveOtherOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget looked = target(), live = target(), gone = target();
+        java.util.function.Predicate<org.eclipse.debug.core.model.IDebugTarget> ended = t -> t == gone;
+        assertEquals(looked, StartProfilingTool.ownerAfterReading(null, looked, true, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(looked, looked, false, ended));
+        assertEquals(live, StartProfilingTool.ownerAfterReading(live, looked, true, ended));
+        assertEquals(live, StartProfilingTool.ownerAfterReading(live, looked, false, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(gone, looked, false, ended));
+        assertEquals(looked, StartProfilingTool.ownerAfterReading(gone, looked, true, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(new Object(), looked, false, ended));
+        // A reading taken before its own target ended never resurrects that target as the owner.
+        assertEquals(null, StartProfilingTool.ownerAfterReading(null, gone, true, ended));
+    }
+
+    /** A stale lookup (an older target, or none) never clears the flag of a newer owner that is still live. */
+    @Test
+    public void staleTargetKeepsTheFlagOfALiveNewerOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget newer = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        org.eclipse.debug.core.ILaunch launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        org.mockito.Mockito.when(newer.getLaunch()).thenReturn(launch);
+        org.mockito.Mockito.when(launch.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            org.mockito.Mockito.mock(org.eclipse.debug.core.model.IProcess.class) });
+        StartProfilingTool.markActive("app", newer); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", target()); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", null); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+    }
+
+    /** A lookup miss alone keeps the flag of a target whose launch is still live (a relaunch race). */
+    @Test
+    public void lookupMissKeepsTheFlagOfALiveOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget owner = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        org.eclipse.debug.core.ILaunch launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        org.mockito.Mockito.when(owner.getLaunch()).thenReturn(launch);
+        assertFalse(StartProfilingTool.ended(owner, l -> l == launch));
+        // Removed from the launch manager while its client still runs (an unconfirmed orphan): still live.
+        org.eclipse.debug.core.model.IProcess process = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IProcess.class);
+        org.mockito.Mockito.when(launch.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { process });
+        assertFalse(StartProfilingTool.ended(owner, l -> false));
+        // Removed and its client exited (terminate while profiling): ended.
+        org.mockito.Mockito.when(process.isTerminated()).thenReturn(true);
+        assertTrue(StartProfilingTool.ended(owner, l -> false));
+        assertFalse(StartProfilingTool.ended(owner, l -> l == launch));
+        org.mockito.Mockito.when(launch.isTerminated()).thenReturn(true);
+        assertTrue(StartProfilingTool.ended(owner, l -> l == launch));
+        org.mockito.Mockito.when(owner.isTerminated()).thenReturn(true);
+        assertTrue(StartProfilingTool.ended(owner, l -> true));
+    }
+
+    private static org.eclipse.debug.core.model.IDebugTarget target()
+    {
+        return (org.eclipse.debug.core.model.IDebugTarget)java.lang.reflect.Proxy.newProxyInstance(
+            StartProfilingToolTest.class.getClassLoader(), new Class<?>[] { org.eclipse.debug.core.model.IDebugTarget.class },
+            (proxy, method, args) -> switch (method.getName()) {
+                case "equals" -> proxy == args[0]; //$NON-NLS-1$
+                case "hashCode" -> System.identityHashCode(proxy); //$NON-NLS-1$
+                case "toString" -> "target"; //$NON-NLS-1$ //$NON-NLS-2$
+                default -> method.getReturnType() == boolean.class ? Boolean.FALSE : null;
+            });
+    }
+
+    @Test
     public void testStateHelpersTrackPerApplicationId()
     {
         assertFalse(StartProfilingTool.isProfilingActive("x")); //$NON-NLS-1$

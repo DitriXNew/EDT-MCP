@@ -57,6 +57,17 @@ public class BuildExternalObjectsToolTest
     // ==================== Metadata ====================
 
     @Test
+    public void failureMessageCarriesTheFirstReason()
+    {
+        // A locked infobase failed the build with only "1 failed"; the reason sat in results, which text clients miss.
+        List<Map<String, Object>> results = List.of(
+            Map.of("name", "Ok", "success", true), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            Map.of("name", "PerfLoad", "success", false, "error", "infobase is locked")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertEquals("Built 1 of 2 external object(s) in 12 ms; 1 failed. First failure - PerfLoad: infobase is locked", //$NON-NLS-1$
+            BuildExternalObjectsTool.failureMessage(results, 1, 1, 12));
+    }
+
+    @Test
     public void testName()
     {
         assertEquals("build_external_objects", new BuildExternalObjectsTool().getName()); //$NON-NLS-1$

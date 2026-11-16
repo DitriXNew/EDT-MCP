@@ -4746,6 +4746,9 @@
         "extraEvents": {
           "type": "string"
         },
+        "from": {
+          "type": "string"
+        },
         "historyHours": {
           "type": "integer"
         },
@@ -4793,6 +4796,9 @@
         },
         "thresholdMs": {
           "type": "integer"
+        },
+        "to": {
+          "type": "string"
         }
       },
       "required": [],

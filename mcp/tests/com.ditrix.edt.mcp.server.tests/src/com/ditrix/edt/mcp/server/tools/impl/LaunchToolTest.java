@@ -133,6 +133,108 @@ public class LaunchToolTest
         }
     }
 
+    /** A session whose client exited must not be reported as a running client. */
+    @Test
+    public void alreadyRunningNamesAnExitedClient()
+    {
+        org.eclipse.debug.core.model.IProcess dead = mock(org.eclipse.debug.core.model.IProcess.class);
+        when(dead.isTerminated()).thenReturn(true);
+        ILaunch exited = mock(ILaunch.class);
+        when(exited.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { dead });
+        String message = LaunchTool.alreadyRunningMessage(exited);
+        assertTrue(message, message.contains("client process has exited") && message.contains("restartIfRunning=true"));
+        ILaunch running = mock(ILaunch.class);
+        when(running.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        assertFalse(LaunchTool.alreadyRunningMessage(running).contains("exited"));
+        // Neither a process nor a target: still starting or cancelled at a dialog, not "already running".
+        ILaunch empty = mock(ILaunch.class);
+        when(empty.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(empty.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        assertEquals(LaunchTool.EMPTY_LAUNCH_MESSAGE, LaunchTool.alreadyRunningMessage(empty));
+    }
+
+    /** An empty launch this tool did not finish may still be starting elsewhere: refused, never removed. */
+    @Test
+    public void restartRefusesAnEmptyLaunchItDidNotStart() throws Exception
+    {
+        ILaunch foreign = mock(ILaunch.class);
+        when(foreign.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(foreign.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        assertEquals(LaunchTool.FOREIGN_STARTING_MESSAGE, LaunchTool.cancelStartingLaunch(foreign, null, 10));
+        verify(foreign, never()).terminate();
+    }
+
+    /** A launch whose delegate returned in this tool's job is dead when empty, and a client it started is terminated. */
+    @Test
+    public void restartEndsAFinishedLaunchAndTerminatesAClientItStarted() throws Exception
+    {
+        ILaunch dead = mock(ILaunch.class);
+        when(dead.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(dead.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        LaunchTool.recordFinishedLaunch(dead);
+        assertNull(LaunchTool.cancelStartingLaunch(dead, null, 10));
+        verify(dead, never()).terminate();
+
+        ILaunch started = mock(ILaunch.class);
+        when(started.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(started.canTerminate()).thenReturn(true);
+        when(started.isTerminated()).thenReturn(true);
+        LaunchTool.recordFinishedLaunch(started);
+        assertNull(LaunchTool.cancelStartingLaunch(started, null, 10));
+        verify(started).terminate();
+    }
+
+    /** A client that does not confirm termination keeps the restart refused; the launch is not dropped. */
+    @Test
+    public void restartRefusesWhenTheStartedClientDoesNotStop() throws Exception
+    {
+        ILaunch stuck = mock(ILaunch.class);
+        when(stuck.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(stuck.canTerminate()).thenReturn(true);
+        when(stuck.isTerminated()).thenReturn(false);
+        LaunchTool.recordFinishedLaunch(stuck);
+        assertEquals(LaunchTool.CLIENT_NOT_STOPPED_MESSAGE, LaunchTool.cancelStartingLaunch(stuck, null, 10));
+        verify(stuck).terminate();
+    }
+
+    /** The launch job terminates a client of a launch Eclipse removed, so no waiter has to be present. */
+    @Test
+    public void launchJobTerminatesTheClientOfARemovedLaunch() throws Exception
+    {
+        ILaunch started = mock(ILaunch.class);
+        when(started.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(started.hasChildren()).thenReturn(true);
+        when(started.canTerminate()).thenReturn(true);
+        when(started.isTerminated()).thenReturn(true);
+        LaunchTool.endOrphanedLaunch(started, true);
+        verify(started, never()).terminate();
+        LaunchTool.endOrphanedLaunch(started, false);
+        verify(started).terminate();
+        ILaunch empty = mock(ILaunch.class);
+        when(empty.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(empty.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        LaunchTool.endOrphanedLaunch(empty, false);
+        verify(empty, never()).terminate();
+    }
+
+    /** A removed launch whose client does not confirm termination is registered again, never dropped. */
+    @Test
+    public void unconfirmedOrphanIsRegisteredAgain() throws Exception
+    {
+        ILaunch stuck = mock(ILaunch.class);
+        when(stuck.hasChildren()).thenReturn(true);
+        when(stuck.canTerminate()).thenReturn(true);
+        when(stuck.isTerminated()).thenReturn(false);
+        List<ILaunch> registered = new ArrayList<>();
+        LaunchTool.endOrphanedLaunch(stuck, false, registered::add);
+        verify(stuck).terminate();
+        assertEquals(List.of(stuck), registered);
+    }
+
     @Test
     public void testName()
     {

@@ -101,10 +101,38 @@ public class StopProfilingTool implements IMcpTool
         }
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         String name = JsonUtils.extractStringArgument(params, "name");
+        Object stopped;
+        synchronized (StartProfilingTool.TRANSITIONS)
+        {
+            stopped = stop(applicationId, name);
+        }
+        if (!(stopped instanceof Stopped s))
+        {
+            return (String)stopped;
+        }
+        // The measurement wait runs outside the transition lock.
+        try
+        {
+            return describeMeasurement(s.result(), s.service(), s.before(), s.sessionId(), name, 5000).toJson();
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+    }
 
+    /** A stop that toggled profiling off and still has its measurement to read back. */
+    private record Stopped(ToolResult result, IProfilingService service, Set<UUID> before, UUID sessionId) { }
+
+    /** Runs under {@link StartProfilingTool#TRANSITIONS}; returns the response, or a {@link Stopped} to describe. */
+    private static Object stop(String applicationId, String name)
+    {
         try
         {
             if (name != null) { ProfilingFiles.validateName(name); }
+            IDebugTarget live = DebugSessionRegistry.findActiveTarget(applicationId);
+            StartProfilingTool.reconcile(applicationId, StartProfilingTool.profiledTarget(applicationId, live));
             // Idempotent: nothing to do if profiling was never started (or already
             // stopped) for this id. Return a benign success, NOT an error — toggling
             // here would silently switch profiling ON.
@@ -118,8 +146,7 @@ public class StopProfilingTool implements IMcpTool
                     .toJson();
             }
 
-            // Find active debug target
-            IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
+            IDebugTarget target = StartProfilingTool.profiledTarget(applicationId, live);
             if (target == null)
             {
                 // The session is gone, so profiling cannot still be running on the
@@ -159,7 +186,7 @@ public class StopProfilingTool implements IMcpTool
                 .put(KEY_ACTIVE, false)
                 .put(KEY_STOPPED, true)
                 .put(McpKeys.APPLICATION_ID, applicationId);
-            return describeMeasurement(result, service, before, sessionId, name, 5000).toJson();
+            return new Stopped(result, service, before, sessionId);
         }
         catch (IllegalArgumentException e)
         {

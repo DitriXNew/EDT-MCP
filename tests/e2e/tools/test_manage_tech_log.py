@@ -47,6 +47,12 @@ def test_export_new_csv_and_refuse_overwrite():
         error = assert_error(call("manage_tech_log", params), "never overwrite CSV")
         assert_error_quality(error, names=[str(output)], suggests=["new absolute file"])
         assert output.read_bytes() == before
+        # A from/to window exports only the events that intersect it.
+        window = Path(directory) / "window.csv"
+        windowed = call("manage_tech_log", dict(params, outputPath=str(window), **{"from": "2026-11-15T23:43:11"}))
+        assert_ok(windowed, "windowed CSV export")
+        rows = lambda text: int(text.split("Rows: ")[1].split(".")[0])
+        assert 0 < rows(windowed.text) < rows(result.text), (windowed.text, result.text)
     assert_no_diff()
 
 

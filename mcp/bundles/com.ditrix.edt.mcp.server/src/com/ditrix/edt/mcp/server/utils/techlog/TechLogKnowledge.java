@@ -69,6 +69,23 @@ public final class TechLogKnowledge
         return render(id, entry(category, id));
     }
 
+    /** An entry's sources as inline Markdown links, for a table cell. */
+    public static String inlineSources(JsonObject object)
+    {
+        List<String> links = new ArrayList<>();
+        if (object.has("sources"))
+            object.getAsJsonArray("sources").forEach(source -> links.add(link(source.getAsJsonObject())));
+        return String.join(", ", links);
+    }
+
+    private static String link(JsonObject ref)
+    {
+        String tag = ref.get("tag").getAsString();
+        if (tag.startsWith("[") && tag.endsWith("]")) tag = tag.substring(1, tag.length() - 1);
+        String url = ref.get("url").getAsString().replace("(", "%28").replace(")", "%29");
+        return "[" + MarkdownUtils.escapeMarkdown(tag) + "](" + url + ")";
+    }
+
     private static String render(String title, JsonObject object)
     {
         StringBuilder out = new StringBuilder("## " + MarkdownUtils.escapeMarkdown(title) + "\n\n");
@@ -95,14 +112,7 @@ public final class TechLogKnowledge
         {
             out.append("**Sources:**\n\n");
             for (JsonElement source : object.getAsJsonArray("sources"))
-            {
-                JsonObject ref = source.getAsJsonObject();
-                String tag = ref.get("tag").getAsString();
-                if (tag.startsWith("[") && tag.endsWith("]")) tag = tag.substring(1, tag.length() - 1);
-                String url = ref.get("url").getAsString().replace("(", "%28").replace(")", "%29");
-                out.append("- [").append(MarkdownUtils.escapeMarkdown(tag)).append("](")
-                    .append(url).append(")\n");
-            }
+                out.append("- ").append(link(source.getAsJsonObject())).append('\n');
             out.append('\n');
         }
         if (object.has("example"))
