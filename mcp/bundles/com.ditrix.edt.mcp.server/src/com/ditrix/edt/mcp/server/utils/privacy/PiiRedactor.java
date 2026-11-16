@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.privacy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,6 +24,7 @@ import com.ditrix.edt.mcp.server.preferences.PiiRedactionSettings;
 import com.ditrix.edt.mcp.server.preferences.PiiRuleSettings;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 
 /**
  * The PII redactor invoked at the single wire-serialization choke point
@@ -180,11 +182,14 @@ public final class PiiRedactor
         return new Outcome(GsonProvider.toJson(root), counter.count);
     }
 
-    /** Plain text has no enclosing keys: reuse only VALUE/BOTH rules, tokens and match counts. */
+    /**
+     * Plain text has no enclosing keys: reuse only VALUE/BOTH rules, tokens and match counts.
+     * Non-JSON results are rendered Markdown, so a token is escaped like a table cell.
+     */
     private static Outcome redactText(String result, PiiRuleSet ruleSet, String salt)
     {
         RuleEngine engine = new RuleEngine(ruleSet, new Pseudonymizer(salt));
-        SpanResult spans = engine.redactValueSpans(result);
+        SpanResult spans = engine.redactValueSpans(result, MarkdownUtils::escapeForTable);
         return new Outcome(spans.count == 0 ? result : spans.text, spans.count);
     }
 
@@ -454,16 +459,21 @@ public final class PiiRedactor
          */
         SpanResult redactValueSpans(String value)
         {
+            return redactValueSpans(value, UnaryOperator.identity());
+        }
+
+        SpanResult redactValueSpans(String value, UnaryOperator<String> tokenFilter)
+        {
             int[] count = {0};
             String out = value;
             for (CompiledRule rule : valueRules)
             {
                 Matcher matcher = rule.pattern.matcher(out);
-                // The Function overload appends the replacement LITERALLY (no $/\ group
-                // interpretation), so a representation with regex metacharacters is safe.
+                // replaceAll(Function) still interprets $ and \ in the returned text: quote it.
                 out = matcher.replaceAll(mr -> {
                     count[0]++;
-                    return pseudonymizer.token(rule.representation, rule.countable, mr.group());
+                    return Matcher.quoteReplacement(
+                        tokenFilter.apply(pseudonymizer.token(rule.representation, rule.countable, mr.group())));
                 });
             }
             return new SpanResult(out, count[0]);

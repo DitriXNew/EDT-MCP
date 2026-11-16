@@ -338,9 +338,19 @@ public final class TechLogReader
         return false;
     }
 
+    /** A member under directories is its own log (a zipped capture); a root member is a rotation in the zip's directory. */
+    private static Path logical(Source source)
+    {
+        String member = source.member().replace('\\', '/');
+        if (!member.contains("/")) return source.file();
+        Path path = source.file().resolveSibling(source.file().getFileName() + "!");
+        for (String part : member.split("/")) if (!part.isEmpty()) path = path.resolve(part);
+        return path;
+    }
+
     private static String nodeScope(Source source)
     {
-        Path parent = source.file().getParent();
+        Path parent = logical(source).getParent();
         if (parent.getFileName() != null && parent.getFileName().toString().matches("[A-Za-z0-9]+_\\d+") && parent.getParent() != null)
             parent = parent.getParent();
         return parent.toString();
@@ -349,7 +359,8 @@ public final class TechLogReader
     private static String processId(Source source, Map<String, String> properties)
     {
         // Plain files and size rotations encode producer PID; folders do so in the parent name.
-        for (String name : List.of(source.file().getFileName().toString(), source.file().getParent().toString().replace('\\', '/').replaceAll(".*/", "")))
+        Path file = logical(source);
+        for (String name : List.of(file.getFileName().toString(), file.getParent().toString().replace('\\', '/').replaceAll(".*/", "")))
         {
             var match = java.util.regex.Pattern.compile("^[A-Za-z0-9]+_(\\d+)(?:_|\\.log|$)").matcher(name);
             if (match.find()) return match.group(1);

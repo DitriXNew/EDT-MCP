@@ -30,6 +30,8 @@ public final class TechLogAnalysis
 {
     public static final Set<String> PROBLEMS = Set.of("exceptions", "query-errors", "process-crashes", "lock-timeouts",
         "managed-deadlocks", "lock-waits", "dbms-locks", "slow-db", "slow-calls", "memory-peaks");
+    private static final java.util.regex.Pattern CRASH = java.util.regex.Pattern.compile(
+        "crash|abnormal|fatal|unexpected|exception|\\u0430\\u0432\\u0430\\u0440|\\u043d\\u0435\\u0448\\u0442\\u0430\\u0442");
     private static final Set<String> DB = Set.of("DBMSSQL", "DBPOSTGRS", "DBV8DBENG", "SDBL");
     private static final Pattern SQL_TOKEN = Pattern.compile(
         "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|[NEXB]?'(?:''|\\\\.|[^'\\\\])*'|"
@@ -91,8 +93,7 @@ public final class TechLogAnalysis
             case "QERR" -> add(index, event, "query-errors", normalizeSql(get(p, "Descr")), 85, 0);
             case "PROC" -> {
                 String state = get(p, "Func") + " " + get(p, "Descr") + " " + get(p, "Txt") + " " + get(p, "Event");
-                if (state.toLowerCase(Locale.ROOT).matches(".*(?:crash|abnormal|fatal|unexpected|exception|"
-                    + "\\u0430\\u0432\\u0430\\u0440|\\u043d\\u0435\\u0448\\u0442\\u0430\\u0442).*"))
+                if (CRASH.matcher(state.toLowerCase(Locale.ROOT)).find())
                     add(index, event, "process-crashes", normalizeSql(state), 100, 0);
             }
             case "TTIMEOUT" -> add(index, event, "lock-timeouts", event.regions(), 95, 0);

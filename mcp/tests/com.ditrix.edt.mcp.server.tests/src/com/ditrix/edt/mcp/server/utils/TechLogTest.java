@@ -160,6 +160,31 @@ public class TechLogTest
         assertEquals(1, index.sources.size());
     }
 
+    @Test public void zipMemberDirectoriesKeepNodesApart() throws Exception
+    {
+        Path zip = temporary.newFile("nodes.zip").toPath();
+        try (var out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            for (String name : List.of("nodeA/rphost_42/26111612.log", "nodeB/rphost_42/26111612.log"))
+            {
+                out.putNextEntry(new ZipEntry(name));
+                out.write((event("CALL", "1000") + "\n").getBytes(StandardCharsets.UTF_8)); out.closeEntry();
+            }
+        }
+        var events = TechLogReader.read(zip, 1, 10, null, null).events;
+        assertEquals(2, events.size());
+        assertEquals("42", events.get(0).pid()); assertEquals("42", events.get(1).pid());
+        assertNotEquals(events.get(0).node(), events.get(1).node());
+        assertNotEquals(events.get(0).scope(), events.get(1).scope());
+    }
+
+    @Test public void multilineProcessDescriptionStillMarksACrash() throws Exception
+    {
+        var index = TechLogReader.read(file(event("PROC", "0").replace("}",
+            ",\"Func\":\"Crash\",\"Descr\":\"Abnormal termination\\nStack trace\"}") + "\n"), 1, 10, null, null);
+        assertTrue(TechLogAnalysis.ranked(index).stream().anyMatch(g -> g.problem.equals("process-crashes")));
+    }
+
     @Test public void sqlNormalizationPreservesBinaryPlusAndMinus()
     {
         assertEquals("select amount -?", TechLogAnalysis.normalizeSql("SELECT amount -1"));

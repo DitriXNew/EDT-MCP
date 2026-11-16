@@ -144,6 +144,23 @@ public class PiiRedactorTest
         assertEquals("Usr: [email]", PiiRedactor.apply(text, rules, SALT));
     }
 
+    @Test
+    public void plainTextTokensAreEscapedForMarkdownTableCells()
+    {
+        String table = "| " + EMAIL_LITERAL + " | value |";
+        var rules = PiiRuleSet.of(new PiiRule(true, EMAIL_REGEX, PiiRuleScope.VALUE, "hidden|per\nson", false));
+        assertEquals("| hidden\\|per son | value |", PiiRedactor.apply(table, rules, SALT));
+    }
+
+    @Test
+    public void representationDollarAndBackslashAreLiteral()
+    {
+        var rules = PiiRuleSet.of(new PiiRule(true, EMAIL_REGEX, PiiRuleScope.VALUE, "$1\\x", false));
+        assertEquals("Usr: $1\\x", PiiRedactor.apply("Usr: " + EMAIL_LITERAL, rules, SALT));
+        String json = PiiRedactor.apply("{\"u\":\"" + EMAIL_LITERAL + "\"}", rules, SALT);
+        assertEquals("$1\\x", JsonParser.parseString(json).getAsJsonObject().get("u").getAsString());
+    }
+
     // ---- NAME scope: match the key, replace the WHOLE value ----
 
     @Test
