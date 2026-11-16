@@ -54,22 +54,19 @@ public final class TechLogKnowledge
     public static String describe(String category, String id)
     {
         if (id == null || id.isBlank())
-            return "# Technological log reference\n\nModes: describe, summary (default), details, chain, events.\n\n"
+        {
+            StringBuilder out = new StringBuilder("# Technological log reference\n\nModes: describe, summary (default), details, chain, events.\n\n"
                 + "Workflow: profiling → profile → capture → summary → details → chain → fix → re-measure.\n\n"
-                + "Profiles: " + String.join(", ", DATA.getAsJsonObject("profiles").keySet())
-                + ". Use event, property, profile or problem with mode=describe.\n\n"
-                + "Capture: manage_tech_log mode=preview, then start with consent. JSON requires platform 8.3.25+.\n\n"
-                + "Service-account clusters do not read your LOCALAPPDATA configuration. Collect every relevant node.\n\n"
-                + gotchas();
+                + "Use event, property, profile or problem with mode=describe.\n\n"
+                + "Capture: manage_tech_log mode=preview, then start with consent. JSON/placement requires platform 8.3.25+.\n\n"
+                + "Service-account clusters do not read your LOCALAPPDATA configuration. Collect every relevant node.\n\n");
+            for (String name : List.of("events", "properties", "profiles", "problems", "elements", "gotchas"))
+                out.append("**").append(name).append(":** ")
+                    .append(MarkdownUtils.escapeMarkdown(String.join(", ", DATA.getAsJsonObject(name).keySet())))
+                    .append("\n\n");
+            return out.toString();
+        }
         return render(id, entry(category, id));
-    }
-
-    private static String gotchas()
-    {
-        StringBuilder out = new StringBuilder();
-        DATA.getAsJsonObject("gotchas").entrySet().forEach(item ->
-            out.append(render(item.getKey(), item.getValue().getAsJsonObject())));
-        return out.toString();
     }
 
     private static String render(String title, JsonObject object)
@@ -108,7 +105,60 @@ public final class TechLogKnowledge
             }
             out.append('\n');
         }
+        if (object.has("example"))
+        {
+            out.append("**Example:**\n\n");
+            if (object.has("exampleNote")) out.append(MarkdownUtils.escapeMarkdown(
+                object.get("exampleNote").getAsString())).append("\n\n");
+            code(out, "json", object.get("example").getAsString());
+        }
+        if (object.has("thresholds"))
+        {
+            out.append("**Thresholds:**\n\n");
+            for (JsonElement threshold : object.getAsJsonArray("thresholds"))
+            {
+                JsonObject value = threshold.getAsJsonObject();
+                out.append("- ").append(MarkdownUtils.escapeMarkdown(value.get("text").getAsString()))
+                    .append(" ([source](").append(value.get("source").getAsString()
+                        .replace("(", "%28").replace(")", "%29")).append("))\n");
+            }
+            out.append('\n');
+        }
+        bullets(out, object, "causes", "Causes");
+        if (object.has("fixExample"))
+        {
+            out.append("**Fix example:**\n\n");
+            code(out, "bsl", object.get("fixExample").getAsString());
+        }
+        bullets(out, object, "nextSteps", "Next steps");
+        if (object.has("related"))
+        {
+            out.append("**Related:**\n\n");
+            for (JsonElement related : object.getAsJsonArray("related"))
+            {
+                String[] reference = related.getAsString().split(":", 2);
+                out.append("- `get_tech_log mode=describe ").append(reference[0]).append('=')
+                    .append(reference[1]).append("`\n");
+            }
+            out.append('\n');
+        }
         return out.toString();
+    }
+
+    private static void bullets(StringBuilder out, JsonObject object, String field, String label)
+    {
+        if (!object.has(field)) return;
+        out.append("**").append(label).append(":**\n\n");
+        for (JsonElement value : object.getAsJsonArray(field))
+            out.append("- ").append(MarkdownUtils.escapeMarkdown(value.getAsString())).append('\n');
+        out.append('\n');
+    }
+
+    private static void code(StringBuilder out, String language, String text)
+    {
+        String fence = "```";
+        while (text.contains(fence)) fence += "`";
+        out.append(fence).append(language).append('\n').append(text).append('\n').append(fence).append("\n\n");
     }
 
     private static int distance(String a, String b)
