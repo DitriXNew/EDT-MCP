@@ -652,8 +652,8 @@ public class GeneralTab
      * <p>
      * This is ONE shape, not a universal one, and the button says so: Cursor, VS Code and Claude
      * Code take it as written, while Cline wants {@code type: "streamableHttp"}, Antigravity a
-     * {@code serverUrl} field, and OpenCode an {@code mcp} wrapper with {@code type: "remote"} -
-     * see the README's per-client sections. Generating those from a picker would mean guessing
+     * {@code serverUrl} field -
+     * see docs/clients.md. Generating those from a picker would mean guessing
      * whether each accepts an auth header, which their documented examples do not show, so it
      * stays out until someone can verify it against the real clients.
      * </p>

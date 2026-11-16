@@ -265,7 +265,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             if (outsideWorkspace)
             {
                 Activator.logWarning("import_configuration_from_xml: importPath is OUTSIDE the EDT workspace: " //$NON-NLS-1$
-                    + importPath + " (trusted-caller-only — see README Security & trust model)."); //$NON-NLS-1$
+                    + importPath + " (trusted-caller-only — see docs/security.md)."); //$NON-NLS-1$
             }
             if (!Files.exists(importPath))
             {
@@ -636,7 +636,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         // Action result: status + the source path, the created project name and the state EDT
         // left it in. There is no round-trip ID, machine-structured position, declared
         // outputSchema, or UI-bound payload here, so MARKDOWN is the right format
-        // (see the "Response format policy" in README / edt-mcp-tool-conventions).
+        // (see the "Response format policy" in docs/output-formats.md / edt-mcp-tool-conventions).
         boolean ready = outcome.phase == StartPhase.STARTED;
         FrontMatter fm = FrontMatter.create()
             .put("tool", NAME) //$NON-NLS-1$

@@ -40,7 +40,7 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 
 8. **Golden** — a new tool changes `tools/list`; regenerate and commit: `EDT_MCP_UPDATE_GOLDEN=1 python tests/e2e/run_all.py --project TestConfiguration --filter test_tools_list_matches_committed_golden_snapshot`, then `git add tests/e2e/tools_list.golden.json`.
 
-9. **README + tool docs** — update counts and preference-group membership; write a concise README usage overview with the target, defaults and required gates. The generator preserves these overviews while refreshing toolset membership and links. Generate `docs/tools/<name>.md` and its index entry (`edt-mcp-ready-to-deploy` step 6); `ToolDocsRatchetTest` and `docs/validate_agent_skills.py` require them.
+9. **README + tool docs** — keep README's toolset summary compact; update preference-group membership in `docs/tool-management.md` and write the usage overview in `docs/tool-overviews.md` with the target, defaults and required gates. The generator preserves these overviews while refreshing detailed index membership, counts and links; it leaves README unchanged. Tool counts live only in the generated indexes and are checked by `ToolDocsRatchetTest`; nobody updates counts in `docs/tool-management.md`. Generate `docs/tools/<name>.md` and its index entry (`edt-mcp-ready-to-deploy` step 6); `ToolDocsRatchetTest` and `docs/validate_agent_skills.py` require them. Put longer feature articles under `docs/` and link them from README's Documentation section.
 
 10. **Full contour** (don't say "done" without it): `bash source/compile.sh` (compile + unit tests + every ratchet) → adversarial **Opus review** → redeploy to the dev EDT copy (`edt-redeploy.ps1`; the signal is the log line `MCP server UP on 8765`) → **live validation** against `:8765` → commit. A freshly deployed tool is NOT in this session's MCP deferred list — to check it live, call it through the e2e harness client (`python` → `harness.initialize(); harness.call("<name>", {...})`) or `Invoke-RestMethod`, not the tool's MCP wrapper. See `edt-mcp-build-test` and the dev-loop memory.
 
@@ -56,5 +56,5 @@ The procedure that actually compiles, passes every ratchet, and validates live. 
 - [ ] Shared resolvers + `ToolResult.error`; model only in a tx boundary; persist (forceExport) if a write
 - [ ] Registered in `BuiltInToolRegistrar`; new packages in MANIFEST Import-Package
 - [ ] `XxxToolTest` (unit ratchet) + `test_<tool>.py` (e2e ratchet)
-- [ ] Golden regenerated; README count + group + table + detail
+- [ ] Golden regenerated; compact README toolset summary, preference-group membership, usage overviews and generated tool pages/indexes updated (step 9); counts generated and ratcheted
 - [ ] `compile.sh` green → Opus review → redeploy → live validation → commit

@@ -106,5 +106,5 @@ Each tier proves a different layer. A green lower tier does NOT prove the higher
 ## Where to look next
 
 - "How to do it right" — the skills in `.claude/skills/` (auto-suggested by `.claude/hooks/edt-skill-router.js`).
-- Build details — README "Building from source".
+- Build details — [docs/building.md](docs/building.md).
 - Refactor backlog — `.devtool/features/*.md`.
