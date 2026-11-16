@@ -76,6 +76,8 @@ public class ProfilingReportTest
         assertFalse(output, output.contains("<module not found>") || output.contains("<method not found>") || output.contains("<line not found>"));
         assertFalse(output, output.contains("performance ticks") || output.contains("Durations"));
         assertTrue(output, output.contains("Total time sums inclusive line times; pure time is own time."));
+        assertTrue(output, output.substring(output.indexOf("## Compared lines")).contains("\n\nn/a"));
+        assertTrue(output, output.contains("not a defect of the measurement"));
     }
 
     @Test public void pageCountsAreSentencesAndOnlyOfferAnotherPageWhenNeeded()

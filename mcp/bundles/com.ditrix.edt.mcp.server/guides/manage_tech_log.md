@@ -38,7 +38,9 @@ Generated log attributes: JSON, plain placement, dedicated location, size rotati
 
 ### Configuration ownership and recovery
 
-Target: `%LOCALAPPDATA%/1C/1cv8/conf/logcfg.xml`; Program Files is never written. Windows lookup order is version `bin/conf`, user LOCALAPPDATA, version `ConfLocation`, then ALLUSERSPROFILE. Existing version `bin/conf/logcfg.xml` files under both Program Files roots are listed as shadowing warnings. **Service-account clusters do not read the interactive user's LOCALAPPDATA**; an administrator must arrange capture for the service account and collect all nodes separately.
+Capture configuration writes only the CURRENT Windows user's `%LOCALAPPDATA%\1C\1cv8\conf\logcfg.xml`. It captures processes of THIS user on THIS machine: client, file infobase, or local server running as this user. For a server cluster or a service account, use `mode=preview` and place the generated XML in that server's conf directory by hand; remove it afterwards. Collect logs from every relevant node.
+
+Windows lookup order is version `bin/conf`, user LOCALAPPDATA, version `ConfLocation`, then ALLUSERSPROFILE. Existing version `bin/conf/logcfg.xml` files under both Program Files roots are listed as shadowing warnings; they can override the user configuration.
 
 An existing foreign configuration is preserved with a byte-exact backup, and a comment-marked capture block is inserted. UTF-8 and BOM UTF-16 are supported for insertion; other encodings refuse before config mutation. Required generating elements are siblings of log; conflicts with existing foreign generators refuse start for review. A durable recovery record and `edt-mcp-capture.json` are written before config mutation. Stop restores the original bytes (or original absence), keeps log files, records stop time and removes the active recovery/backup files. Capture markers cause a warning on both tools, including after an EDT restart.
 

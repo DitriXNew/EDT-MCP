@@ -198,6 +198,40 @@ public class GetProfilingResultsToolTest
         assertTrue(output, output.contains("Showing 1-1 of 2") && output.contains("offset=1"));
         assertTrue(tool.execute(Map.of("mode", "list", "offset", "1")).contains("Before"));
     }
+    @Test public void listShowsEmptyMeasurementLineCountsAndEscapesCells()
+    {
+        when(second.getProfilingResults()).thenReturn(List.of());
+        when(second.getName()).thenReturn("Empty | capture\nno code");
+        String output = tool.execute(Map.of("mode", "list"));
+        assertTrue(output, output.contains("| Line records |"));
+        assertTrue(output, output.contains("Empty \\| capture no code"));
+        String emptyRow = output.lines().filter(s -> s.contains(second.getUuid().toString())).findFirst().orElseThrow();
+        String measuredRow = output.lines().filter(s -> s.contains(first.getUuid().toString())).findFirst().orElseThrow();
+        assertTrue(emptyRow, emptyRow.endsWith("| 0 |"));
+        assertTrue(measuredRow, measuredRow.endsWith("| 3 |"));
+    }
+    @Test public void unresolvedRowsExplainNaBelowTablesInEveryReadMode()
+    {
+        assertFalse(tool.execute(named()).contains("\n\nn/a"));
+        when(first.getProfilingResults().get(0).getModuleName()).thenReturn("<module not found>");
+        for (String mode : List.of("summary", "lines"))
+        {
+            String output = tool.execute(named("mode", mode, "responseFormat", "detailed"));
+            assertTrue(output, output.contains("\n\nn/a"));
+            assertTrue(output, output.contains("platform modules or other projects"));
+            assertTrue(output, output.contains("not a defect of the measurement"));
+        }
+        ICompareResult result = mock(ICompareResult.class);
+        IMethodCompareResult unresolved = method("<method not found>", 1_000_000, 2_000_000);
+        when(unresolved.getModuleName()).thenReturn("<module not found>");
+        when(result.getMethodsCompareResults()).thenReturn(List.of(unresolved));
+        when(compare.compare(first, second)).thenReturn(result);
+        when(first.getProfilingResults().get(0).getModuleName()).thenReturn("Module");
+        String output = tool.execute(Map.of("mode", "compare", "baseId", first.getUuid().toString()));
+        assertTrue(output, output.contains("\n\nn/a"));
+        assertTrue(output, output.contains("platform modules or other projects"));
+        assertTrue(output, output.contains("not a defect of the measurement"));
+    }
     @Test public void emptyStoreIsActionableAndNamedMissingIsError()
     {
         when(service.getResults()).thenReturn(List.of());

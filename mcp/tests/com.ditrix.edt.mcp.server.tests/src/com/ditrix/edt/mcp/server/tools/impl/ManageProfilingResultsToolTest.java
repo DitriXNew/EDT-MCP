@@ -121,6 +121,22 @@ public class ManageProfilingResultsToolTest
         error(tool.execute(named("mode", "export", "exportFormat", "edt", "exportPath", parent.toString())), "already exists", "another");
         assertEquals(0, consents);
     }
+    @Test public void exportPathErrorsOnlyGivePathRecoveryAdvice() throws Exception
+    {
+        Path occupied = temp.newFile("occupied.csv").toPath();
+        for (Path path : List.of(Path.of("relative.csv"), temp.getRoot().toPath().resolve("missing/out.csv"), occupied))
+        {
+            String output = tool.execute(named("exportPath", path.toString()));
+            String message = JsonParser.parseString(output).getAsJsonObject().get("error").getAsString();
+            error(output, path.getFileName().toString());
+            assertTrue(message, message.contains(path.toString()));
+            assertFalse(message, message.contains("mode=list") || message.contains("verify IDs"));
+        }
+        String missing = tool.execute(named("measurementId", UUID.randomUUID().toString(),
+            "exportPath", temp.getRoot().toPath().resolve("new.csv").toString()));
+        error(missing, "not found", "mode=list");
+        assertEquals(0, consents);
+    }
     @Test public void edtCreatesDirectoryAndVerifiesFiles() throws Exception
     {
         Path parent = temp.getRoot().toPath().resolve("native");
@@ -137,7 +153,10 @@ public class ManageProfilingResultsToolTest
     @Test public void edtSilentWriteFailureIsNotSuccess() throws Exception
     {
         Path parent = temp.newFolder().toPath();
-        error(tool.execute(named("mode", "export", "exportFormat", "edt", "exportPath", parent.toString())), "incomplete", "EDT log");
+        String output = tool.execute(named("mode", "export", "exportFormat", "edt", "exportPath", parent.toString()));
+        error(output, "incomplete", "EDT log", "writable");
+        assertFalse(output, output.contains("mode=list"));
+        assertTrue(JsonParser.parseString(output).getAsJsonObject().get("error").getAsString().contains(parent.toString()));
     }
     @Test public void nativeExportPinsTheReservedNameAcrossConcurrentRename() throws Exception
     {

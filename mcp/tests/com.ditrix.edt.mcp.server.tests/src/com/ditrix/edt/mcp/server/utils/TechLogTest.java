@@ -52,6 +52,55 @@ public class TechLogTest
         assertTrue(lic.containsKey("TXT")); assertEquals("1", lic.get("DURATION"));
         var hasp = TechLogReader.reread(index.events.get(1).pointer()); assertTrue(hasp.get("txt").contains("\n"));
     }
+    @Test public void headerUsesIbThenProcessNamesThenExplicitMissingIdentity() throws Exception
+    {
+        String base = event("EXCP", "1");
+        var known = TechLogReader.read(file(base.replace("}", ",\"IB\":\"D:/ib|one\",\"p:processName\":\"other\"}") + "\n"), 1, 10, null, null);
+        assertTrue(TechLogAnalysis.header(known), TechLogAnalysis.header(known).contains("infobases: " + MarkdownUtils.escapeMarkdown("[D:/ib|one]")));
+        var server = TechLogReader.read(file(base.replace("}", ",\"p:processName\":\"ServerBase\"}") + "\n"
+            + base.replace("}", ",\"P:PROCESSNAME\":\"SecondBase\"}") + "\n"
+            + base.replace("}", ",\"p:processName\":\"ServerBase\"}") + "\n"), 1, 10, null, null);
+        assertTrue(TechLogAnalysis.header(server), TechLogAnalysis.header(server).contains("p:processName: " + MarkdownUtils.escapeMarkdown("[SecondBase, ServerBase]")));
+        var missing = TechLogReader.read(root().resolve("tests/fixtures/tech-log/real-8.5.1-createinfobase.log"), 1, 10, null, null);
+        String header = TechLogAnalysis.header(missing);
+        assertTrue(header, header.contains("not recorded (file infobases do not write IB)"));
+        assertFalse(header, header.contains("infobases: []"));
+    }
+    @Test public void coverageRendersManifestInstantsLocallyWithOffsetWithoutChangingManifest() throws Exception
+    {
+        var index = TechLogReader.read(file(event("EXCP", "1") + "\n"), 1, 10, null, null);
+        index.manifest = com.google.gson.JsonParser.parseString("{\"profile\":\"errors\",\"events\":[\"EXCP\"],"
+            + "\"startTime\":\"2026-11-16T00:51:03Z\",\"stopTime\":\"2026-11-16T01:51:03Z\"}").getAsJsonObject();
+        String original = index.manifest.toString();
+        java.util.TimeZone previous = java.util.TimeZone.getDefault();
+        try
+        {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Europe/Kyiv"));
+            String coverage = TechLogAnalysis.coverage(index);
+            assertTrue(coverage, coverage.contains("startTime=2026-11-16 02:51:03 +02:00"));
+            assertTrue(coverage, coverage.contains("stopTime=2026-11-16 03:51:03 +02:00"));
+            assertTrue(TechLogAnalysis.header(index).contains("Event times are local to the machine that wrote them"));
+            assertEquals(original, index.manifest.toString());
+        }
+        finally { java.util.TimeZone.setDefault(previous); }
+    }
+    @Test public void problemsOmitSubMillisecondSlowGroupsButKeepErrorsAndFullDetails() throws Exception
+    {
+        var index = TechLogReader.read(file(event("CALL", "999").replace("}", ",\"Context\":\"tiny-call\"}") + "\n"
+            + event("CALL", "999").replace("}", ",\"Context\":\"tiny-call\"}") + "\n"
+            + event("DBV8DBENG", "1").replace("}", ",\"Sql\":\"select tiny from data\"}") + "\n"
+            + event("CALL", "1000").replace("}", ",\"Context\":\"boundary-call\"}") + "\n"
+            + event("EXCP", "0") + "\n" + event("QERR", "1") + "\n"
+            + event("TTIMEOUT", "0") + "\n" + event("TDEADLOCK", "0") + "\n"), 1, 10, null, null);
+        String summary = TechLogAnalysis.summary(index, 100, 0);
+        assertTrue(summary, summary.contains("2 slow groups under 1 ms omitted"));
+        assertFalse(summary, summary.contains("tiny-call") || summary.contains("select tiny"));
+        for (String retained : List.of("boundary-call", "exceptions", "query-errors", "lock-timeouts", "managed-deadlocks"))
+            assertTrue(summary, summary.contains(retained));
+        var tiny = TechLogAnalysis.ranked(index).stream().filter(g -> g.key.equals("tiny-call")).findFirst().orElseThrow();
+        assertEquals(2, TechLogAnalysis.details(index, tiny.id).size());
+        assertTrue(TechLogAnalysis.summary(index, 1, 0).contains("of 5"));
+    }
 
     @Test public void corruptLineAndIncompleteTailAreSeparate() throws Exception
     {

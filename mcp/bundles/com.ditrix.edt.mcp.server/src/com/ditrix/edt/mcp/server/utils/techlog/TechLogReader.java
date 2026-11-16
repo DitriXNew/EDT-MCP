@@ -56,6 +56,8 @@ public final class TechLogReader
         public final List<Event> events = new ArrayList<>();
         public final Map<String, TechLogAnalysis.Group> groups = new LinkedHashMap<>();
         public final Map<String, Integer> kinds = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        public final java.util.Set<String> infobases = new java.util.TreeSet<>();
+        public final java.util.Set<String> processNames = new java.util.TreeSet<>();
         public final List<String> errors = new ArrayList<>();
         public long bytesRead, totalBytes, weight;
         public int files, readEvents, rejected, incompleteTail;
@@ -307,6 +309,9 @@ public final class TechLogReader
                     get(props, "OSThread"), get(props, "Regions"), get(props, "WaitConnections"), get(props, "dbpid"),
                     get(props, "lkaid"), get(props, "lkpid"), get(props, "lksrc"), (int)number(props, "depth"));
                 index.events.add(event);
+                String ib = get(props, "IB"), processName = get(props, "p:processName");
+                if (!ib.isBlank() && index.infobases.add(ib)) index.weight += 64L + ib.length() * 2L;
+                if (!processName.isBlank() && index.processNames.add(processName)) index.weight += 64L + processName.length() * 2L;
                 index.kinds.merge(event.name(), 1, Integer::sum);
                 index.weight += 512L + text.length() / 8;
                 TechLogAnalysis.aggregate(index, event, props);

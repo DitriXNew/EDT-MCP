@@ -89,16 +89,24 @@ public class ManageProfilingResultsTool implements IMcpTool
             // Repeat validation after a human may have spent time answering the dialog.
             ProfilingFiles.validateExport(exportPath, format, result);
             Path written = target;
-            if (format.equals("csv")) { ProfilingFiles.csv(target, result); }
-            else { written = ProfilingFiles.edt(target, result, resultsStore()); }
+            try
+            {
+                if (format.equals("csv")) { ProfilingFiles.csv(target, result); }
+                else { written = ProfilingFiles.edt(target, result, resultsStore()); }
+            }
+            catch (java.io.IOException e)
+            {
+                return ToolResult.error("Cannot export to exportPath '" + target + "': " + PlatformFailures.describe(e)
+                    + ". Choose a new writable " + (format.equals("csv") ? "CSV file with an existing parent directory" : "EDT directory")
+                    + " on the EDT host.").toJson();
+            }
             return ProfilingReport.identity(result) + "Exported complete measurement (" + result.getProfilingResults().size()
                 + " line records), format " + format + ", to " + MarkdownUtils.inlineCode(written.toString()) + ".\n\n";
         }
         catch (Exception e)
         {
             if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
-            return ToolResult.error("Cannot manage profiling results: " + PlatformFailures.describe(e)
-                + " Use get_profiling_results mode=list to verify IDs and check the requested mode/paths.").toJson();
+            return ToolResult.error("Cannot manage profiling results: " + PlatformFailures.describe(e)).toJson();
         }
     }
 

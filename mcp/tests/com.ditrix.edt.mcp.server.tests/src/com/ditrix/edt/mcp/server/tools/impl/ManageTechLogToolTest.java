@@ -36,6 +36,43 @@ public class ManageTechLogToolTest
         assertFalse(com.ditrix.edt.mcp.server.protocol.ToolAnnotationClassifier.classify(t.getName()).getReadOnlyHint());
         assertTrue(t.getDescription().contains("get_tool_guide('manage_tech_log')"));
     }
+    @Test public void guideExplainsCurrentUserScopeAndManualServerPreview()
+    {
+        String guide = tool(ConsentDecision.REJECT, false, new AtomicInteger()).getGuide();
+        assertTrue(guide, guide.contains("CURRENT Windows user") && guide.contains("%LOCALAPPDATA%\\1C\\1cv8\\conf\\logcfg.xml"));
+        assertTrue(guide, guide.contains("THIS user on THIS machine"));
+        assertTrue(guide, guide.contains("local server running as this user"));
+        assertTrue(guide, guide.contains("mode=preview") && guide.contains("server's conf directory") && guide.contains("remove it afterwards"));
+        String local = System.getenv("LOCALAPPDATA");
+        Path expected = Path.of(local == null ? System.getProperty("user.home") + "/AppData/Local" : local).resolve("1C/1cv8/conf/logcfg.xml");
+        assertEquals(expected, TechLogCapture.user().target());
+    }
+    @Test public void statusAndStopRenderLocalCaptureTimesWithOffsetButKeepUtcOnDisk() throws Exception
+    {
+        var t = tool(ConsentDecision.ALLOW, false, new AtomicInteger());
+        Path location = temporary.getRoot().toPath().resolve("capture");
+        t.execute(Map.of("mode", "start", "location", location.toString()));
+        Path manifest = location.resolve("edt-mcp-capture.json");
+        var started = com.google.gson.JsonParser.parseString(Files.readString(manifest)).getAsJsonObject();
+        String start = started.get("startTime").getAsString();
+        assertTrue(start, start.endsWith("Z"));
+        java.util.TimeZone previous = java.util.TimeZone.getDefault();
+        try
+        {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Europe/Kyiv"));
+            var format = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss xxx");
+            String expected = java.time.Instant.parse(start).atZone(java.time.ZoneId.systemDefault()).format(format);
+            String status = t.execute(Map.of("mode", "status"));
+            assertTrue(status, status.contains("startTime=" + expected));
+            String stopped = t.execute(Map.of("mode", "stop"));
+            var saved = com.google.gson.JsonParser.parseString(Files.readString(manifest)).getAsJsonObject();
+            assertEquals(start, saved.get("startTime").getAsString());
+            String stop = saved.get("stopTime").getAsString(); assertTrue(stop, stop.endsWith("Z"));
+            assertTrue(stopped, stopped.contains("startTime=" + expected));
+            assertTrue(stopped, stopped.contains("stopTime=" + java.time.Instant.parse(stop).atZone(java.time.ZoneId.systemDefault()).format(format)));
+        }
+        finally { java.util.TimeZone.setDefault(previous); }
+    }
     @Test public void previewIsReadOnlyAndShowsGeneratingCostAndTarget()
     {
         AtomicInteger asks = new AtomicInteger(); var t = tool(ConsentDecision.REJECT, false, asks);

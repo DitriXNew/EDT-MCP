@@ -31,6 +31,9 @@ import com._1c.g5.v8.dt.profiling.core.compare.IUnmatchedCompareResult;
 /** Pure aggregation and Markdown rendering. EDT durability getters hold ticks, not durations. */
 public final class ProfilingReport
 {
+    private static final String NA_NOTICE = "n/a identifies methods/source unavailable in this workspace "
+        + "(platform modules or other projects); their records can aggregate under n/a. "
+        + "This is not a defect of the measurement.\n\n";
     private ProfilingReport() { }
 
     public record Row(String moduleKey, String module, String method, int line, long calls,
@@ -185,7 +188,9 @@ public final class ProfilingReport
                 : MarkdownUtils.tableRow(row.module(), text(row.line()), row.target(), text(row.calls()),
                     number(row.time()), number(row.pure()), average, text(row.signal())));
         }
-        return out.append('\n').toString();
+        out.append('\n');
+        if (rows.stream().anyMatch(r -> r.unresolved() || r.method().equals("n/a"))) out.append(NA_NOTICE);
+        return out.toString();
     }
 
     public static String summary(IProfilingResult result, List<Row> all, List<Row> selected, int top)
@@ -255,6 +260,7 @@ public final class ProfilingReport
             out.append(MarkdownUtils.tableRow(row.module(), row.method(), number(row.pure()), number(row.time()), text(row.lineCalls())));
         }
         out.append('\n');
+        if (page(rows, 0, top).stream().anyMatch(r -> r.method().equals("n/a"))) out.append(NA_NOTICE);
     }
 
     public static String measurements(List<IProfilingResult> results, int offset, int limit)
@@ -262,11 +268,12 @@ public final class ProfilingReport
         List<IProfilingResult> shown = page(results, offset, limit);
         StringBuilder out = new StringBuilder("Measurements (newest first). Time unit: ms.\n\n")
             .append(pageCount(offset, shown.size(), results.size()))
-            .append(MarkdownUtils.tableHeader("Id", "Name", "Date", "Infobase", "Total time ms (line sum)", "Debug targets"));
+            .append(MarkdownUtils.tableHeader("Id", "Name", "Date", "Infobase", "Total time ms (line sum)", "Debug targets", "Line records"));
         for (IProfilingResult result : shown)
         {
             out.append(MarkdownUtils.tableRow(text(result.getUuid()), result.getName(), text(result.getDateOfSession()),
-                result.getConnectionString(), number(rows(result).stream().mapToDouble(Row::time).sum()), text(result.getDebugTargets())));
+                result.getConnectionString(), number(rows(result).stream().mapToDouble(Row::time).sum()), text(result.getDebugTargets()),
+                text(result.getProfilingResults().size())));
         }
         return out.append('\n').toString();
     }
@@ -314,6 +321,8 @@ public final class ProfilingReport
                     missingLabel(item.getModuleName()) ? "n/a" : resolvedText(item.getMethodName()), number(b), number(c), change(b, c)));
             }
             out.append('\n');
+            if (page(ranked, 0, top).stream().anyMatch(m -> missingLabel(m.getModuleName()) || missingLabel(m.getMethodName())))
+                out.append(NA_NOTICE);
         }
         List<ILineCompareResult> allLines = methods.stream().flatMap(m -> m.getLinesCompareResults().stream()).toList();
         out.append("\nUnmatched elements: modules=").append(comparison.getModulesCompareResults().stream().filter(m -> m instanceof IUnmatchedCompareResult).count())
@@ -345,6 +354,9 @@ public final class ProfilingReport
                 out.append(MarkdownUtils.tableRow(moduleName, methodName, text(line.getLineNo()),
                     text(line.getFrequency(CompareSide.BASE)), text(line.getFrequency(CompareSide.COMPARED)), number(b), number(c), change(b, c), code));
             }
+            out.append('\n');
+            if (shown.stream().anyMatch(l -> missingLabel(l.getModuleName()) || missingLabel(l.getMethodName()) || missingLabel(l.getLine())))
+                out.append(NA_NOTICE);
         }
         return out.append('\n').toString();
     }

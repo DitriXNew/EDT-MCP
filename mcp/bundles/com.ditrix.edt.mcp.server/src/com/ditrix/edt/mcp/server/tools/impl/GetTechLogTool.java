@@ -102,7 +102,8 @@ public class GetTechLogTool implements IMcpTool
                 {
                     if (!present(occurrenceId)) throw new IllegalArgumentException("occurrenceId is required in chain; get it from details or events.");
                     var chain = TechLogAnalysis.chain(index, occurrenceId);
-                    return header + chain.completeness() + "\n\n" + TechLogAnalysis.renderEvents(chain.events(), limit, offset, reads);
+                    var anchor = chain.events().stream().filter(e -> e.id().equals(occurrenceId)).findFirst().orElseThrow();
+                    return header + chain.completeness() + "\n\n" + TechLogAnalysis.renderEvents(chain.events(), limit, offset, reads, anchor.start());
                 }
                 if (present(contains) && !present(property))
                     throw new IllegalArgumentException("contains requires property in events; for example property=Context, contains=Module.");

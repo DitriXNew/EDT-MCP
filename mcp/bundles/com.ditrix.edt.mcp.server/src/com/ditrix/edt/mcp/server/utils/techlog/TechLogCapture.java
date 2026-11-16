@@ -305,6 +305,7 @@ public final class TechLogCapture
         String last = index.events.stream().map(TechLogReader.Event::end).max(java.util.Comparator.naturalOrder())
             .map(Object::toString).orElse("unknown");
         return "Capture " + m.get("id").getAsString() + "; profile " + m.get("profile").getAsString()
+            + ".\n\nCapture settings (local machine time with offset): " + MarkdownUtils.escapeMarkdown(TechLogAnalysis.captureSettings(m))
             + ".\n\nConfig written (observed exact contents): " + config + "; target " + target
             + ".\n\nLog files appeared: " + (index.files > 0) + "; files=" + index.files
             + "; last event time observed in bounded scan=" + last + ".\n\n"
@@ -350,7 +351,9 @@ public final class TechLogCapture
             if (original != null) Files.delete(Path.of(m.get("backupPath").getAsString()));
             else if (m.has("createdDirectory") && m.get("createdDirectory").getAsBoolean()) deleteIfEmpty(target.getParent());
             return "Stopped; original config restored byte-exactly (original absence restored when applicable). Log files kept. "
-                + "Platform pickup may take ≤60 s.\n\nNext: get_tech_log {\"mode\":\"summary\",\"path\":\""
+                + "Platform pickup may take ≤60 s.\n\nCapture settings (local machine time with offset): "
+                + MarkdownUtils.escapeMarkdown(TechLogAnalysis.captureSettings(m))
+                + "\n\nNext: get_tech_log {\"mode\":\"summary\",\"path\":\""
                 + location.toString().replace("\\", "\\\\") + "\"}";
         }
     }

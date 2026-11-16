@@ -136,7 +136,10 @@ public final class TechLogAnalysis
     {
         StringBuilder out = new StringBuilder("# Technological log summary\n\n");
         out.append(header(index));
-        List<Group> all = ranked(index);
+        List<Group> ranked = ranked(index);
+        List<Group> all = ranked.stream().filter(g -> g.maxUs >= 1000
+            || !List.of("slow-calls", "slow-db").contains(g.problem)).toList();
+        int omitted = ranked.size() - all.size();
         int start = Math.min(offset, all.size()), end = Math.min(all.size(), start + limit);
         out.append("\n## Problems\n\nRanked by incident severity, then cumulative elapsed time (memory by peak). "
             + "Slow groups are candidates, not proven faults; nested DB/SDBL/CALL times overlap.\n\n")
@@ -145,25 +148,31 @@ public final class TechLogAnalysis
         for (Group g : all.subList(start, end))
             out.append(MarkdownUtils.tableRow(g.id, g.problem, g.key, "" + g.occurrences.size(), ms(g.totalUs),
                 ms(g.totalUs / g.occurrences.size()), ms(g.maxUs), "" + g.memoryPeak));
-        out.append("\n").append(coverage(index));
+        out.append("\n");
+        if (omitted > 0) out.append(omitted).append(" slow groups under 1 ms omitted; manage_tech_log mode=export exportKind=groups lists every group.\n\n");
+        out.append(coverage(index));
         return out.toString();
     }
 
     public static String header(Index index)
     {
-        TreeSet<String> processes = new TreeSet<>(), bases = new TreeSet<>();
+        TreeSet<String> processes = new TreeSet<>();
         LocalDateTime first = null, last = null;
         for (Event e : index.events)
         {
-            processes.add(e.process()); if (!e.infobase().isBlank()) bases.add(e.infobase());
+            processes.add(e.process());
             if (first == null || e.start().isBefore(first)) first = e.start();
             if (last == null || e.end().isAfter(last)) last = e.end();
         }
         String text = "Files: " + index.files + "; events read: " + index.readEvents + "; events indexed: " + index.events.size() + "; rejected: " + index.rejected
             + "; incomplete-tail: " + index.incompleteTail + ". Read " + mb(index.bytesRead) + " of " + mb(index.totalBytes)
             + " MB (expanded JSON bytes, including zip members).\n\nTime span: " + first + " → " + last
-            + ".\n\nProcesses: " + MarkdownUtils.escapeMarkdown(processes.toString()) + "; infobases: "
-            + MarkdownUtils.escapeMarkdown(bases.toString()) + ".\n";
+            + ". Event times are local to the machine that wrote them.\n\nProcesses: " + MarkdownUtils.escapeMarkdown(processes.toString())
+            + (index.infobases.isEmpty() ? index.processNames.isEmpty()
+                ? "; infobase: not recorded (file infobases do not write IB)"
+                : "; IB not recorded; p:processName: " + MarkdownUtils.escapeMarkdown(index.processNames.toString())
+                    + " (infobase names for server processes)"
+                : "; infobases: " + MarkdownUtils.escapeMarkdown(index.infobases.toString())) + ".\n";
         if (index.limited) text += "\nINCOMPLETE: " + index.limitReason
             + ". Narrow from/to (reduces index/output, still scans bytes), use a subdirectory/file or increase readBudgetMb/readBudgetSeconds.\n";
         if (index.rejected > 0) text += "\nCorrupt samples (showing " + index.errors.size() + " of " + index.rejected
@@ -212,14 +221,25 @@ public final class TechLogAnalysis
         return out.toString();
     }
 
-    private static String captureSettings(com.google.gson.JsonObject m)
+    public static String captureSettings(com.google.gson.JsonObject m)
     {
         StringBuilder out = new StringBuilder();
         for (String key : List.of("profile", "startTime", "stopTime", "status"))
-            if (m.has(key)) out.append(key).append('=').append(m.get(key).getAsString()).append("; ");
+            if (m.has(key)) out.append(key).append('=').append(key.endsWith("Time")
+                ? localCaptureTime(m.get(key).getAsString()) : m.get(key).getAsString()).append("; ");
         if (m.has("overrides")) m.getAsJsonObject("overrides").entrySet()
             .forEach(e -> out.append(e.getKey()).append('=').append(e.getValue().isJsonPrimitive() ? e.getValue().getAsString() : e.getValue().toString()).append("; "));
         return out.toString().trim();
+    }
+
+    private static String localCaptureTime(String instant)
+    {
+        try
+        {
+            return java.time.Instant.parse(instant).atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss xxx", Locale.ROOT));
+        }
+        catch (java.time.format.DateTimeParseException e) { return instant + " (unrecognized capture time)"; }
     }
 
     public static List<Event> details(Index index, String groupId)
@@ -328,17 +348,32 @@ public final class TechLogAnalysis
 
     public static String renderEvents(List<Event> events, int limit, int offset, TechLogReader.ReadSession session) throws IOException
     {
+        return renderEvents(events, limit, offset, session, null);
+    }
+
+    public static String renderEvents(List<Event> events, int limit, int offset, TechLogReader.ReadSession session,
+        LocalDateTime anchorStart) throws IOException
+    {
         int start = Math.min(offset, events.size()), end = Math.min(events.size(), start + limit);
         StringBuilder out = new StringBuilder("Occurrences: " + events.size()
             + Pagination.pageNotice(start, end - start, events.size()) + "\n\n");
-        out.append(MarkdownUtils.tableHeader("occurrenceId", "End time", "Duration ms", "Event", "Process", "Session", "User", "Connection", "Context", "SQL / query", "Plan", "All properties / provenance"));
+        List<String> columns = new ArrayList<>(List.of("occurrenceId", "End time", "Duration ms", "Event", "Process", "Session", "User", "Connection", "Context", "SQL / query", "Plan", "All properties / provenance"));
+        if (anchorStart != null) columns.add(1, "Offset from anchor start ms");
+        out.append(MarkdownUtils.tableHeader(columns.toArray(String[]::new)));
         for (Event e : events.subList(start, end))
         {
             Map<String, String> p = session.read(e.pointer());
-            out.append(MarkdownUtils.tableRow(e.id(), e.end().toString(), ms(e.durationUs()), e.name(), e.process(),
+            List<String> cells = new ArrayList<>(List.of(e.id(), e.end().toString(), ms(e.durationUs()), e.name(), e.process(),
                 e.session(), get(p, "Usr"), e.connection(), get(p, "Context"), get(p, "Sql") + get(p, "Sdbl") + get(p, "Query"),
                 get(p, "planSQLText"), p.toString() + " @ " + e.pointer().source().file().getFileName()
                 + (e.pointer().source().member().isEmpty() ? "" : "!" + e.pointer().source().member()) + "#" + e.pointer().offset()));
+            if (anchorStart != null)
+            {
+                java.time.Duration delta = java.time.Duration.between(anchorStart, e.start());
+                double microseconds = delta.getSeconds() * 1_000_000.0 + delta.getNano() / 1000.0;
+                cells.add(1, (delta.isNegative() ? "" : "+") + ms(microseconds) + " ms");
+            }
+            out.append(MarkdownUtils.tableRow(cells.toArray(String[]::new)));
         }
         return out.toString();
     }

@@ -69,6 +69,27 @@ public class GetTechLogToolTest
         assertTrue(matcher.find()); String occurrence = matcher.group(1);
         assertTrue(tool.execute(Map.of("mode", "chain", "path", path.toString(), "occurrenceId", occurrence)).contains("INCOMPLETE"));
     }
+    @Test public void chainOffsetsUseAnchorStartEvenWhenAnchorIsNotOnPage() throws Exception
+    {
+        Path path = Files.createTempFile("tech-log-offsets-", ".log");
+        try
+        {
+            String common = "\"process\":\"rphost\",\"PID\":\"42\",\"OSThread\":\"1\"";
+            Files.writeString(path,
+                "{\"ts\":\"2026-11-16T02:51:03.020000\",\"name\":\"CALL\",\"duration\":\"20000\"," + common + "}\n"
+                + "{\"ts\":\"2026-11-16T02:51:03.013400\",\"name\":\"EXCP\",\"duration\":\"1000\"," + common + "}\n"
+                + "{\"ts\":\"2026-11-16T02:51:03.016500\",\"name\":\"QERR\",\"duration\":\"1000\"," + common + "}\n");
+            var index = TechLogReader.read(path, 1, 10, null, null);
+            String anchor = index.events.get(1).id();
+            String result = tool.execute(Map.of("mode", "chain", "path", path.toString(), "occurrenceId", anchor));
+            assertTrue(result, result.contains("Offset from anchor start ms"));
+            assertTrue(result, result.contains("-12.400 ms") && result.contains("+0.000 ms") && result.contains("+3.100 ms"));
+            String page = tool.execute(Map.of("mode", "chain", "path", path.toString(), "occurrenceId", anchor, "limit", "1", "offset", "2"));
+            assertTrue(page, page.contains("+3.100 ms"));
+            assertFalse(tool.execute(Map.of("mode", "events", "path", path.toString())).contains("Offset from anchor"));
+        }
+        finally { Files.deleteIfExists(path); }
+    }
     @Test public void eventsFiltersAndPaging()
     {
         String path = TechLogTest.root().resolve("tests/fixtures/tech-log/synthetic.log").toString();
