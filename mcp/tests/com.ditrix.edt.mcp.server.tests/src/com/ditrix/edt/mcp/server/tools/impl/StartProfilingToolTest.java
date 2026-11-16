@@ -138,7 +138,14 @@ public class StartProfilingToolTest
         org.eclipse.debug.core.ILaunch launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
         org.mockito.Mockito.when(owner.getLaunch()).thenReturn(launch);
         assertFalse(StartProfilingTool.ended(owner, l -> l == launch));
+        // Removed from the launch manager while its client still runs (an unconfirmed orphan): still live.
+        org.eclipse.debug.core.model.IProcess process = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IProcess.class);
+        org.mockito.Mockito.when(launch.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { process });
+        assertFalse(StartProfilingTool.ended(owner, l -> false));
+        // Removed and its client exited (terminate while profiling): ended.
+        org.mockito.Mockito.when(process.isTerminated()).thenReturn(true);
         assertTrue(StartProfilingTool.ended(owner, l -> false));
+        assertFalse(StartProfilingTool.ended(owner, l -> l == launch));
         org.mockito.Mockito.when(launch.isTerminated()).thenReturn(true);
         assertTrue(StartProfilingTool.ended(owner, l -> l == launch));
         org.mockito.Mockito.when(owner.isTerminated()).thenReturn(true);

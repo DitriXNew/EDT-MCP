@@ -83,7 +83,8 @@ public class StartProfilingTool implements IMcpTool
             // only when its own target has ended.
             if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget owner && ended(owner))
             {
-                ACTIVE_APPLICATION_IDS.remove(applicationId);
+                // Only the owner checked: a concurrent start may have replaced it meanwhile.
+                ACTIVE_APPLICATION_IDS.remove(applicationId, owner);
             }
             return;
         }
@@ -103,7 +104,10 @@ public class StartProfilingTool implements IMcpTool
         }
     }
 
-    /** A target is ended when it reports so or its launch has left the launch manager. */
+    /**
+     * A target is ended when it or its launch reports so, or when its launch has left the launch manager AND its
+     * client process has exited (a removed launch whose client still runs is kept live).
+     */
     static boolean ended(IDebugTarget target)
     {
         org.eclipse.debug.core.DebugPlugin debug = org.eclipse.debug.core.DebugPlugin.getDefault();
@@ -115,7 +119,8 @@ public class StartProfilingTool implements IMcpTool
     {
         if (target.isTerminated()) { return true; }
         org.eclipse.debug.core.ILaunch launch = target.getLaunch();
-        return launch == null || launch.isTerminated() || !registered.test(launch);
+        return launch == null || launch.isTerminated()
+            || !registered.test(launch) && com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.clientExited(launch);
     }
 
     /**
