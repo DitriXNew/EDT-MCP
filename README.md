@@ -33,9 +33,9 @@ The plugin ships both local stdio and HTTP transports; choose the setup your cli
 ## Requirements
 
 - 1C:EDT 2026.2.2 (Ruby); compatibility with earlier versions is not guaranteed
-- Java 17+ (EDT 2026.2 itself runs on Java 25 — it ships its own JRE)
+- Runs on the JRE bundled with EDT (the plugin runtime floor is Java 17); no separate Java installation is needed
 
-See [compatibility and CI details](docs/overview.md) for the supported platform and build baseline.
+See [compatibility details](docs/features.md) and [CI details](docs/building.md) for the supported platform and build baseline.
 
 ## Installation
 
@@ -48,17 +48,19 @@ For a one-shot Windows install, close EDT and run this with your actual executab
 "<path-to-EDT>\1cedt.exe" -nosplash -application org.eclipse.equinox.p2.director -repository https://ditrixnew.github.io/EDT-MCP/ -installIU com.ditrix.edt.mcp.server.feature.feature.group -profileProperties org.eclipse.update.reconcile=true
 ```
 
-**Form screenshots:** `get_form_screenshot` is disabled by default. Enable it in **MCP Server > Tools**;
-on Windows, EDT also needs `-DnativeFormBufferedLayoutRender=true` after `-vmargs` in `1cedt.ini`.
-This changes the form designer for the whole session; read the [JVM flag details](docs/installation.md#required-jvm-flag-for-form-screenshots) before enabling it.
+**Form screenshots:** before enabling `get_form_screenshot`, read the [JVM flag requirements and form-designer effects](docs/installation.md#required-jvm-flag-for-form-screenshots).
 
-See [installation and preferences](docs/installation.md) for screenshots, updates and status-bar controls.
+See [installation and preferences](docs/installation.md) for screenshots, updates and preferences, and [status-bar controls](docs/status-bar.md).
 
 ## Connecting a client
 
 For local stdio, use **Window > Preferences > MCP Server > General**: clear **Enable MCP over HTTP**,
 then click **Copy stdio .mcp.json** and merge the entry into your client's configuration.
 Apply to stop HTTP as well. The bundled bootstrap uses EDT's Java and explicit install/workspace paths.
+On Linux, stdio only attaches to an already running EDT; on Windows it starts EDT if needed.
+
+For HTTP clients, click **Start** in the EDT status bar before connecting, or enable **Auto-start** in
+**Window > Preferences > MCP Server > General** (off by default); see [HTTP startup](docs/installation.md#starting-http).
 
 For HTTP, the default endpoint is `http://localhost:8765/mcp`. The minimal configurations differ as follows:
 
@@ -84,11 +86,22 @@ Cursor:
 {"mcpServers": {"EDT MCP Server": {"url": "http://localhost:8765/mcp"}}}
 ```
 
-Claude Code and Cline use the Cursor shape with `"type": "http"` or `"type": "streamableHttp"` inside the server entry.
+Claude Code:
+
+```json
+{"mcpServers": {"EDT MCP Server": {"type": "http", "url": "http://localhost:8765/mcp"}}}
+```
+
+Cline:
+
+```json
+{"mcpServers": {"EDTMCPServer": {"type": "streamableHttp", "url": "http://localhost:8765/mcp"}}}
+```
+
 Antigravity uses:
 
 ```json
-{"mcpServers": {"EDT MCP Server": {"serverUrl": "http://localhost:8765/mcp"}}}
+{"mcpServers": {"EDTMCPServer": {"serverUrl": "http://localhost:8765/mcp"}}}
 ```
 
 The [client setup guide](docs/clients.md) includes full snippets, `mcp-remote` and the
@@ -97,7 +110,7 @@ The [client setup guide](docs/clients.md) includes full snippets, `mcp-remote` a
 ## Tools
 
 The generated [full tool reference](docs/tools/README.md) lists every tool, parameter and guide, grouped by toolset.
-For usage summaries, see [tool overviews](docs/tool-overviews.md); for enablement, presets and progressive disclosure,
+For enablement, presets and progressive disclosure,
 see [tool management](docs/tool-management.md). Toolsets control visibility; preferences control which tools are enabled.
 
 | Toolset | Purpose | Reference |
@@ -127,8 +140,9 @@ Preview/confirm steps and tool preconditions still apply. See the [security and 
 
 | Article | Contents |
 |---|---|
-| [Overview](docs/overview.md) | Full feature list, compatibility, CI and contributor/project guidance |
-| [Installation](docs/installation.md) | Update site, Windows command, JVM flag, preferences and status bar |
+| [Features](docs/features.md) | Full feature list, compatibility and business-project guidance |
+| [Installation](docs/installation.md) | Update site, Windows command, JVM flag, HTTP startup and preferences |
+| [Status bar](docs/status-bar.md) | Server status, execution controls and user signals |
 | [Clients](docs/clients.md) | Every client's full setup, HTTP bridge and Multi-EDT proxy |
 | [stdio](docs/stdio.md) | Bundled bootstrap, local transport, startup modes and limits |
 | [Tool management](docs/tool-management.md) | Preference groups, presets, defaults and progressive disclosure |
@@ -158,5 +172,6 @@ Build from the repository root with `bash source/compile.sh` (JDK 25 and Maven 3
 The output is a p2 update-site archive for installation through EDT.
 
 ## License
-# Copyright (C) 2026 DitriX
-# Licensed under GNU AGPL v3.0
+Copyright (C) 2026 DitriX
+
+Licensed under GNU AGPL v3.0

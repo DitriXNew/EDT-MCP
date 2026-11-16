@@ -1,5 +1,7 @@
 # Available Tools
 
+This article keeps maintained usage summaries; the [per-tool reference](tools/README.md) provides generated descriptions, parameters and guides.
+
 The full per-tool reference lives in **[docs/tools/](tools/)** — one page per
 tool (what it does, every parameter, and how it works), generated from the current MCP
 server (`get_tool_guide`). The usage summaries below are maintained prose; regeneration

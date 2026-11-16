@@ -27,9 +27,6 @@ Create `.vscode/mcp.json`:
 }
 ```
 
-<details>
-<summary><strong>Other AI Assistants</strong> - Cursor, Claude Code, Claude Desktop</summary>
-
 ## Cursor IDE
 
 > **Note:** Cursor doesn't support MCP embedded resources. Enable **"Plain text mode (Cursor compatibility)"** in EDT preferences: **Window → Preferences → MCP Server**. It moves a result into `content[0].text`; a JSON tool still returns its `structuredContent` as well, so a client that enforces the declared `outputSchema` is satisfied too.
@@ -99,9 +96,7 @@ Copy the bundled [stdio configuration](stdio.md) into `claude_desktop_config.jso
 }
 ```
 
-</details>
-
-# Multi-EDT Proxy
+## Multi-EDT Proxy
 
 The proxy supports [client bearer authentication and separate tokens for each EDT](../proxy/README.md#client-and-backend-tokens).
 Network listeners require a proxy token; use HTTPS through a reverse proxy or a VPN to encrypt LAN traffic.

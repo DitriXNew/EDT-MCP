@@ -4,8 +4,7 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ## Tool Groups
 
-All **108 tools** are organized into 11 preference groups; **105 are enabled by default**.
-These preference groups control enablement; the 12 progressive-disclosure toolsets in the
+Tools are organized into preference groups that control enablement; progressive-disclosure toolsets in the
 [tool index](tool-overviews.md#available-tools) control visibility and have separate membership.
 `git`, `ask_workmate`, and `get_form_screenshot` are **disabled by default**. Enable
 them in **Window → Preferences → MCP Server → Tools**; `enable_toolset` only changes
@@ -39,7 +38,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | Explicitly enable every tool, including the three disabled by default |
+| **All Tools** | Explicitly enable every tool, including those disabled by default |
 | **Analysis Only** | Read-only analysis — Core reads, comparison and git branch listing, Errors, Code Intelligence, Tags; `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, git branch changes, infobase binding and `project_checks` are off; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -94,7 +93,7 @@ When on, only the `core` toolset (navigation, source read, metadata discovery, a
 two management tools) appears in `tools/list`. To use more tools:
 
 1. Call **`list_toolsets`** to see the groups (`core`, `metadata`, `code`, `debug`,
-   `testing`, `profiling`, `forms`, `tags`, `translation`, `project`, `git`) and their tools.
+   `testing`, `profiling`, `forms`, `tags`, `translation`, `project`, `comparison`, `git`) and their tools.
 2. Call **`enable_toolset`** with `toolsets=[ids]` (e.g. `["code","debug"]`).
 3. **Re-request `tools/list`** — the revealed tools now appear.
 

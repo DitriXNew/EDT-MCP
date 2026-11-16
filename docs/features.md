@@ -1,16 +1,11 @@
-# Overview
-
-> **Build & Unit Tests**, **E2E**, and **MCP Conformance** all run on stock GitHub-hosted runners (cloud CI) — no docker image, no self-hosted runner. E2E and Conformance run against **EDT 2026.2** (build 2026.2, Eclipse 4.38 / Java 25): the setup step installs a headless EDT of that version on the runner via `p2 director`. E2E additionally imports the test fixtures into an empty workspace via the plugin's headless bootstrap (`EDT_MCP_IMPORT_PROJECTS`) and skips the live-infobase tools, so no 1C platform is needed. Each badge reflects its latest run.
-
-> [!TIP]
-> **Contributing / making changes?** Read [CLAUDE.md](../CLAUDE.md) first — it's the code-conduct "minefield map": hard don'ts and the stop-and-think-twice zones for this codebase (BM transactions, the bilingual ru/en model, cascading rename, etc.). Detailed how-to lives in the skills under `.claude/skills/`.
+# Features
 
 > [!TIP]
 > **Using EDT-MCP on a 1C business project?** The client-neutral
 > [business-project skills pack](../agent/README.md) routes common project tasks to
 > compact workflows. The [rules pack](../rules/README.md) provides standing,
 > detailed project policy; the two business-project layers are complementary.
-> Both are separate from the plugin-contributor skills above.
+> Both are separate from the [plugin-contributor skills](../.claude/skills/).
 
 > [!IMPORTANT]
 > **EDT version compatibility:**
@@ -18,9 +13,7 @@
 > **Compatibility with earlier EDT versions is not guaranteed:** the plugin may work
 > there, but nothing checks it and such a problem does not block a release.
 > The plugin is COMPILED against the 2026.2 target platform but **to Java 17**
-> (`release 17` plus `Bundle-RequiredExecutionEnvironment: JavaSE-17`). Building it needs
-> a JDK 25 (Tycho 5 reads the platform's Java 25 class files); that is the JDK that
-> *runs* the build, not the level it emits.
+> (`release 17` plus `Bundle-RequiredExecutionEnvironment: JavaSE-17`).
 
 ## Features
 

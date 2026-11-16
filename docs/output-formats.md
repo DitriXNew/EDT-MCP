@@ -2,7 +2,7 @@
 
 Each tool declares a response type (`IMcpTool.getResponseType()`), with some selecting a format per call. **The default is Markdown**: a tool without a response-type override returns an EmbeddedResource with `mimeType: text/markdown`. The non-default types and per-call variants are enumerated below; everything else is Markdown.
 
-### Response format policy (Markdown vs JSON)
+## Response format policy (Markdown vs JSON)
 
 `structuredContent`/JSON exists for clients to consume, not for the agent to read: it is justified only by verbatim round-trip of identifiers, machine-structured positions, a declared `outputSchema`, or UI-rendered data. **Markdown is the default** because it is more token-efficient and directly readable.
 
@@ -34,7 +34,7 @@ Errors are reported the same way regardless of a tool's normal format — see th
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` and `get_template_screenshot` return rendered PNG images as EmbeddedResources with an `image/*` `mimeType`.
 
-### Saved-module query validation
+## Saved-module query validation
 
 `validate_query` requires `projectName` and exactly one of `queryText` or `modulePath`.
 Use `modulePath="CommonModules/MyModule/Module.bsl"` to scan saved BSL, with optional
@@ -44,7 +44,7 @@ verdicts in `queries` with diagnostics mapped to module lines. `skipped` reports
 concatenations and keyword-leading strings without query structure; an empty scan suggests
 `queryText`. Runtime substitutions are not reconstructed. `dcsMode` applies in either mode.
 
-### DCS lifecycle and values
+## DCS lifecycle and values
 
 Creating or changing an empty template to `templateType=DataCompositionSchema` exports `Template.dcs`
 in that call; an empty schema supports `dcs get format="xml"`. `create_metadata` with
@@ -59,7 +59,7 @@ Writes wait for export off the UI thread; `Export scheduled` is submission and
 `Export drained: true` confirms queue completion. A post-commit export failure carries
 `mutationCommitted`; check project state, resync and read back before retrying.
 
-### DCS XML transfers
+## DCS XML transfers
 
 `dcs` with `action="get"`, `type="schema"`, and `format="xml"` returns
 `{success,totalChars,offset,hasMore,nextOffset?,hash,xml}`. Begin at `offset=0`, append
@@ -72,7 +72,7 @@ raise `limit` when the client tolerates larger results to reduce the page count.
 all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes are not chunked. See
 [`dcs`](tools/dcs.md) for the paging loop and replacement example.
 
-### Error contract
+## Error contract
 
 Whatever a tool's normal output format above, it reports a **failure** the same way: a JSON payload `{"success": false, "error": "<message>"}` that the server delivers as a structured tool error (`isError: true`) regardless of the declared response type. The `error` field is always present (a `null` exception message is coalesced to `Unknown error`) and the message carries no redundant `Error:` prefix. A client detects failure via `isError` / `success: false` and reads `error` for the reason — no markdown parsing required. Success and purely *informational* results (for example "No references found", or a not-found accompanied by a list of valid alternatives) stay in the tool's natural format.
 
@@ -93,7 +93,7 @@ before capping stored bodies at 20000 characters. A capped body may be invalid J
 use the recorded status. Background completion preserves that status and updates the
 same interrupted-call row without changing its delivered response or statistics.
 
-### Tool annotations
+## Tool annotations
 
 Every tool in the `tools/list` response carries an `annotations` object with the standard MCP behavioral hints, so a client can reason about a tool's effect before calling it. The hints are derived centrally from the tool name (a tool may override them):
 
@@ -108,7 +108,7 @@ Only hints that apply are emitted; unset hints are omitted from the JSON. Tools 
 
 </details>
 
-# API Endpoints
+## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

@@ -385,7 +385,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         if (outsideWorkspace)
         {
             Activator.logWarning(NAME + ": outputDir is OUTSIDE the EDT workspace: " + outputDir //$NON-NLS-1$
-                + " (trusted-caller-only — see README Security & trust model)."); //$NON-NLS-1$
+                + " (trusted-caller-only — see docs/security.md)."); //$NON-NLS-1$
         }
         return OutputDirResolution.ok(outputDir, outsideWorkspace);
     }
