@@ -22,6 +22,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
@@ -165,7 +166,37 @@ public class EdtDialogs
     private static boolean answerable(Shell shell, Map<String, List<Button>> buttons, boolean complete)
     {
         return shell.getData(HUMAN_KEY) == null
-            && (questionAnswerable(shell, buttons, complete) || acknowledgeOnly(buttons, complete));
+            && (questionAnswerable(shell, buttons, complete)
+                || acknowledgeOnly(buttons, complete) && onlyPassiveControls(shell, 0));
+    }
+
+    /**
+     * Whether everything under {@code control} only shows text: labels, links, read-only text, push buttons
+     * and plain containers. A checkbox, a choice, an editable field or any control of an unknown class makes
+     * OK submit a decision, so the dialog is not merely informational.
+     */
+    static boolean onlyPassiveControls(Control control, int depth)
+    {
+        if (depth > 6)
+        {
+            return false;
+        }
+        for (Control child : ((Composite)control).getChildren())
+        {
+            if (child.isDisposed())
+            {
+                continue;
+            }
+            boolean container = child.getClass() == Composite.class || child.getClass() == Group.class;
+            boolean passive = container || child instanceof Label || child instanceof CLabel || child instanceof Link
+                || child instanceof Button && (child.getStyle() & SWT.PUSH) != 0
+                || child instanceof Text && (child.getStyle() & SWT.READ_ONLY) != 0;
+            if (!passive || container && !onlyPassiveControls(child, depth + 1))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** A known EDT question: any of its buttons may be pressed. */

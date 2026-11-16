@@ -558,4 +558,24 @@ public class EdtDialogToolTest
         assertTrue(EdtDialogs.acknowledgeOnly(Map.of("OK", List.of(new Object())), true));
         assertFalse(EdtDialogs.acknowledgeOnly(Map.of(), true));
     }
+
+    /** OK next to a checkbox, a choice or an editable field submits a decision: still human-only. */
+    @Test
+    public void okWithAnInteractiveControlIsNotInformational()
+    {
+        for (int style : new int[] {SWT.CHECK, SWT.RADIO})
+        {
+            Button ok = question("Error", "OK")[0];
+            Button choice = mock(Button.class);
+            when(choice.getStyle()).thenReturn(style);
+            when(choice.getText()).thenReturn("Do not ask again");
+            when(shell.getChildren()).thenReturn(new Control[] {ok, choice});
+            assertQuestionRefuses(new Button[] {ok});
+        }
+        Button ok = question("Error", "OK")[0];
+        org.eclipse.swt.widgets.Text field = mock(org.eclipse.swt.widgets.Text.class);
+        when(field.getStyle()).thenReturn(SWT.BORDER);
+        when(shell.getChildren()).thenReturn(new Control[] {field, ok});
+        assertQuestionRefuses(new Button[] {ok});
+    }
 }
