@@ -33,7 +33,8 @@ def test_profiling_fixture_summary_paging_and_compare():
     summary = _read(top=2, applicationId='unknown-profiling-e2e')
     for fragment in ('Measurement: `' + _BASE + '`', '2026-06-06', 'Time unit: ms', 'Top lines by pure time',
                      'Top lines by call count', 'Top lines with server calls', 'Top methods by own',
-                     'Top modules by own', 'showing 2 of', 'Pure time ms', 'Server', 'profilingActive: false'):
+                     'Top modules by own', 'showing 2 of', 'Pure time ms', 'Server', 'profilingActive: false',
+                     'Invocations (est.)', 'loop header'):
         assert_contains(summary, fragment, 'summary contract')
     first = _read(mode='lines', moduleFilter='tests_SampleTests', limit=1, responseFormat='detailed')
     second = _read(mode='lines', moduleFilter='tests_SampleTests', limit=1, offset=1, responseFormat='detailed')
@@ -44,6 +45,9 @@ def test_profiling_fixture_summary_paging_and_compare():
     rows1 = [line for line in first.splitlines() if line.startswith('| TestConfiguration')]
     rows2 = [line for line in second.splitlines() if line.startswith('| TestConfiguration')]
     assert len(rows1) == len(rows2) == 1 and rows1 != rows2, (rows1, rows2)
+    callers = _read(mode='callers', methodFilter='ОжидаетЧто', moduleFilter='tests_SampleTests')
+    for fragment in ('Callers of `ОжидаетЧто`', 'by inclusive time', 'Inclusive ms', 'ЮТест.ОжидаетЧто(2 + 2)'):
+        assert_contains(callers, fragment, 'callers contract')
     concise = _read(mode='lines', moduleFilter='tests_SampleTests', limit=1)
     assert '| Method |' not in concise and '| Source (shortened) |' not in concise, concise
     compared = _read(mode='compare', baseId=_BASE, comparedId=_COMPARED,
@@ -51,7 +55,7 @@ def test_profiling_fixture_summary_paging_and_compare():
     for fragment in ('Base → compared', _BASE, _COMPARED, 'slowed-down methods', 'sped-up methods',
                      'Base calls', 'Compared calls', 'Unmatched elements:', 'number and trimmed text'):
         assert_contains(compared, fragment, 'EDT comparison contract')
-    for output in (listed.text, summary, first, second, concise, compared):
+    for output in (listed.text, summary, first, second, callers, concise, compared):
         lines = output.splitlines()
         for index, line in enumerate(lines[:-1]):
             if line.startswith('|') and not lines[index + 1].startswith('|'):
@@ -75,6 +79,7 @@ def test_profiling_validation_and_unknown_measurement():
         ({'limit': 101}, 'limit', '1..100'),
         ({'offset': -1}, 'offset', 'integer'),
         ({'mode': 'compare'}, 'baseId', 'mode=list'),
+        ({'mode': 'callers'}, 'methodFilter', 'called method'),
         ({'measurementId': 'no-such-measurement'}, 'no-such-measurement', 'mode=list'),
     ]:
         result = call('get_profiling_results', arguments)

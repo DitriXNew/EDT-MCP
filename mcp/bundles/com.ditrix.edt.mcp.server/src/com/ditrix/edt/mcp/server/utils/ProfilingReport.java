@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com._1c.g5.v8.dt.debug.model.base.data.DebugTargetType;
 import com._1c.g5.v8.dt.debug.model.base.data.BSLModuleIdInternal;
@@ -40,7 +42,8 @@ public final class ProfilingReport
         double time, double pure, double percent, double purePercent, ServerCallSignal signal,
         String target, Map<String, Double> times, Map<String, Double> pureTimes, String source, boolean unresolved) { }
 
-    public record Rollup(String module, String method, double time, double pure, long lineCalls) { }
+    /** {@code invocations} is the call count of the method's first recorded line; -1 when unknown. */
+    public record Rollup(String module, String method, double time, double pure, long lineCalls, long invocations) { }
 
     public static String ms(double value) { return number(value) + " ms"; }
     public static String number(double value) { return String.format(Locale.ROOT, "%.3f", value); }
@@ -126,15 +129,95 @@ public final class ProfilingReport
     public static List<Rollup> rollups(List<Row> rows, boolean methods)
     {
         Map<List<String>, Rollup> sums = new LinkedHashMap<>();
+        Map<List<String>, Integer> firstLines = new LinkedHashMap<>();
         for (Row row : rows)
         {
             List<String> key = List.of(row.moduleKey(), methods ? row.method() : "");
-            Rollup old = sums.getOrDefault(key, new Rollup(row.module(), methods ? row.method() : "", 0, 0, 0));
+            Rollup old = sums.getOrDefault(key, new Rollup(row.module(), methods ? row.method() : "", 0, 0, 0, 0));
             sums.put(key, new Rollup(old.module(), old.method(), old.time() + row.time(),
-                old.pure() + row.pure(), old.lineCalls() + row.calls()));
+                old.pure() + row.pure(), old.lineCalls() + row.calls(), 0));
+            firstLines.merge(key, row.line(), Math::min);
         }
-        return sums.values().stream().sorted(Comparator.comparingDouble(Rollup::pure).reversed()
+        // A method's first statement runs once per invocation, so its line's calls count the invocations.
+        Map<List<String>, Long> entries = new LinkedHashMap<>();
+        for (Row row : rows)
+        {
+            List<String> key = List.of(row.moduleKey(), methods ? row.method() : "");
+            if (row.line() == firstLines.get(key))
+            {
+                entries.merge(key, row.calls(), Long::sum);
+            }
+        }
+        List<Rollup> result = new ArrayList<>();
+        for (Map.Entry<List<String>, Rollup> sum : sums.entrySet())
+        {
+            Rollup r = sum.getValue();
+            boolean known = methods && !r.method().equals("n/a");
+            result.add(new Rollup(r.module(), r.method(), r.time(), r.pure(), r.lineCalls(),
+                known ? entries.getOrDefault(sum.getKey(), 0L) : -1));
+        }
+        return result.stream().sorted(Comparator.comparingDouble(Rollup::pure).reversed()
             .thenComparing(Rollup::module).thenComparing(Rollup::method)).toList();
+    }
+
+    /** The name a method signature declares, e.g. {@code Post} for {@code Post(Cancel) Export}. */
+    private static String methodName(String signature)
+    {
+        int paren = signature.indexOf('(');
+        return (paren < 0 ? signature : signature.substring(0, paren)).trim();
+    }
+
+    /**
+     * Whether the line calls the method. Inside a same-named method only a qualified call ({@code Module.Name(})
+     * counts: an unqualified one is recursion, a qualified one usually calls another module's method.
+     */
+    private static boolean callsOut(Matcher matcher, String source, boolean sameName)
+    {
+        while (matcher.find())
+        {
+            if (!sameName || matcher.start() > 0 && source.charAt(matcher.start() - 1) == '.')
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The source lines that call {@code method}, by inclusive time: each line's time includes the callee's.
+     * Matched on the line text (the name followed by an opening parenthesis), so a same-named method of
+     * another module matches too; {@code module} narrows the CALLERS' module.
+     */
+    public static String callers(IProfilingResult result, List<Row> all, String module, String method, int frequency,
+        int offset, int limit)
+    {
+        String name = methodName(method);
+        Pattern call = Pattern.compile("(?<![\\p{L}\\p{N}_])" + Pattern.quote(name)
+            + "\\s*\\(", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        List<Row> sites = all.stream()
+            .filter(r -> !r.unresolved() && matches(r.module(), module) && r.calls() >= frequency
+                && callsOut(call.matcher(r.source()), r.source(), methodName(r.method()).equalsIgnoreCase(name)))
+            .sorted(Comparator.comparingDouble(Row::time).reversed().thenComparing(Row::moduleKey)
+                .thenComparingInt(Row::line).thenComparing(Row::target))
+            .toList();
+        List<Row> shown = page(sites, offset, limit);
+        StringBuilder out = new StringBuilder(identity(result)).append(unresolvedNotice(all))
+            .append("Callers of ").append(MarkdownUtils.inlineCode(name))
+            .append(": source lines that call it, by inclusive time. A call line's time includes the callee's and ")
+            .append("everything it calls. Matched by name on the line text, so a same-named method of another ")
+            .append("module also matches; an unqualified call inside a same-named method (recursion) is left out. ")
+            .append("Total over ")
+            .append(sites.size()).append(" call line(s): ").append(ms(sites.stream().mapToDouble(Row::time).sum()))
+            .append(" inclusive, ").append(sites.stream().mapToLong(Row::calls).sum()).append(" calls.\n\n")
+            .append(pageCount(offset, shown.size(), sites.size()))
+            .append(MarkdownUtils.tableHeader("Caller module", "Caller method", "Line", "Target", "Calls",
+                "Inclusive ms", "Pure ms", "Source (shortened)"));
+        for (Row row : shown)
+        {
+            out.append(MarkdownUtils.tableRow(row.module(), row.method(), text(row.line()), row.target(),
+                text(row.calls()), number(row.time()), number(row.pure()), source(row.source())));
+        }
+        return out.append('\n').toString();
     }
 
     public static String identity(IProfilingResult result)
@@ -255,15 +338,22 @@ public final class ProfilingReport
         out.append("## ").append(title).append(count(Math.min(top, rows.size()), rows.size(),
             "Increase top (maximum 20), narrow moduleFilter/methodFilter, or export with manage_profiling_results."))
             .append(byMethod
-                ? MarkdownUtils.tableHeader("Module", "Method", "Pure ms", "Inclusive line sum ms (may double-count)", "Line calls (sum, not method invocations)")
+                ? MarkdownUtils.tableHeader("Module", "Method", "Pure ms", "Inclusive line sum ms (may double-count)",
+                    "Invocations (est.)", "Line calls (sum, not method invocations)")
                 : MarkdownUtils.tableHeader("Module", "Pure ms", "Inclusive line sum ms (may double-count)", "Line calls (sum, not method invocations)"));
         for (Rollup row : page(rows, 0, top))
         {
             out.append(byMethod
-                ? MarkdownUtils.tableRow(row.module(), row.method(), number(row.pure()), number(row.time()), text(row.lineCalls()))
+                ? MarkdownUtils.tableRow(row.module(), row.method(), number(row.pure()), number(row.time()),
+                    row.invocations() < 0 ? "n/a" : text(row.invocations()), text(row.lineCalls()))
                 : MarkdownUtils.tableRow(row.module(), number(row.pure()), number(row.time()), text(row.lineCalls())));
         }
         out.append('\n');
+        if (byMethod)
+        {
+            out.append("Invocations (est.) are the calls of the method's first recorded line: exact unless that line "
+                + "is a loop header, which counts every iteration. For who calls a method, use mode=callers.\n\n");
+        }
         if (byMethod && page(rows, 0, top).stream().anyMatch(r -> r.method().equals("n/a"))) out.append(NA_NOTICE);
     }
 

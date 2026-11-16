@@ -3415,7 +3415,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect BSL performance measurements: summary, list, paged lines and comparison.",
+    "description": "Inspect BSL performance measurements: summary, list, paged lines, callers of a method and comparison.",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3446,11 +3446,12 @@
           "type": "integer"
         },
         "mode": {
-          "description": "Default: summary.",
+          "description": "Default: summary. callers: the lines calling methodFilter.",
           "enum": [
             "summary",
             "list",
             "lines",
+            "callers",
             "compare"
           ],
           "type": "string"

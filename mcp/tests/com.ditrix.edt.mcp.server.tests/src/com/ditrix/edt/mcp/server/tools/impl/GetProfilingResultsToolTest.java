@@ -153,6 +153,43 @@ public class GetProfilingResultsToolTest
         assertTrue(callTop, callTop.contains("third") && !callTop.contains("second"));
         assertTrue(output, output.contains("2.000")); // avg pure/call = 4/2
     }
+    @Test public void methodInvocationsCountTheFirstRecordedLine()
+    {
+        List<ProfilingReport.Row> rows = ProfilingReport.rows(first);
+        var methods = ProfilingReport.rollups(rows, true);
+        assertEquals("Slow()", methods.get(0).method());
+        assertEquals(2, methods.get(0).invocations());
+        assertEquals(12, methods.get(0).lineCalls());
+        assertEquals(20, methods.get(1).invocations());
+        assertEquals(-1, ProfilingReport.rollups(rows, false).get(0).invocations());
+        String output = tool.execute(named());
+        assertTrue(output, output.contains("Invocations (est.)") && output.contains("loop header"));
+        assertTrue(output, output.contains("| Module | Slow() | 6.000 | 14.000 | 2 | 12 |"));
+    }
+    @Test public void callersListCallLinesByInclusiveTime()
+    {
+        String provesti = "\u041f\u0440\u043e\u0432\u0435\u0441\u0442\u0438";
+        List<ILineProfilingResult> calls = List.of(
+            line("Module", "Slow()", 1, 2, 8_000_000, 4_000_000, "Slow(n - 1);"),
+            line("Caller", "Run()", 5, 3, 10_000_000, 1_000_000, "Result = Slow(1);"),
+            line("Other", "Go()", 2, 1, 40_000_000, 2_000_000, "x = Module.slow (2);"),
+            line("Other", "Go()", 3, 1, 50_000_000, 2_000_000, "SlowDown(3);"),
+            line("Other", "Go()", 4, 1, 60_000_000, 2_000_000, "NotSlow(3); y = Slow;"),
+            line("Chain", "Go()", 9, 1, 1_000_000, 1_000_000, "Doc.Module.Slow(4);"),
+            line("Handler", "Slow(Cancel)", 2, 1, 2_000_000, 1_000_000, "Common.Slow(Cancel);"),
+            line("Doc", "Post()", 7, 1, 5_000_000, 1_000_000, "Doc." + provesti.toLowerCase() + "();"));
+        when(first.getProfilingResults()).thenReturn(calls);
+        String output = tool.execute(named("mode", "callers", "methodFilter", "Slow"));
+        assertTrue(output, output.contains("Callers of `Slow`") && output.contains("inclusive"));
+        assertTrue(output, output.contains("Total over 4 call line(s): 53.000 ms inclusive, 6 calls."));
+        assertTrue(output, output.indexOf("Module.slow (2)") < output.indexOf("Result = Slow(1)"));
+        assertFalse(output, output.contains("Slow(n - 1)") || output.contains("SlowDown") || output.contains("NotSlow"));
+        output = tool.execute(named("mode", "callers", "methodFilter", "Slow()", "moduleFilter", "caller"));
+        assertTrue(output, output.contains("Total over 1 call line(s)") && output.contains("Result = Slow(1)"));
+        output = tool.execute(named("mode", "callers", "methodFilter", provesti + "(Cancel) Export"));
+        assertTrue(output, output.contains("Total over 1 call line(s)") && output.contains("| Doc | Post() | 7 |"));
+        error(tool.execute(named("mode", "callers")), "methodFilter is required for callers");
+    }
     @Test public void sourceTruncationIsExplicitAndServerCallsAreSelected()
     {
         ILineProfilingResult server = first.getProfilingResults().get(0);
@@ -338,6 +375,7 @@ public class GetProfilingResultsToolTest
         ICompareResult compared = mock(ICompareResult.class);
         when(compare.compare(first, second)).thenReturn(compared);
         for (Map<String, String> params : List.of(named(), named("mode", "lines"), named("mode", "list"),
+            named("mode", "callers", "methodFilter", "Slow"),
             Map.of("mode", "compare", "baseId", first.getUuid().toString(), "moduleFilter", "Module")))
         {
             String output = tool.execute(params);

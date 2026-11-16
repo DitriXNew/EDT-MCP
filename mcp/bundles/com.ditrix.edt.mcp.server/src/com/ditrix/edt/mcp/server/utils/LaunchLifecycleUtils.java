@@ -1931,6 +1931,64 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * The pre-launch check of a launch whose infobase update EDT's launch delegate performs inside
+     * the launch Job (its "Application update" dialog is pressed by the armed confirmer), so the call
+     * returns "launching" at once and {@code debug_status} reports {@code state: starting} until the
+     * client is up (EDT's update state does not change to BEING_UPDATED on this path). Refuses only what that path cannot recover from: an application that
+     * cannot be read or does not exist, or one another caller is updating right now.
+     *
+     * @return {@link Optional#empty()} to launch, otherwise an actionable refusal
+     */
+    public static Optional<String> deferredUpdatePreflight(IProject project, String applicationId,
+        IApplicationManager appManager)
+    {
+        if (appManager == null)
+        {
+            return Optional.of("IApplicationManager service is not available"); //$NON-NLS-1$
+        }
+        if (project == null || !project.exists() || !project.isOpen())
+        {
+            return Optional.of("Project is not available: " //$NON-NLS-1$
+                + (project != null ? project.getName() : "<null>")); //$NON-NLS-1$
+        }
+        ApplicationSupport.BoundedRead<Optional<IApplication>> lookup =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!lookup.concluded())
+        {
+            return Optional.of("Application '" + applicationId + "' could not be resolved: " //$NON-NLS-1$ //$NON-NLS-2$
+                + lookup.deadlineFailure() + "."); //$NON-NLS-1$
+        }
+        try
+        {
+            Optional<IApplication> application = lookup.valueOrRethrow();
+            if (application.isEmpty())
+            {
+                return Optional.of("Application not found: " + applicationId); //$NON-NLS-1$
+            }
+            ApplicationUpdateState state = appManager.getUpdateState(application.get());
+            if (isInProgress(state))
+            {
+                return Optional.of("The infobase of application '" + applicationId //$NON-NLS-1$
+                    + "' is being updated right now (by update_database or another launch). Wait until " //$NON-NLS-1$
+                    + "get_applications shows its updateState as UPDATED, then launch again."); //$NON-NLS-1$
+            }
+            if (!isSynced(state))
+            {
+                Activator.logInfo("launch: the infobase needs an update (" + state //$NON-NLS-1$
+                    + "); EDT's launch delegate performs it (auto-confirmed): applicationId=" //$NON-NLS-1$
+                    + applicationId);
+            }
+            return Optional.empty();
+        }
+        catch (ApplicationException e)
+        {
+            return Optional.of("Application '" + applicationId + "' could not be read: " //$NON-NLS-1$ //$NON-NLS-2$
+                + PlatformFailures.describe(e));
+        }
+    }
+
+    /**
      * Handles the "another caller is already updating this IB" case: waits
      * (event-driven) until the in-progress update actually applies, then reports
      * success or the stale-infobase refusal. Launching while the update is mid-flight

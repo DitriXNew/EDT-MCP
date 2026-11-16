@@ -1,15 +1,15 @@
 # get_profiling_results
 
-Inspect BSL performance measurements: summary, list, paged lines and comparison.
+Inspect BSL performance measurements: summary, list, paged lines, callers of a method and comparison.
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
-| mode | — | string (one of: summary, list, lines, compare) | Default: summary. |
+| mode | — | string (one of: summary, list, lines, callers, compare) | Default: summary. callers: the lines calling methodFilter. |
 | measurementId | — | string | Measurement UUID; default: latest by session date. Use mode=list. |
 | top | — | integer | Summary/compare top size: 1..20, default 10. |
 | moduleFilter | — | string | Case-insensitive module substring. |
-| methodFilter | — | string | Case-insensitive method substring. |
+| methodFilter | — | string | Case-insensitive method substring; for callers, the called method's name. |
 | minFrequency | — | integer | Minimum line calls: 0..2147483647, default 1. |
 | limit | — | integer | Page size: 1..100, default 50 (list/lines/compare lines). |
 | offset | — | integer | Page offset: nonnegative integer, default 0. |
@@ -41,7 +41,11 @@ Unresolved workspace modules use stable identities: project, module object ID an
 
 Times use **ms** with three decimals (microsecond precision); percentages use two decimals. EDT's line `getDurability()`/`getPureDurability()` and measurement totals are performance ticks. `LineProfilingResult` converts ticks using the measurement's performance frequency into `Duration`; the tool sums those normalized per-target durations. EDT comparison element `getTime`/`getPureTime` values are nanoseconds, matching the UI's `Duration.of(..., NANOS)` formatting. Raw comparison totals still hold ticks and are not printed as durations.
 
-Own (pure) method/module time is the sum of pure line times, following EDT's `MethodStatistic`. Inclusive line sums can double-count nested calls and recursion; they are labeled accordingly. Rollup call counts are sums of line calls, not method invocations. Client types include desktop/web/mobile clients and COMConnector; server types include servers, services, jobs and file-mode server emulation. Unknown targets appear as Other.
+Own (pure) method/module time is the sum of pure line times, following EDT's `MethodStatistic`. Inclusive line sums can double-count nested calls and recursion; they are labeled accordingly. Rollup line calls are sums of line calls, not method invocations. EDT records lines, not calls, so method rows estimate **Invocations (est.)** as the calls of the method's first recorded line: exact unless that line is a loop header, which counts every iteration. Client types include desktop/web/mobile clients and COMConnector; server types include servers, services, jobs and file-mode server emulation. Unknown targets appear as Other.
+
+## Callers
+
+EDT stores no call graph. `{"mode":"callers","methodFilter":"FillCheckProcessing"}` finds the source lines that call a method: the name followed by `(`, matched case-insensitively on the line text, so a same-named method of another module matches too; an unqualified call inside a same-named method (recursion) is left out, a qualified `Module.Name(` call there is kept. Rows are sorted by **inclusive** time, which includes the callee and everything it calls; pure time is the call line's own. `methodFilter` is required here (a signature such as `Post(Cancel) Export` also works); `moduleFilter` narrows the callers' module, `minFrequency` their calls, and `limit`/`offset` page them.
 
 ## Compare
 
@@ -51,7 +55,7 @@ The method rankings use absolute **own-time change in ms**, not percentage. Unma
 
 ## Export and import
 
-Use the separate write tool `manage_profiling_results` for full CSV/native exports or native imports. It requires its own client permission, a writable preset and consent. This read tool only supports `summary`, `list`, `lines` and `compare`. Its preset membership follows the Debugging group.
+Use the separate write tool `manage_profiling_results` for full CSV/native exports or native imports. It requires its own client permission, a writable preset and consent. This read tool only supports `summary`, `list`, `lines`, `callers` and `compare`. Its preset membership follows the Debugging group.
 
 ## Workflow
 
