@@ -45,7 +45,7 @@ Own (pure) method/module time is the sum of pure line times, following EDT's `Me
 
 ## Callers
 
-EDT stores no call graph. `{"mode":"callers","methodFilter":"FillCheckProcessing"}` finds the source lines that call a method: the name followed by `(`, matched case-insensitively on the line text, so a same-named method of another module matches too; an unqualified call inside a same-named method (recursion) is left out, a qualified `Module.Name(` call there is kept. Rows are sorted by **inclusive** time, which includes the callee and everything it calls; pure time is the call line's own. `methodFilter` is required here (a signature such as `Post(Cancel) Export` also works); `moduleFilter` narrows the callers' module, `minFrequency` their calls, and `limit`/`offset` page them.
+EDT stores no call graph. `{"mode":"callers","methodFilter":"FillCheckProcessing"}` finds the source lines that call a method: the name followed by `(`, matched case-insensitively on the line's code (string literals and comments ignored), so a same-named method of another module matches too; an unqualified call inside a same-named method (recursion) is left out, a qualified `Module.Name(` call there is kept. Rows are sorted by **inclusive** time, which includes the callee and everything it calls; pure time is the call line's own. `methodFilter` is required here (a signature such as `Post(Cancel) Export` also works); `moduleFilter` narrows the callers' module, `minFrequency` their calls, and `limit`/`offset` page them.
 
 ## Compare
 

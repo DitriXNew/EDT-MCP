@@ -162,6 +162,9 @@ public class GetProfilingResultsToolTest
         assertEquals(12, methods.get(0).lineCalls());
         assertEquals(20, methods.get(1).invocations());
         assertEquals(-1, ProfilingReport.rollups(rows, false).get(0).invocations());
+        // A filter that drops the entry line keeps the whole-measurement estimate.
+        assertEquals(2, ProfilingReport.rollups(ProfilingReport.filter(rows, null, null, 5), rows, true).get(0).invocations());
+        assertTrue(tool.execute(named("minFrequency", "5")).contains("| Module | Slow() | 2.000 | 6.000 | 2 | 10 |"));
         String output = tool.execute(named());
         assertTrue(output, output.contains("Invocations (est.)") && output.contains("loop header"));
         assertTrue(output, output.contains("| Module | Slow() | 6.000 | 14.000 | 2 | 12 |"));
@@ -177,6 +180,9 @@ public class GetProfilingResultsToolTest
             line("Other", "Go()", 4, 1, 60_000_000, 2_000_000, "NotSlow(3); y = Slow;"),
             line("Chain", "Go()", 9, 1, 1_000_000, 1_000_000, "Doc.Module.Slow(4);"),
             line("Handler", "Slow(Cancel)", 2, 1, 2_000_000, 1_000_000, "Common.Slow(Cancel);"),
+            line("Text", "Log()", 4, 1, 70_000_000, 1_000_000, "Message(\"Slow() failed\"); // Slow(1)"),
+            line("Text", "Log()", 5, 1, 80_000_000, 1_000_000, "|Slow(2)\" + Done(x);"),
+            line("Module", "Slow()", 6, 1, 90_000_000, 1_000_000, "Slow(n - 2); // Common.Slow()"),
             line("Doc", "Post()", 7, 1, 5_000_000, 1_000_000, "Doc." + provesti.toLowerCase() + "();"));
         when(first.getProfilingResults()).thenReturn(calls);
         String output = tool.execute(named("mode", "callers", "methodFilter", "Slow"));

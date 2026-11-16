@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -128,19 +129,31 @@ public final class ProfilingReport
 
     public static List<Rollup> rollups(List<Row> rows, boolean methods)
     {
+        return rollups(rows, rows, methods);
+    }
+
+    /**
+     * Rollups of {@code rows}; the invocation estimates come from {@code all}, the whole measurement, so a
+     * filter that drops a method's entry line cannot turn a hotter later line into its invocation count.
+     */
+    public static List<Rollup> rollups(List<Row> rows, List<Row> all, boolean methods)
+    {
         Map<List<String>, Rollup> sums = new LinkedHashMap<>();
-        Map<List<String>, Integer> firstLines = new LinkedHashMap<>();
         for (Row row : rows)
         {
             List<String> key = List.of(row.moduleKey(), methods ? row.method() : "");
             Rollup old = sums.getOrDefault(key, new Rollup(row.module(), methods ? row.method() : "", 0, 0, 0, 0));
             sums.put(key, new Rollup(old.module(), old.method(), old.time() + row.time(),
                 old.pure() + row.pure(), old.lineCalls() + row.calls(), 0));
-            firstLines.merge(key, row.line(), Math::min);
+        }
+        Map<List<String>, Integer> firstLines = new LinkedHashMap<>();
+        for (Row row : all)
+        {
+            firstLines.merge(List.of(row.moduleKey(), methods ? row.method() : ""), row.line(), Math::min);
         }
         // A method's first statement runs once per invocation, so its line's calls count the invocations.
         Map<List<String>, Long> entries = new LinkedHashMap<>();
-        for (Row row : rows)
+        for (Row row : all)
         {
             List<String> key = List.of(row.moduleKey(), methods ? row.method() : "");
             if (row.line() == firstLines.get(key))
@@ -168,11 +181,46 @@ public final class ProfilingReport
     }
 
     /**
+     * The executable text of one source line: string literals and the trailing comment become spaces. A line
+     * starting with {@code |} continues a multi-line string literal.
+     */
+    static String code(String source)
+    {
+        char[] text = source.toCharArray();
+        int start = 0;
+        while (start < text.length && Character.isWhitespace(text[start]))
+        {
+            start++;
+        }
+        boolean inString = start < text.length && text[start] == '|';
+        for (int i = start; i < text.length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                inString = !inString;
+                text[i] = ' ';
+            }
+            else if (inString)
+            {
+                text[i] = ' ';
+            }
+            else if (c == '/' && i + 1 < text.length && text[i + 1] == '/')
+            {
+                Arrays.fill(text, i, text.length, ' ');
+                break;
+            }
+        }
+        return new String(text);
+    }
+
+    /**
      * Whether the line calls the method. Inside a same-named method only a qualified call ({@code Module.Name(})
      * counts: an unqualified one is recursion, a qualified one usually calls another module's method.
      */
-    private static boolean callsOut(Matcher matcher, String source, boolean sameName)
+    private static boolean callsOut(Pattern call, String source, boolean sameName)
     {
+        Matcher matcher = call.matcher(source);
         while (matcher.find())
         {
             if (!sameName || matcher.start() > 0 && source.charAt(matcher.start() - 1) == '.')
@@ -196,7 +244,7 @@ public final class ProfilingReport
             + "\\s*\\(", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
         List<Row> sites = all.stream()
             .filter(r -> !r.unresolved() && matches(r.module(), module) && r.calls() >= frequency
-                && callsOut(call.matcher(r.source()), r.source(), methodName(r.method()).equalsIgnoreCase(name)))
+                && callsOut(call, code(r.source()), methodName(r.method()).equalsIgnoreCase(name)))
             .sorted(Comparator.comparingDouble(Row::time).reversed().thenComparing(Row::moduleKey)
                 .thenComparingInt(Row::line).thenComparing(Row::target))
             .toList();
@@ -204,8 +252,8 @@ public final class ProfilingReport
         StringBuilder out = new StringBuilder(identity(result)).append(unresolvedNotice(all))
             .append("Callers of ").append(MarkdownUtils.inlineCode(name))
             .append(": source lines that call it, by inclusive time. A call line's time includes the callee's and ")
-            .append("everything it calls. Matched by name on the line text, so a same-named method of another ")
-            .append("module also matches; an unqualified call inside a same-named method (recursion) is left out. ")
+            .append("everything it calls. Matched by name on the line's code (strings and comments ignored), so a ")
+            .append("same-named method of another module also matches; an unqualified call inside a same-named method (recursion) is left out. ")
             .append("Total over ")
             .append(sites.size()).append(" call line(s): ").append(ms(sites.stream().mapToDouble(Row::time).sum()))
             .append(" inclusive, ").append(sites.stream().mapToLong(Row::calls).sum()).append(" calls.\n\n")
@@ -291,7 +339,7 @@ public final class ProfilingReport
             .reversed().thenComparing(Row::moduleKey).thenComparingInt(Row::line)).toList(), top);
         topLines(out, "Top lines with server calls", byPure(selected.stream().filter(r -> r.signal() != null
             && r.signal() != ServerCallSignal.NO_SERVER_CALL).toList()), top);
-        topRollups(out, "Top methods by own (pure) time", rollups(selected, true), top, true);
+        topRollups(out, "Top methods by own (pure) time", rollups(selected, all, true), top, true);
         topRollups(out, "Top modules by own (pure) time", rollups(selected, false), top, false);
         return out.append('\n').toString();
     }
