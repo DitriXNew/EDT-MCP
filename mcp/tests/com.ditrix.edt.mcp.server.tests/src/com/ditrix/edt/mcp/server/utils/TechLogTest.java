@@ -214,6 +214,44 @@ public class TechLogTest
         assertEquals(1, i.rejected); assertEquals(0, i.incompleteTail);
     }
 
+    @Test public void hugeQueriesAreClippedInSummaryAndDetailsButKeptInExportSource() throws Exception
+    {
+        // IRP produced 50 KB statements; 15 summary rows came to 413k characters.
+        String sql = "select t1._fld1 from _reference1 t1 where t1._fld2 = " + "x".repeat(50_000);
+        StringBuilder log = new StringBuilder();
+        for (int n = 0; n < 30; n++)
+            log.append(event("SDBL", "" + (5_000_000 + n)).replace("}", ",\"Sdbl\":\"" + sql + "\",\"Context\":\"" + "c".repeat(9000) + "\"}")).append('\n');
+        var i = TechLogReader.read(file(log.toString()), 8, 10, null, null);
+        assertEquals(30, i.events.size());
+        String summary = TechLogAnalysis.summary(i, 15, 0);
+        assertTrue("summary chars " + summary.length(), summary.length() < 20_000);
+        assertTrue(summary, summary.contains("chars; full text: manage_tech_log mode=export]"));
+        String group = i.groups.keySet().iterator().next();
+        String details = TechLogAnalysis.renderEvents(TechLogAnalysis.details(i, group), 100, 0);
+        assertTrue("details chars " + details.length(), details.length() < TechLogAnalysis.MAX_OUTPUT_CHARS + 20_000);
+        assertTrue(details, details.contains("Output budget reached after ") && details.contains("continue with offset="));
+        try (var reads = new TechLogReader.ReadSession(8, 10))
+        { assertEquals(sql, TechLogReader.get(reads.read(i.events.get(0).pointer()), "Sdbl")); }
+    }
+
+    @Test public void platformRepeatedPropertiesAreKeptNotRejected() throws Exception
+    {
+        // Verbatim shapes from an 8.3.25 file infobase capture.
+        var i = TechLogReader.read(file(
+            "{\"ts\":\"2026-11-16T07:40:09.195012\",\"duration\":\"10\",\"name\":\"SDBL\",\"depth\":\"1\",\"level\":\"DEBUG\",\"process\":\"1cv8c\","
+                + "\"OSThread\":\"3612\",\"Usr\":\"DefUser\",\"Trans\":\"0\",\"Func\":\"Transaction\",\"Func\":\"CommitTransaction\"}\n"
+            + "{\"ts\":\"2026-11-16T07:38:11.326002\",\"duration\":\"93002\",\"name\":\"CONN\",\"depth\":\"0\",\"level\":\"INFO\",\"process\":\"1cv8c\","
+                + "\"OSThread\":\"25580\",\"t:clientID\":\"3\",\"t:clientID\":\"3\",\"Calls\":\"3\"}\n"), 1, 10, null, null);
+        assertEquals(0, i.rejected); assertEquals(2, i.events.size());
+        try (var reads = new TechLogReader.ReadSession(1, 10))
+        {
+            var sdbl = i.events.stream().filter(e -> e.name().equals("SDBL")).findFirst().orElseThrow();
+            var conn = i.events.stream().filter(e -> e.name().equals("CONN")).findFirst().orElseThrow();
+            assertEquals("Transaction, CommitTransaction", TechLogReader.get(reads.read(sdbl.pointer()), "Func"));
+            assertEquals("3", TechLogReader.get(reads.read(conn.pointer()), "t:clientID"));
+        }
+    }
+
     @Test public void numericValuesAndDuplicateCaseInsensitiveNamesAreRejected() throws Exception
     {
         var i = TechLogReader.read(file(event("CALL", "1").replace("\"duration\":\"1\"", "\"duration\":1") + "\n"
@@ -293,7 +331,97 @@ public class TechLogTest
     {
         var i = TechLogReader.read(file((event("CALL", "1") + "\n").repeat(20000)), 1, 10, null, null);
         assertTrue(i.limited); assertTrue(i.bytesRead < i.totalBytes);
-        String out = TechLogAnalysis.header(i); assertTrue(out.contains("INCOMPLETE")); assertTrue(out.contains("of")); assertTrue(out.contains("subdirectory"));
+        String out = TechLogAnalysis.header(i); assertTrue(out.contains("INCOMPLETE")); assertTrue(out.contains("of"));
+        assertTrue(out, out.contains("Read budget of 1 MB reached; raise get_tech_log readBudgetMb"));
+        assertFalse(out, out.contains("index cap") || out.contains("Time budget"));
+    }
+
+    @Test public void fixedEventCapSaysRaisingTheByteBudgetDoesNotHelp()
+    {
+        var index = new TechLogReader.Index();
+        index.events.addAll(java.util.Collections.nCopies(TechLogReader.MAX_EVENTS, null));
+        String reason = TechLogReader.limitReason(index, Long.MAX_VALUE, Long.MAX_VALUE);
+        assertTrue(reason, reason.contains("Fixed index cap of 200000 events") && reason.contains("does not lift it"));
+        assertTrue(reason, reason.contains("from/to"));
+    }
+
+    @Test public void maxedBudgetsDoNotAskToBeRaised()
+    {
+        var index = new TechLogReader.Index();
+        index.bytesRead = TechLogReader.MAX_BUDGET_MB * 1048576L;
+        String bytes = TechLogReader.limitReason(index, index.bytesRead, Long.MAX_VALUE);
+        assertTrue(bytes, bytes.startsWith("Read budget of 512 MB reached; narrow from/to"));
+        index.bytesRead = 0; index.budgetSeconds = TechLogReader.MAX_BUDGET_SECONDS;
+        String time = TechLogReader.limitReason(index, Long.MAX_VALUE, 0);
+        assertTrue(time, time.startsWith("Time budget reached; narrow from/to"));
+        assertFalse(bytes + time, (bytes + time).contains("raise"));
+    }
+
+    @Test public void filesEndingBeforeFromAreSkippedWithoutSpendingBudget() throws Exception
+    {
+        Path directory = temporary.newFolder("window").toPath();
+        String old = event("CALL", "1").replace("23:43:10", "23:40:00");
+        Files.writeString(directory.resolve("rphost_1.log"), (old + "\n").repeat(3000));
+        Files.writeString(directory.resolve("rphost_2.log"), event("EXCP", "1") + "\n");
+        var i = TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null);
+        assertFalse(i.limitReason, i.limited);
+        assertEquals(1, i.skippedFiles); assertEquals(1, i.events.size()); assertTrue("" + i.bytesRead, i.bytesRead < 1000);
+        assertEquals("EXCP", i.events.get(0).name());
+        assertTrue(TechLogAnalysis.header(i).contains("1 file(s) ending before from skipped unread"));
+        // A long event ending inside the window keeps its file.
+        String longParent = event("CALL", "600000000").replace("23:43:10", "23:43:05");
+        Files.writeString(directory.resolve("rphost_1.log"), old + "\n" + longParent + "\n");
+        var kept = TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null);
+        assertEquals(0, kept.skippedFiles); assertEquals(2, kept.events.size());
+    }
+
+    @Test public void bomOnlyFreshLogIsEmptyNotAnIncompleteTail() throws Exception
+    {
+        Path directory = temporary.newFolder("fresh").toPath();
+        Files.write(directory.resolve("dbgs_1.log"), new byte[] { (byte)0xef, (byte)0xbb, (byte)0xbf });
+        Files.writeString(directory.resolve("rphost_2.log"), event("EXCP", "1") + "\n");
+        var i = TechLogReader.read(directory, 1, 10, null, null);
+        assertEquals(0, i.incompleteTail); assertEquals(0, i.rejected); assertEquals(1, i.events.size());
+    }
+
+    @Test public void linesSpanningReadChunksKeepExactPointersAndOversizedLinesAreRejected() throws Exception
+    {
+        String wide = event("CALL", "1").replace("\"name\"", "\"Context\":\"" + "x".repeat(70_000) + "\",\"name\"");
+        String huge = "{\"pad\":\"" + "y".repeat(4 * 1024 * 1024 + 10) + "\"}";
+        Path log = file(wide + "\n" + huge + "\n" + event("EXCP", "1") + "\n");
+        var i = TechLogReader.read(log, 16, 10, null, null);
+        assertEquals(2, i.events.size()); assertEquals(1, i.rejected); assertEquals(0, i.incompleteTail);
+        assertTrue(i.errors.get(0), i.errors.get(0).contains("exceeds 4 MB"));
+        assertEquals(Files.size(log), i.bytesRead);
+        assertEquals("x".repeat(70_000), TechLogReader.reread(i.events.get(0).pointer()).get("Context"));
+        assertEquals("EXCP", TechLogReader.reread(i.events.get(1).pointer()).get("name"));
+    }
+
+    /** Pins the tokenizer at tricky starts: tokens inside identifiers, look-behinds, quotes and temp tables. */
+    @Test public void normalizationFindsTokensAtEveryPossibleStart()
+    {
+        assertEquals("select abc? from t", TechLogAnalysis.normalizeSql("SELECT abc12345678-1234-1234-1234-123456789012 FROM t"));
+        assertEquals("select ?, ?, ?, ?, [a]]b], \"q\"\"r\"",
+            TechLogAnalysis.normalizeSql("SELECT $tag$ 42 $tag$, $$x$$, @P1, &Param, [a]]b], \"q\"\"r\""));
+        assertEquals("select ? ,? from #temp1 join #temp2 x", TechLogAnalysis.normalizeSql(
+            "  Select\t1.5e-3 ,7 /* c */ -- tail\n FROM   #tt12 JOIN #T0123456789ABCDEF0123456789abcdef x"));
+        assertEquals("? ? fld75:0123456789abcdef0123456789abcdef", TechLogAnalysis.normalizeSql(
+            "deadbeef-dead-beef-dead-beefdeadbeef 75:0123456789abcdef0123456789ABCDEF fld75:0123456789abcdef0123456789abcdef"));
+        assertEquals("where x? = fld? and n=?", TechLogAnalysis.normalizeSql("WHERE x0x1F = fld0X2a AND n=N'it''s'"));
+        assertEquals("unterminated 'abc and \"q", TechLogAnalysis.normalizeSql("unterminated 'abc and \"q"));
+        assertEquals("x", TechLogAnalysis.normalizeSql("x\nParameters: p1=1"));
+    }
+
+    @Test public void sdblReferenceLiteralsShareOneGroup()
+    {
+        String a = TechLogAnalysis.normalizeSql("select fld1 from inforg7 where fld7233 = 75:b87dd00b46da9dfc11f1e01048eed46d");
+        String b = TechLogAnalysis.normalizeSql("select fld1 from inforg7 where fld7233 = 75:0a1b2c3d4e5f60718293a4b5c6d7e8f9");
+        assertEquals("select fld1 from inforg7 where fld7233 = ?", a);
+        assertEquals(a, b);
+        // File-infobase temp tables are #t + 32 hex per execution.
+        assertEquals("drop table #temp1", TechLogAnalysis.normalizeSql("drop table #t44dce59405d24d398f1aba4dce970708"));
+        assertEquals(TechLogAnalysis.normalizeSql("select x into #te15cecbef3f1493d88a8507a80629031 from #t9722a9dadeab4053803d3ee553443a1a"),
+            TechLogAnalysis.normalizeSql("select x into #tc1699baf418c4344b00fb7d5fa36feb7 from #t5c58ece0c80b4d978d1cfcb135e74250"));
     }
 
     @Test public void sizeRotationsAreDiscoveredAndProducerIdentitySpansFiles() throws Exception
@@ -312,6 +440,7 @@ public class TechLogTest
     {
         var i = TechLogReader.read(file(event("CALL", "1") + "\n"), 1, 0, null, null);
         assertTrue(i.limited); assertEquals(0, i.events.size()); assertTrue(TechLogAnalysis.header(i).contains("Read 0.000 of"));
+        assertTrue(i.limitReason, i.limitReason.startsWith("Time budget reached; raise get_tech_log readBudgetSeconds"));
     }
 
     @Test public void directoryDiscoveryIsBudgetedAndNeverInventsTotalBytes() throws Exception

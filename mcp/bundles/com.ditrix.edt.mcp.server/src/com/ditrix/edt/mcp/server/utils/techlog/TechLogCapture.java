@@ -168,7 +168,7 @@ public final class TechLogCapture
     {
         JsonObject entry = TechLogKnowledge.entry("elements", id);
         return MarkdownUtils.tableRow(id, entry.get("meaning").getAsString() + " " + entry.get("reason").getAsString(),
-            entry.get("cost").getAsString() + " Sources: " + entry.get("sources"));
+            entry.get("cost").getAsString() + " Sources: " + TechLogKnowledge.inlineSources(entry));
     }
 
     /** Preserve original bytes during insertion; stop restores the independently saved bytes. */

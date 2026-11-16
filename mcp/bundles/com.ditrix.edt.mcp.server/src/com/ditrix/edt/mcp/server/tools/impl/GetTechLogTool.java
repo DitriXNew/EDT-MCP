@@ -73,8 +73,8 @@ public class GetTechLogTool implements IMcpTool
             String to = JsonUtils.extractStringArgument(params, "to");
             int limit = Pagination.clampLimit(integer(JsonUtils.extractStringArgument(params, McpKeys.LIMIT), "limit", 100, 1, Integer.MAX_VALUE), Pagination.MAX_LIMIT);
             int offset = integer(JsonUtils.extractStringArgument(params, "offset"), "offset", 0, 0, Integer.MAX_VALUE);
-            int mb = integer(JsonUtils.extractStringArgument(params, "readBudgetMb"), "readBudgetMb", 64, 1, 512);
-            int seconds = integer(JsonUtils.extractStringArgument(params, "readBudgetSeconds"), "readBudgetSeconds", 10, 1, 30);
+            int mb = integer(JsonUtils.extractStringArgument(params, "readBudgetMb"), "readBudgetMb", 64, 1, TechLogReader.MAX_BUDGET_MB);
+            int seconds = integer(JsonUtils.extractStringArgument(params, "readBudgetSeconds"), "readBudgetSeconds", 10, 1, TechLogReader.MAX_BUDGET_SECONDS);
             if (mode.equals("describe"))
             {
                 List<String> categories = new ArrayList<>(), ids = new ArrayList<>();

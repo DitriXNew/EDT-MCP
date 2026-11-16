@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.debug.core.model.IDebugTarget;
@@ -57,7 +56,10 @@ public class StartProfilingTool implements IMcpTool
      * single source of truth reused by {@link StopProfilingTool} and
      * {@link GetProfilingResultsTool} — do not add a parallel state holder.
      */
-    private static final Set<String> ACTIVE_APPLICATION_IDS = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Object> ACTIVE_APPLICATION_IDS = new ConcurrentHashMap<>();
+
+    /** Owner of a flag set without a known target (tests, legacy callers). */
+    private static final Object UNKNOWN_TARGET = new Object();
 
     /**
      * @param applicationId the application id of a debug session
@@ -65,7 +67,30 @@ public class StartProfilingTool implements IMcpTool
      */
     public static boolean isProfilingActive(String applicationId)
     {
-        return applicationId != null && ACTIVE_APPLICATION_IDS.contains(applicationId);
+        return applicationId != null && ACTIVE_APPLICATION_IDS.containsKey(applicationId);
+    }
+
+    /**
+     * Aligns the flag with the live target: EDT's own per-target state when readable, otherwise the flag is
+     * dropped when it was set for an earlier session of the same applicationId (a relaunch keeps the id).
+     */
+    static void reconcile(String applicationId, IDebugTarget target)
+    {
+        if (applicationId == null || target == null) { return; }
+        Boolean enabled;
+        try { enabled = ProfilingSupport.enabled(ProfilingSupport.service(), target); }
+        catch (RuntimeException e) { enabled = null; }
+        if (enabled != null)
+        {
+            if (enabled) { ACTIVE_APPLICATION_IDS.put(applicationId, target); }
+            else { ACTIVE_APPLICATION_IDS.remove(applicationId); }
+            return;
+        }
+        Object owner = ACTIVE_APPLICATION_IDS.get(applicationId);
+        if (owner != null && owner != UNKNOWN_TARGET && owner != target)
+        {
+            ACTIVE_APPLICATION_IDS.remove(applicationId);
+        }
     }
 
     /**
@@ -81,9 +106,14 @@ public class StartProfilingTool implements IMcpTool
     /** Marks profiling active for the given application id. Package-visible for the stop tool. */
     static void markActive(String applicationId)
     {
+        markActive(applicationId, null);
+    }
+
+    static void markActive(String applicationId, IDebugTarget target)
+    {
         if (applicationId != null)
         {
-            ACTIVE_APPLICATION_IDS.add(applicationId);
+            ACTIVE_APPLICATION_IDS.put(applicationId, target == null ? UNKNOWN_TARGET : target);
         }
     }
 
@@ -153,6 +183,8 @@ public class StartProfilingTool implements IMcpTool
 
         try
         {
+            IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
+            reconcile(applicationId, target);
             // Start-only: if we already track profiling as active for this id, do
             // NOT toggle (toggling would silently switch profiling OFF). Return an
             // idempotent "already profiling" result instead.
@@ -167,8 +199,6 @@ public class StartProfilingTool implements IMcpTool
                     .toJson();
             }
 
-            // Find active debug target
-            IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
             if (target == null)
             {
                 return ToolResult.error("No active debug target for applicationId: " + applicationId //$NON-NLS-1$
@@ -184,7 +214,7 @@ public class StartProfilingTool implements IMcpTool
                 return ToolResult.error(toggleError).toJson();
             }
 
-            markActive(applicationId);
+            markActive(applicationId, target);
 
             Activator.logInfo("Profiling started via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 

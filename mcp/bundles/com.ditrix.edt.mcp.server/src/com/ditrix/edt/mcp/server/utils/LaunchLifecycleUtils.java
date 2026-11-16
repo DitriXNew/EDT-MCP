@@ -3560,6 +3560,44 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * True when the launch holds neither a process nor a debug target: it is still starting
+     * (a database update or an EDT dialog) or was cancelled at a dialog. Eclipse never reports
+     * such a launch as terminated.
+     */
+    public static boolean emptyLaunch(ILaunch launch)
+    {
+        if (launch == null)
+        {
+            return false;
+        }
+        var processes = launch.getProcesses();
+        var targets = launch.getDebugTargets();
+        // Unknown children (null) are never read as "nothing started".
+        return processes != null && targets != null && processes.length == 0 && targets.length == 0;
+    }
+
+    /**
+     * True when the launch started processes and every one has exited, although the launch
+     * itself may still hold a debug target EDT has not finished ending.
+     */
+    public static boolean clientExited(ILaunch launch)
+    {
+        var processes = launch == null ? null : launch.getProcesses();
+        if (processes == null || processes.length == 0)
+        {
+            return false;
+        }
+        for (org.eclipse.debug.core.model.IProcess process : processes)
+        {
+            if (process != null && !process.isTerminated())
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * @return the first debug target of {@code launch} that carries a non-terminated
      *     CLIENT-typed thread
      *     ({@link DebugServerTargetSupport#findFirstLiveClientThread}), or

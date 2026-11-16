@@ -81,6 +81,12 @@ public class ManageTechLogToolTest
         assertTrue(r.contains("service-account")); assertEquals(0, asks.get());
         assertFalse(Files.exists(temporary.getRoot().toPath().resolve("conf")));
     }
+    @Test public void previewElementSourcesAreLinksNotRawJson()
+    {
+        String r = tool(ConsentDecision.REJECT, false, new AtomicInteger()).execute(Map.of("mode", "preview", "profile", "scenario"));
+        assertTrue(r, r.contains("Sources: [doc](https://"));
+        assertFalse(r, r.contains("[{\"tag\"") || r.contains("\"url\":"));
+    }
     @Test public void readOnlyRefusesEveryWriterBeforeConsentOrFilesystem()
     {
         AtomicInteger asks = new AtomicInteger(); var t = tool(ConsentDecision.ALLOW, true, asks);
@@ -125,6 +131,17 @@ public class ManageTechLogToolTest
         Path groups = output.resolveSibling("groups.csv");
         assertTrue(allow.execute(Map.of("mode", "export", "path", input, "outputPath", groups.toString(), "exportKind", "groups")).contains("CSV exported"));
         assertTrue(Files.readString(groups).contains("managed-deadlocks"));
+    }
+    @Test public void exportHonoursTheFromToWindow() throws Exception
+    {
+        String input = TechLogTest.root().resolve("tests/fixtures/tech-log/synthetic.log").toString();
+        String from = "2026-11-15T23:43:11";
+        int expected = com.ditrix.edt.mcp.server.utils.techlog.TechLogReader.read(Path.of(input), 64, 10, from, null).events.size();
+        assertTrue("window must drop some of the 15 events: " + expected, expected > 0 && expected < 15);
+        Path output = temporary.getRoot().toPath().resolve("window.csv");
+        String result = tool(ConsentDecision.ALLOW, false, new AtomicInteger()).execute(
+            Map.of("mode", "export", "path", input, "outputPath", output.toString(), "from", from));
+        assertTrue(result, result.contains("Rows: " + expected + "."));
     }
     @Test public void invalidModesProfileThresholdAndExportDestinationRefuse()
     {

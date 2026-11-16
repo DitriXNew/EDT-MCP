@@ -612,26 +612,55 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
             return null;
         }
         ILaunchManager mgr = debugPlugin.getLaunchManager();
-        for (ILaunch launch : mgr.getLaunches()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+        for (boolean byDelegate : new boolean[] { false, true })
         {
-            if (launch.isTerminated())
+            for (ILaunch launch : mgr.getLaunches()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
             {
-                continue;
-            }
-            String appId = findApplicationIdFor(launch);
-            if (!applicationId.equals(appId))
-            {
-                continue;
-            }
-            for (IDebugTarget target : launch.getDebugTargets())
-            {
-                if (target != null && !target.isTerminated())
+                if (launch.isTerminated() || !matches(launch, applicationId, byDelegate))
                 {
-                    return target;
+                    continue;
+                }
+                for (IDebugTarget target : launch.getDebugTargets())
+                {
+                    if (target != null && !target.isTerminated())
+                    {
+                        return target;
+                    }
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Exact pass: the launch's own id. Delegate pass: a config without a persisted
+     * {@code ATTR_APPLICATION_ID} (EDT clears it when its infobase is deleted or re-added)
+     * runs the project's default application, so the real id get_applications returns
+     * still names that session.
+     */
+    private static boolean matches(ILaunch launch, String applicationId, boolean byDelegate)
+    {
+        String own = findApplicationIdFor(launch);
+        if (!byDelegate)
+        {
+            return applicationId.equals(own);
+        }
+        return matchesDelegate(applicationId, own, () -> {
+            var config = launch.getLaunchConfiguration();
+            return LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, null));
+        });
+    }
+
+    /** Pure delegate-pass rule; the delegate id is resolved only for an unbound EDT launch. */
+    static boolean matchesDelegate(String requested, String ownId, java.util.function.Supplier<String> delegateId)
+    {
+        if (requested == null || ownId == null || LaunchConfigUtils.isSyntheticApplicationId(requested)
+            || !ownId.startsWith(LaunchConfigUtils.LAUNCH_APP_ID_PREFIX))
+        {
+            return false;
+        }
+        return requested.equals(delegateId.get());
     }
 
     /**
@@ -716,15 +745,14 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
             return null;
         }
         ILaunchManager mgr = debugPlugin.getLaunchManager();
-        for (ILaunch launch : mgr.getLaunches())
+        for (boolean byDelegate : new boolean[] { false, true })
         {
-            if (launch.isTerminated())
+            for (ILaunch launch : mgr.getLaunches())
             {
-                continue;
-            }
-            if (applicationId.equals(findApplicationIdFor(launch)))
-            {
-                return launch;
+                if (!launch.isTerminated() && matches(launch, applicationId, byDelegate))
+                {
+                    return launch;
+                }
             }
         }
         return null;

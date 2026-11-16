@@ -629,6 +629,16 @@ public class TerminateLaunchTool implements IMcpTool
      * to {@link IProcess#terminate()} with a short grace wait. Records the outcome code
      * and any note on {@code result}; propagates {@link DebugException} to the caller.
      */
+    /** The OS process is gone; only EDT's debug session outlived it, so force cannot help. */
+    static final String CLIENT_EXITED_NOTE = "The 1C client process has exited, but EDT has not finished " //$NON-NLS-1$
+        + "ending its debug session (seen after terminating while profiling). launch with " //$NON-NLS-1$
+        + "restartIfRunning=true replaces it."; //$NON-NLS-1$
+
+    /** Nothing to kill: the launch has no process and no debug target yet. */
+    static final String EMPTY_LAUNCH_NOTE = "The launch has no 1C client process or debug target: it is still " //$NON-NLS-1$
+        + "starting (check edt_dialog action=list) or was cancelled at an EDT dialog. launch with " //$NON-NLS-1$
+        + "restartIfRunning=true replaces it."; //$NON-NLS-1$
+
     private static void terminateRuntimeLaunch(ILaunch launch, int timeoutSeconds, boolean force,
             TerminationResult result) throws DebugException
     {
@@ -647,14 +657,18 @@ public class TerminateLaunchTool implements IMcpTool
             else
             {
                 result.code = R_TIMEOUT;
-                result.note = "Force-terminate sent but launch still not marked terminated."; //$NON-NLS-1$
+                result.note = LaunchLifecycleUtils.emptyLaunch(launch) ? EMPTY_LAUNCH_NOTE
+                    : LaunchLifecycleUtils.clientExited(launch) ? CLIENT_EXITED_NOTE
+                    : "Force-terminate sent but launch still not marked terminated."; //$NON-NLS-1$
             }
         }
         else
         {
             result.code = R_TIMEOUT;
-            result.note = "Still terminating in background. " //$NON-NLS-1$
-                + "Re-run with `force=true` to kill the OS process."; //$NON-NLS-1$
+            result.note = LaunchLifecycleUtils.emptyLaunch(launch) ? EMPTY_LAUNCH_NOTE
+                : LaunchLifecycleUtils.clientExited(launch) ? CLIENT_EXITED_NOTE
+                : "Still terminating in background. " //$NON-NLS-1$
+                    + "Re-run with `force=true` to kill the OS process."; //$NON-NLS-1$
         }
     }
 

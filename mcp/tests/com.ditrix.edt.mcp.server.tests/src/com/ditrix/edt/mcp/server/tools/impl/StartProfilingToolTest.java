@@ -115,6 +115,30 @@ public class StartProfilingToolTest
     }
 
     @Test
+    public void flagFromAnEarlierSessionOfTheSameApplicationIdIsDropped()
+    {
+        // A relaunch keeps the applicationId; the flag must follow the target, not the id.
+        org.eclipse.debug.core.model.IDebugTarget first = target(), relaunched = target();
+        StartProfilingTool.markActive("app", first); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", first); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", relaunched); //$NON-NLS-1$
+        assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+    }
+
+    private static org.eclipse.debug.core.model.IDebugTarget target()
+    {
+        return (org.eclipse.debug.core.model.IDebugTarget)java.lang.reflect.Proxy.newProxyInstance(
+            StartProfilingToolTest.class.getClassLoader(), new Class<?>[] { org.eclipse.debug.core.model.IDebugTarget.class },
+            (proxy, method, args) -> switch (method.getName()) {
+                case "equals" -> proxy == args[0]; //$NON-NLS-1$
+                case "hashCode" -> System.identityHashCode(proxy); //$NON-NLS-1$
+                case "toString" -> "target"; //$NON-NLS-1$ //$NON-NLS-2$
+                default -> method.getReturnType() == boolean.class ? Boolean.FALSE : null;
+            });
+    }
+
+    @Test
     public void testStateHelpersTrackPerApplicationId()
     {
         assertFalse(StartProfilingTool.isProfilingActive("x")); //$NON-NLS-1$

@@ -133,6 +133,27 @@ public class LaunchToolTest
         }
     }
 
+    /** A session whose client exited must not be reported as a running client. */
+    @Test
+    public void alreadyRunningNamesAnExitedClient()
+    {
+        org.eclipse.debug.core.model.IProcess dead = mock(org.eclipse.debug.core.model.IProcess.class);
+        when(dead.isTerminated()).thenReturn(true);
+        ILaunch exited = mock(ILaunch.class);
+        when(exited.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] { dead });
+        String message = LaunchTool.alreadyRunningMessage(exited);
+        assertTrue(message, message.contains("client process has exited") && message.contains("restartIfRunning=true"));
+        ILaunch running = mock(ILaunch.class);
+        when(running.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        assertFalse(LaunchTool.alreadyRunningMessage(running).contains("exited"));
+        // Neither a process nor a target: still starting or cancelled at a dialog, not "already running".
+        ILaunch empty = mock(ILaunch.class);
+        when(empty.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(empty.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        assertEquals(LaunchTool.EMPTY_LAUNCH_MESSAGE, LaunchTool.alreadyRunningMessage(empty));
+    }
+
     @Test
     public void testName()
     {

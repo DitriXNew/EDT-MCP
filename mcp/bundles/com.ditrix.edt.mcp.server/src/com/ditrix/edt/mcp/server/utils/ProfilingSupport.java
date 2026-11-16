@@ -120,6 +120,30 @@ public final class ProfilingSupport
         return null;
     }
 
+    /**
+     * EDT's own on/off state for this target: {@code ProfilingService.states} maps a profiled target to ENABLED and
+     * drops it on stop. Reflective, as the service has no getter; null when it cannot be read.
+     */
+    public static Boolean enabled(IProfilingService service, IDebugTarget target)
+    {
+        IProfileTarget profile = profileTarget(target);
+        if (profile == null || service == null) { return null; }
+        for (Class<?> type = service.getClass(); type != null; type = type.getSuperclass())
+        {
+            try
+            {
+                Field field = type.getDeclaredField("states"); //$NON-NLS-1$
+                field.setAccessible(true);
+                if (!(field.get(service) instanceof Map<?, ?> states)) { return null; }
+                Object state = states.get(profile);
+                return state != null && "ENABLED".equals(String.valueOf(state)); //$NON-NLS-1$
+            }
+            catch (NoSuchFieldException e) { continue; }
+            catch (ReflectiveOperationException | RuntimeException e) { return null; }
+        }
+        return null;
+    }
+
     /** The caller owns the tracked on/off state: EDT exposes a toggle, not a setter. */
     public static String toggleProfiling(IDebugTarget target)
     {

@@ -791,6 +791,15 @@ public class BuildExternalObjectsTool implements IMcpTool
      * @param results the per-object result maps
      * @return the JSON response
      */
+    /** Text-channel clients see only this message, not {@code results}, so it carries the first failure's reason. */
+    static String failureMessage(List<Map<String, Object>> results, int built, int failed, long elapsedMs)
+    {
+        String first = results.stream().filter(r -> !Boolean.TRUE.equals(r.get(RES_SUCCESS))).findFirst()
+            .map(r -> ". First failure - " + r.get(RES_NAME) + ": " + r.get(RES_ERROR)).orElse("."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "Built " + built + " of " + (built + failed) + " external object(s) in " + elapsedMs //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " ms; " + failed + " failed" + first; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private static String buildResponse(BuildContext bc, List<Map<String, Object>> results, long elapsedMs)
     {
         int built = 0;
@@ -807,14 +816,11 @@ public class BuildExternalObjectsTool implements IMcpTool
             }
         }
 
+        String failure = failureMessage(results, built, failed, elapsedMs);
         boolean allOk = failed == 0;
         ToolResult tr = allOk ? ToolResult.success()
-            : bc.mutationCommitted.get() ? ToolResult.errorAfterMutation("Built " + built //$NON-NLS-1$
-                + " of " + (built + failed) + " external object(s) in " + elapsedMs + " ms; " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + failed + " failed.") //$NON-NLS-1$
-            : ToolResult.error("Built " + built //$NON-NLS-1$
-            + " of " + (built + failed) + " external object(s) in " + elapsedMs + " ms; " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + failed + " failed."); //$NON-NLS-1$
+            : bc.mutationCommitted.get() ? ToolResult.errorAfterMutation(failure)
+            : ToolResult.error(failure);
         tr.put(McpKeys.PROJECT, bc.project.getName())
             .put(KEY_OUTPUT_DIR, bc.outputDir.toString())
             .put(KEY_BUILT, built)

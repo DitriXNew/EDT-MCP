@@ -762,4 +762,22 @@ public class DebugSessionRegistryTest
         when(thread.isSuspended()).thenReturn(true);
         return thread;
     }
+
+    /** An unbound EDT launch (no ATTR_APPLICATION_ID) answers to its default application id. */
+    @Test
+    public void unboundLaunchMatchesTheRealIdOfItsDefaultApplication()
+    {
+        String real = "afc6d609-6d30-40ce-a729-5c9966c2f580";
+        int[] lookups = { 0 };
+        java.util.function.Supplier<String> delegate = () -> { lookups[0]++; return real; };
+        assertTrue(DebugSessionRegistry.matchesDelegate(real, "launch:IRP thin", delegate));
+        assertFalse(DebugSessionRegistry.matchesDelegate("other-id", "launch:IRP thin", delegate));
+        // A bound launch, an attach id and a synthetic request never take the delegate pass.
+        int before = lookups[0];
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, "11111111-2222-3333-4444-555555555555", delegate));
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, "attach:Server", delegate));
+        assertFalse(DebugSessionRegistry.matchesDelegate("launch:IRP thin", "launch:IRP thin", delegate));
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, null, delegate));
+        assertEquals("no default-application lookup outside an unbound launch", before, lookups[0]);
+    }
 }
