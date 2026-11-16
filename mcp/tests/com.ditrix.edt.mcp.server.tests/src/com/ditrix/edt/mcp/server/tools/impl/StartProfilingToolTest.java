@@ -130,6 +130,19 @@ public class StartProfilingToolTest
         assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
     }
 
+    /** A stop acts on the live target that owns the flag, not on whichever target discovery returned. */
+    @Test
+    public void stopActsOnTheLiveOwnerNotTheLookedUpTarget()
+    {
+        org.eclipse.debug.core.model.IDebugTarget owner = target(), lookedUp = target(), gone = target();
+        java.util.function.Predicate<org.eclipse.debug.core.model.IDebugTarget> ended = t -> t == gone;
+        assertEquals(owner, StartProfilingTool.stopTarget(owner, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.stopTarget(gone, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.stopTarget(null, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.stopTarget(new Object(), lookedUp, ended));
+        assertEquals(owner, StartProfilingTool.stopTarget(owner, null, ended));
+    }
+
     /** EDT's own state for the looked-up target replaces only a missing, same, unknown or ended owner. */
     @Test
     public void readableStateNeverOverridesALiveOtherOwner()

@@ -112,6 +112,21 @@ public class StartProfilingTool implements IMcpTool
     }
 
     /**
+     * The target a stop must act on: the live target that owns the flag (several targets can share an
+     * applicationId, and discovery may pick another one), else the looked-up target.
+     */
+    static IDebugTarget stopTarget(String applicationId, IDebugTarget lookedUp)
+    {
+        return stopTarget(ACTIVE_APPLICATION_IDS.get(applicationId), lookedUp, StartProfilingTool::ended);
+    }
+
+    static IDebugTarget stopTarget(Object owner, IDebugTarget lookedUp,
+        java.util.function.Predicate<IDebugTarget> ended)
+    {
+        return owner instanceof IDebugTarget target && !ended.test(target) ? target : lookedUp;
+    }
+
+    /**
      * The flag owner after EDT reported the looked-up target's own profiling state ({@code null} = no flag). A
      * live other owner is kept either way: the lookup may predate a relaunch that owner belongs to.
      */

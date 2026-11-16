@@ -146,7 +146,7 @@ public class StopProfilingTool implements IMcpTool
                     .toJson();
             }
 
-            IDebugTarget target = live;
+            IDebugTarget target = StartProfilingTool.stopTarget(applicationId, live);
             if (target == null)
             {
                 // The session is gone, so profiling cannot still be running on the
