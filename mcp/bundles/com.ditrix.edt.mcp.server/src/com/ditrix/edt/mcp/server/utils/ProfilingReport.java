@@ -208,8 +208,8 @@ public final class ProfilingReport
             .reversed().thenComparing(Row::moduleKey).thenComparingInt(Row::line)).toList(), top);
         topLines(out, "Top lines with server calls", byPure(selected.stream().filter(r -> r.signal() != null
             && r.signal() != ServerCallSignal.NO_SERVER_CALL).toList()), top);
-        topRollups(out, "Top methods by own (pure) time", rollups(selected, true), top);
-        topRollups(out, "Top modules by own (pure) time", rollups(selected, false), top);
+        topRollups(out, "Top methods by own (pure) time", rollups(selected, true), top, true);
+        topRollups(out, "Top modules by own (pure) time", rollups(selected, false), top, false);
         return out.append('\n').toString();
     }
 
@@ -250,17 +250,21 @@ public final class ProfilingReport
             .append(lineTable(shown, true));
     }
 
-    private static void topRollups(StringBuilder out, String title, List<Rollup> rows, int top)
+    private static void topRollups(StringBuilder out, String title, List<Rollup> rows, int top, boolean byMethod)
     {
         out.append("## ").append(title).append(count(Math.min(top, rows.size()), rows.size(),
             "Increase top (maximum 20), narrow moduleFilter/methodFilter, or export with manage_profiling_results."))
-            .append(MarkdownUtils.tableHeader("Module", "Method", "Pure ms", "Inclusive line sum ms (may double-count)", "Line calls (sum, not method invocations)"));
+            .append(byMethod
+                ? MarkdownUtils.tableHeader("Module", "Method", "Pure ms", "Inclusive line sum ms (may double-count)", "Line calls (sum, not method invocations)")
+                : MarkdownUtils.tableHeader("Module", "Pure ms", "Inclusive line sum ms (may double-count)", "Line calls (sum, not method invocations)"));
         for (Rollup row : page(rows, 0, top))
         {
-            out.append(MarkdownUtils.tableRow(row.module(), row.method(), number(row.pure()), number(row.time()), text(row.lineCalls())));
+            out.append(byMethod
+                ? MarkdownUtils.tableRow(row.module(), row.method(), number(row.pure()), number(row.time()), text(row.lineCalls()))
+                : MarkdownUtils.tableRow(row.module(), number(row.pure()), number(row.time()), text(row.lineCalls())));
         }
         out.append('\n');
-        if (page(rows, 0, top).stream().anyMatch(r -> r.method().equals("n/a"))) out.append(NA_NOTICE);
+        if (byMethod && page(rows, 0, top).stream().anyMatch(r -> r.method().equals("n/a"))) out.append(NA_NOTICE);
     }
 
     public static String measurements(List<IProfilingResult> results, int offset, int limit)

@@ -137,7 +137,8 @@ public final class TechLogCapture
         String body = decode(generated);
         String fence = MarkdownUtils.codeBlockFence(body);
         StringBuilder out = new StringBuilder("# Capture preview\n\nTarget: " + MarkdownUtils.inlineCode(target.toString())
-            + "; existing: " + (original == null ? "absent" : original.length + " bytes; preserved with byte-exact backup")
+            + "; existing: " + (original == null ? "absent; stop deletes the file again (and the conf directory if start created it)"
+                : original.length + " bytes; start backs it up and stop restores it byte-exactly")
             + ".\n\nDedicated location: " + MarkdownUtils.inlineCode(o.location().toString()) + ".\n\n"
             + "Platform 8.3.25+ required. The platform re-reads logcfg.xml every 60 s. A service-account cluster does not read this user's LOCALAPPDATA; configure that account separately. "
             + "An infobase filter can exclude client/file events lacking p:processName. Scenario: reproduce once briefly, then stop; no automatic stop timer.\n\n");
