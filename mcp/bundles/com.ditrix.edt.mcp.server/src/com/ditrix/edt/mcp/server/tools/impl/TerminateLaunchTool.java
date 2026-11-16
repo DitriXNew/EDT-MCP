@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.StartingLaunches;
 
 /**
  * Terminates 1C launches started from this EDT instance. The set of
@@ -78,6 +79,7 @@ public class TerminateLaunchTool implements IMcpTool
     private static final String R_TIMEOUT = "timeout"; //$NON-NLS-1$
     private static final String R_ALREADY_TERMINATED = "already_terminated"; //$NON-NLS-1$
     private static final String R_ERROR = "error"; //$NON-NLS-1$
+    private static final String R_STILL_STARTING = "still_starting"; //$NON-NLS-1$
 
     /** Input key: deprecated alias of the 'timeout' wait window in seconds. */
     private static final String KEY_TIMEOUT_SECONDS = "timeoutSeconds"; //$NON-NLS-1$
@@ -127,7 +129,8 @@ public class TerminateLaunchTool implements IMcpTool
                 "Required (true) when all=true; guards against accidental mass termination.") //$NON-NLS-1$
             .booleanProperty("force", //$NON-NLS-1$
                 "On polite-termination timeout, escalate to an OS-level process kill; " //$NON-NLS-1$
-                    + "may lose unsaved 1C state. Default false. Ignored for Attach.") //$NON-NLS-1$
+                    + "may lose unsaved 1C state. Also required to abort a launch EDT is still " //$NON-NLS-1$
+                    + "starting (refused otherwise). Default false. Ignored for Attach.") //$NON-NLS-1$
             .integerProperty(R_TIMEOUT,
                 "Polite-wait window per launch in seconds, clamped to [1, 120]. " //$NON-NLS-1$
                     + "Default from EDT preferences (factory default 10).") //$NON-NLS-1$
@@ -639,9 +642,73 @@ public class TerminateLaunchTool implements IMcpTool
         + "starting (check edt_dialog action=list) or was cancelled at an EDT dialog. launch with " //$NON-NLS-1$
         + "restartIfRunning=true replaces it."; //$NON-NLS-1$
 
+    /** EDT is still starting the launch, and the call did not ask to interrupt that. */
+    static String stillStartingNote(StartingLaunches.Phase phase)
+    {
+        return "Not terminated: EDT is still starting this launch (state: " + phase.token() + "). " //$NON-NLS-1$ //$NON-NLS-2$
+            + StartingLaunches.note(phase) + " Pass force=true to abort the start anyway."; //$NON-NLS-1$
+    }
+
+    /** The start was cancelled on request. */
+    static final String START_CANCELLED_NOTE = "The start was cancelled before the 1C client started. An " //$NON-NLS-1$
+        + "interrupted infobase load leaves an EDT 'Error synchronizing application' dialog: dismiss it with " //$NON-NLS-1$
+        + "edt_dialog, and expect the next launch to load the configuration again."; //$NON-NLS-1$
+
+    /** The launch ended without a client; only its leftover entry was removed. */
+    static final String ABANDONED_REMOVED_NOTE = "Its start had already ended without a 1C client; the leftover " //$NON-NLS-1$
+        + "launch was removed."; //$NON-NLS-1$
+
+    /**
+     * Ends a launch that has no client yet, which a plain terminate cannot: Eclipse never reports an empty launch
+     * as terminated. A start this tool's sibling {@code launch} is still running is left alone unless
+     * {@code force} is set, because cancelling it interrupts EDT's infobase load.
+     *
+     * @return {@code true} when the launch was handled here
+     */
+    static boolean endEmptyLaunch(ILaunch launch, int timeoutSeconds, boolean force, TerminationResult result)
+    {
+        if (!LaunchLifecycleUtils.emptyLaunch(launch))
+        {
+            return false;
+        }
+        boolean jobActive = StartingLaunches.startJobActive(launch);
+        if (!jobActive && !StartingLaunches.delegateReturned(launch))
+        {
+            return false; // started from EDT's UI: no start job of ours to read or cancel
+        }
+        if (jobActive && !force)
+        {
+            result.code = R_STILL_STARTING;
+            result.note = stillStartingNote(StartingLaunches.phase(launch));
+            return true;
+        }
+        switch (StartingLaunches.cancel(launch, result.applicationId, timeoutSeconds * 1000L))
+        {
+            case REMOVED:
+                result.code = R_TERMINATED;
+                result.note = jobActive ? START_CANCELLED_NOTE : ABANDONED_REMOVED_NOTE;
+                break;
+            case CLIENT_NOT_STOPPED:
+                result.code = R_TIMEOUT;
+                result.note = "The cancelled start had already started a 1C client, which did not confirm " //$NON-NLS-1$
+                    + "termination; retry terminate_launch."; //$NON-NLS-1$
+                break;
+            default:
+                result.code = R_TIMEOUT;
+                result.note = "The start was cancelled but EDT has not stopped it yet (an EDT dialog may be " //$NON-NLS-1$
+                    + "open - check edt_dialog action=list); retry terminate_launch."; //$NON-NLS-1$
+                break;
+        }
+        return true;
+    }
+
     private static void terminateRuntimeLaunch(ILaunch launch, int timeoutSeconds, boolean force,
             TerminationResult result) throws DebugException
     {
+        if (endEmptyLaunch(launch, timeoutSeconds, force, result))
+        {
+            return;
+        }
         launch.terminate();
         if (LaunchLifecycleUtils.waitForTerminated(launch, timeoutSeconds * 1000L))
         {
@@ -893,6 +960,7 @@ public class TerminateLaunchTool implements IMcpTool
                 r -> R_DETACHED.equals(r.code), true);
             appendSection(sb, "## Already Terminated", results, //$NON-NLS-1$
                 r -> R_ALREADY_TERMINATED.equals(r.code), false);
+            appendIssueSection(sb, "## Still Starting (not terminated)", results, R_STILL_STARTING); //$NON-NLS-1$
             appendIssueSection(sb, "## Timed Out", results, R_TIMEOUT); //$NON-NLS-1$
             appendIssueSection(sb, "## Errors", results, R_ERROR); //$NON-NLS-1$
         }
@@ -939,6 +1007,7 @@ public class TerminateLaunchTool implements IMcpTool
                     c.detached++;
                     break;
                 case R_TIMEOUT:
+                case R_STILL_STARTING:
                     c.timedOut++;
                     break;
                 case R_ERROR:
@@ -977,6 +1046,9 @@ public class TerminateLaunchTool implements IMcpTool
                 break;
             case R_TIMEOUT:
                 sb.append("# Launch Termination Timed Out\n\n"); //$NON-NLS-1$
+                break;
+            case R_STILL_STARTING:
+                sb.append("# Launch Still Starting - Not Terminated\n\n"); //$NON-NLS-1$
                 break;
             case R_ERROR:
                 sb.append("# Launch Termination Failed\n\n"); //$NON-NLS-1$
@@ -1126,7 +1198,7 @@ public class TerminateLaunchTool implements IMcpTool
      * outcome of the termination attempt. Built eagerly so the rendering code
      * can read the values after the underlying {@link ILaunch} is gone.
      */
-    private static final class TerminationResult
+    static final class TerminationResult
     {
         final String configName;
         final String projectName;

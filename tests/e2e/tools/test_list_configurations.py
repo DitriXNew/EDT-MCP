@@ -72,6 +72,12 @@ def test_lists_configs_with_consistent_envelope_and_no_mutation():
             raise AssertionError("every entry must have a boolean 'attach': %r" % entry)
         if not isinstance(entry.get("running"), bool):
             raise AssertionError("every entry must have a boolean 'running': %r" % entry)
+        # running means a client exists; a live launch without one is starting, not running.
+        state = entry.get("state")
+        if state is not None and state not in ("starting", "synchronizing", "running", "abandoned"):
+            raise AssertionError("unknown launch state: %r" % entry)
+        if entry["running"] != (state == "running"):
+            raise AssertionError("running must be true exactly when state is running: %r" % entry)
     assert_no_diff("a read/list tool must not mutate the project on disk")
 
 

@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CLabel;
 import org.eclipse.swt.widgets.Button;
@@ -21,6 +22,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
@@ -37,6 +39,7 @@ public class EdtDialogs
     private static final String HUMAN_KEY = EdtDialogs.class.getName() + ".humanOnly";
     private static final Object HUMAN_IDENTITY = new Object();
     private static final String HUMAN_REASON = "ask the user to answer it in EDT";
+    private static final String ACKNOWLEDGE_REASON = "informational: only OK can be pressed, which closes it";
     private static final long UI_TIMEOUT_MS = 500;
     private final AtomicReference<Display> installing = new AtomicReference<>();
     private final Map<Shell, Entry> entries = new IdentityHashMap<>();
@@ -163,9 +166,85 @@ public class EdtDialogs
     private static boolean answerable(Shell shell, Map<String, List<Button>> buttons, boolean complete)
     {
         return shell.getData(HUMAN_KEY) == null
-            && (LaunchUpdateDialogAutoConfirmer.isTargetTitle(shell.getText())
-                || LaunchUpdateDialogAutoConfirmer.isConflictTitle(shell.getText())
-                || LaunchUpdateDialogAutoConfirmer.isExclusiveLockQuestion(shell.getText(), buttons, complete));
+            && (questionAnswerable(shell, buttons, complete)
+                || acknowledgeOnly(buttons, complete) && onlyPassiveControls(shell, 0));
+    }
+
+    /**
+     * Whether everything under {@code control} only shows text: labels, links, read-only text, push buttons
+     * and plain containers. A checkbox, a choice, an editable field or any control of an unknown class makes
+     * OK submit a decision, so the dialog is not merely informational.
+     */
+    static boolean onlyPassiveControls(Control control, int depth)
+    {
+        if (depth > 6)
+        {
+            return false;
+        }
+        for (Control child : ((Composite)control).getChildren())
+        {
+            if (child.isDisposed())
+            {
+                continue;
+            }
+            boolean container = child.getClass() == Composite.class || child.getClass() == Group.class;
+            boolean passive = container || child instanceof Label || child instanceof CLabel || child instanceof Link
+                || child instanceof Button && (child.getStyle() & SWT.PUSH) != 0
+                || child instanceof Text && (child.getStyle() & SWT.READ_ONLY) != 0;
+            if (!passive || container && !onlyPassiveControls(child, depth + 1))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** A known EDT question: any of its buttons may be pressed. */
+    private static boolean questionAnswerable(Shell shell, Map<String, List<Button>> buttons, boolean complete)
+    {
+        return LaunchUpdateDialogAutoConfirmer.isTargetTitle(shell.getText())
+            || LaunchUpdateDialogAutoConfirmer.isConflictTitle(shell.getText())
+            || LaunchUpdateDialogAutoConfirmer.isExclusiveLockQuestion(shell.getText(), buttons, complete);
+    }
+
+    /**
+     * A message with nothing to decide: its only action is OK (an error dialog's Details toggle aside), so
+     * pressing OK only closes it. Such a dialog still blocks EDT until someone does.
+     */
+    public static boolean acknowledgeOnly(Map<String, ? extends List<?>> buttons, boolean complete)
+    {
+        if (!complete || buttons == null)
+        {
+            return false;
+        }
+        boolean ok = false;
+        for (Map.Entry<String, ? extends List<?>> entry : buttons.entrySet())
+        {
+            if (entry.getValue() == null || entry.getValue().size() != 1)
+            {
+                return false;
+            }
+            if (isOkLabel(entry.getKey()))
+            {
+                ok = true;
+            }
+            else if (!isDetailsLabel(entry.getKey()))
+            {
+                return false;
+            }
+        }
+        return ok;
+    }
+
+    private static boolean isOkLabel(String label)
+    {
+        return "OK".equals(label) || IDialogConstants.OK_LABEL.equals(label);
+    }
+
+    private static boolean isDetailsLabel(String label)
+    {
+        return IDialogConstants.SHOW_DETAILS_LABEL.equals(label) || IDialogConstants.HIDE_DETAILS_LABEL.equals(label)
+            || "&Details >>".equals(label) || "<< &Details".equals(label);
     }
 
     private void capture(Shell shell)
@@ -192,6 +271,10 @@ public class EdtDialogs
         if (!allowed)
         {
             data.addProperty("reason", HUMAN_REASON);
+        }
+        else if (!questionAnswerable(shell, buttons, complete))
+        {
+            data.addProperty("reason", ACKNOWLEDGE_REASON);
         }
         if (entry.data != null && !entry.data.equals(data))
         {
@@ -323,6 +406,11 @@ public class EdtDialogs
         if (!answerable(shell, buttons, complete))
         {
             return ToolResult.error("Dialog '" + dialogId + "': " + HUMAN_REASON + ".").toJson();
+        }
+        if (!questionAnswerable(shell, buttons, complete) && !isOkLabel(label))
+        {
+            return ToolResult.error("Dialog '" + dialogId + "' is informational: only OK can be pressed. "
+                + "Its message is in edt_dialog action=list.").toJson();
         }
         List<Button> matches = buttons.get(label);
         if (matches == null || matches.size() != 1 || !matches.get(0).isEnabled()

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -532,5 +533,49 @@ public class EdtDialogToolTest
         assertFalse(dialog.get("answerable").getAsBoolean());
         assertTrue(press(dialog, "Run without update").contains("ask the user"));
         verify(button, never()).notifyListeners(anyInt(), any());
+    }
+    /** An error dialog with only OK (and its Details toggle) blocks EDT but decides nothing: OK may close it. */
+    @Test
+    public void informationalDialogIsAnswerableWithOkOnly()
+    {
+        Button[] buttons = question("Error", "OK", "&Details >>");
+        JsonObject dialog = list();
+        assertTrue(dialog.toString(), dialog.get("answerable").getAsBoolean());
+        assertTrue(dialog.get("reason").getAsString().contains("only OK"));
+        assertTrue(press(dialog, "&Details >>").contains("only OK can be pressed"));
+        verify(buttons[1], never()).notifyListeners(anyInt(), any());
+        assertTrue(press(list(), "OK").contains("\"success\":true"));
+        verify(buttons[0]).notifyListeners(eq(SWT.Selection), any(Event.class));
+    }
+
+    /** A second choice, a duplicated OK, or an unread control tree keeps the dialog human-only. */
+    @Test
+    public void okWithAChoiceIsNotInformational()
+    {
+        assertQuestionRefuses(question("Error", "OK", "Cancel"));
+        assertQuestionRefuses(question("Error", "OK", "OK"));
+        assertFalse(EdtDialogs.acknowledgeOnly(Map.of("OK", List.of(new Object())), false));
+        assertTrue(EdtDialogs.acknowledgeOnly(Map.of("OK", List.of(new Object())), true));
+        assertFalse(EdtDialogs.acknowledgeOnly(Map.of(), true));
+    }
+
+    /** OK next to a checkbox, a choice or an editable field submits a decision: still human-only. */
+    @Test
+    public void okWithAnInteractiveControlIsNotInformational()
+    {
+        for (int style : new int[] {SWT.CHECK, SWT.RADIO})
+        {
+            Button ok = question("Error", "OK")[0];
+            Button choice = mock(Button.class);
+            when(choice.getStyle()).thenReturn(style);
+            when(choice.getText()).thenReturn("Do not ask again");
+            when(shell.getChildren()).thenReturn(new Control[] {ok, choice});
+            assertQuestionRefuses(new Button[] {ok});
+        }
+        Button ok = question("Error", "OK")[0];
+        org.eclipse.swt.widgets.Text field = mock(org.eclipse.swt.widgets.Text.class);
+        when(field.getStyle()).thenReturn(SWT.BORDER);
+        when(shell.getChildren()).thenReturn(new Control[] {field, ok});
+        assertQuestionRefuses(new Button[] {ok});
     }
 }

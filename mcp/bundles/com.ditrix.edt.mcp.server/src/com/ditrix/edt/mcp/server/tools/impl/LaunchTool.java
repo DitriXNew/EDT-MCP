@@ -55,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
+import com.ditrix.edt.mcp.server.utils.StartingLaunches;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
@@ -1460,15 +1461,13 @@ public class LaunchTool implements IMcpTool
             return "Attach debug session is connecting — poll debug_status to confirm it is " //$NON-NLS-1$
                 + "running, then wait_for_break to block until a breakpoint is hit."; //$NON-NLS-1$
         }
-        if (MODE_RUN.equals(mode))
-        {
-            return "Run session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
-                + "dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
-                + "Poll debug_status until the session appears running."; //$NON-NLS-1$
-        }
-        return "Debug session is starting asynchronously. The 1C client may show startup " //$NON-NLS-1$
-            + "dialogs (login / database update); this call does NOT wait for it. " //$NON-NLS-1$
-            + "Poll debug_status until the session appears running, then use wait_for_break."; //$NON-NLS-1$
+        String then = MODE_RUN.equals(mode) ? "." : ", then use wait_for_break."; //$NON-NLS-1$ //$NON-NLS-2$
+        return (MODE_RUN.equals(mode) ? "Run" : "Debug") //$NON-NLS-1$ //$NON-NLS-2$
+            + " session is starting asynchronously; this call does NOT wait for it. When the configuration " //$NON-NLS-1$
+            + "changed, EDT first loads it into the infobase (minutes on a large configuration; debug_status " //$NON-NLS-1$
+            + "state 'synchronizing'), then starts the 1C client. Poll debug_status until the launch state is " //$NON-NLS-1$
+            + "'running'" + then + " Do not terminate_launch or relaunch while it is starting: that interrupts " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the load and leaves an EDT error dialog."; //$NON-NLS-1$
     }
 
     /** Reports effective testing settings and applied startup overrides, without asserting readiness. */
@@ -1573,14 +1572,49 @@ public class LaunchTool implements IMcpTool
             ILaunchConfiguration matchingConfig = LaunchConfigUtils.findLaunchConfig(
                     launchManager, configType, projectName, applicationId);
 
+            // A configuration without a binding runs against the project's default application.
+            String unboundHint = ""; //$NON-NLS-1$
+            if (matchingConfig == null)
+            {
+                List<ILaunchConfiguration> unbound =
+                    LaunchConfigUtils.findUnboundLaunchConfigs(launchManager, configType, projectName);
+                UnboundChoice choice = UnboundChoice.NONE;
+                if (!unbound.isEmpty())
+                {
+                    LaunchLifecycleUtils.DefaultApplicationLookup lookup = LaunchLifecycleUtils
+                        .resolveDefaultApplication(project, null, appManager, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+                    choice = chooseUnboundConfig(unbound, applicationId, lookup.inconclusive() ? null : lookup.id());
+                }
+                if (choice.error() != null)
+                {
+                    ToolResult errorResult = ToolResult.error(choice.error());
+                    errorResult.put("availableConfigurations", listAvailableConfigs(launchManager)); //$NON-NLS-1$
+                    return errorResult.toJson();
+                }
+                matchingConfig = choice.config();
+                unboundHint = choice.hint();
+            }
+
             if (matchingConfig == null)
             {
                 ToolResult errorResult = ToolResult.error("No launch configuration found for project '" //$NON-NLS-1$
                     + projectName + "' and application '" + applicationName + "' (" //$NON-NLS-1$ //$NON-NLS-2$
-                    + applicationId + "). Create one with create_launch_config, " //$NON-NLS-1$
+                    + applicationId + "). " + unboundHint + "Create one with create_launch_config, " //$NON-NLS-1$ //$NON-NLS-2$
                     + "or pass launchConfigurationName to start an existing configuration."); //$NON-NLS-1$
                 errorResult.put("availableConfigurations", listAvailableConfigs(launchManager)); //$NON-NLS-1$
                 return errorResult.toJson();
+            }
+
+            // An unbound configuration's launch is tracked under its own id, not the application's.
+            String trackedId = LaunchConfigUtils.getApplicationIdFor(matchingConfig);
+            boolean unboundMatch = trackedId != null && !trackedId.equals(applicationId);
+            if (unboundMatch)
+            {
+                String existingUnbound = handleExistingByAppSession(trackedId, projectName, restartIfRunning);
+                if (existingUnbound != null)
+                {
+                    return existingUnbound;
+                }
             }
 
             // Update database before launch if requested. Routes through the
@@ -1635,15 +1669,22 @@ public class LaunchTool implements IMcpTool
                     + launchError).toJson();
             }
 
+            String message = startingMessage(mode, false);
+            if (unboundMatch)
+            {
+                message = "Started '" + configName + "', which is not bound to an application, so EDT runs it " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "against the project's default application " + applicationId + "; debug tools track " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "it as applicationId '" + trackedId + "'. " + message; //$NON-NLS-1$ //$NON-NLS-2$
+            }
             return reportLaunchDialogs(echoOverrides(ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
-                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(McpKeys.APPLICATION_ID, unboundMatch ? trackedId : applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
                 .put(KEY_CONFIGURATION_TYPE, LaunchConfigUtils.getConfigTypeId(matchingConfig))
                 .put(KEY_ATTACH, false), overrides, prepared, applied.config)
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
-                .put(McpKeys.MESSAGE, startingMessage(mode, false))
+                .put(McpKeys.MESSAGE, message)
                 .toJson(), watchDialogs, EdtDialogs.getInstance());
         }
         catch (Exception e)
@@ -1652,6 +1693,46 @@ public class LaunchTool implements IMcpTool
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /** How the project's unbound configurations answer a project + application request. */
+    record UnboundChoice(ILaunchConfiguration config, String error, String hint)
+    {
+        static final UnboundChoice NONE = new UnboundChoice(null, null, ""); //$NON-NLS-1$
+    }
+
+    /**
+     * Picks the unbound configuration that launches {@code applicationId}: EDT runs an unbound configuration
+     * against the project's default application, so one matches only when that default is the requested id.
+     *
+     * @param unbound the project's configurations without an application binding (not empty)
+     * @param applicationId the requested application id
+     * @param defaultApplicationId the project's default application id, or {@code null} when it is unknown
+     * @return the choice; {@link UnboundChoice#NONE}-like with a hint when nothing matches
+     */
+    static UnboundChoice chooseUnboundConfig(List<ILaunchConfiguration> unbound, String applicationId,
+        String defaultApplicationId)
+    {
+        List<String> names = unbound.stream().map(ILaunchConfiguration::getName).toList();
+        if (defaultApplicationId == null || defaultApplicationId.isEmpty())
+        {
+            return new UnboundChoice(null, null, "The configuration(s) " + names //$NON-NLS-1$
+                + " carry no application binding and run against the project's default application, which " //$NON-NLS-1$
+                + "could not be determined; pass launchConfigurationName to start one. "); //$NON-NLS-1$
+        }
+        if (!defaultApplicationId.equals(applicationId))
+        {
+            return new UnboundChoice(null, null, "The configuration(s) " + names //$NON-NLS-1$
+                + " carry no application binding and run against the project's default application " //$NON-NLS-1$
+                + defaultApplicationId + ", not this one. "); //$NON-NLS-1$
+        }
+        if (unbound.size() > 1)
+        {
+            return new UnboundChoice(null, "Several configurations of this project run against its default " //$NON-NLS-1$
+                + "application " + applicationId + ": " + names //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Pass launchConfigurationName to choose one.", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return new UnboundChoice(unbound.get(0), null, ""); //$NON-NLS-1$
     }
 
     private static boolean dialogWatchNeeded(boolean updateBeforeLaunch, boolean attach,
@@ -1998,10 +2079,14 @@ public class LaunchTool implements IMcpTool
         }
         else if (LaunchLifecycleUtils.emptyLaunch(session.launch))
         {
-            // Still starting (or cancelled at a dialog): nothing to terminate yet, so the old
-            // launch would go on to start a second client next to the new one. Cancel its job.
-            Activator.logInfo("launch restartIfRunning: cancelling a still-starting launch: applicationId=" //$NON-NLS-1$
-                + applicationId);
+            // Cancelling a start interrupts EDT's infobase synchronization and leaves an error dialog.
+            if (StartingLaunches.startJobActive(session.launch))
+            {
+                return ToolResult.error(stillStartingRefusal(StartingLaunches.phase(session.launch))).toJson();
+            }
+            // The start ended without a client (or is foreign): remove what is left of it.
+            Activator.logInfo("launch restartIfRunning: removing a launch whose start ended without a client: " //$NON-NLS-1$
+                + "applicationId=" + applicationId); //$NON-NLS-1$
             String refusal = cancelStartingLaunch(session.launch, applicationId, CANCEL_WAIT_MS);
             if (refusal != null)
             {
@@ -2016,10 +2101,6 @@ public class LaunchTool implements IMcpTool
         }
         return null;
     }
-
-    /** Launches returned by this tool's launch job: their delegate has finished, so an empty one is dead. */
-    private static final java.util.Set<org.eclipse.debug.core.ILaunch> FINISHED_LAUNCHES =
-        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
 
     /** How long restartIfRunning waits for a cancelled launch job to stop. */
     static final long CANCEL_WAIT_MS = 30_000;
@@ -2097,10 +2178,7 @@ public class LaunchTool implements IMcpTool
     /** Records a launch whose delegate has returned inside this tool's launch job. */
     static void recordFinishedLaunch(org.eclipse.debug.core.ILaunch launch)
     {
-        if (launch != null)
-        {
-            FINISHED_LAUNCHES.add(launch);
-        }
+        StartingLaunches.markDelegateReturned(launch);
     }
 
     /**
@@ -2114,48 +2192,25 @@ public class LaunchTool implements IMcpTool
      */
     static String cancelStartingLaunch(org.eclipse.debug.core.ILaunch launch, String applicationId, long waitMs)
     {
-        ILaunchConfiguration config = launch.getLaunchConfiguration();
-        org.eclipse.core.runtime.jobs.IJobManager jobs = Job.getJobManager();
-        if (config != null && jobs.find(config).length > 0)
+        switch (StartingLaunches.cancel(launch, applicationId, waitMs))
         {
-            jobs.cancel(config);
-            long deadline = System.nanoTime() + waitMs * 1_000_000L;
-            while (jobs.find(config).length > 0)
-            {
-                if (System.nanoTime() >= deadline)
-                {
-                    return STARTING_NOT_STOPPED_MESSAGE;
-                }
-                try
-                {
-                    Thread.sleep(100);
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                    return STARTING_NOT_STOPPED_MESSAGE;
-                }
-            }
+            case JOB_STILL_RUNNING:
+                return STARTING_NOT_STOPPED_MESSAGE;
+            case FOREIGN:
+                return FOREIGN_STARTING_MESSAGE;
+            case CLIENT_NOT_STOPPED:
+                return CLIENT_NOT_STOPPED_MESSAGE;
+            default:
+                return null;
         }
-        if (!FINISHED_LAUNCHES.contains(launch))
-        {
-            return FOREIGN_STARTING_MESSAGE;
-        }
-        if (!LaunchLifecycleUtils.emptyLaunch(launch)
-            && !LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, applicationId))
-        {
-            return CLIENT_NOT_STOPPED_MESSAGE;
-        }
-        DebugPlugin debug = DebugPlugin.getDefault();
-        if (debug != null)
-        {
-            debug.getLaunchManager().removeLaunch(launch);
-        }
-        if (applicationId != null && !applicationId.isEmpty())
-        {
-            com.ditrix.edt.mcp.server.utils.DebugSessionRegistry.get().forgetApplication(applicationId);
-        }
-        return null;
+    }
+
+    /** Refusal for restartIfRunning over a launch EDT is still starting: cancelling it breaks the start. */
+    static String stillStartingRefusal(StartingLaunches.Phase phase)
+    {
+        return "The previous launch of this configuration is still starting (state: " + phase.token() //$NON-NLS-1$
+            + "), so it was not restarted. " + StartingLaunches.note(phase) //$NON-NLS-1$
+            + " To abort the start anyway, call terminate_launch with force=true."; //$NON-NLS-1$
     }
 
     /**
@@ -2218,7 +2273,10 @@ public class LaunchTool implements IMcpTool
     {
         if (LaunchLifecycleUtils.emptyLaunch(launch))
         {
-            return EMPTY_LAUNCH_MESSAGE;
+            StartingLaunches.Phase phase = StartingLaunches.phase(launch);
+            return phase.starting() && StartingLaunches.startJobActive(launch)
+                ? "The launch is still starting (state: " + phase.token() + "). " + StartingLaunches.note(phase) //$NON-NLS-1$ //$NON-NLS-2$
+                : EMPTY_LAUNCH_MESSAGE;
         }
         return LaunchLifecycleUtils.clientExited(launch) ? CLIENT_EXITED_MESSAGE : ALREADY_RUNNING_MESSAGE;
     }

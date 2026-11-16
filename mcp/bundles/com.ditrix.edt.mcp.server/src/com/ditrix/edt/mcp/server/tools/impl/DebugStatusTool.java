@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.StartingLaunches;
 
 /**
  * Reports active debug launches and their suspend state. If {@code applicationId}
@@ -68,7 +69,8 @@ public class DebugStatusTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("launches", "Active debug launches with state and frame info") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("launches", "Live launches with frame info and state: starting|synchronizing " //$NON-NLS-1$
+                + "(no 1C client yet - wait, do not terminate), running, or abandoned (ended without a client)") //$NON-NLS-1$
             .integerProperty("count", "Number of active debug launches returned") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("registry", "Debug session registry snapshot counters") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("debugServerTargets", //$NON-NLS-1$
@@ -172,6 +174,13 @@ public class DebugStatusTool implements IMcpTool
 
         appendSuspendState(entry, launch.getDebugTargets());
         entry.put("registered", DebugSessionRegistry.get().hasSnapshot(appId)); //$NON-NLS-1$
+        StartingLaunches.Phase phase = StartingLaunches.phase(launch);
+        entry.put("state", phase.token()); //$NON-NLS-1$
+        String note = StartingLaunches.note(phase);
+        if (note != null)
+        {
+            entry.put("stateNote", note); //$NON-NLS-1$
+        }
         return entry;
     }
 

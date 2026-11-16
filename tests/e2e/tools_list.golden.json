@@ -6628,7 +6628,7 @@
           "type": "boolean"
         },
         "force": {
-          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1C state. Default false. Ignored for Attach.",
+          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1C state. Also required to abort a launch EDT is still starting (refused otherwise). Default false. Ignored for Attach.",
           "type": "boolean"
         },
         "includeAttach": {
