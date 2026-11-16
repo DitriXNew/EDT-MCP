@@ -115,7 +115,17 @@ Short form:
    started and therefore owned by this task.
 5. Read `get_profiling_results` while the global profiling surface remains
    quiescent; otherwise treat the result as unattributed unless identity can be
-   matched independently.
+   matched independently. Pass `name` to `stop_profiling` ("before", "after")
+   and read by `measurementId`: `summary` first, then `lines` for one
+   module or method; `compare` the before/after measurements after a fix.
+6. When the time is spent under a server call or in the database, capture a
+   technological log for the same scenario: `manage_tech_log` `preview`
+   (profile `slow-calls`, `db`, `locks`, `errors`, `memory` or `scenario`),
+   `start` with consent, reproduce once briefly, `stop` (restores
+   logcfg.xml). Then `get_tech_log` `summary` → `details` for a group →
+   `chain` for an occurrence; use `describe` for an unfamiliar event or
+   property. Absent events are not evidence of health: read the coverage
+   section. Fix, then measure again.
 
 ## 11. Working with forms
 

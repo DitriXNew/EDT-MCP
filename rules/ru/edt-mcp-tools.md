@@ -50,7 +50,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | Пресет | Что выключено |
 |---|---|
 | **All Tools** | Ничего (все включённые на данный момент инструменты) |
-| **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Также выключены изменяющие инструменты Core: `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, смена веток git (`switch_git_branch`, `create_git_branch`) и привязка базы (`set_branch_infobase`), а также `project_checks` из Errors & Problems. Доступны: чтение Core, сравнение, список веток git, остальные инструменты Errors & Problems, Code Intelligence, Tags; `revalidate_objects` и `enable_toolset` остаются включёнными |
+| **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Также выключены изменяющие инструменты Core: `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, смена веток git (`switch_git_branch`, `create_git_branch`) и привязка базы (`set_branch_infobase`), а также `project_checks` и `manage_tech_log` из Errors & Problems. Доступны: чтение Core, сравнение, список веток git, остальные инструменты Errors & Problems, Code Intelligence, Tags; `revalidate_objects` и `enable_toolset` остаются включёнными |
 | **Code Review** | То же, что Analysis Only, **минус** добавляются доступными все инструменты BSL Code **кроме** `write_module_source`. То есть доступны `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | Группа Debugging и инструменты, выключенные по умолчанию (сейчас raw `git` и `ask_workmate`). `run_yaxunit_tests` остаётся доступен через Applications для обычных прогонов; `debug=true` может запуститься, но инструменты исследования и очистки выключены, поэтому не начинай debug-прогон, пока Debugging не включён. Refactoring, Translation, BSL Code и остальные инструменты Applications — доступны |
 
@@ -82,11 +82,13 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `export_configuration_to_xml` | Экспорт конфигурации в XML (EDT menu: Export → Configuration to XML Files) | По запросу пользователя |
 | `import_configuration_from_xml` | Импорт конфигурации из XML (обратный к экспорту) | По запросу пользователя |
 
-### 2. Errors & Problems — ошибки и задачи (4)
+### 2. Errors & Problems — ошибки и задачи (6)
 
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_problem_summary` | Сводка по числу проблем по проектам и severity | **Первым** — даёт картину одним вызовом |
+| `get_tech_log` | Только чтение: разбор JSON-технологического журнала 1С (файл, папка или `.zip`): `summary` (сначала проблемы, затем покрытие), `details` (одна группа), `chain` (связанные события вокруг случая), `events` (фильтры), `describe` (справочник по событию, свойству, проблеме или профилю со ссылками на источники) |
+| `manage_tech_log` | Запись: `preview` показывает logcfg.xml для профиля, `start`/`status`/`stop` захват в logcfg.xml текущего пользователя (при `stop` восстанавливается байт в байт), `export` в CSV. Через подтверждение, отключён в пресетах только для чтения. Для кластера XML из `preview` кладут в каталог conf сервера вручную |
 | `project_checks` | Чтение/изменение проверок; список, переключение, создание, копирование и удаление профилей (`createProfile`, `copyProfile`, `deleteProfile`). Запись требует согласия; удаление разрушительно | Сначала прочитать настройки; имена проверяет EDT, для `copyProfile` нужен `from`, активный профиль удалить нельзя |
 | `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN-фрагментов, неточный) ЛИБО `objectFqns` (точные адреса, возвращает `objectsNotFound` / `objectsUnsupported`; взаимоисключаются с `objects`), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
 | `get_markers` | Маркеры workspace — закладки и/или TODO/FIXME-маркеры. Фильтры: `markerKind` (`bookmark`/`task`; без него — оба), `projectName`, `filePath`, `priority` (только для задач) | По запросу или при аудите технического долга |
@@ -120,7 +122,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `launch` | Запуск в режиме debug (по умолчанию) или run. Аналогично: `launchConfigurationName` (включая debug-only Attach) **или** `projectName + applicationId` | По запросу |
 | `run_yaxunit_tests` | Запуск тестов YAxUnit, парсинг JUnit XML, Markdown-отчёт | После правок, если в проекте есть тесты |
 
-### 6. Debugging — отладчик (13 неустаревших инструментов)
+### 6. Debugging — отладчик (14 неустаревших инструментов)
 
 | Инструмент | Назначение |
 |---|---|
@@ -135,8 +137,9 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `evaluate_expression` | Выполнить BSL-выражение в контексте кадра |
 | `debug_status` | Статус активных отладочных запусков: mode, suspend, потоки, top frame |
 | `start_profiling` | Начало замера производительности на активном debug target; завершать через `stop_profiling` |
-| `stop_profiling` | Завершить профилирование выбранного активного debug target |
-| `get_profiling_results` | Результаты замера: per-module / per-line, счётчики вызовов, тайминги, покрытие |
+| `stop_profiling` | Завершить профилирование выбранного активного debug target; необязательный `name` даёт имя замеру этой сессии («до», «после») |
+| `get_profiling_results` | Только чтение, Markdown. `mode`: `summary` (по умолчанию: итоги клиент/сервер, топ строк по чистому времени, по числу вызовов и с серверными вызовами, топ методов и модулей), `list` (сохранённые замеры с числом строк), `lines` (модуль или метод по чистому времени, `limit`/`offset`), `compare` (`baseId` → `comparedId`: что замедлилось и ускорилось, через сравнение самой EDT). `measurementId` выбирает замер; по умолчанию последний |
+| `manage_profiling_results` | Запись: `export` полного замера в CSV или родной каталог EDT, `import` родного каталога. Через подтверждение, не перезаписывает, отключён в пресетах только для чтения |
 
 Типовой цикл — см. `edt-mcp-workflows.md`, раздел «Отладка».
 

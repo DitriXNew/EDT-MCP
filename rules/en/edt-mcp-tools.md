@@ -49,7 +49,7 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 | Preset | What is disabled |
 |---|---|
 | **All Tools** | Nothing (all currently enabled tools) |
-| **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Also off: the Core writers `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, the git branch changes (`switch_git_branch`, `create_git_branch`) and infobase binding (`set_branch_infobase`), plus `project_checks` in Errors & Problems. Available: Core reads, comparison, git branch listing, the other Errors & Problems tools, Code Intelligence, Tags; `revalidate_objects` and `enable_toolset` stay enabled |
+| **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Also off: the Core writers `clean_project`, `resync_to_disk`, `create_project`, `delete_project`, the git branch changes (`switch_git_branch`, `create_git_branch`) and infobase binding (`set_branch_infobase`), plus `project_checks` and `manage_tech_log` in Errors & Problems. Available: Core reads, comparison, git branch listing, the other Errors & Problems tools, Code Intelligence, Tags; `revalidate_objects` and `enable_toolset` stay enabled |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
 | **Development** | The Debugging group and default-off tools (currently raw `git` and `ask_workmate`). `run_yaxunit_tests` remains available from Applications for normal runs; although `debug=true` can start, its inspection and cleanup tools are disabled, so do not start a debug run until Debugging is enabled. Refactoring, Translation, BSL Code, and the remaining Applications tools are available |
 
@@ -81,11 +81,13 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `export_configuration_to_xml` | Export configuration to XML files (EDT menu: Export -> Configuration to XML Files) | On user request |
 | `import_configuration_from_xml` | Import configuration from XML files (reverse of export) | On user request |
 
-### 2. Errors & Problems (4)
+### 2. Errors & Problems (6)
 
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_problem_summary` | Problem counts by project and severity | **First** — gives the full picture in one call |
+| `get_tech_log` | Read-only analysis of 1C JSON technological logs (file, folder or `.zip`): `summary` (problems first, then coverage), `details` (one group), `chain` (related events around an occurrence), `events` (filters), `describe` (sourced reference for an event, property, problem or profile) |
+| `manage_tech_log` | Write: `preview` the logcfg.xml a profile would write, `start`/`status`/`stop` a capture in the current user's logcfg.xml (restored byte-exactly on stop), `export` CSV. Consent-gated, off in read-only presets. For a server cluster, place the previewed XML in the server's conf directory by hand |
 | `project_checks` | List/change validation checks; list, switch, create, copy or delete check-settings profiles (`createProfile`, `copyProfile`, `deleteProfile`). Writes require consent; deletion is destructive | Read settings before changing them; new names use EDT validation, `copyProfile` requires `from`, and active profiles cannot be deleted |
 | `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (loose FQN-fragment array) OR `objectFqns` (exact addresses, reports `objectsNotFound` / `objectsUnsupported`; mutually exclusive with `objects`), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
 | `get_markers` | Workspace markers — bookmarks and/or TODO/FIXME task markers. Filters: `markerKind` (`bookmark`/`task`; omit = both), `projectName`, `filePath`, `priority` (task-only) | On request or during a technical-debt audit |
@@ -119,7 +121,7 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `launch` | Launch in debug (default) or run mode. Same identification: `launchConfigurationName` (incl. debug-only Attach) **or** `projectName + applicationId` | On request |
 | `run_yaxunit_tests` | Run YAxUnit tests, parse JUnit XML, Markdown report | After edits, if the project has tests |
 
-### 6. Debugging (13 non-deprecated tools)
+### 6. Debugging (14 non-deprecated tools)
 
 | Tool | Purpose |
 |---|---|
@@ -134,8 +136,9 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `evaluate_expression` | Execute a BSL expression in frame context |
 | `debug_status` | Status of active debug launches: mode, suspend, threads, top frame |
 | `start_profiling` | Start performance profiling on the active debug target; use `stop_profiling` to finish |
-| `stop_profiling` | Stop profiling on the selected active debug target |
-| `get_profiling_results` | Profiling results: per-module / per-line, call counts, timing, coverage |
+| `stop_profiling` | Stop profiling on the selected active debug target; optional `name` labels the measurement of this session ("before", "after") |
+| `get_profiling_results` | Read-only, Markdown. `mode`: `summary` (default: client/server totals, top lines by own time, by calls and with server calls, top methods and modules), `list` (saved measurements with line-record counts), `lines` (one module/method by own time, `limit`/`offset`), `compare` (`baseId` → `comparedId`: slowed down / sped up, through EDT's own comparison). `measurementId` selects a measurement; default is the latest |
+| `manage_profiling_results` | Write: `export` a complete measurement to CSV or EDT's native folder, `import` a native folder. Consent-gated, never overwrites, off in read-only presets |
 
 Typical cycle — see `edt-mcp-workflows.md`, section "Debugging".
 
