@@ -262,38 +262,57 @@ public final class TechLogReader
 
     private static final java.util.regex.Pattern TS = java.util.regex.Pattern.compile("\"ts\"\\s*:\\s*\"([^\"]+)\"");
 
-    /** Producer and file-system clocks may differ by this much. */
-    private static final long CLOCK_SKEW_MINUTES = 1;
+    /** The platform's hourly file name, yyMMddHH.log, in the producer's local clock. */
+    private static final java.util.regex.Pattern HOUR_FILE = java.util.regex.Pattern.compile(
+        "(\\d{2})(\\d{2})(\\d{2})(\\d{2})\\.log", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /**
-     * A plain file last written before 'from' holds no event of the window, so its bytes cost no budget.
-     * An event is written after it ends, so the modification time bounds every end in any line order;
-     * the latest tail event must end before 'from' as well, an independent second bound.
+     * A plain file of an hour that ended by 'from' holds no event of the window, so its bytes cost no budget.
+     * The platform files each event under the hour it ends in (the text format stores only minutes and
+     * seconds, so the name is the event's own hour), in the same clock as 'ts'. Any line order is covered.
+     * A file whose tail holds an event outside its named hour does not follow that layout and is read.
      */
     static boolean endsBefore(Source source, LocalDateTime lower)
     {
         if (lower == LocalDateTime.MIN || !source.member().isEmpty()) return false;
-        LocalDateTime written = LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(source.mtime()),
-            java.time.ZoneId.systemDefault());
-        if (!written.plusMinutes(CLOCK_SKEW_MINUTES).isBefore(lower)) return false;
+        LocalDateTime hour = namedHour(source.file().getFileName().toString());
+        if (hour == null || hour.plusHours(1).isAfter(lower)) return false;
         try (RandomAccessFile file = new RandomAccessFile(source.file().toFile(), "r"))
         {
             long start = Math.max(0, file.length() - 65536);
             byte[] tail = new byte[(int)(file.length() - start)];
             file.seek(start); file.readFully(tail);
             String[] lines = new String(tail, StandardCharsets.UTF_8).split("\n");
-            LocalDateTime latest = null;
-            // The first line of a mid-file tail is partial; lines are written at completion, so the tail holds the latest ends.
+            boolean seen = false;
+            // The first line of a mid-file tail is partial.
             for (int i = start == 0 ? 0 : 1; i < lines.length; i++)
             {
                 var match = TS.matcher(lines[i]);
                 if (!match.find()) continue;
-                try { LocalDateTime end = time(match.group(1)); if (latest == null || end.isAfter(latest)) latest = end; }
+                try
+                {
+                    LocalDateTime end = time(match.group(1));
+                    if (end.isBefore(hour) || !end.isBefore(hour.plusHours(1))) return false;
+                    seen = true;
+                }
                 catch (RuntimeException e) { return false; }
             }
-            return latest != null && latest.isBefore(lower);
+            return seen;
         }
         catch (IOException e) { return false; }
+    }
+
+    /** The hour a platform log file is named after, or null for any other name. */
+    public static LocalDateTime namedHour(String fileName)
+    {
+        var match = HOUR_FILE.matcher(fileName);
+        if (!match.matches()) return null;
+        try
+        {
+            return LocalDateTime.of(2000 + Integer.parseInt(match.group(1)), Integer.parseInt(match.group(2)),
+                Integer.parseInt(match.group(3)), Integer.parseInt(match.group(4)), 0);
+        }
+        catch (java.time.DateTimeException e) { return null; }
     }
 
     private static void loadManifest(Index index, Path path)

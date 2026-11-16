@@ -357,48 +357,42 @@ public class TechLogTest
         assertFalse(bytes + time, (bytes + time).contains("raise"));
     }
 
-    @Test public void filesEndingBeforeFromAreSkippedWithoutSpendingBudget() throws Exception
+    @Test public void hourFilesEndedBeforeFromAreSkippedWithoutSpendingBudget() throws Exception
     {
         Path directory = temporary.newFolder("window").toPath();
-        String old = event("CALL", "1").replace("23:43:10", "23:40:00");
-        Files.writeString(directory.resolve("rphost_1.log"), (old + "\n").repeat(3000));
-        writtenAt(directory.resolve("rphost_1.log"), "2026-11-15T23:40:01");
-        Files.writeString(directory.resolve("rphost_2.log"), event("EXCP", "1") + "\n");
+        Files.createDirectories(directory.resolve("rphost_1")); Files.createDirectories(directory.resolve("rphost_2"));
+        String old = event("CALL", "1").replace("23:43:10", "22:40:00");
+        Path hour22 = directory.resolve("rphost_1/26111522.log");
+        Files.writeString(hour22, (old + "\n").repeat(3000));
+        Files.writeString(directory.resolve("rphost_2/26111523.log"), event("EXCP", "1") + "\n");
         var i = TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null);
         assertFalse(i.limitReason, i.limited);
         assertEquals(1, i.skippedFiles); assertEquals(1, i.events.size()); assertTrue("" + i.bytesRead, i.bytesRead < 1000);
         assertEquals("EXCP", i.events.get(0).name());
-        assertTrue(TechLogAnalysis.header(i).contains("1 file(s) last written before from skipped unread"));
-        // A long event ending inside the window keeps its file.
-        String longParent = event("CALL", "600000000").replace("23:43:10", "23:43:05");
-        Files.writeString(directory.resolve("rphost_1.log"), old + "\n" + longParent + "\n");
-        writtenAt(directory.resolve("rphost_1.log"), "2026-11-15T23:40:01");
+        assertTrue(TechLogAnalysis.header(i).contains("1 file(s) of hours ended before from skipped unread"));
+        // A 'from' inside the file's hour keeps it.
+        assertEquals(0, TechLogReader.read(directory, 1, 10, "2026-11-15T22:59:00", null).skippedFiles);
+        // A tail event outside the named hour means the file does not follow the layout: read it.
+        String late = event("EXCP", "1").replace("23:43:10", "23:45:00");
+        Files.writeString(hour22, (old + "\n").repeat(3000) + late + "\n");
         var kept = TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null);
         assertEquals(0, kept.skippedFiles); assertEquals(2, kept.events.size());
     }
 
-    /** Line order proves nothing: an in-window event followed by more than 64 KB of older ones keeps its file. */
-    @Test public void unsortedFileWrittenAfterFromIsReadInFull() throws Exception
+    /** Only the platform's hourly name bounds a file's events; any other file is read in full, in any line order. */
+    @Test public void filesWithoutAnHourNameAreAlwaysRead() throws Exception
     {
         Path directory = temporary.newFolder("unsorted").toPath();
         String inWindow = event("EXCP", "1").replace("23:43:10", "23:45:00");
         String old = event("CALL", "1").replace("23:43:10", "23:40:00");
-        Path log = directory.resolve("rphost_1.log");
-        Files.writeString(log, inWindow + "\n" + (old + "\n").repeat(3000));
-        writtenAt(log, "2026-11-15T23:45:01");
+        Files.writeString(directory.resolve("1cv8c_21040.log"), inWindow + "\n" + (old + "\n").repeat(3000));
         var i = TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null);
         assertEquals(0, i.skippedFiles);
         assertEquals(1, i.events.size()); assertEquals("EXCP", i.events.get(0).name());
-        // Written within the clock-skew margin of 'from': still read.
-        Files.writeString(log, (old + "\n").repeat(3000));
-        writtenAt(log, "2026-11-15T23:42:30");
-        assertEquals(0, TechLogReader.read(directory, 1, 10, "2026-11-15T23:43:00", null).skippedFiles);
-    }
-
-    private static void writtenAt(Path file, String localTime) throws java.io.IOException
-    {
-        Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.from(
-            java.time.LocalDateTime.parse(localTime).atZone(java.time.ZoneId.systemDefault()).toInstant()));
+        assertEquals(java.time.LocalDateTime.of(2026, 11, 15, 22, 0), TechLogReader.namedHour("26111522.log"));
+        assertEquals(null, TechLogReader.namedHour("1cv8c_21040.log"));
+        assertEquals(null, TechLogReader.namedHour("26111522.log.1"));
+        assertEquals(null, TechLogReader.namedHour("26133099.log"));
     }
 
     @Test public void bomOnlyFreshLogIsEmptyNotAnIncompleteTail() throws Exception

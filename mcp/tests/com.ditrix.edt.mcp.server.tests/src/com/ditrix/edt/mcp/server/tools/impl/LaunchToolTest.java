@@ -186,6 +186,43 @@ public class LaunchToolTest
         verify(started).terminate();
     }
 
+    /** A client that does not confirm termination keeps the restart refused; the launch is not dropped. */
+    @Test
+    public void restartRefusesWhenTheStartedClientDoesNotStop() throws Exception
+    {
+        ILaunch stuck = mock(ILaunch.class);
+        when(stuck.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(stuck.canTerminate()).thenReturn(true);
+        when(stuck.isTerminated()).thenReturn(false);
+        LaunchTool.recordFinishedLaunch(stuck);
+        assertEquals(LaunchTool.CLIENT_NOT_STOPPED_MESSAGE, LaunchTool.cancelStartingLaunch(stuck, null, 10));
+        verify(stuck).terminate();
+    }
+
+    /** The cancelled job itself terminates a client its delegate started, so no waiter has to be present. */
+    @Test
+    public void cancelledLaunchJobTerminatesTheClientItStarted() throws Exception
+    {
+        ILaunch started = mock(ILaunch.class);
+        when(started.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(started.canTerminate()).thenReturn(true);
+        when(started.isTerminated()).thenReturn(true);
+        org.eclipse.core.runtime.NullProgressMonitor running = new org.eclipse.core.runtime.NullProgressMonitor();
+        LaunchTool.endCancelledLaunch(started, running);
+        verify(started, never()).terminate();
+        org.eclipse.core.runtime.NullProgressMonitor cancelled = new org.eclipse.core.runtime.NullProgressMonitor();
+        cancelled.setCanceled(true);
+        LaunchTool.endCancelledLaunch(started, cancelled);
+        verify(started).terminate();
+        ILaunch empty = mock(ILaunch.class);
+        when(empty.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(empty.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        LaunchTool.endCancelledLaunch(empty, cancelled);
+        verify(empty, never()).terminate();
+    }
+
     @Test
     public void testName()
     {

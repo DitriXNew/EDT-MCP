@@ -2027,14 +2027,32 @@ public class LaunchTool implements IMcpTool
     static final String STARTING_NOT_STOPPED_MESSAGE =
         "The previous launch of this configuration is still starting and did not stop within " //$NON-NLS-1$
             + CANCEL_WAIT_MS / 1000 + " s of being cancelled (a database update, or an EDT dialog - check " //$NON-NLS-1$
-            + "edt_dialog action=list). It is cancelled and starts no client after that step; retry " //$NON-NLS-1$
-            + "restartIfRunning=true once it ends."; //$NON-NLS-1$
+            + "edt_dialog action=list). It stays cancelled, and a client it still starts is terminated when " //$NON-NLS-1$
+            + "it ends; retry restartIfRunning=true then."; //$NON-NLS-1$
+
+    static final String CLIENT_NOT_STOPPED_MESSAGE =
+        "The previous launch started a 1C client while being cancelled, and that client did not confirm " //$NON-NLS-1$
+            + "termination. No new client was started; retry terminate_launch, then launch."; //$NON-NLS-1$
 
     static final String FOREIGN_STARTING_MESSAGE =
         "The existing launch of this configuration has no 1C client yet and was not started by this tool " //$NON-NLS-1$
             + "(EDT's UI), so it may still be starting and cannot be cancelled safely. Wait for its client " //$NON-NLS-1$
             + "(or answer its dialog - edt_dialog action=list) and retry restartIfRunning=true, or remove the " //$NON-NLS-1$
             + "launch in EDT's Debug view."; //$NON-NLS-1$
+
+    /**
+     * Eclipse removes a cancelled launch even after its delegate started the client, which would leave that
+     * client running and undiscoverable; the cancelled job terminates it instead, whoever is still waiting.
+     */
+    static void endCancelledLaunch(org.eclipse.debug.core.ILaunch launch, IProgressMonitor monitor)
+    {
+        if (launch != null && monitor != null && monitor.isCanceled() && !LaunchLifecycleUtils.emptyLaunch(launch))
+        {
+            Activator.logInfo("launch: terminating a client started by a cancelled launch: " //$NON-NLS-1$
+                + launch.getLaunchConfiguration());
+            LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, null);
+        }
+    }
 
     /** Records a launch whose delegate has returned inside this tool's launch job. */
     static void recordFinishedLaunch(org.eclipse.debug.core.ILaunch launch)
@@ -2083,9 +2101,10 @@ public class LaunchTool implements IMcpTool
         {
             return FOREIGN_STARTING_MESSAGE;
         }
-        if (!LaunchLifecycleUtils.emptyLaunch(launch))
+        if (!LaunchLifecycleUtils.emptyLaunch(launch)
+            && !LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, applicationId))
         {
-            LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, applicationId);
+            return CLIENT_NOT_STOPPED_MESSAGE;
         }
         DebugPlugin debug = DebugPlugin.getDefault();
         if (debug != null)
@@ -2692,8 +2711,10 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
-                () -> abandonedLaunchMessage(config.getName(), abortReason.reason())));
+            org.eclipse.debug.core.ILaunch started = StandaloneServerStateRecovery.launchWithRecovery(config,
+                launchMode, monitor, () -> abandonedLaunchMessage(config.getName(), abortReason.reason()));
+            endCancelledLaunch(started, monitor);
+            recordFinishedLaunch(started);
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {

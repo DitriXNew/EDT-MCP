@@ -208,7 +208,7 @@ public final class TechLogAnalysis
         String text = "Files: " + index.files + "; events read: " + index.readEvents + "; events indexed: " + index.events.size() + "; rejected: " + index.rejected
             + "; incomplete-tail: " + index.incompleteTail + ". Read " + mb(index.bytesRead) + " of " + mb(index.totalBytes)
             + " MB (expanded JSON bytes, including zip members)"
-            + (index.skippedFiles > 0 ? "; " + index.skippedFiles + " file(s) last written before from skipped unread" : "")
+            + (index.skippedFiles > 0 ? "; " + index.skippedFiles + " file(s) of hours ended before from skipped unread" : "")
             + ".\n\nTime span: " + first + " → " + last
             + ". Event times are local to the machine that wrote them.\n\nProcesses: " + MarkdownUtils.escapeMarkdown(processes.toString())
             + (index.infobases.isEmpty() ? index.processNames.isEmpty()
