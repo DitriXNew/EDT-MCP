@@ -112,15 +112,15 @@ public class StartProfilingTool implements IMcpTool
     }
 
     /**
-     * The target a stop must act on: the live target that owns the flag (several targets can share an
-     * applicationId, and discovery may pick another one), else the looked-up target.
+     * The target start and stop reconcile and act on: the live target that owns the flag (several targets can
+     * share an applicationId, and discovery may pick another one), else the looked-up target.
      */
-    static IDebugTarget stopTarget(String applicationId, IDebugTarget lookedUp)
+    static IDebugTarget profiledTarget(String applicationId, IDebugTarget lookedUp)
     {
-        return stopTarget(ACTIVE_APPLICATION_IDS.get(applicationId), lookedUp, StartProfilingTool::ended);
+        return profiledTarget(ACTIVE_APPLICATION_IDS.get(applicationId), lookedUp, StartProfilingTool::ended);
     }
 
-    static IDebugTarget stopTarget(Object owner, IDebugTarget lookedUp,
+    static IDebugTarget profiledTarget(Object owner, IDebugTarget lookedUp,
         java.util.function.Predicate<IDebugTarget> ended)
     {
         return owner instanceof IDebugTarget target && !ended.test(target) ? target : lookedUp;
@@ -258,8 +258,10 @@ public class StartProfilingTool implements IMcpTool
     {
         try
         {
-            IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);
-            reconcile(applicationId, target);
+            IDebugTarget lookedUp = DebugSessionRegistry.findActiveTarget(applicationId);
+            // Read EDT's state of the target that owns the flag, so a run stopped elsewhere is noticed.
+            reconcile(applicationId, profiledTarget(applicationId, lookedUp));
+            IDebugTarget target = lookedUp;
             // Start-only: if we already track profiling as active for this id, do
             // NOT toggle (toggling would silently switch profiling OFF). Return an
             // idempotent "already profiling" result instead.

@@ -132,7 +132,7 @@ public class StopProfilingTool implements IMcpTool
         {
             if (name != null) { ProfilingFiles.validateName(name); }
             IDebugTarget live = DebugSessionRegistry.findActiveTarget(applicationId);
-            StartProfilingTool.reconcile(applicationId, live);
+            StartProfilingTool.reconcile(applicationId, StartProfilingTool.profiledTarget(applicationId, live));
             // Idempotent: nothing to do if profiling was never started (or already
             // stopped) for this id. Return a benign success, NOT an error — toggling
             // here would silently switch profiling ON.
@@ -146,7 +146,7 @@ public class StopProfilingTool implements IMcpTool
                     .toJson();
             }
 
-            IDebugTarget target = StartProfilingTool.stopTarget(applicationId, live);
+            IDebugTarget target = StartProfilingTool.profiledTarget(applicationId, live);
             if (target == null)
             {
                 // The session is gone, so profiling cannot still be running on the

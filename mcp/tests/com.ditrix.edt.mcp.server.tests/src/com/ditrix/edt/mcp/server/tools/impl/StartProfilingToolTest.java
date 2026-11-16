@@ -136,11 +136,11 @@ public class StartProfilingToolTest
     {
         org.eclipse.debug.core.model.IDebugTarget owner = target(), lookedUp = target(), gone = target();
         java.util.function.Predicate<org.eclipse.debug.core.model.IDebugTarget> ended = t -> t == gone;
-        assertEquals(owner, StartProfilingTool.stopTarget(owner, lookedUp, ended));
-        assertEquals(lookedUp, StartProfilingTool.stopTarget(gone, lookedUp, ended));
-        assertEquals(lookedUp, StartProfilingTool.stopTarget(null, lookedUp, ended));
-        assertEquals(lookedUp, StartProfilingTool.stopTarget(new Object(), lookedUp, ended));
-        assertEquals(owner, StartProfilingTool.stopTarget(owner, null, ended));
+        assertEquals(owner, StartProfilingTool.profiledTarget(owner, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(gone, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(null, lookedUp, ended));
+        assertEquals(lookedUp, StartProfilingTool.profiledTarget(new Object(), lookedUp, ended));
+        assertEquals(owner, StartProfilingTool.profiledTarget(owner, null, ended));
     }
 
     /** EDT's own state for the looked-up target replaces only a missing, same, unknown or ended owner. */
