@@ -8,7 +8,7 @@ from harness import (REPO_ROOT, E2ESkip, call, assert_ok, assert_error,
 
 
 @e2e_test(tool="manage_tech_log", kind="action")
-def test_preview_and_read_only_write_refusals():
+def test_preview_and_invalid_input_refusals():
     with TemporaryDirectory(prefix="edt-mcp-tech-log-e2e-") as directory:
         capture = Path(directory) / "capture"
         preview = call("manage_tech_log", {"mode": "preview", "profile": "db",

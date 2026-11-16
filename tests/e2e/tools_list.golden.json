@@ -2866,36 +2866,6 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show a grey rectangle instead of the form for the whole session (EDT behaviour); changing the flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot').",
-    "inputSchema": {
-      "properties": {
-        "formPath": {
-          "type": "string"
-        },
-        "projectName": {
-          "description": "EDT project name. Required when formPath is specified.",
-          "type": "string"
-        },
-        "refresh": {
-          "description": "Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false)",
-          "type": "boolean"
-        },
-        "showElement": {
-          "type": "string"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "name": "get_form_screenshot",
-    "outputSchema": null
-  },
-  {
-    "annotations": {
-      "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
-    },
     "description": "Poll any background job by the jobId its owning tool returned: state, progress journal and terminal result. Parameters and examples: get_tool_guide('get_job_status').",
     "inputSchema": {
       "properties": {
@@ -3711,6 +3681,80 @@
       "type": "object"
     },
     "name": "get_tags",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Analyze 1C JSON technological logs: problems first, then details and correlated chains; describe explains events and capture profiles. Absent events do not prove absence of a problem. Full parameters and examples: call get_tool_guide('get_tech_log').",
+    "inputSchema": {
+      "properties": {
+        "contains": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "minDurationMs": {
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "describe",
+            "summary",
+            "details",
+            "chain",
+            "events"
+          ],
+          "type": "string"
+        },
+        "occurrenceId": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "problem": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "property": {
+          "type": "string"
+        },
+        "readBudgetMb": {
+          "type": "integer"
+        },
+        "readBudgetSeconds": {
+          "type": "integer"
+        },
+        "session": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_tech_log",
     "outputSchema": null
   },
   {
@@ -4648,6 +4692,83 @@
       "type": "object"
     },
     "name": "manage_profiling_results",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Preview and manage 1C JSON technological-log capture, or export CSV. Preview before start; start, stop and export require consent and refuse read-only mode. Stop after a short reproduction to restore logcfg.xml. Full parameters and examples: call get_tool_guide('manage_tech_log').",
+    "inputSchema": {
+      "properties": {
+        "dbmsLocks": {
+          "type": "boolean"
+        },
+        "exportKind": {
+          "enum": [
+            "events",
+            "groups"
+          ],
+          "type": "string"
+        },
+        "extraEvents": {
+          "type": "string"
+        },
+        "historyHours": {
+          "type": "integer"
+        },
+        "infobase": {
+          "type": "string"
+        },
+        "location": {
+          "description": "Absolute dedicated empty capture directory; default a new temp/edt-mcp-tech-log/<uuid>.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Default preview; start/stop/export write and ask consent.",
+          "enum": [
+            "preview",
+            "start",
+            "status",
+            "stop",
+            "export"
+          ],
+          "type": "string"
+        },
+        "outputPath": {
+          "description": "New absolute CSV file; required for export, never overwritten.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "plans": {
+          "type": "boolean"
+        },
+        "profile": {
+          "enum": [
+            "errors",
+            "slow-calls",
+            "db",
+            "locks",
+            "memory",
+            "scenario"
+          ],
+          "type": "string"
+        },
+        "rotationMb": {
+          "type": "integer"
+        },
+        "thresholdMs": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "manage_tech_log",
     "outputSchema": null
   },
   {
