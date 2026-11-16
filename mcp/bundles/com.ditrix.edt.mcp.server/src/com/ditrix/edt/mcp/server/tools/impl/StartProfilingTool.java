@@ -260,7 +260,13 @@ public class StartProfilingTool implements IMcpTool
         {
             IDebugTarget lookedUp = DebugSessionRegistry.findActiveTarget(applicationId);
             // Read EDT's state of the target that owns the flag, so a run stopped elsewhere is noticed.
-            reconcile(applicationId, profiledTarget(applicationId, lookedUp));
+            IDebugTarget owner = profiledTarget(applicationId, lookedUp);
+            reconcile(applicationId, owner);
+            // The toggle acts on the looked-up target, so its own state is read too before it is toggled.
+            if (lookedUp != null && lookedUp != owner && !isProfilingActive(applicationId))
+            {
+                reconcile(applicationId, lookedUp);
+            }
             IDebugTarget target = lookedUp;
             // Start-only: if we already track profiling as active for this id, do
             // NOT toggle (toggling would silently switch profiling OFF). Return an
