@@ -262,10 +262,20 @@ public final class TechLogReader
 
     private static final java.util.regex.Pattern TS = java.util.regex.Pattern.compile("\"ts\"\\s*:\\s*\"([^\"]+)\"");
 
-    /** A plain file whose latest tail event ends before 'from' holds no event of the window; its bytes cost no budget. */
+    /** Producer and file-system clocks may differ by this much. */
+    private static final long CLOCK_SKEW_MINUTES = 1;
+
+    /**
+     * A plain file last written before 'from' holds no event of the window, so its bytes cost no budget.
+     * An event is written after it ends, so the modification time bounds every end in any line order;
+     * the latest tail event must end before 'from' as well, an independent second bound.
+     */
     static boolean endsBefore(Source source, LocalDateTime lower)
     {
         if (lower == LocalDateTime.MIN || !source.member().isEmpty()) return false;
+        LocalDateTime written = LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(source.mtime()),
+            java.time.ZoneId.systemDefault());
+        if (!written.plusMinutes(CLOCK_SKEW_MINUTES).isBefore(lower)) return false;
         try (RandomAccessFile file = new RandomAccessFile(source.file().toFile(), "r"))
         {
             long start = Math.max(0, file.length() - 65536);

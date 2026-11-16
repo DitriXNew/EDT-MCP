@@ -2002,7 +2002,11 @@ public class LaunchTool implements IMcpTool
             // launch would go on to start a second client next to the new one. Cancel its job.
             Activator.logInfo("launch restartIfRunning: cancelling a still-starting launch: applicationId=" //$NON-NLS-1$
                 + applicationId);
-            cancelStartingLaunch(session.launch, applicationId);
+            String refusal = cancelStartingLaunch(session.launch, applicationId, CANCEL_WAIT_MS);
+            if (refusal != null)
+            {
+                return ToolResult.error(refusal).toJson();
+            }
         }
         else
         {
@@ -2013,16 +2017,75 @@ public class LaunchTool implements IMcpTool
         return null;
     }
 
+    /** Launches returned by this tool's launch job: their delegate has finished, so an empty one is dead. */
+    private static final java.util.Set<org.eclipse.debug.core.ILaunch> FINISHED_LAUNCHES =
+        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
+
+    /** How long restartIfRunning waits for a cancelled launch job to stop. */
+    static final long CANCEL_WAIT_MS = 30_000;
+
+    static final String STARTING_NOT_STOPPED_MESSAGE =
+        "The previous launch of this configuration is still starting and did not stop within " //$NON-NLS-1$
+            + CANCEL_WAIT_MS / 1000 + " s of being cancelled (a database update, or an EDT dialog - check " //$NON-NLS-1$
+            + "edt_dialog action=list). It is cancelled and starts no client after that step; retry " //$NON-NLS-1$
+            + "restartIfRunning=true once it ends."; //$NON-NLS-1$
+
+    static final String FOREIGN_STARTING_MESSAGE =
+        "The existing launch of this configuration has no 1C client yet and was not started by this tool " //$NON-NLS-1$
+            + "(EDT's UI), so it may still be starting and cannot be cancelled safely. Wait for its client " //$NON-NLS-1$
+            + "(or answer its dialog - edt_dialog action=list) and retry restartIfRunning=true, or remove the " //$NON-NLS-1$
+            + "launch in EDT's Debug view."; //$NON-NLS-1$
+
+    /** Records a launch whose delegate has returned inside this tool's launch job. */
+    static void recordFinishedLaunch(org.eclipse.debug.core.ILaunch launch)
+    {
+        if (launch != null)
+        {
+            FINISHED_LAUNCHES.add(launch);
+        }
+    }
+
     /**
-     * Cancels this tool's launch job for the launch's configuration (the delegate checks the monitor
-     * before starting the client) and removes the empty launch, which Eclipse never reports as terminated.
+     * Ends a launch that has no client yet. This tool's launch job for the configuration is cancelled and
+     * awaited (the delegate checks the monitor before starting the client, and Eclipse removes a cancelled
+     * launch even when a client did start), so a client started past that check is terminated, not
+     * orphaned. An empty launch whose delegate has not returned in this tool's job may still be starting
+     * elsewhere and is left alone.
+     *
+     * @return {@code null} once the old launch is gone, else the refusal text
      */
-    static void cancelStartingLaunch(org.eclipse.debug.core.ILaunch launch, String applicationId)
+    static String cancelStartingLaunch(org.eclipse.debug.core.ILaunch launch, String applicationId, long waitMs)
     {
         ILaunchConfiguration config = launch.getLaunchConfiguration();
-        if (config != null)
+        org.eclipse.core.runtime.jobs.IJobManager jobs = Job.getJobManager();
+        if (config != null && jobs.find(config).length > 0)
         {
-            Job.getJobManager().cancel(config);
+            jobs.cancel(config);
+            long deadline = System.nanoTime() + waitMs * 1_000_000L;
+            while (jobs.find(config).length > 0)
+            {
+                if (System.nanoTime() >= deadline)
+                {
+                    return STARTING_NOT_STOPPED_MESSAGE;
+                }
+                try
+                {
+                    Thread.sleep(100);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return STARTING_NOT_STOPPED_MESSAGE;
+                }
+            }
+        }
+        if (!FINISHED_LAUNCHES.contains(launch))
+        {
+            return FOREIGN_STARTING_MESSAGE;
+        }
+        if (!LaunchLifecycleUtils.emptyLaunch(launch))
+        {
+            LaunchLifecycleUtils.terminateExistingLaunchAndWait(launch, applicationId);
         }
         DebugPlugin debug = DebugPlugin.getDefault();
         if (debug != null)
@@ -2033,6 +2096,7 @@ public class LaunchTool implements IMcpTool
         {
             com.ditrix.edt.mcp.server.utils.DebugSessionRegistry.get().forgetApplication(applicationId);
         }
+        return null;
     }
 
     /**
@@ -2104,7 +2168,8 @@ public class LaunchTool implements IMcpTool
     static final String EMPTY_LAUNCH_MESSAGE =
         "The launch is registered but has no 1C client process or debug target: it is still starting " //$NON-NLS-1$
             + "(a database update, or an EDT dialog - check edt_dialog action=list) or was cancelled at a " //$NON-NLS-1$
-            + "dialog. Pass restartIfRunning=true to replace it."; //$NON-NLS-1$
+            + "dialog. Pass restartIfRunning=true to replace it (a launch started from EDT's UI must finish starting " //$NON-NLS-1$
+            + "first)."; //$NON-NLS-1$
 
     /** Default short-circuit message for a still-running client session. */
     private static final String ALREADY_RUNNING_MESSAGE =
@@ -2499,7 +2564,7 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null);
+            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null));
             return null;
         }
         catch (CoreException e)
@@ -2627,8 +2692,8 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
-                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()));
+            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
+                () -> abandonedLaunchMessage(config.getName(), abortReason.reason())));
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {

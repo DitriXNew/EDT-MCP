@@ -976,6 +976,13 @@ public final class DebugServerTargetSupport
         }
     }
 
+    /** The id of the application a runtime debug target was started against; null when it has none. */
+    public static String applicationIdOf(Object target)
+    {
+        Object app = target == null ? null : reflectApplication(target);
+        return app == null ? null : reflectString(app, "getId"); //$NON-NLS-1$
+    }
+
     /** Reflectively resolves {@code getApplication()} (possibly an Optional) to its name. */
     private static String reflectApplicationName(Object target)
     {

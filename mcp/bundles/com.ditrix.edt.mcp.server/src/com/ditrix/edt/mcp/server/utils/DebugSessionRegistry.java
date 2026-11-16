@@ -636,7 +636,8 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
      * Exact pass: the launch's own id. Delegate pass: a config without a persisted
      * {@code ATTR_APPLICATION_ID} (EDT clears it when its infobase is deleted or re-added)
      * runs the project's default application, so the real id get_applications returns
-     * still names that session.
+     * still names that session. The id is read from the launch's live debug targets, which
+     * keep the application they started against even if the project default changes later.
      */
     private static boolean matches(ILaunch launch, String applicationId, boolean byDelegate)
     {
@@ -645,22 +646,34 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         {
             return applicationId.equals(own);
         }
-        return matchesDelegate(applicationId, own, () -> {
-            var config = launch.getLaunchConfiguration();
-            return LaunchLifecycleUtils.resolveDelegateApplicationId(config,
-                LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, null));
-        });
+        return matchesDelegate(applicationId, own, () -> liveApplicationIds(launch));
     }
 
-    /** Pure delegate-pass rule; the delegate id is resolved only for an unbound EDT launch. */
-    static boolean matchesDelegate(String requested, String ownId, java.util.function.Supplier<String> delegateId)
+    /** Applications the launch's live debug targets were started against. */
+    private static List<String> liveApplicationIds(ILaunch launch)
+    {
+        List<String> ids = new ArrayList<>();
+        for (IDebugTarget target : launch.getDebugTargets())
+        {
+            String id = target == null || target.isTerminated() ? null : DebugServerTargetSupport.applicationIdOf(target);
+            if (id != null)
+            {
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    /** Pure delegate-pass rule; live application ids are read only for an unbound EDT launch. */
+    static boolean matchesDelegate(String requested, String ownId,
+        java.util.function.Supplier<? extends java.util.Collection<String>> liveIds)
     {
         if (requested == null || ownId == null || LaunchConfigUtils.isSyntheticApplicationId(requested)
             || !ownId.startsWith(LaunchConfigUtils.LAUNCH_APP_ID_PREFIX))
         {
             return false;
         }
-        return requested.equals(delegateId.get());
+        return liveIds.get().contains(requested);
     }
 
     /**

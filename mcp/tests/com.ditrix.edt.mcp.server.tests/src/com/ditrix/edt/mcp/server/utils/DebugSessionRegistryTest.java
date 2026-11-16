@@ -763,21 +763,47 @@ public class DebugSessionRegistryTest
         return thread;
     }
 
-    /** An unbound EDT launch (no ATTR_APPLICATION_ID) answers to its default application id. */
+    /** An unbound EDT launch (no ATTR_APPLICATION_ID) answers to the application its live target runs. */
     @Test
-    public void unboundLaunchMatchesTheRealIdOfItsDefaultApplication()
+    public void unboundLaunchMatchesTheApplicationItsLiveTargetRuns()
     {
         String real = "afc6d609-6d30-40ce-a729-5c9966c2f580";
         int[] lookups = { 0 };
-        java.util.function.Supplier<String> delegate = () -> { lookups[0]++; return real; };
-        assertTrue(DebugSessionRegistry.matchesDelegate(real, "launch:IRP thin", delegate));
-        assertFalse(DebugSessionRegistry.matchesDelegate("other-id", "launch:IRP thin", delegate));
+        java.util.function.Supplier<java.util.List<String>> live = () -> { lookups[0]++; return java.util.List.of(real); };
+        assertTrue(DebugSessionRegistry.matchesDelegate(real, "launch:IRP thin", live));
+        // The project default changing to another application does not move a running session.
+        assertFalse(DebugSessionRegistry.matchesDelegate("other-id", "launch:IRP thin", live));
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, "launch:IRP thin", java.util.List::of));
         // A bound launch, an attach id and a synthetic request never take the delegate pass.
         int before = lookups[0];
-        assertFalse(DebugSessionRegistry.matchesDelegate(real, "11111111-2222-3333-4444-555555555555", delegate));
-        assertFalse(DebugSessionRegistry.matchesDelegate(real, "attach:Server", delegate));
-        assertFalse(DebugSessionRegistry.matchesDelegate("launch:IRP thin", "launch:IRP thin", delegate));
-        assertFalse(DebugSessionRegistry.matchesDelegate(real, null, delegate));
-        assertEquals("no default-application lookup outside an unbound launch", before, lookups[0]);
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, "11111111-2222-3333-4444-555555555555", live));
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, "attach:Server", live));
+        assertFalse(DebugSessionRegistry.matchesDelegate("launch:IRP thin", "launch:IRP thin", live));
+        assertFalse(DebugSessionRegistry.matchesDelegate(real, null, live));
+        assertEquals("no target read outside an unbound launch", before, lookups[0]);
+    }
+
+    /** The application id comes from the target's own getApplication(), as an Optional or plain. */
+    @Test
+    public void targetApplicationIdIsReadFromTheTarget()
+    {
+        assertEquals("app-1", DebugServerTargetSupport.applicationIdOf(new FakeTarget(java.util.Optional.of(new FakeApplication("app-1")))));
+        assertEquals("app-2", DebugServerTargetSupport.applicationIdOf(new FakeTarget(new FakeApplication("app-2"))));
+        assertEquals(null, DebugServerTargetSupport.applicationIdOf(new FakeTarget(java.util.Optional.empty())));
+        assertEquals(null, DebugServerTargetSupport.applicationIdOf(null));
+    }
+
+    public static final class FakeTarget
+    {
+        private final Object application;
+        FakeTarget(Object application) { this.application = application; }
+        public Object getApplication() { return application; }
+    }
+
+    public static final class FakeApplication
+    {
+        private final String id;
+        FakeApplication(String id) { this.id = id; }
+        public String getId() { return id; }
     }
 }

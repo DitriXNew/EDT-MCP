@@ -154,6 +154,38 @@ public class LaunchToolTest
         assertEquals(LaunchTool.EMPTY_LAUNCH_MESSAGE, LaunchTool.alreadyRunningMessage(empty));
     }
 
+    /** An empty launch this tool did not finish may still be starting elsewhere: refused, never removed. */
+    @Test
+    public void restartRefusesAnEmptyLaunchItDidNotStart() throws Exception
+    {
+        ILaunch foreign = mock(ILaunch.class);
+        when(foreign.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(foreign.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        assertEquals(LaunchTool.FOREIGN_STARTING_MESSAGE, LaunchTool.cancelStartingLaunch(foreign, null, 10));
+        verify(foreign, never()).terminate();
+    }
+
+    /** A launch whose delegate returned in this tool's job is dead when empty, and a client it started is terminated. */
+    @Test
+    public void restartEndsAFinishedLaunchAndTerminatesAClientItStarted() throws Exception
+    {
+        ILaunch dead = mock(ILaunch.class);
+        when(dead.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[0]);
+        when(dead.getDebugTargets()).thenReturn(new org.eclipse.debug.core.model.IDebugTarget[0]);
+        LaunchTool.recordFinishedLaunch(dead);
+        assertNull(LaunchTool.cancelStartingLaunch(dead, null, 10));
+        verify(dead, never()).terminate();
+
+        ILaunch started = mock(ILaunch.class);
+        when(started.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            mock(org.eclipse.debug.core.model.IProcess.class) });
+        when(started.canTerminate()).thenReturn(true);
+        when(started.isTerminated()).thenReturn(true);
+        LaunchTool.recordFinishedLaunch(started);
+        assertNull(LaunchTool.cancelStartingLaunch(started, null, 10));
+        verify(started).terminate();
+    }
+
     @Test
     public void testName()
     {
