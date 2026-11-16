@@ -77,10 +77,10 @@ Use the shared `Pagination` (`utils/Pagination.java`: one `limit`/`offset`, one 
 
 Through `ToolResult`/`JsonUtils` and the shared markdown-table builder, not a hand-rolled StringBuilder.
 
-## Schema ↔ code ↔ README
+## Schema ↔ code ↔ tool docs
 
 - For mode-dependent JSON results, keep branch-specific output keys optional unless present in every branch. `validate_query` text mode has a top-level verdict; module mode has per-literal verdicts in `queries` plus `skipped` and counts. Extraction counts do not prove runtime-query coverage.
-- `BuiltInToolRegistrar` is the source of truth for the tool set; the README catalog + the e2e golden (`tests/e2e/tools_list.golden.json`) must match it. A new tool changes the golden → regenerate (`EDT_MCP_UPDATE_GOLDEN=1`).
+- `BuiltInToolRegistrar` is the source of truth for the tool set; `docs/tools/README.md`, `docs/tool-overviews.md` and the e2e golden (`tests/e2e/tools_list.golden.json`) must match it. The root README links to the reference and carries only a compact toolset summary. A new tool changes the golden → regenerate (`EDT_MCP_UPDATE_GOLDEN=1`).
 - Every tool: a non-empty meaningful description and a description for every parameter.
 - Match `outputSchema` to every successful `structuredContent` branch. Preserve response shapes in use; prefer precise `oneOf` for disjoint field shapes, with each branch's item types and required members. Build regression responses through production code.
 

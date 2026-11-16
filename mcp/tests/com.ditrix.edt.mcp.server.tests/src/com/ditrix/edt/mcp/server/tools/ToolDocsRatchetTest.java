@@ -53,7 +53,7 @@ public class ToolDocsRatchetTest
 
     private static final String INDEX_START = "<!-- TOOLS-INDEX:START -->";
     private static final String INDEX_END = "<!-- TOOLS-INDEX:END -->";
-    // The folder index puts its period inside the bold count; the root index does not.
+    // The folder index puts its period inside the bold count; usage overviews do not.
     private static final Pattern TOOL_COUNT = Pattern.compile("^\\*\\*(\\d+) tools\\.?\\*\\*", Pattern.MULTILINE);
 
     private McpToolRegistry registry;
@@ -127,17 +127,24 @@ public class ToolDocsRatchetTest
         checkIndex("docs/tools/README.md", Files.readString(root.resolve("docs/tools/README.md"),
             StandardCharsets.UTF_8), "", problems);
 
-        String readme = normalizeLf(Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8));
-        int start = readme.indexOf(INDEX_START);
-        int end = readme.indexOf(INDEX_END);
+        String readme = Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8);
+        if (!readme.contains("](docs/tools/README.md)"))
+        {
+            problems.add("README.md: missing link to the generated full tool index");
+        }
+
+        String overviews = normalizeLf(Files.readString(root.resolve("docs/tool-overviews.md"),
+            StandardCharsets.UTF_8));
+        int start = overviews.indexOf(INDEX_START);
+        int end = overviews.indexOf(INDEX_END);
         if (start < 0 || end <= start)
         {
-            problems.add("README.md: missing or misordered TOOLS-INDEX markers");
+            problems.add("docs/tool-overviews.md: missing or misordered TOOLS-INDEX markers");
         }
         else
         {
-            checkIndex("README.md TOOLS-INDEX", readme.substring(start + INDEX_START.length(), end),
-                "docs/tools/", problems);
+            checkIndex("docs/tool-overviews.md TOOLS-INDEX",
+                overviews.substring(start + INDEX_START.length(), end), "tools/", problems);
         }
         assertEquals(REGENERATE + "\n" + String.join("\n", problems), 0, problems.size());
     }
