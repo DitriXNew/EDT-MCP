@@ -130,6 +130,22 @@ public class StartProfilingToolTest
         assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
     }
 
+    /** A stale lookup (an older target, or none) never clears the flag of a newer owner that is still live. */
+    @Test
+    public void staleTargetKeepsTheFlagOfALiveNewerOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget newer = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        org.eclipse.debug.core.ILaunch launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        org.mockito.Mockito.when(newer.getLaunch()).thenReturn(launch);
+        org.mockito.Mockito.when(launch.getProcesses()).thenReturn(new org.eclipse.debug.core.model.IProcess[] {
+            org.mockito.Mockito.mock(org.eclipse.debug.core.model.IProcess.class) });
+        StartProfilingTool.markActive("app", newer); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", target()); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+        StartProfilingTool.reconcile("app", null); //$NON-NLS-1$
+        assertTrue(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
+    }
+
     /** A lookup miss alone keeps the flag of a target whose launch is still live (a relaunch race). */
     @Test
     public void lookupMissKeepsTheFlagOfALiveOwner()

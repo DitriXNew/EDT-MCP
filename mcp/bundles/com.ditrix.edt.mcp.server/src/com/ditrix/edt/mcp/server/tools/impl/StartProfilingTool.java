@@ -72,7 +72,7 @@ public class StartProfilingTool implements IMcpTool
 
     /**
      * Aligns the flag with the live target: EDT's own per-target state when readable, otherwise the flag is
-     * dropped when it was set for an earlier session of the same applicationId (a relaunch keeps the id).
+     * dropped when it was set for an earlier, ended session of the same applicationId (a relaunch keeps the id).
      */
     static void reconcile(String applicationId, IDebugTarget target)
     {
@@ -97,10 +97,10 @@ public class StartProfilingTool implements IMcpTool
             else { ACTIVE_APPLICATION_IDS.remove(applicationId); }
             return;
         }
-        Object owner = ACTIVE_APPLICATION_IDS.get(applicationId);
-        if (owner != null && owner != UNKNOWN_TARGET && owner != target)
+        // Another owner is dropped only once it has ended: a stale lookup may predate a newer live owner.
+        if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget owner && owner != target && ended(owner))
         {
-            ACTIVE_APPLICATION_IDS.remove(applicationId);
+            ACTIVE_APPLICATION_IDS.remove(applicationId, owner);
         }
     }
 
