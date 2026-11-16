@@ -58,6 +58,8 @@ Groups rank incident severity first, then cumulative duration (memory by peak by
 
 Coverage lists present/absent event kinds. A manifest distinguishes disabled events from enabled-but-unobserved events; filters, missing generators, unfinished operations, platform version and uncollected nodes can still explain absence. **Absent does not mean no problem.** Describe entries keep source links, author tags, disagreements and unverified observations.
 
+Describe without a selector lists ids by category. Select one event, property, profile or problem to read its entry; optional sections include illustrative string-valued JSON records, sourced thresholds, causes, before/after fix examples, concrete next tool calls and related describe hints. Capture cutoffs are not universal health limits. The additional problem entries provide investigation guidance; they do not add automatic summary detectors.
+
 Chain starts with the enclosing CALL when available and gathers interval/identity candidates within the same node/process/infobase, using thread, session and connection without equating different identifier types. Producer PID is read from platform filenames/folders or PID when available; otherwise correlation stays file-scoped. Node boundaries are inferred from source directories: keep copied nodes separate. Compare timestamps in the same recorded wall clock; align clocks/time zones before combining nodes. DBMS holders require poll-id and connection linkage. Managed holders are candidates until resource values, modes and transaction lifetime are checked. Missing parents, identities, other nodes and possible duration filtering remain explicit. This is not a proven distributed trace.
 
 ### Budgets and navigation
