@@ -2866,6 +2866,36 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Visually inspect an EDT form. ATTENTION: disabled by default; on Windows it needs EDT started with -DnativeFormBufferedLayoutRender=true in 1cedt.ini, which makes EDT's form designer show a grey rectangle instead of the form for the whole session (EDT behaviour); changing the flag needs an EDT restart. Parameters and examples: get_tool_guide('get_form_screenshot').",
+    "inputSchema": {
+      "properties": {
+        "formPath": {
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name. Required when formPath is specified.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false)",
+          "type": "boolean"
+        },
+        "showElement": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_form_screenshot",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Poll any background job by the jobId its owning tool returned: state, progress journal and terminal result. Parameters and examples: get_tool_guide('get_job_status').",
     "inputSchema": {
       "properties": {
