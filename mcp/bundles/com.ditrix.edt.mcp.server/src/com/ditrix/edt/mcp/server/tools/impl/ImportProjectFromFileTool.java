@@ -293,7 +293,7 @@ public class ImportProjectFromFileTool implements IMcpTool
         if (outsideWorkspace)
         {
             Activator.logWarning(NAME + ": filePath is OUTSIDE the EDT workspace: " + file //$NON-NLS-1$
-                + " (trusted-caller-only - see README Security & trust model)."); //$NON-NLS-1$
+                + " (trusted-caller-only - see docs/security.md)."); //$NON-NLS-1$
         }
 
         Request request = new Request(kind, file, outsideWorkspace, projectName, baseProjectName,

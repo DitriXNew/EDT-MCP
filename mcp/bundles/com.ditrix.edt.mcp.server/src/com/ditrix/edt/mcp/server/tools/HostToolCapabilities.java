@@ -37,6 +37,8 @@ public final class HostToolCapabilities
         define("get_project_errors", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("get_markers", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("get_event_log", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
+        define("get_tech_log", Capability.HEADLESS, "Pure local JSON file analysis/reference; unit fixtures cover parser, groups and correlation; live wire acceptance remains separate");
+        define("manage_tech_log", Capability.HEADLESS, "Local capture/CSV file writes reuse the existing consent and preset policy; unit temporary-file round trips do not prove platform pickup");
         define("get_mcp_history", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("list_git_branches", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("switch_git_branch", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
@@ -90,6 +92,7 @@ public final class HostToolCapabilities
         define("debug_status", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("start_profiling", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("stop_profiling", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
+        define("manage_profiling_results", Capability.HEADLESS, "Typed core/file services; consent uses the existing host gate");
         define("get_profiling_results", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");
         define("read_module_source", Capability.HEADLESS_DEGRADED, "ReadModuleSourceToolTest verifies whole/range reads of English/Cyrillic paths without entering the UI footer; optional interception enrichment remains windowed");
         define("open_editor", Capability.WINDOWED_ONLY, "Real headless call with navigation enabled fails in EditorNavigation.open -> BoundedUiCall.workbenchExecutorOrNull: EDT UI is unavailable");

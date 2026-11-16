@@ -25,7 +25,7 @@ bash source/compile.sh
 bash source/compile.sh --skip-tests
 ```
 
-- The toolchain (JDK 25 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK25 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in README "Building from source".
+- The toolchain (JDK 25 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK25 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in [Building from source](../../../docs/building.md).
 - **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
 - **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
 - When sharing a local Tycho cache, hold the shared build lock for the entire Maven process. With a warm cache, `mvn -o clean verify --batch-mode -T 1` is the offline equivalent; run the full suite without `-Dtest` before handoff. Discover toolchain/cache/lock paths locally.

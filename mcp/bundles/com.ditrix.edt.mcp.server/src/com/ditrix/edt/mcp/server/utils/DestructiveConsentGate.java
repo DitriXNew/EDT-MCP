@@ -150,6 +150,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@code DestructiveConsentGateTest} so the two lists never silently drift.
      */
     public static final Set<String> GATED_TOOLS = Set.of(
+        // Profiling exchange has its own write permission; the read tool never asks.
+        "manage_profiling_results",
         "clone_metadata_object",
         "delete_metadata", //$NON-NLS-1$
         "rename_metadata_object", //$NON-NLS-1$
@@ -165,6 +167,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "dcs", //$NON-NLS-1$
         "business_process_route_map", //$NON-NLS-1$
         // Settings/profile writes ask, including destructive deletion; reads and effective no-ops do not.
+        "manage_tech_log",
         "project_checks", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since

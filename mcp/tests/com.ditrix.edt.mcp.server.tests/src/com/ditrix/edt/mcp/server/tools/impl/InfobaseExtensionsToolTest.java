@@ -98,6 +98,17 @@ public class InfobaseExtensionsToolTest
         assertError(params("timeoutSeconds", "NaN"), "timeoutSeconds must be an integer");
         assertError(params("timeoutSeconds", "0"), "10 to 600");
         assertError(params("timeoutSeconds", "601"), "10 to 600");
+        assertError(params("timeoutSeconds", "300.5"), "timeoutSeconds must be an integer");
+    }
+
+    @Test public void acceptsTheWireFormOfAJsonIntegerTimeout()
+    {
+        // A JSON 300 reaches execute() as "300.0" after the protocol layer stringifies the Gson number.
+        for (String value : List.of("300", "300.0", "120.0"))
+        {
+            String output = tool.execute(params("timeoutSeconds", value));
+            assertFalse(value + " -> " + output, output.contains("timeoutSeconds"));
+        }
     }
 
     @Test public void standaloneSessionAdmissionPreservesUnreachableAndBusyReasons()

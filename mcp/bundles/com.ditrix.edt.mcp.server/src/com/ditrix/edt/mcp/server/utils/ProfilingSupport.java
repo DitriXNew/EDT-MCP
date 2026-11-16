@@ -6,104 +6,175 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.lang.reflect.Method;
-
-import org.eclipse.core.runtime.Platform;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ExecutionException;
+import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 import org.eclipse.debug.core.model.IDebugTarget;
-import org.osgi.framework.Bundle;
+import com._1c.g5.v8.dt.profiling.core.IProfileTarget;
+import com._1c.g5.v8.dt.profiling.core.IProfilingResult;
+import com._1c.g5.v8.dt.profiling.core.IProfilingService;
+import com._1c.g5.wiring.ServiceAccess;
+import com.ditrix.edt.mcp.server.Activator;
 
-/**
- * Shared reflection plumbing for the line-level profiling tools
- * ({@code start_profiling} / {@code stop_profiling}). Reaches the EDT
- * {@code IProfilingService} via {@code ServiceAccess.get()} from the
- * {@code com._1c.g5.wiring} bundle and toggles profiling on a debug target
- * adapted to {@code com._1c.g5.v8.dt.profiling.core.IProfileTarget}.
- *
- * <p>The underlying EDT API exposes only a single {@code toggleProfiling(target)}
- * flip with no on/off argument and no public "is active" query, so callers MUST
- * gate the call on their own tracked on/off state (kept in
- * {@code StartProfilingTool}); a single call deterministically flips the state.
- */
+/** Typed EDT service access and bounded completion of asynchronous measurements. */
 public final class ProfilingSupport
 {
-    private static final String WIRING_BUNDLE = "com._1c.g5.wiring"; //$NON-NLS-1$
-    private static final String DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
-    private static final String PROFILING_CORE_BUNDLE = "com._1c.g5.v8.dt.profiling.core"; //$NON-NLS-1$
+    private ProfilingSupport() { }
 
-    private ProfilingSupport()
+    public static IProfilingService service()
     {
+        IProfilingService service = ServiceAccess.get(IProfilingService.class);
+        if (service == null)
+        {
+            throw new IllegalStateException("IProfilingService is unavailable. Enable the EDT profiling bundle.");
+        }
+        return service;
+    }
+
+    /** EDT saves before notifying UI listeners. A listener failure must not hide an observed write. */
+    public static String applyObserved(Runnable mutation, BooleanSupplier observed, String action)
+    {
+        return applyObserved(BoundedUiCall.workbenchExecutorOrNull(), mutation, observed, action, 5000);
+    }
+
+    static String applyObserved(BoundedUiCall.UiExecutor executor, Runnable mutation,
+        BooleanSupplier observed, String action, long timeoutMillis)
+    {
+        FutureTask<Void> task = new FutureTask<>(mutation, null);
+        Exception failure = null;
+        try
+        {
+            if (executor == null) { task.run(); }
+            else
+            {
+                var dispatch = BoundedUiCall.dispatch(executor, task, timeoutMillis,
+                    BoundedUiCall.UiThreadPolicy.RUN_INLINE);
+                if (dispatch.outcome() != BoundedUiCall.Outcome.COMPLETED)
+                {
+                    throw new IllegalStateException("EDT UI did not complete " + action
+                        + " within " + timeoutMillis + " ms; check the measurement before retrying.", dispatch.failure());
+                }
+            }
+            task.get(0, TimeUnit.MILLISECONDS);
+        }
+        catch (Exception e)
+        {
+            if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
+            failure = e instanceof ExecutionException && e.getCause() instanceof Exception cause ? cause : e;
+        }
+        finally { task.cancel(false); } // Cancel work that is still queued, without interrupting a committed save.
+        if (!observed.getAsBoolean())
+        {
+            throw new IllegalStateException(action + " was not observed in EDT. "
+                + (failure == null ? "EDT did not apply the change." : PlatformFailures.describe(failure))
+                + " Use get_profiling_results mode=list to inspect the measurement before retrying.", failure);
+        }
+        return failure == null ? "" : " The change was observed, but the EDT profiling view may need a refresh.";
+    }
+
+    static IProfileTarget profileTarget(IDebugTarget target)
+    {
+        if (target == null) { return null; }
+        return target instanceof IProfileTarget direct ? direct : target.getAdapter(IProfileTarget.class);
     }
 
     /**
-     * Resolves the EDT {@code IProfilingService} and the {@code IProfileTarget} for
-     * the given debug target and invokes the single {@code toggleProfiling} primitive.
-     * Because the toggle is a flip with no on/off argument, the caller MUST gate this
-     * on its own tracked on/off state — calling it once deterministically flips the
-     * current state.
-     *
-     * @param target the active, non-{@code null} debug target to toggle profiling on
-     * @return {@code null} on success, or an actionable error message (a required
-     *         bundle/service is missing, or the target does not support profiling)
-     *         that the caller should surface via {@code ToolResult.error}
-     * @throws ReflectiveOperationException if the EDT profiling API shape differs from
-     *         what this reflection expects (unexpected; the caller surfaces it as a
-     *         generic error, mirroring the previous inline behaviour)
+     * The measurement UUID EDT sent to the debug server for this target. EDT keeps it only in the
+     * service's private {@code targets} map, so it is read reflectively; null when it cannot be read.
      */
-    public static String toggleProfiling(IDebugTarget target) throws ReflectiveOperationException
+    public static UUID sessionId(IProfilingService service, IDebugTarget target)
     {
-        // The contract is a non-null target; guard it explicitly so a null caller gets an actionable
-        // error instead of an NPE when the target is dereferenced below (e.g. for the error message).
+        IProfileTarget profile = profileTarget(target);
+        if (profile == null || service == null) { return null; }
+        for (Class<?> type = service.getClass(); type != null; type = type.getSuperclass())
+        {
+            try
+            {
+                Field field = type.getDeclaredField("targets"); //$NON-NLS-1$
+                field.setAccessible(true);
+                if (!(field.get(service) instanceof Map<?, ?> targets)) { break; }
+                for (Map.Entry<?, ?> entry : new ArrayList<>(targets.entrySet()))
+                {
+                    if (entry.getValue() == profile && entry.getKey() instanceof UUID id) { return id; }
+                }
+                return null;
+            }
+            catch (NoSuchFieldException e) { continue; }
+            catch (ReflectiveOperationException | RuntimeException e)
+            {
+                Activator.logWarning("Profiling session id is unreadable (" + PlatformFailures.describe(e) //$NON-NLS-1$
+                    + "); stop_profiling will not name measurements."); //$NON-NLS-1$
+                return null;
+            }
+        }
+        Activator.logWarning("IProfilingService has no session map in this EDT build; stop_profiling will not name measurements."); //$NON-NLS-1$
+        return null;
+    }
+
+    /** The caller owns the tracked on/off state: EDT exposes a toggle, not a setter. */
+    public static String toggleProfiling(IDebugTarget target)
+    {
         if (target == null)
         {
-            return "No active debug target to toggle profiling on."; //$NON-NLS-1$
+            return "No active debug target. Use debug_status to select a running session.";
         }
-        Bundle debugBundle = Platform.getBundle(DEBUG_CORE_BUNDLE);
-        if (debugBundle == null)
+        IProfileTarget profile = profileTarget(target);
+        if (profile == null)
         {
-            return "Debug core bundle not found"; //$NON-NLS-1$
+            return "Debug target does not support profiling. Launch a 1C debug session first.";
         }
-
-        Bundle profilingBundle = Platform.getBundle(PROFILING_CORE_BUNDLE);
-        if (profilingBundle == null)
-        {
-            return "Profiling core bundle not found"; //$NON-NLS-1$
-        }
-
-        Class<?> profileTargetClass = profilingBundle.loadClass(
-            "com._1c.g5.v8.dt.profiling.core.IProfileTarget"); //$NON-NLS-1$
-
-        // Adapt the debug target to IProfileTarget (directly or via Eclipse adapters).
-        Object profileTarget = profileTargetClass.isInstance(target)
-            ? target
-            : target.getAdapter(profileTargetClass);
-        if (profileTarget == null)
-        {
-            return "Debug target does not support profiling. " //$NON-NLS-1$
-                + "Target class: " + target.getClass().getName(); //$NON-NLS-1$
-        }
-
-        // Get IProfilingService via ServiceAccess.get() — it manages the
-        // UUID↔target mapping needed for module resolution in results.
-        Bundle wiringBundle = Platform.getBundle(WIRING_BUNDLE);
-        if (wiringBundle == null)
-        {
-            return "Wiring bundle not found"; //$NON-NLS-1$
-        }
-
-        Class<?> serviceAccessClass = wiringBundle.loadClass("com._1c.g5.wiring.ServiceAccess"); //$NON-NLS-1$
-        Class<?> profilingServiceClass = profilingBundle.loadClass(
-            "com._1c.g5.v8.dt.profiling.core.IProfilingService"); //$NON-NLS-1$
-        Method getService = serviceAccessClass.getMethod("get", Class.class); //$NON-NLS-1$
-        Object profilingService = getService.invoke(null, profilingServiceClass);
-        if (profilingService == null)
-        {
-            return "IProfilingService not available"; //$NON-NLS-1$
-        }
-
-        // IProfilingService.toggleProfiling(IProfileTarget) — generates a UUID
-        // internally, registers it in the targets map, sends it to the debug server.
-        Method toggleProfiling = profilingServiceClass.getMethod("toggleProfiling", profileTargetClass); //$NON-NLS-1$
-        toggleProfiling.invoke(profilingService, profileTarget);
+        service().toggleProfiling(profile);
         return null;
+    }
+
+    public static List<IProfilingResult> newest(List<IProfilingResult> results)
+    {
+        return results.stream().sorted(Comparator.comparing(IProfilingResult::getDateOfSession,
+            Comparator.nullsFirst(Comparator.naturalOrder())).reversed().thenComparing(r -> r.getUuid().toString())).toList();
+    }
+    public static IProfilingResult select(List<IProfilingResult> results, String id)
+    {
+        if (id == null && !results.isEmpty()) { return results.get(0); }
+        return results.stream().filter(r -> r.getUuid().toString().equals(id)).findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Measurement id '" + id + "' not found. Use mode=list to choose a loaded UUID."));
+    }
+
+    public static Set<UUID> ids(IProfilingService service)
+    {
+        return service.getResults().stream().map(IProfilingResult::getUuid).collect(Collectors.toSet());
+    }
+
+    /**
+     * Runs on the calling worker, never SWT. With a known session id only that measurement matches;
+     * without one, a single new arrival is reported and several are ambiguous.
+     */
+    public static IProfilingResult awaitNewResult(IProfilingService service, Set<UUID> before, UUID sessionId,
+        long timeoutMillis) throws InterruptedException
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        do
+        {
+            List<IProfilingResult> added = service.getResults().stream()
+                .filter(result -> !before.contains(result.getUuid())).toList();
+            if (sessionId != null)
+            {
+                IProfilingResult own = added.stream().filter(r -> sessionId.equals(r.getUuid())).findFirst().orElse(null);
+                if (own != null) { return own; }
+            }
+            else if (added.size() == 1) { return added.get(0); }
+            else if (added.size() > 1) { return null; }
+            if (System.nanoTime() >= deadline) { return null; }
+            TimeUnit.MILLISECONDS.sleep(100);
+        }
+        while (true);
     }
 }

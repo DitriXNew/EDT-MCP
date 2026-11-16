@@ -28,6 +28,8 @@ public final class StartupCoordinator
         Started start() throws Exception;
         default boolean supportsStartup() { return true; }
         default String notReadyMessage() { return "EDT is running but IPC is not ready. Ask the user to inspect the EDT window for a blocking dialog."; }
+        /** An EDT launched for this workspace by anyone else, before it locks the workspace; null when none or unknown. */
+        default Long runningFor() throws Exception { return null; }
     }
     private final EndpointRegistry registry;
     private final Starter starter;
@@ -76,6 +78,9 @@ public final class StartupCoordinator
                     }
                     catch (IOException | OverlappingFileLockException e) { return occupied(); }
                 }
+                // An EDT started outside the bootstrap takes the workspace lock seconds after launch.
+                Long running = runningFor();
+                if (running != null) { return startingElsewhere(running); }
                 EndpointRegistry.atomicWrite(registry.claimPath(), JSON.toJson(new Claim(Instant.now().toString(), null)));
                 // Keep the claim if the provider outcome is uncertain. Never blindly retry a launch.
                 launching.run();
@@ -84,6 +89,23 @@ public final class StartupCoordinator
                 return STARTING;
             }
         }
+    }
+
+    private Long runningFor()
+    {
+        try { return starter.runningFor(); }
+        catch (Exception e)
+        {
+            // Best effort: the workspace lock still stops a second EDT once the first one owns it.
+            System.err.println("EDT MCP: cannot list running EDT processes: " + e.getMessage());
+            return null;
+        }
+    }
+
+    static String startingElsewhere(long pid)
+    {
+        return "An EDT for this workspace is already starting (process " + pid + "). Retry the same call in about 15 seconds. "
+            + "No tool ran.";
     }
 
     private static String occupied()

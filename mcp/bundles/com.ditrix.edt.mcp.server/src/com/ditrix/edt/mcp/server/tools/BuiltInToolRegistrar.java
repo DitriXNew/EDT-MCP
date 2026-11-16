@@ -48,6 +48,8 @@ import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEventLogTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetTechLogTool;
+import com.ditrix.edt.mcp.server.tools.impl.ManageTechLogTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormLayoutSnapshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetFormScreenshotTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetJobStatusTool;
@@ -62,6 +64,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetOutgoingStructuresTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetPlatformDocumentationTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProblemSummaryTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProfilingResultsTool;
+import com.ditrix.edt.mcp.server.tools.impl.ManageProfilingResultsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetServerStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetSubsystemContentTool;
@@ -173,6 +176,8 @@ public final class BuiltInToolRegistrar
         catalogue.add(new GetProjectErrorsTool());
         catalogue.add(new GetMarkersTool());
         catalogue.add(new GetEventLogTool());
+        catalogue.add(new GetTechLogTool());
+        catalogue.add(new ManageTechLogTool());
         catalogue.add(new GetMcpHistoryTool());
         catalogue.add(new ListGitBranchesTool());
         catalogue.add(new SwitchGitBranchTool());
@@ -234,6 +239,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new StartProfilingTool());
         catalogue.add(new StopProfilingTool());
         catalogue.add(new GetProfilingResultsTool());
+        catalogue.add(new ManageProfilingResultsTool());
 
         // BSL code analysis tools
         catalogue.add(new ReadModuleSourceTool());

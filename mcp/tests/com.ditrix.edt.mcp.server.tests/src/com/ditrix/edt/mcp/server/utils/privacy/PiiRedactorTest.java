@@ -112,6 +112,55 @@ public class PiiRedactorTest
         assertSame(text, PiiRedactor.apply(text, PiiRuleSet.of(valueRule(EMAIL_REGEX, PREFIX, true)), SALT));
     }
 
+    @Test
+    public void plainTextValueRulesUseSamePseudonymsAndAuditCountAsJsonWalk()
+    {
+        var rules = PiiRuleSet.of(valueRule(EMAIL_REGEX, PREFIX, true));
+        String markdown = "| Usr | SQL |\n| " + EMAIL_LITERAL + " | SELECT '" + EMAIL_LITERAL + "' |\n";
+        var outcome = PiiRedactor.redact(markdown, rules, SALT);
+        String token = new Pseudonymizer(SALT).token(PREFIX, true, EMAIL_LITERAL);
+        assertEquals(markdown.replace(EMAIL_LITERAL, token), outcome.text);
+        assertEquals(2, outcome.count);
+        assertEquals(token, PiiRedactor.apply(EMAIL_LITERAL, rules, SALT));
+        String scalar = "\"" + EMAIL_LITERAL + "\"";
+        assertSame("Actual JSON scalars keep their existing no-op path", scalar, PiiRedactor.apply(scalar, rules, SALT));
+        String json = "{\"" + EMAIL_LITERAL + "\":\"" + EMAIL_LITERAL + "\",\"count\":1}";
+        var jsonOutcome = PiiRedactor.redact(json, rules, SALT);
+        assertEquals(1, jsonOutcome.count);
+        var object = JsonParser.parseString(jsonOutcome.text).getAsJsonObject();
+        assertEquals(token, object.get(EMAIL_LITERAL).getAsString());
+        assertEquals(1, object.get("count").getAsInt());
+    }
+
+    @Test
+    public void plainTextSkipsNameRulesAndDisabledRulesButAppliesBothValueScope()
+    {
+        String text = "Usr: " + EMAIL_LITERAL;
+        var skipped = PiiRuleSet.of(nameRule("Usr|" + EMAIL_REGEX, MASK, false),
+            new PiiRule(false, EMAIL_REGEX, PiiRuleScope.VALUE, MASK, false));
+        assertSame(text, PiiRedactor.apply(text, skipped, SALT));
+        var rules = PiiRuleSet.of(nameRule("Usr", "NAME", false), valueRule("(", MASK, false),
+            new PiiRule(true, EMAIL_REGEX, PiiRuleScope.BOTH, "[email]", false));
+        assertEquals("Usr: [email]", PiiRedactor.apply(text, rules, SALT));
+    }
+
+    @Test
+    public void plainTextTokensAreEscapedForMarkdownTableCells()
+    {
+        String table = "| " + EMAIL_LITERAL + " | value |";
+        var rules = PiiRuleSet.of(new PiiRule(true, EMAIL_REGEX, PiiRuleScope.VALUE, "hidden|per\nson", false));
+        assertEquals("| hidden\\|per son | value |", PiiRedactor.apply(table, rules, SALT));
+    }
+
+    @Test
+    public void representationDollarAndBackslashAreLiteral()
+    {
+        var rules = PiiRuleSet.of(new PiiRule(true, EMAIL_REGEX, PiiRuleScope.VALUE, "$1\\x", false));
+        assertEquals("Usr: $1\\x", PiiRedactor.apply("Usr: " + EMAIL_LITERAL, rules, SALT));
+        String json = PiiRedactor.apply("{\"u\":\"" + EMAIL_LITERAL + "\"}", rules, SALT);
+        assertEquals("$1\\x", JsonParser.parseString(json).getAsJsonObject().get("u").getAsString());
+    }
+
     // ---- NAME scope: match the key, replace the WHOLE value ----
 
     @Test

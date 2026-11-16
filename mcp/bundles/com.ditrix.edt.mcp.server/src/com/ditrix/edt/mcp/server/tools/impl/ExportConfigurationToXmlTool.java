@@ -122,7 +122,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             if (outsideWorkspace)
             {
                 Activator.logWarning("export_configuration_to_xml: outputPath is OUTSIDE the EDT workspace: " //$NON-NLS-1$
-                    + outputPath + " (trusted-caller-only — see README Security & trust model)."); //$NON-NLS-1$
+                    + outputPath + " (trusted-caller-only — see docs/security.md)."); //$NON-NLS-1$
             }
 
             Object api = Activator.getDefault().getExportConfigurationFilesApi();
@@ -175,7 +175,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             // Action result: status + the project and destination path. There is no
             // round-trip ID, machine-structured position, declared outputSchema, or
             // UI-bound payload here, so MARKDOWN is the right format (see the
-            // "Response format policy" in README / edt-mcp-tool-conventions).
+            // "Response format policy" in docs/output-formats.md / edt-mcp-tool-conventions).
             FrontMatter fm = FrontMatter.create()
                 .put("tool", NAME) //$NON-NLS-1$
                 .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$

@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -53,7 +54,7 @@ public class ToolDocsRatchetTest
 
     private static final String INDEX_START = "<!-- TOOLS-INDEX:START -->";
     private static final String INDEX_END = "<!-- TOOLS-INDEX:END -->";
-    // The folder index puts its period inside the bold count; the root index does not.
+    // The folder index puts its period inside the bold count; usage overviews do not.
     private static final Pattern TOOL_COUNT = Pattern.compile("^\\*\\*(\\d+) tools\\.?\\*\\*", Pattern.MULTILINE);
 
     private McpToolRegistry registry;
@@ -127,19 +128,88 @@ public class ToolDocsRatchetTest
         checkIndex("docs/tools/README.md", Files.readString(root.resolve("docs/tools/README.md"),
             StandardCharsets.UTF_8), "", problems);
 
-        String readme = normalizeLf(Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8));
-        int start = readme.indexOf(INDEX_START);
-        int end = readme.indexOf(INDEX_END);
+        String readme = Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8);
+        if (!readme.contains("](docs/tools/README.md)"))
+        {
+            problems.add("README.md: missing link to the generated full tool index");
+        }
+
+        String overviews = normalizeLf(Files.readString(root.resolve("docs/tool-overviews.md"),
+            StandardCharsets.UTF_8));
+        int start = overviews.indexOf(INDEX_START);
+        int end = overviews.indexOf(INDEX_END);
         if (start < 0 || end <= start)
         {
-            problems.add("README.md: missing or misordered TOOLS-INDEX markers");
+            problems.add("docs/tool-overviews.md: missing or misordered TOOLS-INDEX markers");
         }
         else
         {
-            checkIndex("README.md TOOLS-INDEX", readme.substring(start + INDEX_START.length(), end),
-                "docs/tools/", problems);
+            checkIndex("docs/tool-overviews.md TOOLS-INDEX",
+                overviews.substring(start + INDEX_START.length(), end), "tools/", problems);
         }
         assertEquals(REGENERATE + "\n" + String.join("\n", problems), 0, problems.size());
+    }
+
+    @Test
+    public void readmeToolsetsLinkToReferenceHeadings() throws IOException
+    {
+        String readme = normalizeLf(Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8));
+        String reference = normalizeLf(Files.readString(root.resolve("docs/tools/README.md"),
+            StandardCharsets.UTF_8));
+        List<String> problems = readmeToolsetProblems(readme, reference);
+        assertEquals(String.join("\n", problems), 0, problems.size());
+    }
+
+    @Test
+    public void readmeToolsetRatchetRejectsMissingRowsAndBrokenAnchors() throws IOException
+    {
+        String readme = normalizeLf(Files.readString(root.resolve("README.md"), StandardCharsets.UTF_8));
+        String reference = normalizeLf(Files.readString(root.resolve("docs/tools/README.md"),
+            StandardCharsets.UTF_8));
+        assertFalse(readmeToolsetProblems(readme.replaceAll("(?m)^\\| `comparison`.*\\n", ""),
+            reference).isEmpty());
+        assertFalse(readmeToolsetProblems(readme.replace("docs/tools/README.md#comparison",
+            "docs/tools/README.md#missing-heading"), reference).isEmpty());
+        assertFalse(readmeToolsetProblems(readme.replace("docs/tools/README.md#comparison",
+            "docs/tools/README.md#core"), reference).isEmpty());
+        assertFalse(readmeToolsetProblems(readme, reference.replace("## Comparison\n",
+            "## Different heading\n")).isEmpty());
+    }
+
+    private static List<String> readmeToolsetProblems(String readme, String reference)
+    {
+        List<String> problems = new ArrayList<>();
+        Set<String> headings = new TreeSet<>();
+        Matcher heading = Pattern.compile("(?m)^#{1,6} +(.+)$").matcher(reference);
+        while (heading.find())
+        {
+            headings.add(headingAnchor(heading.group(1)));
+        }
+        Matcher section = Pattern.compile("(?ms)^## Tools\\n(.*?)(?=^## |\\z)").matcher(readme);
+        String table = section.find() ? section.group(1) : "";
+        for (Toolsets.Toolset toolset : Toolsets.all())
+        {
+            Matcher row = Pattern.compile("(?m)^\\| `" + Pattern.quote(toolset.getId())
+                + "` \\|[^\\n]*\\]\\(docs/tools/README\\.md#([a-z0-9_-]+)\\)").matcher(table);
+            if (!row.find())
+            {
+                problems.add("README toolset table: missing reference link for " + toolset.getId());
+            }
+            else if (!headings.contains(row.group(1)))
+            {
+                problems.add("README toolset table: unresolved reference heading #" + row.group(1));
+            }
+            else if (!headingAnchor(toolset.getTitle()).equals(row.group(1)))
+            {
+                problems.add("README toolset table: wrong reference heading for " + toolset.getId());
+            }
+        }
+        return problems;
+    }
+
+    private static String headingAnchor(String title)
+    {
+        return title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_ -]", "").replace(' ', '-');
     }
 
     @Test

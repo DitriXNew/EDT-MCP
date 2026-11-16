@@ -235,7 +235,7 @@ public final class HttpTransport
      * which blocks only CR and LF - the listener then compares the very same character. Both
      * would be refused by SOME clients and accepted by others, and "some clients cannot use
      * this" is a different claim from "no client can". Only the second belongs in a warning
-     * whose advice is to replace the credential; the first belongs in the README, where it is.
+     * whose advice is to replace the credential; the first belongs in docs/security.md, where it is.
      * </p>
      *
      * @param token the token as it is compared, i.e. already {@link #normalizeToken normalized}

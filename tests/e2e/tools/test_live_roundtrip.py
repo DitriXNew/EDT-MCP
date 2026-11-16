@@ -644,11 +644,8 @@ def test_live_profiling_start_results_stop_roundtrip():
 
         results = call("get_profiling_results", {})
         assert_ok(results, "get_profiling_results returns cleanly")
-        rs = results.structured or {}
-        # Either real data (moduleCount/modules) or the explicit empty shape (count:0
-        # + message). Both are valid; what matters is no crash and a structured answer.
-        if "moduleCount" not in rs and "count" not in rs:
-            _fail("get_profiling_results returned neither data nor the empty shape: %r" % (rs,))
+        assert_contains(results.text, "Measurement:", "profiling read names the measurement or none")
+        assert_contains(results.text, "Time unit: ms", "profiling timings have explicit units")
 
         stopped = call("stop_profiling", {"applicationId": app_id})
         assert_ok(stopped, "stop_profiling on the session")

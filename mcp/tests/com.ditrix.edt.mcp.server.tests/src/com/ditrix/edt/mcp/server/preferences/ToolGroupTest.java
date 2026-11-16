@@ -191,7 +191,8 @@ public class ToolGroupTest
         assertTrue(tools.contains("set_error_breakpoint")); //$NON-NLS-1$
         // Pausing a running session is the counterpart of resume, so it rides the same group.
         assertTrue(tools.contains("debug_pause")); //$NON-NLS-1$
-        assertEquals(16, tools.size());
+        assertTrue(tools.contains("manage_profiling_results")); //$NON-NLS-1$
+        assertEquals(17, tools.size());
     }
 
     @Test

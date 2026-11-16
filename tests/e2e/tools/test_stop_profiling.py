@@ -1,87 +1,10 @@
-"""
-e2e tests for stop_profiling (kind: read).
+"""Stop profiling is idempotent for inactive sessions and optionally names a new UUID.
 
-What the tool does
-------------------
-stop_profiling switches 1C performance measurement (замер производительности) OFF
-on the active debug target for a given applicationId. It is the counterpart to
-start_profiling and shares an on/off state keyed by applicationId
-(StartProfilingTool.ACTIVE_APPLICATION_IDS, queried via isProfilingActive). The
-underlying EDT primitive (IProfilingService.toggleProfiling) is a single toggle with
-no public stop / is-active query, so this tool only calls toggle when the SHARED
-state says profiling is currently ON; otherwise it must NOT toggle (that would
-silently switch profiling ON). It is a pure DEBUG/RUNTIME tool: it walks the live
-Eclipse debug model (DebugSessionRegistry) + reflective profiling services; it never
-touches project source.
-
-Response shape (IMPORTANT)
---------------------------
-StopProfilingTool.getResponseType() == JSON, so the real payload lands in
-Result.structured (NOT Result.text — for a JSON tool r.text is just a "Done"/error
-placeholder). The benign success envelope (ToolResult.success() + .put(...)) is:
-    {"success": true,
-     "active": false,
-     "stopped": <bool>,                       # false = nothing was running; true = toggled off
-     "applicationId": <echoed id>,
-     "message": <human-readable status>}
-A ToolResult.error(...) (the missing-arg guard) is delivered as isError:true with the
-message surfaced via r.error_text().
-
-ENVIRONMENT / SENTINEL (the realistic happy contract here)
-----------------------------------------------------------
-This is a DEBUG/RUNTIME tool. In THIS EDT there is NO active debug session and
-TestConfiguration has NO running infobase / launched application, and — crucially —
-NO profiling was ever started, so StartProfilingTool.ACTIVE_APPLICATION_IDS is EMPTY.
-For ANY applicationId we can supply, execute() therefore takes its FIRST branch:
-
-    if (!StartProfilingTool.isProfilingActive(applicationId))   // always true here
-        -> ToolResult.success()
-             .put("active", false).put("stopped", false)
-             .put("applicationId", applicationId)
-             .put("message", "Profiling was not active for this applicationId;
-                              nothing to stop.")
-
-This is the documented IDEMPOTENT contract: stopping something that was never started
-is a BENIGN SUCCESS, not an error (an error/forced toggle would have switched
-profiling ON — the exact bug the branch guards against). The empty-but-well-formed
-"nothing to stop" envelope IS the sentinel here, so the happy-path tests assert
-assert_ok + that specific envelope (active:false, stopped:false, the echoed id, and
-the "nothing to stop" message). We deliberately do NOT start a real infobase /
-launch + start_profiling (heavy, not configured for this fixture); the benign
-idempotent branch + the negative matrix IS the coverage.
-
-Branches NOT reachable without a live session (documented, not silently skipped):
-  - the "No active debug target ... debug session has ended. Profiling state cleared."
-    success branch — needs isProfilingActive==true (a prior start_profiling) but a
-    now-dead target;
-  - the genuine toggle-OFF path (stopped:true, "Call get_profiling_results ...");
-  - "Debug target does not support profiling", "IProfilingService not available", and
-    the bundle-missing / outer-catch errors — all need a live target / are internal.
-  These require a real launch + start_profiling against a running infobase,
-  which this fixture does not provide; deferred to a live-session run. See the AUDIT
-  notes below.
-
-NEGATIVE MATRIX — what is client-reachable here
------------------------------------------------
-The ONLY declared parameter is `applicationId` and it IS required (input schema marks
-it required; execute() guards with JsonUtils.requireArgument). So:
-  - the reachable VALIDATION error is the missing/blank applicationId guard
-    ("applicationId is required");
-  - there is NO enum / XOR / conditional-required parameter to violate;
-  - a NON-EXISTENT / bogus applicationId is NOT a validation error — by the idempotent
-    contract it is a benign "nothing to stop" success (same as the happy path). Forcing
-    an assert_error against a bogus id would be a CHEAT (SKILL §6): the tool genuinely
-    cannot produce one here. We instead assert the real graceful-success contract for a
-    bogus id (mutation-sensitive: a tool that errored, toggled, or echoed the wrong id
-    fails it) and AUDIT the discoverability gap.
-
-DIFF: a debug/profiling tool operates on the running infobase / EDT workspace, NEVER
-on the git-tracked TestConfiguration tree, so EVERY test ends with assert_no_diff() —
-a stop_profiling that mutated project source would be a bug, and this catches it.
-
-Fixture inventory referenced (TestConfiguration, English Names): only the project
-name "TestConfiguration" (used to shape a realistic applicationId); no project file is
-read or written by this tool.
+The headless CI stand has no active infobase, so these wire tests verify the
+inactive/no-rename contract and name/id refusals. Java service-mock tests cover
+asynchronous arrival, naming and timeout. The live stand owns a real stop run.
+JSON results expose active/stopped/applicationId/message, with measurementId/name
+only when a new measurement was actually observed. Project sources stay clean.
 """
 
 from harness import (
@@ -94,6 +17,15 @@ from harness import (
     e2e_test,
     PROJECT,
 )
+
+
+@e2e_test(tool="stop_profiling", kind="read")
+def test_invalid_measurement_name_is_refused_even_when_inactive():
+    for name, hint in (("", "Use"), ("../escape", "Use"), ("CON", "Choose"), ("trailing.", "Use")):
+        result = call("stop_profiling", {"applicationId": "inactive-e2e", "name": name})
+        error = assert_error(result, "unsafe measurement name")
+        assert_error_quality(error, names=["measurement name"], suggests=[hint])
+    assert_no_diff("invalid names must not change project sources")
 
 
 # The exact benign "nothing to stop" message emitted when profiling is not active.
@@ -164,10 +96,11 @@ def test_no_active_profiling_returns_benign_nothing_to_stop():
     invariant; a tool that echoed the wrong id or dropped the message also fails.
     """
     app_id = PROJECT  # a realistic, plainly-not-running applicationId
-    r = call("stop_profiling", {"applicationId": app_id})
+    r = call("stop_profiling", {"applicationId": app_id, "name": "E2E inactive must not rename"})
     assert_ok(r, "stop_profiling for a never-started id is benign, not an error")
 
     _benign_not_active_envelope(r, app_id, "no-active-profiling envelope")
+    assert "measurementId" not in r.structured and "name" not in r.structured, r.structured
 
     # Belt-and-suspenders on the wire payload (independent of the dict-typed checks):
     # the specific not-active message must be present. stop_profiling is a JSON tool,
@@ -221,11 +154,11 @@ def test_unknown_application_id_is_idempotent_not_an_error():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# NEGATIVE MATRIX — the one client-reachable validation error: missing/blank id
+# Required application-id validation (name validation is covered above).
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="stop_profiling", kind="read")
 def test_missing_application_id_errors_clearly():
-    """applicationId is the only declared parameter AND it is required. Omitting it must
+    """applicationId is required; name is optional. Omitting it must
     hit JsonUtils.requireArgument -> ToolResult.error("applicationId is required") and
     be flagged isError — NOT a NullPointer, not a benign success, and not a toggle.
 
@@ -286,7 +219,7 @@ def test_empty_string_application_id_errors_clearly():
 
 @e2e_test(tool="stop_profiling", kind="read")
 def test_unexpected_extra_argument_is_ignored():
-    """The tool declares only `applicationId` and reads only that key. An unknown extra
+    """Alongside the declared applicationId/name parameters, an unknown extra
     argument (alongside a valid applicationId) must be IGNORED, not cause a failure, and
     the benign "nothing to stop" snapshot must be unchanged. A tool that rejected /
     crashed on an unknown key would be a robustness regression caught here.

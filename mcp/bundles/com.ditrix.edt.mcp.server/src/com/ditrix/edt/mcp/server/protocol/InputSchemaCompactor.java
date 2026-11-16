@@ -126,6 +126,12 @@ public final class InputSchemaCompactor
     private static Map<String, Set<String>> buildKeepList()
     {
         Map<String, Set<String>> keep = new HashMap<>();
+        // Mode-specific requirements, selection semantics and defaults are not structural in these schemas.
+        keep.put("get_profiling_results", asSet("mode", "measurementId", "top", "minFrequency", "limit", "offset",
+            "baseId", "comparedId", "responseFormat", "applicationId"));
+        keep.put("manage_profiling_results", asSet("mode", "measurementId", "exportPath", "exportFormat", "importPath"));
+        keep.put("manage_tech_log", asSet("mode", "location", "outputPath"));
+        keep.put("stop_profiling", asSet("name"));
         // Conditional press arguments and exact-label semantics are absent from scalar schemas.
         keep.put("edt_dialog", asSet("dialogId", "button"));
         // XOR input modes and the method's conditional scope must survive schema compaction.

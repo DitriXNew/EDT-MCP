@@ -755,7 +755,7 @@ public class ToolSettingsServiceTest
         ToolSettingsService.ensureMigratedForTest(store);
 
         assertEquals(Set.of("owner_disabled", "write_module_source", "open_editor", "clone_metadata_object",
-            "sort_metadata", "edt_dialog", "standalone_server"), disabledTools(store));
+            "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log"), disabledTools(store));
         assertEquals(ToolPreset.ANALYSIS_ONLY.getId(), store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
             store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
@@ -776,13 +776,31 @@ public class ToolSettingsServiceTest
             ToolSettingsService.ensureMigratedForTest(store);
 
             Set<String> expected = ToolPreset.CODE_REVIEW.getId().equals(presetId)
-                ? Set.of("owner_disabled", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server")
+                ? Set.of("owner_disabled", "clone_metadata_object", "sort_metadata", "edt_dialog", "standalone_server", "manage_profiling_results", "manage_tech_log")
                 : Set.of("owner_disabled");
             assertEquals("Profile " + presetId, expected, disabledTools(store));
             assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
                 store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
             assertEquals(presetId == null ? "" : presetId,
                 store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+        }
+    }
+
+    @Test
+    public void testVersion24DisablesCaptureOnlyForStoredReadOnlyPromiseAndRunsOnce()
+    {
+        for (String preset : new String[] {"analysis-only", "code-review", "custom", "development", "all-tools"})
+        {
+            PreferenceStore store = storedDisabledTools(Set.of("owner_disabled"), 23);
+            store.setValue(PreferenceConstants.PREF_TOOL_PRESET_ID, preset);
+            ToolSettingsService.ensureMigratedForTest(store);
+            Set<String> expected = preset.equals("analysis-only") || preset.equals("code-review")
+                ? Set.of("owner_disabled", "manage_profiling_results", "manage_tech_log") : Set.of("owner_disabled");
+            assertEquals(preset, expected, disabledTools(store));
+            assertEquals(preset, store.getString(PreferenceConstants.PREF_TOOL_PRESET_ID));
+            store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "owner_disabled");
+            ToolSettingsService.ensureMigratedForTest(store);
+            assertEquals("A deliberate re-enable after migration must survive", Set.of("owner_disabled"), disabledTools(store));
         }
     }
 

@@ -39,7 +39,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
    - **Harness changes:** run `python -m unittest discover -s tests/e2e/runner_tests -p "test_*.py"`; output-schema validator and call-path contracts live there.
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
-4. **README updated** — bump the tool count (both places), add/adjust the group table, the flat tool table, and the detailed section; parameters must match the schema.
+4. **Documentation updated** — keep README as a landing page with a compact toolset summary and a link to `docs/tools/README.md`. Update preference-group membership in `docs/tool-management.md`, usage summaries in `docs/tool-overviews.md`, and feature articles under `docs/`; parameters must match the schema. Regeneration refreshes both detailed tool indexes and their counts, leaving README unchanged. Tool counts live only in the generated indexes and are checked by `ToolDocsRatchetTest`; nobody updates counts in `docs/tool-management.md`.
 
 5. **Live redeploy (Tier 2)** — redeploy the freshly built bundle to the non-elevated dev EDT copy (`edt-redeploy.ps1`; signal `MCP server UP on 8765`, exit 1 ≠ failure). **Anti-stale:** confirm the DEPLOYED jar contains your change (`unzip -p <jar> path/Class.class | grep <literal>`). Wait for both projects `ready`. If EDT wedges → kill + `-clean` relaunch.
 
@@ -60,7 +60,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 - [ ] No stray Cyrillic / English surface / lowerCamelCase / `ToolResult.error` / tx boundary
 - [ ] Unit `XxxToolTest` + e2e `test_<tool>.py` (+ bilingual case if resolution changed)
 - [ ] `compile.sh` BUILD SUCCESS (FULL suite, on top of current master) + ratchets green; `docs/validate_agent_skills.py` clean
-- [ ] README count + tables + detail updated
+- [ ] README toolset summary + detailed docs/indexes updated
 - [ ] Redeployed live; deployed jar verified (anti-stale); projects `ready`
 - [ ] Golden regenerated + committed (if `tools/list` changed); `docs/tools/<tool>.md` regenerated for every tool whose description/schema/guide changed
 - [ ] Full e2e green + fixture clean

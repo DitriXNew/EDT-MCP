@@ -78,6 +78,90 @@ public final class WindowsEdtStarter implements StartupCoordinator.Starter
         return List.copyOf(command);
     }
 
+    @Override public Long runningFor() throws Exception
+    {
+        if (!supportsStartup()) { return null; }
+        String script = "$ErrorActionPreference='Stop';Get-CimInstance Win32_Process -Filter \"Name='1cedt.exe' OR Name='1cedtc.exe' "
+            + "OR Name='javaw.exe' OR Name='java.exe'\" | ForEach-Object { if ($_.CommandLine) { [Console]::Out.WriteLine("
+            + "[string]$_.ProcessId + [char]9 + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.CommandLine))) } }";
+        String output = powershell(script, 15);
+        for (String line : output.split("\\R"))
+        {
+            int tab = line.indexOf('\t');
+            if (tab <= 0) { continue; }
+            String commandLine = new String(Base64.getDecoder().decode(line.substring(tab + 1).trim()), StandardCharsets.UTF_8);
+            if (launchesWorkspace(commandLine, workspace)) { return Long.parseLong(line.substring(0, tab).trim()); }
+        }
+        return null;
+    }
+
+    /** True for an EDT or its JVM opened on this workspace; stdio bootstraps name the workspace too and are skipped. */
+    public static boolean launchesWorkspace(String commandLine, Path workspace)
+    {
+        List<String> args = arguments(commandLine);
+        if (args.stream().anyMatch(a -> a.toLowerCase(java.util.Locale.ROOT).contains("edt-mcp-bootstrap"))) { return false; }
+        for (int i = 0; i + 1 < args.size(); i++)
+        {
+            if (args.get(i).equalsIgnoreCase("-data") && normalized(args.get(i + 1)).equals(normalized(workspace.toString())))
+            { return true; }
+        }
+        return false;
+    }
+
+    private static String normalized(String path)
+    {
+        String value = path.replace('/', '\\').toLowerCase(java.util.Locale.ROOT);
+        while (value.length() > 3 && value.endsWith("\\")) { value = value.substring(0, value.length() - 1); }
+        return value;
+    }
+
+    /** CommandLineToArgvW splitting: quotes group, 2n backslashes before a quote become n. */
+    static List<String> arguments(String commandLine)
+    {
+        List<String> args = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false, any = false;
+        int slashes = 0;
+        for (char c : commandLine.toCharArray())
+        {
+            if (c == '\\') { slashes++; any = true; continue; }
+            if (c == '"')
+            {
+                current.append("\\".repeat(slashes / 2)); any = true;
+                if (slashes % 2 == 1) { current.append('"'); } else { quoted = !quoted; }
+                slashes = 0; continue;
+            }
+            current.append("\\".repeat(slashes)); slashes = 0;
+            if (!quoted && (c == ' ' || c == '\t'))
+            {
+                if (any) { args.add(current.toString()); current.setLength(0); any = false; }
+                continue;
+            }
+            current.append(c); any = true;
+        }
+        current.append("\\".repeat(slashes));
+        if (any) { args.add(current.toString()); }
+        return args;
+    }
+
+    private static String powershell(String script, int seconds) throws Exception
+    {
+        Path powershell = Path.of(System.getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        Process process = new ProcessBuilder(powershell.toString(), "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-WindowStyle", "Hidden", "-EncodedCommand", Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE)))
+            .redirectErrorStream(true).start();
+        // Read before waiting: a full pipe would otherwise block the provider.
+        var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8); }
+            catch (IOException e) { return ""; }
+        });
+        if (!process.waitFor(seconds, TimeUnit.SECONDS))
+        { process.destroyForcibly(); throw new IOException("process listing timed out"); }
+        String output = reader.get(seconds, TimeUnit.SECONDS);
+        if (process.exitValue() != 0) { throw new IOException("process listing failed (exit " + process.exitValue() + ")"); }
+        return output;
+    }
+
     @Override public String notReadyMessage()
     { return headless ? "Headless EDT is running but IPC is not ready. Ask the user to inspect the EDT workspace log."
         : StartupCoordinator.Starter.super.notReadyMessage(); }

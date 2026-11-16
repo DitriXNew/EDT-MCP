@@ -7,8 +7,12 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 import org.eclipse.debug.core.model.IDebugTarget;
+import com._1c.g5.v8.dt.profiling.core.IProfilingResult;
+import com._1c.g5.v8.dt.profiling.core.IProfilingService;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -18,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
+import com.ditrix.edt.mcp.server.utils.ProfilingFiles;
 
 /**
  * Stops 1C performance measurement on the active
@@ -54,8 +59,7 @@ public class StopProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Finish measuring BSL performance in a debug session. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('stop_profiling')."; //$NON-NLS-1$
+        return "Stop BSL performance measurement and optionally name the newly collected measurement.";
     }
 
     @Override
@@ -63,6 +67,7 @@ public class StopProfilingTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.APPLICATION_ID, "Application id of the running debug session (required)", true) //$NON-NLS-1$
+            .stringProperty("name", "Optional measurement name; a new UUID must arrive within 5 seconds.")
             .build();
     }
 
@@ -75,6 +80,8 @@ public class StopProfilingTool implements IMcpTool
             .booleanProperty(KEY_STOPPED, "Whether profiling was actually toggled off") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Application id the result refers to") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
+            .stringProperty("measurementId", "New measurement UUID, only when observed after stopping")
+            .stringProperty("name", "Observed measurement name, only when the new measurement arrived")
             .build();
     }
 
@@ -93,9 +100,11 @@ public class StopProfilingTool implements IMcpTool
             return err;
         }
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
+        String name = JsonUtils.extractStringArgument(params, "name");
 
         try
         {
+            if (name != null) { ProfilingFiles.validateName(name); }
             // Idempotent: nothing to do if profiling was never started (or already
             // stopped) for this id. Return a benign success, NOT an error — toggling
             // here would silently switch profiling ON.
@@ -128,6 +137,14 @@ public class StopProfilingTool implements IMcpTool
             // Resolve the profiling service + profile target and flip profiling off.
             // Gated above on our shared ON state, so this toggle deterministically
             // switches profiling OFF.
+            IProfilingService service = ProfilingSupport.service();
+            Set<UUID> before = ProfilingSupport.ids(service);
+            UUID sessionId = ProfilingSupport.sessionId(service, target); // read before the toggle drops it
+            if (name != null && service.getResults().stream().anyMatch(r -> name.equalsIgnoreCase(r.getName())))
+            {
+                return ToolResult.error("Measurement name '" + name
+                    + "' already exists. Choose a new name; existing measurements are never overwritten.").toJson();
+            }
             String toggleError = ProfilingSupport.toggleProfiling(target);
             if (toggleError != null)
             {
@@ -138,17 +155,71 @@ public class StopProfilingTool implements IMcpTool
 
             Activator.logInfo("Profiling stopped via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 
-            return ToolResult.success()
+            ToolResult result = ToolResult.success()
                 .put(KEY_ACTIVE, false)
                 .put(KEY_STOPPED, true)
-                .put(McpKeys.APPLICATION_ID, applicationId)
-                .put(McpKeys.MESSAGE, "Profiling stopped. Call get_profiling_results to retrieve the collected coverage.") //$NON-NLS-1$
-                .toJson();
+                .put(McpKeys.APPLICATION_ID, applicationId);
+            return describeMeasurement(result, service, before, sessionId, name, 5000).toJson();
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
         }
         catch (Exception e)
         {
+            if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
             Activator.logError("Error in stop_profiling", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /** Bounded worker-thread read-back; old results are never renamed. */
+    public static ToolResult describeMeasurement(ToolResult response, IProfilingService service,
+        Set<UUID> before, UUID sessionId, String name, long timeoutMillis) throws InterruptedException
+    {
+        IProfilingResult measurement = ProfilingSupport.awaitNewResult(service, before, sessionId, timeoutMillis);
+        if (measurement != null && name != null && sessionId == null)
+        {
+            // Another stop (UI, session end, a parallel call) can deliver its measurement first.
+            return ToolResult.error("Profiling stopped, but EDT does not expose which measurement belongs to this session,"
+                + " so none was named. Find it with get_profiling_results mode=list.")
+                .put(KEY_STOPPED, true).put(KEY_ACTIVE, false);
+        }
+        if (measurement == null)
+        {
+            return response.put(McpKeys.MESSAGE, "Profiling stopped, but no unambiguous new measurement arrived within "
+                + timeoutMillis + " ms. No measurement was named. Use get_profiling_results mode=list to check later.");
+        }
+        String viewNote = "";
+        if (name != null)
+        {
+            try
+            {
+                var attempted = new java.util.concurrent.atomic.AtomicBoolean();
+                viewNote = ProfilingSupport.applyObserved(() -> {
+                    // Acquire the service lock on the executing thread, never across a UI dispatch.
+                    synchronized (service)
+                    {
+                        if (service.getResults().stream().anyMatch(r -> !r.getUuid().equals(measurement.getUuid()) && name.equalsIgnoreCase(r.getName())))
+                        {
+                            throw new IllegalArgumentException("The requested name now exists. Choose a unique name next time.");
+                        }
+                        attempted.set(true);
+                        service.setResultName(measurement, name);
+                    }
+                }, () -> attempted.get() && service.getResults().stream().anyMatch(r -> r.getUuid().equals(measurement.getUuid())
+                    && name.equals(r.getName())), "Rename to '" + name + "'");
+            }
+            catch (RuntimeException e)
+            {
+                return ToolResult.error("Profiling stopped, but " + e.getMessage())
+                    .put(KEY_STOPPED, true).put(KEY_ACTIVE, false).put("measurementId", measurement.getUuid().toString());
+            }
+        }
+        IProfilingResult observed = service.getResults().stream().filter(r -> r.getUuid().equals(measurement.getUuid()))
+            .findFirst().orElseThrow(() -> new IllegalStateException("New measurement is no longer loaded. Use get_profiling_results mode=list."));
+        return response.put("measurementId", observed.getUuid().toString()).put("name", observed.getName())
+            .put(McpKeys.MESSAGE, "Profiling stopped. New measurement " + (name == null ? "observed" : "named '" + observed.getName() + "'")
+                + "; use get_profiling_results with measurementId." + viewNote);
     }
 }
