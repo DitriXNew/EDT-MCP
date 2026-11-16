@@ -64,6 +64,76 @@ public class TechLogTest
     @Test public void completeLastLineWithoutNewlineIsAccepted() throws Exception
     { assertEquals(1, TechLogReader.read(file(event("CALL", "1")), 1, 10, null, null).events.size()); }
 
+    @Test public void zipDiscoveryRefusesAboveMemberCapWithoutEnumeratingPastIt() throws Exception
+    {
+        Path zip = temporary.newFile("too-many.log.zip").toPath();
+        try (var out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            for (int n = 0; n < 50_002; n++)
+            { out.putNextEntry(new ZipEntry(n + ".log")); out.closeEntry(); }
+        }
+        try { TechLogReader.sources(zip); fail("Oversized archive must be refused"); }
+        catch (IOException e) { assertTrue(e.getMessage().contains("discovery budget")); }
+
+        var consumed = new java.util.concurrent.atomic.AtomicInteger();
+        var entries = new java.util.Enumeration<ZipEntry>()
+        {
+            @Override public boolean hasMoreElements() { return consumed.get() < 50_002; }
+            @Override public ZipEntry nextElement() { return new ZipEntry(consumed.getAndIncrement() + ".log"); }
+        };
+        var hook = TechLogReader.class.getDeclaredMethod("zipSources", Path.class, Path.class, long.class,
+            long.class, long.class, java.util.Enumeration.class, List.class);
+        hook.setAccessible(true);
+        try { hook.invoke(null, zip, zip, 0L, 0L, Long.MAX_VALUE, entries, new ArrayList<>()); fail(); }
+        catch (java.lang.reflect.InvocationTargetException e) { assertTrue(e.getCause() instanceof IOException); }
+        assertEquals("Discovery must stop before fetching another member", 50_000, consumed.get());
+
+        consumed.set(0);
+        try { hook.invoke(null, zip, zip, 0L, 0L, System.nanoTime() - 1, entries, new ArrayList<>()); fail(); }
+        catch (java.lang.reflect.InvocationTargetException e) { assertTrue(e.getCause() instanceof IOException); }
+        assertEquals("Expired discovery must not fetch a member", 0, consumed.get());
+    }
+
+    @Test public void zipIgnoresManifestAndOtherNonLogMembers() throws Exception
+    {
+        Path zip = temporary.newFile("filtered.log.zip").toPath();
+        try (var out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            for (String name : List.of("node/events.LOG.1", "edt-mcp-capture.json", "notes.txt"))
+            {
+                out.putNextEntry(new ZipEntry(name));
+                out.write((name.endsWith(".1") ? event("CALL", "1") + "\n" : "{\"profile\":\"errors\"}\n")
+                    .getBytes(StandardCharsets.UTF_8)); out.closeEntry();
+            }
+        }
+        var index = TechLogReader.read(zip, 1, 10, null, null);
+        assertEquals(1, index.events.size()); assertEquals(0, index.rejected);
+        assertEquals(1, index.sources.size());
+    }
+
+    @Test public void sqlNormalizationPreservesBinaryPlusAndMinus()
+    {
+        assertEquals("select amount -?", TechLogAnalysis.normalizeSql("SELECT amount -1"));
+        assertEquals("select amount +?", TechLogAnalysis.normalizeSql("SELECT amount +1"));
+        assertNotEquals(TechLogAnalysis.normalizeSql("SELECT amount -1"), TechLogAnalysis.normalizeSql("SELECT amount +1"));
+        assertEquals(TechLogAnalysis.normalizeSql("x = 1"), TechLogAnalysis.normalizeSql("x = 2"));
+    }
+
+    @Test public void coverageDoesNotClaimAbsenceWithUnfinishedTailOrRejectedRecords() throws Exception
+    {
+        Files.writeString(temporary.getRoot().toPath().resolve("edt-mcp-capture.json"),
+            "{\"profile\":\"errors\",\"events\":[\"CALL\",\"EXCP\"]}");
+        for (String tail : List.of("{\"name\":\"EXCP\",\"ts\":", "not-json\n"))
+        {
+            var index = TechLogReader.read(file(event("CALL", "1") + "\n" + tail), 1, 10, null, null);
+            assertEquals(1, index.events.size());
+            String coverage = TechLogAnalysis.coverage(index);
+            assertFalse(coverage, coverage.contains("none occurred"));
+            assertTrue(coverage, coverage.contains(tail.endsWith("\n") ? "rejected records" : "unfinished tail"));
+            assertTrue(coverage, coverage.contains("EXCP"));
+        }
+    }
+
     @Test public void semanticErrorOnFinalCompleteJsonIsCorruptNotIncomplete() throws Exception
     {
         var i = TechLogReader.read(file(event("CALL", "-1")), 1, 10, null, null);
@@ -434,6 +504,41 @@ public class TechLogTest
         var d = new TechLogCapture(existing.resolve("logcfg.xml"), List.of());
         d.start(options(temporary.getRoot().toPath().resolve("capture-old")), () -> null);
         d.stop(() -> null); assertTrue(Files.isDirectory(existing));
+    }
+
+    @Test public void deniedStartLeavesNoConfigDirectory() throws Exception
+    {
+        Path conf = temporary.getRoot().toPath().resolve("conf");
+        var capture = new TechLogCapture(conf.resolve("logcfg.xml"), List.of());
+        assertEquals("denied", capture.start(options(temporary.getRoot().toPath().resolve("capture")), () -> "denied"));
+        assertFalse(Files.exists(conf));
+    }
+
+    @Test public void deniedThenAllowedStartAndStopRemovesConfigDirectory() throws Exception
+    {
+        Path conf = temporary.getRoot().toPath().resolve("conf");
+        var capture = new TechLogCapture(conf.resolve("logcfg.xml"), List.of());
+        var o = options(temporary.getRoot().toPath().resolve("capture"));
+        capture.start(o, () -> "denied"); capture.start(o, () -> null); capture.stop(() -> null);
+        assertFalse(Files.exists(conf));
+    }
+
+    @Test public void failedStartAfterCreatingConfigDirectoryRemovesItWhenEmpty() throws Exception
+    {
+        Path conf = temporary.getRoot().toPath().resolve("conf");
+        Path location = temporary.getRoot().toPath().resolve("capture");
+        var capture = new TechLogCapture(conf.resolve("logcfg.xml"), List.of());
+        try
+        {
+            capture.start(options(location), () -> {
+                try { Files.writeString(location, "Blocks capture directory creation after consent"); }
+                catch (IOException e) { throw new AssertionError(e); }
+                return null;
+            });
+            fail("Capture directory creation must fail");
+        }
+        catch (IOException expected) { assertTrue(Files.isRegularFile(location)); }
+        assertFalse(Files.exists(conf));
     }
 
     @Test public void missingActiveRecordRecoversFromOwnManifestAfterCrash() throws Exception

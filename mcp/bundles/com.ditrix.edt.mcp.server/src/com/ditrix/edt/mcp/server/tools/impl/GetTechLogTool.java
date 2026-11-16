@@ -51,6 +51,7 @@ public class GetTechLogTool implements IMcpTool
             .integerProperty("readBudgetSeconds", "Read time budget, default 10 seconds, range 1..30.").build();
     }
     @Override public ResponseType getResponseType() { return ResponseType.MARKDOWN; }
+    @Override public boolean returnsInfobaseData() { return true; }
 
     @Override public String execute(Map<String, String> params)
     {

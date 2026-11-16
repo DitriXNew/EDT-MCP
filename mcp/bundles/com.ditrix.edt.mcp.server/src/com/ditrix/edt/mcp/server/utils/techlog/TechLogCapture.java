@@ -231,8 +231,6 @@ public final class TechLogCapture
     /** Gate runs inside the cross-process mutex after the exact affected bytes have been computed. */
     public synchronized String start(Options o, Supplier<String> refusal) throws Exception
     {
-        boolean createdDirectory = !Files.isDirectory(target.getParent());
-        Files.createDirectories(target.getParent());
         try (FileChannel channel = lockChannel();
             var held = channel.tryLock())
         {
@@ -249,34 +247,50 @@ public final class TechLogCapture
             String denied = refusal.get(); if (denied != null) return denied;
             if (!java.util.Arrays.equals(original, Files.exists(target) ? Files.readAllBytes(target) : null))
                 throw new IOException("logcfg.xml changed during consent; preview and start again.");
-            Files.createDirectories(o.location());
-            Path backup = target.resolveSibling("logcfg.xml.edt-mcp-" + id + ".bak");
-            if (original != null) Files.write(backup, original, StandardOpenOption.CREATE_NEW);
-            JsonObject manifest = new JsonObject();
-            manifest.addProperty("id", id); manifest.addProperty("profile", o.profile());
-            manifest.addProperty("startTime", Instant.now().toString()); manifest.addProperty("targetConfigPath", target.toString());
-            manifest.addProperty("backupPath", original == null ? "" : backup.toString());
-            manifest.addProperty("location", o.location().toString()); manifest.addProperty("originalExisted", original != null);
-            manifest.addProperty("createdDirectory", createdDirectory);
-            manifest.addProperty("originalHash", original == null ? "" : digest(original));
-            manifest.addProperty("writtenHash", digest(generated)); manifest.addProperty("status", "prepared");
-            JsonObject overrides = new JsonObject();
-            overrides.addProperty("thresholdMs", o.thresholdMs()); overrides.addProperty("infobase", o.infobase());
-            overrides.addProperty("plans", o.plans()); overrides.addProperty("dbmsLocks", o.dbmsLocks());
-            overrides.addProperty("historyHours", o.historyHours()); overrides.addProperty("rotationMb", o.rotationMb());
-            var extra = new com.google.gson.JsonArray(); o.extraEvents().forEach(extra::add); overrides.add("extraEvents", extra);
-            manifest.add("overrides", overrides);
-            var events = new com.google.gson.JsonArray(); o.events().forEach(events::add); manifest.add("events", events);
-            // Durable recovery record precedes config mutation. Never overwrite an unrelated manifest/state.
-            writeNew(o.location().resolve("edt-mcp-capture.json"), manifest);
-            writeNew(state(), manifest);
-            atomicWrite(target, generated);
-            manifest.addProperty("status", "config-written");
-            atomicWrite(state(), json(manifest)); atomicWrite(o.location().resolve("edt-mcp-capture.json"), json(manifest));
-            return "Config written: " + target + ". Capture " + id + "; location " + o.location()
-                + ". Waiting for pickup (≤60 s); log-file appearance is not yet observed.\n\n"
-                + "Shadowing configurations: " + shadowing() + ". Service accounts use their own configuration lookup.\n\n"
-                + "Next: manage_tech_log mode=status; reproduce briefly, then mode=stop.";
+            boolean createdDirectory = !Files.isDirectory(target.getParent());
+            boolean configWritten = false;
+            try
+            {
+                Files.createDirectories(target.getParent());
+                Files.createDirectories(o.location());
+                Path backup = target.resolveSibling("logcfg.xml.edt-mcp-" + id + ".bak");
+                if (original != null) Files.write(backup, original, StandardOpenOption.CREATE_NEW);
+                JsonObject manifest = new JsonObject();
+                manifest.addProperty("id", id); manifest.addProperty("profile", o.profile());
+                manifest.addProperty("startTime", Instant.now().toString()); manifest.addProperty("targetConfigPath", target.toString());
+                manifest.addProperty("backupPath", original == null ? "" : backup.toString());
+                manifest.addProperty("location", o.location().toString()); manifest.addProperty("originalExisted", original != null);
+                manifest.addProperty("createdDirectory", createdDirectory);
+                manifest.addProperty("originalHash", original == null ? "" : digest(original));
+                manifest.addProperty("writtenHash", digest(generated)); manifest.addProperty("status", "prepared");
+                JsonObject overrides = new JsonObject();
+                overrides.addProperty("thresholdMs", o.thresholdMs()); overrides.addProperty("infobase", o.infobase());
+                overrides.addProperty("plans", o.plans()); overrides.addProperty("dbmsLocks", o.dbmsLocks());
+                overrides.addProperty("historyHours", o.historyHours()); overrides.addProperty("rotationMb", o.rotationMb());
+                var extra = new com.google.gson.JsonArray(); o.extraEvents().forEach(extra::add); overrides.add("extraEvents", extra);
+                manifest.add("overrides", overrides);
+                var events = new com.google.gson.JsonArray(); o.events().forEach(events::add); manifest.add("events", events);
+                // Durable recovery record precedes config mutation. Never overwrite an unrelated manifest/state.
+                writeNew(o.location().resolve("edt-mcp-capture.json"), manifest);
+                writeNew(state(), manifest);
+                atomicWrite(target, generated);
+                configWritten = true;
+                manifest.addProperty("status", "config-written");
+                atomicWrite(state(), json(manifest)); atomicWrite(o.location().resolve("edt-mcp-capture.json"), json(manifest));
+                return "Config written: " + target + ". Capture " + id + "; location " + o.location()
+                    + ". Waiting for pickup (≤60 s); log-file appearance is not yet observed.\n\n"
+                    + "Shadowing configurations: " + shadowing() + ". Service accounts use their own configuration lookup.\n\n"
+                    + "Next: manage_tech_log mode=status; reproduce briefly, then mode=stop.";
+            }
+            catch (Exception | Error failure)
+            {
+                if (createdDirectory && !configWritten && Files.isDirectory(target.getParent()))
+                {
+                    try { deleteIfEmpty(target.getParent()); }
+                    catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                }
+                throw failure;
+            }
         }
     }
 

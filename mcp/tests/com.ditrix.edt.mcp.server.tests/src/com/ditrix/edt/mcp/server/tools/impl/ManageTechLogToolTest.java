@@ -96,4 +96,21 @@ public class ManageTechLogToolTest
             Map.of("rotationMb", "0"), Map.of("extraEvents", "DB*"), Map.of("mode", "export")))
         { String r = t.execute(p); assertTrue(r, r.contains("\"success\":false")); assertTrue(r.contains("preview")); }
     }
+
+    @Test public void exportZipWithManifestIgnoresNonLogMembers() throws Exception
+    {
+        Path zip = temporary.getRoot().toPath().resolve("capture.log.zip");
+        try (var out = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            out.putNextEntry(new java.util.zip.ZipEntry("events.log"));
+            out.write(Files.readAllBytes(TechLogTest.root().resolve("tests/fixtures/tech-log/synthetic.log")));
+            out.closeEntry();
+            out.putNextEntry(new java.util.zip.ZipEntry("edt-mcp-capture.json"));
+            out.write("{\"profile\":\"errors\"}\n".getBytes(StandardCharsets.UTF_8)); out.closeEntry();
+        }
+        Path output = temporary.getRoot().toPath().resolve("export.csv");
+        String result = tool(ConsentDecision.ALLOW, false, new AtomicInteger()).execute(
+            Map.of("mode", "export", "path", zip.toString(), "outputPath", output.toString()));
+        assertTrue(result, result.contains("Rows: 15")); assertTrue(Files.exists(output));
+    }
 }

@@ -34,7 +34,7 @@ public final class TechLogAnalysis
     private static final Pattern SQL_TOKEN = Pattern.compile(
         "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|[NEXB]?'(?:''|\\\\.|[^'\\\\])*'|"
         + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|"
-        + "#tt\\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
+        + "#tt\\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
         Pattern.CASE_INSENSITIVE);
 
     private TechLogAnalysis() { }
@@ -199,8 +199,13 @@ public final class TechLogAnalysis
             else silent.add(kind);
         }
         out.append("- Present: ").append(present.isEmpty() ? "none" : String.join(", ", present)).append("\n");
+        List<String> incomplete = new ArrayList<>();
+        if (index.limited) incomplete.add("before the scan stopped");
+        if (index.incompleteTail > 0) incomplete.add("unfinished tail");
+        if (index.rejected > 0) incomplete.add("rejected records");
         out.append("- ").append(!known ? "Absent, capture enablement unknown: "
-            : index.limited ? "Enabled, none seen before the scan stopped: " : "Enabled, none occurred in the collected data: ")
+            : !incomplete.isEmpty() ? "Enabled, none seen in incomplete input (" + String.join("; ", incomplete) + "): "
+                : "Enabled, none occurred in the collected data: ")
             .append(silent.isEmpty() ? "none" : String.join(", ", silent)).append("\n");
         if (known) out.append("- Not enabled by profile ").append(profile).append(": ")
             .append(off.isEmpty() ? "none" : String.join(", ", off)).append("\n");

@@ -13,7 +13,6 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -157,18 +156,28 @@ public final class TechLogReader
             {
                 try (ZipFile zip = new ZipFile(file.toFile()))
                 {
-                    var entries = Collections.list(zip.entries());
-                    for (var entry : entries)
-                    {
-                        checkDiscovery(path, deadline, result.size());
-                        if (!entry.isDirectory()) result.add(new Source(file, entry.getName(), size, mtime, entry.getSize()));
-                    }
+                    zipSources(path, file, size, mtime, deadline, zip.entries(), result);
                 }
             }
             else result.add(new Source(file, "", size, mtime, size));
         }
         result.sort(Comparator.comparing(s -> s.file() + "!" + s.member()));
         return result;
+    }
+
+    private static void zipSources(Path path, Path file, long size, long mtime, long deadline,
+        java.util.Enumeration<? extends java.util.zip.ZipEntry> entries, List<Source> result) throws IOException
+    {
+        int members = 0;
+        while (entries.hasMoreElements())
+        {
+            // Bound enumeration itself, including directories and non-log members, before fetching another entry.
+            checkDiscovery(path, deadline, Math.max(members, result.size()));
+            var entry = entries.nextElement();
+            members++;
+            if (!entry.isDirectory() && isLog(entry.getName()))
+                result.add(new Source(file, entry.getName(), size, mtime, entry.getSize()));
+        }
     }
 
     private static void checkDiscovery(Path path, long deadline, int found) throws IOException
@@ -180,8 +189,11 @@ public final class TechLogReader
     }
 
     private static boolean isLog(Path path)
+    { return isLog(path.getFileName().toString()); }
+
+    private static boolean isLog(String fileName)
     {
-        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        String name = fileName.toLowerCase(java.util.Locale.ROOT);
         return name.matches(".*\\.log(?:\\.\\d+)?(?:\\.zip)?");
     }
 

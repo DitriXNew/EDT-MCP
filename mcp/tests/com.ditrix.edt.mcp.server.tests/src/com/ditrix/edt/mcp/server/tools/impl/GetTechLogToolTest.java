@@ -3,11 +3,17 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.TechLogTest;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRedactor;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRule;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleScope;
+import com.ditrix.edt.mcp.server.utils.privacy.PiiRuleSet;
+import com.ditrix.edt.mcp.server.utils.techlog.TechLogReader;
 
 public class GetTechLogToolTest
 {
@@ -28,6 +34,27 @@ public class GetTechLogToolTest
             assertTrue(result, result.contains("https://"));
         }
         assertTrue(tool.execute(Map.of("mode", "describe", "event", "TDEADLOK")).contains("TDEADLOCK"));
+    }
+
+    @Test public void detailsAreFlaggedForPiiRedactionAndEmailIsMasked() throws Exception
+    {
+        assertTrue(tool.returnsInfobaseData());
+        Path path = Files.createTempFile("tech-log-pii-", ".log");
+        try
+        {
+            Files.writeString(path,
+                "{\"ts\":\"2026-11-15T23:43:10\",\"name\":\"CALL\",\"duration\":\"1\",\"Usr\":\"reader@example.com\"}\n");
+            var index = TechLogReader.read(path, 1, 10, null, null);
+            String details = tool.execute(Map.of("mode", "details", "path", path.toString(),
+                "groupId", index.groups.keySet().iterator().next()));
+            assertTrue(details, details.contains("reader@example.com"));
+            var rules = PiiRuleSet.of(new PiiRule(true, "[\\w.]+@[\\w.]+", PiiRuleScope.VALUE, "[email]", false));
+            String masked = PiiRedactor.apply(details, rules, "test-salt");
+            assertFalse(masked, masked.contains("reader@example.com")); assertTrue(masked.contains("[email]"));
+            String clean = details.replace("reader@example.com", "reader");
+            assertSame(clean, PiiRedactor.apply(clean, rules, "test-salt"));
+        }
+        finally { Files.deleteIfExists(path); }
     }
     @Test public void defaultSummaryDetailsAndChain() throws Exception
     {

@@ -43,6 +43,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
  * <li>a {@link PiiRuleScope#VALUE} (or {@code BOTH}) rule regex-replaces every matching
  * SPAN inside the string content.</li>
  * </ul>
+ * Plain-text output uses the same value-content rules across the whole text;
+ * NAME-only rules are skipped because plain text has no JSON keys.
  * The token per rule comes from {@link Pseudonymizer#token}: a {@code countable} rule
  * emits a stable {@code representation#hmac} pseudonym, a non-countable rule emits the
  * {@code representation} verbatim (a flat mask such as {@code [redacted]}). Every rule's
@@ -94,7 +96,7 @@ public final class PiiRedactor
      * @param params the tool call parameters (reserved for the deferred per-infobase PII
      *            flag; unused in v1)
      * @param result the tool's serialized result (may be {@code null})
-     * @return the redacted JSON, or the original {@code result} reference when nothing
+     * @return the redacted JSON or text, or the original {@code result} reference when nothing
      *         is redacted
      */
     public static String redactIfEnabled(IMcpTool tool, Map<String, String> params, String result) // NOSONAR params is reserved for the deferred per-infobase PII flag; the wire contract passes it
@@ -121,15 +123,15 @@ public final class PiiRedactor
 
     /**
      * The pure, headless-testable core. Evaluates {@code ruleSet} (with an HMAC key
-     * derived from {@code salt}) over the JSON tree, redacting personal data. Returns the
+     * derived from {@code salt}) over the JSON tree or plain text, redacting personal data. Returns the
      * SAME {@code result} reference whenever nothing is masked - an OFF / empty rule set,
-     * a non-JSON body, or a zero-match walk all short-circuit to the original string
-     * (never a no-op re-serialization); otherwise returns the re-serialized, redacted tree.
+     * or a zero-match pass all short-circuit to the original string (never a no-op
+     * re-serialization). Plain text uses only value-content rules; JSON uses the tree walk.
      *
      * @param result the tool's serialized result (may be {@code null})
      * @param ruleSet the detection rules (may be {@code null} / empty - then a no-op)
      * @param salt the pseudonym salt (blank / {@code null} = per-pass random key)
-     * @return the redacted JSON, or the original {@code result} reference
+     * @return the redacted JSON or text, or the original {@code result} reference
      */
     public static String apply(String result, PiiRuleSet ruleSet, String salt)
     {
@@ -153,10 +155,17 @@ public final class PiiRedactor
         }
         catch (RuntimeException e)
         {
-            return new Outcome(result, 0); // not JSON: leave the tool's text untouched
+            return redactText(result, ruleSet, salt);
         }
         if (root == null || !(root.isJsonObject() || root.isJsonArray()))
         {
+            // Gson also accepts unquoted text as a string primitive. Treat that as plain
+            // text while preserving the existing no-op path for actual JSON scalars.
+            if (root != null && root.isJsonPrimitive() && root.getAsJsonPrimitive().isString()
+                && !result.stripLeading().startsWith("\"")) //$NON-NLS-1$
+            {
+                return redactText(result, ruleSet, salt);
+            }
             return new Outcome(result, 0);
         }
         RuleEngine engine = new RuleEngine(ruleSet, new Pseudonymizer(salt));
@@ -169,6 +178,14 @@ public final class PiiRedactor
             return new Outcome(result, 0);
         }
         return new Outcome(GsonProvider.toJson(root), counter.count);
+    }
+
+    /** Plain text has no enclosing keys: reuse only VALUE/BOTH rules, tokens and match counts. */
+    private static Outcome redactText(String result, PiiRuleSet ruleSet, String salt)
+    {
+        RuleEngine engine = new RuleEngine(ruleSet, new Pseudonymizer(salt));
+        SpanResult spans = engine.redactValueSpans(result);
+        return new Outcome(spans.count == 0 ? result : spans.text, spans.count);
     }
 
     /**
@@ -497,7 +514,7 @@ public final class PiiRedactor
         }
     }
 
-    /** The redaction pass outcome: the (possibly rewritten) JSON and the total match count. */
+    /** The redaction pass outcome: the (possibly rewritten) JSON or text and the total match count. */
     static final class Outcome
     {
         final String text;
