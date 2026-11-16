@@ -55,6 +55,44 @@ public class StartupCoordinatorTest extends StdioTestSupport
         }
     }
 
+    private static StartupCoordinator.Starter starter(AtomicInteger starts, java.util.concurrent.Callable<Long> running)
+    {
+        return new StartupCoordinator.Starter()
+        {
+            @Override public StartupCoordinator.Started start() { starts.incrementAndGet(); return null; }
+            @Override public Long runningFor() throws Exception { return running.call(); }
+        };
+    }
+
+    @Test public void anEdtStartedElsewhereForThisWorkspaceIsNotStartedAgain() throws Exception
+    {
+        var registry = registry(); AtomicInteger starts = new AtomicInteger();
+        String answer = new StartupCoordinator(registry, starter(starts, () -> 4242L)).ensureStarted();
+        assertTrue(answer, answer.contains("already starting (process 4242)") && answer.contains("No tool ran"));
+        assertEquals(0, starts.get());
+        assertFalse("No claim is taken for an EDT this bootstrap did not start", Files.exists(registry.claimPath()));
+    }
+
+    @Test public void anUnreadableProcessListStillStartsOnce() throws Exception
+    {
+        var registry = registry(); AtomicInteger starts = new AtomicInteger();
+        var coordinator = new StartupCoordinator(registry, starter(starts, () -> { throw new java.io.IOException("WMI down"); }));
+        assertEquals(StartupCoordinator.STARTING, coordinator.ensureStarted());
+        assertEquals(1, starts.get());
+    }
+
+    @Test public void workspaceLaunchMatchingFollowsWindowsArguments()
+    {
+        Path ws = Path.of("D:\\WS\\My Space");
+        assertTrue(WindowsEdtStarter.launchesWorkspace("\"C:\\EDT\\1cedt.exe\" -clean -data \"D:\\WS\\My Space\"", ws));
+        assertTrue(WindowsEdtStarter.launchesWorkspace("javaw.exe -jar plugins/launcher.jar -DATA \"d:/ws/my space/\"", ws));
+        assertFalse("A longer sibling path is another workspace",
+            WindowsEdtStarter.launchesWorkspace("1cedt.exe -data \"D:\\WS\\My Space2\"", ws));
+        assertFalse("A stdio bootstrap names the workspace but is not an EDT",
+            WindowsEdtStarter.launchesWorkspace("1cedtc.exe -startup C:\\Users\\u\\EDT-MCP\\bootstrap\\x\\edt-mcp-bootstrap.jar -data \"D:\\WS\\My Space\"", ws));
+        assertFalse("-data without a value", WindowsEdtStarter.launchesWorkspace("1cedt.exe -data", ws));
+    }
+
     @Test public void startupMutexAllowsOneStarterAcrossRacingClients() throws Exception
     {
         var registry = registry(); AtomicInteger starts = new AtomicInteger();

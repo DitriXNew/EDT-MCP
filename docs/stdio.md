@@ -57,7 +57,7 @@ On Windows, when no live endpoint exists, the first call starts a normal EDT win
 
 > EDT is starting. Retry the same call in about 15 seconds. No tool ran.
 
-Retry explicitly after the interval. A cold workspace may need several attempts while EDT indexes projects or waits for a startup dialog. The startup mutex and durable claim prevent two racing clients from starting two EDTs for one workspace. If automatic startup is unavailable or blocked by Windows policy, ask the user to open that workspace in EDT, then retry.
+Retry explicitly after the interval. A cold workspace may need several attempts while EDT indexes projects or waits for a startup dialog. The startup mutex and durable claim prevent two racing clients from starting two EDTs for one workspace. An EDT started outside the bootstrap (by hand or by a script) is recognized by its `-data` argument while it is still starting, before it locks the workspace, and the call answers that EDT is already starting instead of launching another. If automatic startup is unavailable or blocked by Windows policy, ask the user to open that workspace in EDT, then retry.
 
 Closing the client closes its bootstrap and leaves windowed EDT open. A headless host follows the idle policy above. A later client attaches to that EDT. Each connection keeps its own capabilities, request ids and response/notification sinks. A dropped connection never replays a tool invocation. An interrupted call reports an unknown outcome: a write may have committed, so read back its state before deciding whether to retry.
 
