@@ -17,7 +17,7 @@ Turns on 1C line-level performance measurement for a running debug session: once
 ## Recipe: measure a slow action
 1. `list_configurations`, then `launch({"launchConfigurationName":"<name>"})` (debug mode is the default).
 2. Poll `debug_status` until the launch's `state` is `running`. `starting`/`synchronizing` can last minutes while EDT loads the configuration into the infobase; do not terminate or relaunch meanwhile.
-3. `start_profiling({"applicationId":"<from debug_status>"})`.
+3. Right before the action (so client startup is not measured): `start_profiling` with the `applicationId` that `launch` and `debug_status` report for the launch (`launch:<configuration name>` for a configuration not bound to an application).
 4. Reproduce the action in the client (TestClient tools, or ask the user), then `stop_profiling`.
 5. `get_profiling_results` for the hot lines and methods.
 
