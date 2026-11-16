@@ -505,7 +505,7 @@ public class LaunchTool implements IMcpTool
 
             // For runtime-client configs, run the usual DB-update preflight.
             String preflightError =
-                runUpdatePreflight(isAttach, updateBeforeLaunch, configProject, effectiveAppId, policy);
+                runUpdatePreflight(isAttach, updateBeforeLaunch, configProject, effectiveAppId);
             if (preflightError != null)
             {
                 return preflightError;
@@ -1407,12 +1407,11 @@ public class LaunchTool implements IMcpTool
 
     /**
      * Runtime-client DB-update preflight for the by-name path. Returns a ready
-     * error-JSON string when the project is not ready or the database update
-     * fails, or {@code null} to proceed. Behaviour is identical to the inline
-     * guard it replaces: same condition, same order, same exceptions propagate.
+     * error-JSON string when the project is not ready or the deferred update cannot
+     * proceed ({@link #updateDatabaseIfNeeded}), or {@code null} to proceed.
      */
     private String runUpdatePreflight(boolean isAttach, boolean updateBeforeLaunch, String configProject,
-        String effectiveAppId, ExternalInfobaseChangesPolicy policy)
+        String effectiveAppId)
     {
         if (!isAttach && updateBeforeLaunch && configProject != null && !configProject.isEmpty())
         {
@@ -1421,7 +1420,7 @@ public class LaunchTool implements IMcpTool
             {
                 return ToolResult.error(notReady).toJson();
             }
-            String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId, policy);
+            String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId);
             if (updateError != null)
             {
                 return ToolResult.error(updateError).toJson();
@@ -1464,8 +1463,8 @@ public class LaunchTool implements IMcpTool
         String then = MODE_RUN.equals(mode) ? "." : ", then use wait_for_break."; //$NON-NLS-1$ //$NON-NLS-2$
         return (MODE_RUN.equals(mode) ? "Run" : "Debug") //$NON-NLS-1$ //$NON-NLS-2$
             + " session is starting asynchronously; this call does NOT wait for it. When the configuration " //$NON-NLS-1$
-            + "changed, EDT first loads it into the infobase (minutes on a large configuration; debug_status " //$NON-NLS-1$
-            + "state 'synchronizing'), then starts the 1C client. Poll debug_status until the launch state is " //$NON-NLS-1$
+            + "changed, EDT first updates the infobase (minutes on a large configuration; debug_status " //$NON-NLS-1$
+            + "state 'starting'), then starts the 1C client. Poll debug_status until the launch state is " //$NON-NLS-1$
             + "'running'" + then + " Do not terminate_launch or relaunch while it is starting: that interrupts " //$NON-NLS-1$ //$NON-NLS-2$
             + "the load and leaves an EDT error dialog."; //$NON-NLS-1$
     }
@@ -1617,17 +1616,12 @@ public class LaunchTool implements IMcpTool
                 }
             }
 
-            // Update database before launch if requested. Routes through the
-            // shared LaunchLifecycleUtils.updateApplicationIfNeeded so launch analyses
-            // "does the IB need updating?" the same way the YAXUnit tools
-            // do: skip on UPDATED, wait on BEING_UPDATED, incremental-update otherwise.
-            // For a STANDALONE-SERVER application the programmatic update is SKIPPED
-            // and deferred to the launch delegate's coordinated path instead — see
-            // runPreLaunchUpdateStep.
+            // The infobase update itself runs in EDT's launch delegate; this only refuses what
+            // that path cannot recover from - see runPreLaunchUpdateStep.
             if (appManager != null && application != null)
             {
                 String updateError = runPreLaunchUpdateStep(project, applicationId,
-                    appManager, updateBeforeLaunch, policy);
+                    appManager, updateBeforeLaunch);
                 if (updateError != null)
                 {
                     return ToolResult.error(updateError).toJson();
@@ -1919,8 +1913,9 @@ public class LaunchTool implements IMcpTool
     }
 
     /**
-     * Runs the EDT "update database before launch" step for a runtime-client launch.
-     * Returns {@code null} on success, or an error message describing the failure.
+     * The by-name pre-launch check of the "update database before launch" step: the update itself
+     * runs in EDT's launch delegate ({@link LaunchLifecycleUtils#deferredUpdatePreflight}).
+     * Returns {@code null} to launch, or an error message.
      *
      * <p>Synthetic application ids — {@code attach:<configName>},
      * {@code launch:<configName>} and {@code ServerApplication.<app>}, see
@@ -1954,8 +1949,7 @@ public class LaunchTool implements IMcpTool
      * {@link #runPreLaunchUpdateStep}, the same gate on the
      * project+applicationId path.
      */
-    private String updateDatabaseIfNeeded(String projectName, String applicationId,
-        ExternalInfobaseChangesPolicy policy)
+    private String updateDatabaseIfNeeded(String projectName, String applicationId)
     {
         if (applicationId == null || applicationId.isEmpty()
             || LaunchConfigUtils.isSyntheticApplicationId(applicationId))
@@ -1973,10 +1967,8 @@ public class LaunchTool implements IMcpTool
         {
             return null;
         }
-        // Shared update analysis: skip on UPDATED, wait on BEING_UPDATED, otherwise
-        // incremental-update — same path as the YAXUnit auto-chain.
-        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager, false,
-            policy).orElse(null);
+        // EDT's launch delegate updates the infobase inside the launch Job; see runPreLaunchUpdateStep.
+        return LaunchLifecycleUtils.deferredUpdatePreflight(project, applicationId, appManager).orElse(null);
     }
 
     /**
@@ -2002,18 +1994,18 @@ public class LaunchTool implements IMcpTool
      *       "stale IB" refusal disappears for server apps (the update happens
      *       asynchronously inside the launch); failures surface via
      *       {@code debug_status} / the EDT log — matching EDT-native UX.</li>
-     *   <li>Any other (file / client-server infobase) application — the programmatic
-     *       pre-update runs exactly as before through
-     *       {@link LaunchLifecycleUtils#updateApplicationIfNeeded}: skip on UPDATED,
-     *       wait on BEING_UPDATED, incremental-update otherwise; a stale IB still
-     *       refuses synchronously.</li>
+     *   <li>Any other (file / client-server infobase) application — the update is deferred the
+     *       same way, so the call returns "launching" at once and {@code debug_status} reports
+     *       {@code state: starting} until the client is up. Only an unreadable or missing
+     *       application, or an update already running, refuses synchronously
+     *       ({@link LaunchLifecycleUtils#deferredUpdatePreflight}).</li>
      * </ul>
      *
      * <p>Package-private (static, mock-friendly) so the headless unit tests can
      * assert the gate decision without a live workbench.
      */
     static String runPreLaunchUpdateStep(IProject project, String applicationId,
-        IApplicationManager appManager, boolean updateBeforeLaunch, ExternalInfobaseChangesPolicy policy)
+        IApplicationManager appManager, boolean updateBeforeLaunch)
     {
         if (!updateBeforeLaunch)
         {
@@ -2026,8 +2018,7 @@ public class LaunchTool implements IMcpTool
                 + applicationId);
             return null;
         }
-        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager, false,
-            policy).orElse(null);
+        return LaunchLifecycleUtils.deferredUpdatePreflight(project, applicationId, appManager).orElse(null);
     }
 
     /**

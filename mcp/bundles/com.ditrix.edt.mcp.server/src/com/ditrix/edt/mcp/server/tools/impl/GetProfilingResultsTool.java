@@ -30,17 +30,18 @@ public class GetProfilingResultsTool implements IMcpTool
     @Override public String getName() { return NAME; }
     @Override public String getDescription()
     {
-        return "Inspect BSL performance measurements: summary, list, paged lines and comparison.";
+        return "Inspect BSL performance measurements: summary, list, paged lines, callers of a method and comparison.";
     }
 
     @Override public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .enumProperty("mode", "Default: summary.", "summary", "list", "lines", "compare")
+            .enumProperty("mode", "Default: summary. callers: the lines calling methodFilter.", "summary", "list", "lines",
+                "callers", "compare")
             .stringProperty("measurementId", "Measurement UUID; default: latest by session date. Use mode=list.")
             .integerProperty("top", "Summary/compare top size: 1..20, default 10.")
             .stringProperty("moduleFilter", "Case-insensitive module substring.")
-            .stringProperty("methodFilter", "Case-insensitive method substring.")
+            .stringProperty("methodFilter", "Case-insensitive method substring; for callers, the called method's name.")
             .integerProperty("minFrequency", "Minimum line calls: 0..2147483647, default 1.")
             .integerProperty(McpKeys.LIMIT, "Page size: 1..100, default 50 (list/lines/compare lines).")
             .integerProperty("offset", "Page offset: nonnegative integer, default 0.")
@@ -55,7 +56,8 @@ public class GetProfilingResultsTool implements IMcpTool
     {
         try
         {
-            String mode = choice(JsonUtils.extractStringArgument(params, "mode"), "mode", "summary", "summary", "list", "lines", "compare");
+            String mode = choice(JsonUtils.extractStringArgument(params, "mode"), "mode", "summary", "summary", "list", "lines",
+                "callers", "compare");
             String measurementId = JsonUtils.extractStringArgument(params, "measurementId");
             int top = integer(JsonUtils.extractStringArgument(params, "top"), "top", 10, 1, 20);
             String module = JsonUtils.extractStringArgument(params, "moduleFilter");
@@ -71,6 +73,11 @@ public class GetProfilingResultsTool implements IMcpTool
             {
                 throw new IllegalArgumentException("baseId is required for compare. Use mode=list to choose a measurement UUID.");
             }
+            if (mode.equals("callers") && (method == null || method.isBlank()))
+            {
+                throw new IllegalArgumentException("methodFilter is required for callers: pass the name of the called "
+                    + "method, e.g. FillCheckProcessing.");
+            }
             IProfilingService service = profilingService();
             List<IProfilingResult> results = ProfilingSupport.newest(service.getResults());
             String state = "profilingActive: " + (applicationId == null || applicationId.isBlank()
@@ -81,7 +88,7 @@ public class GetProfilingResultsTool implements IMcpTool
                 return (measurementId == null ? "" : ProfilingReport.identity(ProfilingSupport.select(results, measurementId)))
                     + ProfilingReport.measurements(results, offset, limit) + state;
             }
-            if (results.isEmpty() && measurementId == null && (mode.equals("summary") || mode.equals("lines")))
+            if (results.isEmpty() && measurementId == null && !mode.equals("compare"))
             {
                 return "Measurement: none. Time unit: ms.\n\nNo profiling results available. "
                     + "Use manage_profiling_results mode=import or start_profiling before executing BSL.\n\n" + state;
@@ -95,6 +102,10 @@ public class GetProfilingResultsTool implements IMcpTool
             }
             List<ProfilingReport.Row> all = ProfilingReport.rows(result);
             List<ProfilingReport.Row> selected = ProfilingReport.filter(all, module, method, frequency);
+            if (mode.equals("callers"))
+            {
+                return ProfilingReport.callers(result, all, module, method, frequency, offset, limit) + state;
+            }
             if (mode.equals("lines"))
             {
                 List<ProfilingReport.Row> shown = ProfilingReport.page(ProfilingReport.byPure(selected), offset, limit);

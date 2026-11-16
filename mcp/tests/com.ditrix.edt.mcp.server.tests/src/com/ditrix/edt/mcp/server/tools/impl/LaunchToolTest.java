@@ -73,8 +73,6 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
-import com.e1c.g5.dt.applications.ApplicationUpdateType;
-import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.google.gson.JsonObject;
@@ -2026,7 +2024,7 @@ public class LaunchToolTest
         // touching the application manager at all.
         IApplicationManager mgr = mock(IApplicationManager.class);
         String error = LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "ServerApplication.MyServer", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
+            "ServerApplication.MyServer", mgr, true); //$NON-NLS-1$
         assertNull("server application must proceed without a programmatic update", error);
         verify(mgr, never()).update(any(), any(), any(), any());
         verify(mgr, never()).getUpdateState(any());
@@ -2034,26 +2032,36 @@ public class LaunchToolTest
     }
 
     @Test
-    public void testPreLaunchUpdateStepNonServerApplicationStillUpdates() throws Exception
+    public void testPreLaunchUpdateStepNonServerApplicationDefersTheUpdate() throws Exception
     {
-        // Non-server (file / client-server infobase) application: the programmatic
-        // pre-update KEEPS running exactly as before — the hang is server-app-specific,
-        // ordinary infobase apps don't start a standalone server. A stale IB is updated
-        // and the step proceeds on success.
+        // A stale file / client-server infobase is NOT updated in the call: EDT's launch delegate
+        // updates it inside the launch Job, so the call returns at once.
         IProject project = mockOpenProject();
         IApplication app = mock(IApplication.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         when(mgr.getApplication(any(IProject.class), eq("infobase-app-uuid"))) //$NON-NLS-1$
             .thenReturn(Optional.of(app));
         when(mgr.getUpdateState(app)).thenReturn(ApplicationUpdateState.INCREMENTAL_UPDATE_REQUIRED);
-        when(mgr.update(eq(app), eq(ApplicationUpdateType.INCREMENTAL),
-            any(ExecutionContext.class), any())).thenReturn(ApplicationUpdateState.UPDATED);
 
-        String error = LaunchTool.runPreLaunchUpdateStep(project,
-            "infobase-app-uuid", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
-        assertNull("a successful non-server update must proceed", error);
-        verify(mgr, times(1)).update(eq(app), eq(ApplicationUpdateType.INCREMENTAL),
-            any(ExecutionContext.class), any());
+        assertNull(LaunchTool.runPreLaunchUpdateStep(project, "infobase-app-uuid", mgr, true)); //$NON-NLS-1$
+        verify(mgr, never()).update(any(), any(), any(), any());
+    }
+
+    @Test
+    public void testPreLaunchUpdateStepRefusesWhatTheDelegateCannotRecover() throws Exception
+    {
+        IProject project = mockOpenProject();
+        IApplication app = mock(IApplication.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(any(IProject.class), eq("busy-app"))).thenReturn(Optional.of(app)); //$NON-NLS-1$
+        when(mgr.getApplication(any(IProject.class), eq("missing-app"))).thenReturn(Optional.empty()); //$NON-NLS-1$
+        when(mgr.getUpdateState(app)).thenReturn(ApplicationUpdateState.BEING_UPDATED);
+
+        String busy = LaunchTool.runPreLaunchUpdateStep(project, "busy-app", mgr, true); //$NON-NLS-1$
+        assertTrue(busy, busy.contains("is being updated right now") && busy.contains("get_applications"));
+        assertEquals("Application not found: missing-app", //$NON-NLS-1$
+            LaunchTool.runPreLaunchUpdateStep(project, "missing-app", mgr, true)); //$NON-NLS-1$
+        verify(mgr, never()).update(any(), any(), any(), any());
     }
 
     @Test
@@ -2065,9 +2073,9 @@ public class LaunchToolTest
         // unarmed, so the platform's modal — if any — is a human's).
         IApplicationManager mgr = mock(IApplicationManager.class);
         assertNull(LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "ServerApplication.MyServer", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
+            "ServerApplication.MyServer", mgr, false)); //$NON-NLS-1$
         assertNull(LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "infobase-app-uuid", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
+            "infobase-app-uuid", mgr, false)); //$NON-NLS-1$
         verify(mgr, never()).update(any(), any(), any(), any());
         verify(mgr, never()).getUpdateState(any());
         verify(mgr, never()).getApplication(any(IProject.class), anyString());
