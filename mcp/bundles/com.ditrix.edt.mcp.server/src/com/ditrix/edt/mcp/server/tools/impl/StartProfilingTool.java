@@ -58,6 +58,12 @@ public class StartProfilingTool implements IMcpTool
      */
     private static final Map<String, Object> ACTIVE_APPLICATION_IDS = new ConcurrentHashMap<>();
 
+    /**
+     * Serializes start and stop: each one's lookup, its reading of EDT's state, the toggle and the flag change as
+     * one step, so a concurrent call never acts on a snapshot the other has already changed.
+     */
+    static final Object TRANSITIONS = new Object();
+
     /** Owner of a flag set without a known target (tests, legacy callers). */
     private static final Object UNKNOWN_TARGET = new Object();
 
@@ -93,8 +99,9 @@ public class StartProfilingTool implements IMcpTool
         catch (RuntimeException e) { enabled = null; }
         if (enabled != null)
         {
-            if (enabled) { ACTIVE_APPLICATION_IDS.put(applicationId, target); }
-            else { ACTIVE_APPLICATION_IDS.remove(applicationId); }
+            boolean on = enabled;
+            ACTIVE_APPLICATION_IDS.compute(applicationId,
+                (key, current) -> ownerAfterReading(current, target, on, StartProfilingTool::ended));
             return;
         }
         // Another owner is dropped only once it has ended: a stale lookup may predate a newer live owner.
@@ -102,6 +109,22 @@ public class StartProfilingTool implements IMcpTool
         {
             ACTIVE_APPLICATION_IDS.remove(applicationId, owner);
         }
+    }
+
+    /**
+     * The flag owner after EDT reported the looked-up target's own profiling state ({@code null} = no flag). A
+     * live other owner is kept either way: the lookup may predate a relaunch that owner belongs to.
+     */
+    static Object ownerAfterReading(Object current, IDebugTarget target, boolean enabled,
+        java.util.function.Predicate<IDebugTarget> ended)
+    {
+        boolean replaceable = current == null || current == target || !(current instanceof IDebugTarget owner)
+            || ended.test(owner);
+        if (!replaceable)
+        {
+            return current;
+        }
+        return enabled && !ended.test(target) ? target : null;
     }
 
     /**
@@ -210,7 +233,14 @@ public class StartProfilingTool implements IMcpTool
             return err;
         }
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
+        synchronized (TRANSITIONS)
+        {
+            return start(applicationId);
+        }
+    }
 
+    private static String start(String applicationId)
+    {
         try
         {
             IDebugTarget target = DebugSessionRegistry.findActiveTarget(applicationId);

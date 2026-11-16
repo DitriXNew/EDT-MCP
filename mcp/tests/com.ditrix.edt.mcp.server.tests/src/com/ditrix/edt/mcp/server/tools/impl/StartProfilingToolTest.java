@@ -130,6 +130,23 @@ public class StartProfilingToolTest
         assertFalse(StartProfilingTool.isProfilingActive("app")); //$NON-NLS-1$
     }
 
+    /** EDT's own state for the looked-up target replaces only a missing, same, unknown or ended owner. */
+    @Test
+    public void readableStateNeverOverridesALiveOtherOwner()
+    {
+        org.eclipse.debug.core.model.IDebugTarget looked = target(), live = target(), gone = target();
+        java.util.function.Predicate<org.eclipse.debug.core.model.IDebugTarget> ended = t -> t == gone;
+        assertEquals(looked, StartProfilingTool.ownerAfterReading(null, looked, true, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(looked, looked, false, ended));
+        assertEquals(live, StartProfilingTool.ownerAfterReading(live, looked, true, ended));
+        assertEquals(live, StartProfilingTool.ownerAfterReading(live, looked, false, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(gone, looked, false, ended));
+        assertEquals(looked, StartProfilingTool.ownerAfterReading(gone, looked, true, ended));
+        assertEquals(null, StartProfilingTool.ownerAfterReading(new Object(), looked, false, ended));
+        // A reading taken before its own target ended never resurrects that target as the owner.
+        assertEquals(null, StartProfilingTool.ownerAfterReading(null, gone, true, ended));
+    }
+
     /** A stale lookup (an older target, or none) never clears the flag of a newer owner that is still live. */
     @Test
     public void staleTargetKeepsTheFlagOfALiveNewerOwner()
