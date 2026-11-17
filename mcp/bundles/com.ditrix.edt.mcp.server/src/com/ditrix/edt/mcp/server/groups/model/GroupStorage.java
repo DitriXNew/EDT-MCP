@@ -239,18 +239,18 @@ public class GroupStorage {
      * @return true if moved
      */
     public boolean moveObjectToGroup(String objectFqn, String targetGroupFullPath) {
+        Group targetGroup = getGroupByFullPath(targetGroupFullPath);
+        if (targetGroup == null) {
+            return false;
+        }
+
         // Remove from current group if any
         Group currentGroup = findGroupForObject(objectFqn);
         if (currentGroup != null) {
             currentGroup.removeChild(objectFqn);
         }
         
-        // Add to target group
-        Group targetGroup = getGroupByFullPath(targetGroupFullPath);
-        if (targetGroup != null) {
-            return targetGroup.addChild(objectFqn);
-        }
-        return false;
+        return targetGroup.addChild(objectFqn);
     }
     
     /**

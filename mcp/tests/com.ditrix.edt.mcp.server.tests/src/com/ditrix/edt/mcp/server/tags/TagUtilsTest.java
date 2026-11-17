@@ -231,4 +231,61 @@ public class TagUtilsTest
         // String.split drops trailing empty strings, but the second segment is still present here.
         assertEquals("SalesOrder", TagUtils.getTopNameFromFqn("Document.SalesOrder.")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test
+    public void optionalAccessorsCanBeAbsent()
+    {
+        assertNull(TagUtils.unwrapToEObject(new Object()));
+        assertNull(TagUtils.extractProjectFromElement(new Object()));
+    }
+
+    @Test
+    public void invocationFailureIsLoggedOnceAndFallbackStillWorks()
+    {
+        java.util.concurrent.atomic.AtomicInteger logged = new java.util.concurrent.atomic.AtomicInteger();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().contains(FailingWrapper.class.getName() + ".getTarget")) {
+                logged.incrementAndGet();
+            }
+        };
+        org.eclipse.core.runtime.Platform.addLogListener(listener);
+        try {
+            FailingWrapper wrapper = new FailingWrapper();
+            org.junit.Assert.assertSame(wrapper.data, TagUtils.unwrapToEObject(wrapper));
+            org.junit.Assert.assertSame(wrapper.data, TagUtils.unwrapToEObject(wrapper));
+            assertEquals(1, logged.get());
+        } finally {
+            org.eclipse.core.runtime.Platform.removeLogListener(listener);
+        }
+    }
+
+    @Test
+    public void reflectedErrorsEscapeUnwrappingAndProjectLookup()
+    {
+        ErrorWrapper wrapper = new ErrorWrapper();
+        org.junit.Assert.assertSame(wrapper.failure, org.junit.Assert.assertThrows(AssertionError.class,
+            () -> TagUtils.unwrapToEObject(wrapper)));
+        ProjectErrorWrapper projectWrapper = new ProjectErrorWrapper();
+        org.junit.Assert.assertSame(projectWrapper.failure, org.junit.Assert.assertThrows(AssertionError.class,
+            () -> TagUtils.extractProjectFromElement(projectWrapper)));
+    }
+
+    public static class FailingWrapper
+    {
+        final org.eclipse.emf.ecore.EObject data = org.mockito.Mockito.mock(org.eclipse.emf.ecore.EObject.class);
+        public Object getTarget() { throw new IllegalStateException("broken accessor"); }
+        public Object getData() { return data; }
+    }
+
+    public static class ErrorWrapper
+    {
+        final AssertionError failure = new AssertionError("target failure");
+        public Object getTarget() { throw failure; }
+    }
+
+    public static class ProjectErrorWrapper
+    {
+        final AssertionError failure = new AssertionError("project failure");
+        public Object getProject() { throw failure; }
+    }
 }

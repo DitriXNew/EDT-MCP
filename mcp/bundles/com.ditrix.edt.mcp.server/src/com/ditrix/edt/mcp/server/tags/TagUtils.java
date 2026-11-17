@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.tags;
 import java.lang.reflect.Method;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 
@@ -23,6 +22,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.wiring.ServiceAccess;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Utility class providing common operations for the tags module.
@@ -38,6 +38,25 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class TagUtils {
     
+    private static final ClassValue<java.util.Set<String>> REFLECTION_FAILURES = new ClassValue<>() {
+        @Override
+        protected java.util.Set<String> computeValue(Class<?> type) {
+            return java.util.concurrent.ConcurrentHashMap.newKeySet();
+        }
+    };
+
+    /** Reports each failing optional accessor once, preserving target Errors. */
+    public static void logReflectionFailureOnce(Object target, String method, Exception failure) {
+        Throwable cause = failure instanceof java.lang.reflect.InvocationTargetException invocation
+            ? invocation.getCause() : failure;
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        if (REFLECTION_FAILURES.get(target.getClass()).add(method)) {
+            Activator.logError("Failed to invoke " + target.getClass().getName() + "." + method, failure);
+        }
+    }
+
     private TagUtils() {
         // Utility class
     }
@@ -269,8 +288,7 @@ public final class TagUtils {
         String uriPath = uri.toPlatformString(true);
         if (uriPath != null && uriPath.length() > 1) {
             String projectName = uriPath.split("/")[1];
-            IProject project = ResourcesPlugin.getWorkspace()
-                .getRoot().getProject(projectName);
+            IProject project = ProjectContext.of(projectName).project();
             if (project != null && project.exists()) {
                 return project;
             }
@@ -282,8 +300,7 @@ public final class TagUtils {
             // Format: bm://projectName/...
             String[] parts = uriString.substring(TagConstants.BM_URI_SCHEME.length()).split("/");
             if (parts.length > 0) {
-                IProject project = ResourcesPlugin.getWorkspace()
-                    .getRoot().getProject(parts[0]);
+                IProject project = ProjectContext.of(parts[0]).project();
                 if (project != null && project.exists()) {
                     return project;
                 }
@@ -328,8 +345,10 @@ public final class TagUtils {
             if (result instanceof IProject project) {
                 return project;
             }
-        } catch (Exception e) {
-            // Not found, ignore
+        } catch (NoSuchMethodException e) {
+            // This accessor is optional.
+        } catch (IllegalAccessException | java.lang.reflect.InvocationTargetException | SecurityException e) {
+            logReflectionFailureOnce(element, "getProject", e);
         }
         
         // Try getModel() method
@@ -339,8 +358,10 @@ public final class TagUtils {
             if (model instanceof EObject eObject) {
                 return extractProject(eObject);
             }
-        } catch (Exception e) {
-            // Not found, ignore
+        } catch (NoSuchMethodException e) {
+            // This accessor is optional.
+        } catch (IllegalAccessException | java.lang.reflect.InvocationTargetException | SecurityException e) {
+            logReflectionFailureOnce(element, "getModel", e);
         }
         
         return null;
@@ -382,8 +403,10 @@ public final class TagUtils {
                         return nested;
                     }
                 }
-            } catch (Exception e) {
-                // Method not found or invocation failed, try next
+            } catch (NoSuchMethodException e) {
+                // Try the next optional accessor.
+            } catch (IllegalAccessException | java.lang.reflect.InvocationTargetException | SecurityException e) {
+                logReflectionFailureOnce(element, methodName, e);
             }
         }
         
