@@ -57,12 +57,7 @@ ToolResult.error(...).toJson() payload ({"success":false,...}) — McpProtocolHa
   - direction not in {callers,callees,outgoing}     -> "direction must be 'callers', 'callees' or 'outgoing'"
   - project does not exist                          -> "Project not found: <name>"
   - module can't be loaded as a BSL Module          -> "Could not load EMF model for <modulePath>. ..."
-But the METHOD-NOT-FOUND path returns BslModuleUtils.buildMethodNotFoundResponse — a
-PLAIN markdown string ("Error: Method '<name>' not found in <modulePath>" + an
-"Available methods" list). That is NOT a {"success":false} payload, so it is delivered
-as a normal markdown resource with isError:FALSE (success-with-error-text). We assert
-that REAL contract (success + the named bad method + the available-methods list) and
-flag the inconsistency with an AUDIT note rather than fudging it to is_error.
+Missing methods return isError with the real available-method list.
 """
 
 import time
@@ -364,9 +359,7 @@ def test_missing_projectname_errors():
         "methodName": "Add",
     })
     e = assert_error(r, "missing projectName")
-    # AUDIT: the guard names the missing param but offers no next step (no list_projects
-    # hint to discover a valid project). suggests=[] is intentional -> fix-card.
-    assert_error_quality(e, names=["projectName"], suggests=[],
+    assert_error_quality(e, names=["projectName"], suggests=["list_projects"],
                          ctx="missing projectName names the param")
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -381,9 +374,7 @@ def test_missing_modulepath_errors():
         "methodName": "Add",
     })
     e = assert_error(r, "missing modulePath")
-    # AUDIT: names the param but no actionable next step (no list_modules / path-shape
-    # hint). suggests=[] -> fix-card.
-    assert_error_quality(e, names=["modulePath"], suggests=[],
+    assert_error_quality(e, names=["modulePath"], suggests=["list_modules"],
                          ctx="missing modulePath names the param")
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -453,7 +444,7 @@ def test_nonexistent_module_path_errors_and_names_value():
     """A well-formed but non-existent modulePath cannot be loaded as a BSL Module ->
     loadModule returns null -> ToolResult.error("Could not load EMF model for
     <modulePath>. ..."). Names the offending path. This is the isError path (distinct
-    from method-not-found below, which is success-with-error-text)."""
+    from method-not-found below, which includes the available-method list)."""
     bad = "CommonModules/NoSuchModule_e2e/Module.bsl"
     r = call("get_method_call_hierarchy", {
         "projectName": PROJECT,
@@ -461,10 +452,7 @@ def test_nonexistent_module_path_errors_and_names_value():
         "methodName": "Add",
     })
     e = assert_error(r, "non-existent module path")
-    # The message names the bad path and points the user at the EDT Error Log; assert
-    # the path is named. AUDIT: no sibling-tool hint (e.g. list_modules) to discover a
-    # valid module path -> fix-card.
-    assert_error_quality(e, names=[bad], suggests=[],
+    assert_error_quality(e, names=[bad], suggests=["EDT Error Log"],
                          ctx="non-existent module path names the bad value")
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -488,28 +476,11 @@ def test_non_module_path_errors_and_names_value():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# NEGATIVE MATRIX — method-not-found: REAL contract is success-with-error-text
-# (isError:FALSE), NOT a structured error. Documented + asserted, not fudged.
+# NEGATIVE MATRIX — method-not-found is an error with an available-method hint.
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="get_method_call_hierarchy", kind="read")
-def test_nonexistent_method_returns_notfound_body_listing_available_methods():
-    """Project + module resolve, but the method does not exist in the module ->
-    BslModuleUtils.buildMethodNotFoundResponse, which returns a PLAIN markdown string
-    ("Error: Method '<name>' not found in <modulePath>" + an "Available methods" list).
-
-    REAL CONTRACT (verified against McpProtocolHandler.isJsonErrorPayload): that string
-    is NOT a {"success":false} payload, so it is delivered as a normal markdown resource
-    with isError:FALSE — a success-with-error-text, NOT a structured error.
-
-    AUDIT: this is an inconsistency — a genuine "method not found" failure is reported as
-    a NON-error (is_error==false) for this MARKDOWN tool, while project/module/direction
-    failures correctly set is_error. A schema-driven client checking only isError would
-    treat this as success. -> fix-card: route method-not-found through ToolResult.error so
-    it is machine-detectable, OR document the success-with-body contract deliberately.
-
-    We assert the REAL contract precisely (so the test still fails if the tool breaks):
-    success, the body NAMES the bad method, AND lists the actually-available methods
-    (Add, Test) so the user can self-correct — which makes the body itself actionable."""
+def test_nonexistent_method_returns_error_listing_available_methods():
+    """A missing method lists real siblings and sets isError."""
     bad_method = "NoSuchMethod_e2e"
     r = call("get_method_call_hierarchy", {
         "projectName": PROJECT,
@@ -517,19 +488,18 @@ def test_nonexistent_method_returns_notfound_body_listing_available_methods():
         "methodName": bad_method,
         "direction": "callers",
     })
-    # REAL: not a structured error -> assert_ok, then verify the error-text body.
-    assert_ok(r, "method-not-found is delivered as success-with-error-text (documented)")
+    message = assert_error(r, "missing method in a real module")
     # The body names the missing method and the module it searched.
-    assert_contains(r.text, bad_method,
+    assert_contains(message, bad_method,
                     "the not-found body must name the missing method")
-    assert_contains(r.text, "not found",
+    assert_contains(message, "not found",
                     "the not-found body must say the method was not found")
     # Actionable body: it enumerates the available methods so the caller can fix the call.
-    assert_contains(r.text, "Available methods",
+    assert_contains(message, "Available methods",
                     "the not-found body must list the available methods")
-    assert_contains(r.text, "Add",
+    assert_contains(message, "Add",
                     "available-methods list must include the real method Add")
-    assert_contains(r.text, "Test",
+    assert_contains(message, "Test",
                     "available-methods list must include the real method Test")
     assert_no_diff("a read tool must not touch the project on disk")
 
@@ -540,8 +510,7 @@ def test_method_not_found_in_empty_module_lists_zero_methods():
     literal token "Error"). Asking for any method there yields the not-found body with an
     EMPTY available-methods list — "**Available methods** (0):". Asserting the (0) count
     proves the available-methods list reflects the REAL module (not a hardcoded/stale list)
-    and that the bad method name is still echoed. Same documented success-with-error-text
-    contract as above (isError:FALSE)."""
+    and that the bad method name is still echoed with isError:true."""
     bad_method = "Whatever_e2e"
     r = call("get_method_call_hierarchy", {
         "projectName": PROJECT,
@@ -549,11 +518,11 @@ def test_method_not_found_in_empty_module_lists_zero_methods():
         "methodName": bad_method,
         "direction": "callers",
     })
-    assert_ok(r, "not-found in an empty module is success-with-error-text (documented)")
-    assert_contains(r.text, bad_method,
+    message = assert_error(r, "missing method in an empty module")
+    assert_contains(message, bad_method,
                     "the not-found body must name the missing method")
     # The empty Error module has zero methods -> the list count must be (0).
-    assert_contains(r.text, "(0)",
+    assert_contains(message, "(0)",
                     "an empty module's available-methods list must report a count of 0")
     assert_no_diff("a read tool must not touch the project on disk")
 

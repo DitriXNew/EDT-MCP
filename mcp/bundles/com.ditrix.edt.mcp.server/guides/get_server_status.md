@@ -1,8 +1,8 @@
-A self-diagnosis snapshot of the running MCP server. Reach for it when something behaves oddly and you want the facts instead of guessing - especially a blank form screenshot or a JSON tool that came back as plain text.
+Snapshot of the running server, transport listeners, preferences and form-render flags.
 
 ## When to use
 - `get_form_screenshot` / `get_form_layout_snapshot` returned blank - check the form-render modes here.
-- A JSON-response tool gave you plain text - check `plainTextMode`.
+- Unexpected text delivery: `plainTextMode` is the saved default; `/mcp/plaintext` or stdio `-resultMode` overrides it per client.
 - You want to confirm the port, protocol version, plugin/EDT version, or how many tools are enabled vs. registered (e.g. when progressive disclosure is hiding tools).
 - Quick "is the server actually up and reachable" check.
 

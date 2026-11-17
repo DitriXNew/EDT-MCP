@@ -111,12 +111,14 @@ public final class IpcListener implements AutoCloseable
         var timeout = deadlines.schedule(() -> closePeer(peer), 3, TimeUnit.SECONDS);
         try (peer)
         {
-            if (!IpcHandshake.accepts(peer.read(), endpoint)) { return; }
+            String hello = peer.read();
+            if (!IpcHandshake.accepts(hello, endpoint)) { return; }
+            Boolean plainTextMode = IpcHandshake.plainTextMode(hello);
             peer.write("{\"accepted\":true}");
             timeout.cancel(false);
             try (IpcConnection connection = new IpcConnection(mcpServer, new McpProtocolHandler(), json -> {
                 try { peer.write(json); } catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
-            }))
+            }, plainTextMode))
             {
                 notification = connection::toolsChanged;
                 ToolsChangedListeners.add(notification);

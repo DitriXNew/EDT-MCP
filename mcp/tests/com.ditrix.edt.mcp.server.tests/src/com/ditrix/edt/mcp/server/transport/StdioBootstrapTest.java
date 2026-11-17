@@ -15,6 +15,17 @@ import com.google.gson.*;
 
 public class StdioBootstrapTest extends StdioTestSupport
 {
+    @Test public void launcherDeliveryModeIsExplicitAndValidated() throws Exception
+    {
+        assertNull(StdioBootstrap.plainTextMode(new String[] {"-headless"}));
+        assertEquals(Boolean.TRUE, StdioBootstrap.plainTextMode(new String[] {"-resultMode", "plaintext"}));
+        assertEquals(Boolean.FALSE, StdioBootstrap.plainTextMode(new String[] {"-resultMode", "structured"}));
+        for (String[] args : List.of(new String[] {"-resultMode"}, new String[] {"-resultMode", "other"}))
+        {
+            var failure = assertThrows(IOException.class, () -> StdioBootstrap.plainTextMode(args));
+            assertTrue(failure.getMessage().contains("plaintext or structured"));
+        }
+    }
     private static final String OCCUPIED = "This workspace is already open, but its EDT MCP IPC listener is unavailable. "
         + "Ask the user to inspect Window > Preferences > MCP Server. This call has not executed.";
     private static final String BLOCKING_DIALOG = "EDT is running but IPC is not ready. "

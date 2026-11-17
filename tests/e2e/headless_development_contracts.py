@@ -19,7 +19,7 @@ WRITE_TOOLS = ("create_metadata", "modify_metadata", "sort_metadata", "clone_met
                "evaluate_expression", "infobase_sessions", "infobase_extensions", "ask_workmate")
 READY_WRITES = ("create_metadata", "modify_metadata", "sort_metadata", "clone_metadata_object",
                 "rename_metadata_object", "delete_metadata", "dcs", "business_process_route_map",
-                "adopt_metadata_object", "project_checks", "delete_project")
+                "adopt_metadata_object", "project_checks", "delete_project", "apply_quick_fix")
 
 
 def prepare_quick_fix_fixture(project):

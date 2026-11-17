@@ -58,6 +58,18 @@ public class GoToDefinitionTool implements IMcpTool
     /** Closing fence for a code block. */
     private static final String CODE_FENCE_CLOSE = "```\n"; //$NON-NLS-1$
 
+    private final java.util.function.BiFunction<IProject, String, Module> moduleLoader;
+
+    public GoToDefinitionTool()
+    {
+        this(BslModuleUtils::loadModule);
+    }
+
+    GoToDefinitionTool(java.util.function.BiFunction<IProject, String, Module> moduleLoader)
+    {
+        this.moduleLoader = moduleLoader;
+    }
+
     @Override
     public String getName()
     {
@@ -108,7 +120,12 @@ public class GoToDefinitionTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_SYMBOL);
+        String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
+        if (err == null)
+        {
+            err = JsonUtils.requireArgument(params, KEY_SYMBOL,
+                ". Pass 'ModuleName.MethodName' or a metadata FQN such as 'Catalog.Products'."); //$NON-NLS-1$
+        }
         if (err != null)
         {
             return err;
@@ -266,7 +283,7 @@ public class GoToDefinitionTool implements IMcpTool
                                           String methodName, boolean includeSource, String qualifiedPrefix)
     {
         // Load module via EMF
-        Module module = BslModuleUtils.loadModule(project, modulePath);
+        Module module = moduleLoader.apply(project, modulePath);
         if (module == null)
         {
             // EMF not available — try text-based fallback
@@ -277,7 +294,7 @@ public class GoToDefinitionTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
         }
 
         return formatMethodDefinition(project, projectName, modulePath, method, includeSource, qualifiedPrefix);
@@ -394,6 +411,11 @@ public class GoToDefinitionTool implements IMcpTool
                                          String methodName, boolean includeSource, String qualifiedPrefix)
     {
         IFile file = BslModuleUtils.resolveModuleFile(project, modulePath);
+        if (file == null)
+        {
+            return ToolResult.error("Module not found: " + modulePath
+                + ". Use list_modules to find a workspace module path.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         if (!file.exists())
         {
             return ToolResult.error("Module not found: src/" + modulePath).toJson(); //$NON-NLS-1$
@@ -407,7 +429,8 @@ public class GoToDefinitionTool implements IMcpTool
             BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(allLines, methodName);
             if (!tm.found)
             {
-                return BslModuleUtils.buildTextMethodNotFoundResponse(methodName, modulePath, tm.allMethodNames);
+                return ToolResult.error(BslModuleUtils.buildTextMethodNotFoundResponse(
+                    methodName, modulePath, tm.allMethodNames)).toJson();
             }
 
             int methodStart = tm.startLine;
@@ -683,7 +706,7 @@ public class GoToDefinitionTool implements IMcpTool
         sb.append("**Tip:** For methods in non-common modules, use the full module path:\n"); //$NON-NLS-1$
         sb.append("`go_to_definition(symbol='MethodName', modulePath='Documents/SalesOrder/ObjectModule.bsl')`\n"); //$NON-NLS-1$
 
-        return sb.toString();
+        return ToolResult.error(sb.toString()).toJson();
     }
 
     // ========== Utility ==========

@@ -25,6 +25,7 @@ public final class IpcConnection implements AutoCloseable
     private final McpProtocolHandler dispatcher;
     private final Consumer<String> sink;
     private final InterruptibleToolExecutor executor;
+    private final Boolean plainTextMode;
     private final Set<Thread> requests = new HashSet<>();
     private volatile boolean closed;
     private ClientCapabilities capabilities = ClientCapabilities.ABSENT;
@@ -32,7 +33,13 @@ public final class IpcConnection implements AutoCloseable
     private boolean initializeReceived;
 
     public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink)
-    { this.dispatcher = dispatcher; this.sink = sink; this.executor = new InterruptibleToolExecutor(server, dispatcher); }
+    { this(server, dispatcher, sink, null); }
+
+    public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink, Boolean plainTextMode)
+    {
+        this.dispatcher = dispatcher; this.sink = sink; this.executor = new InterruptibleToolExecutor(server, dispatcher);
+        this.plainTextMode = plainTextMode;
+    }
 
     public void accept(String frame) throws IOException
     {
@@ -50,7 +57,7 @@ public final class IpcConnection implements AutoCloseable
         {
             if (initializeReceived)
             { send(StdioBootstrap.error(id, -32600, "Already initialized")); return; }
-            capabilities = McpProtocolHandler.parseClientCapabilities(request);
+            capabilities = McpProtocolHandler.parseClientCapabilities(request).withPlainTextMode(plainTextMode);
             initializeReceived = true;
         }
         else if ("notifications/initialized".equals(request.getMethod()))
