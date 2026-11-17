@@ -12,6 +12,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 import java.lang.reflect.Field;
 
@@ -22,6 +23,9 @@ import org.junit.Before;
 import org.junit.Test;
 
 import com._1c.g5.v8.derived.IDerivedDataManager;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -42,6 +46,8 @@ public class MetadataWriteContextReasonTest
     private IProjectDescription description;
     private IDtProjectManager manager;
     private AbstractMetadataWriteTool tool;
+    private int readDepth;
+    private int reads;
 
     @Before
     public void setUp() throws Exception
@@ -51,7 +57,8 @@ public class MetadataWriteContextReasonTest
         previousPlugin = plugin.get(null);
         activator = mock(Activator.class);
         plugin.set(null, activator);
-        when(activator.getConfigurationProvider()).thenReturn(mock(IConfigurationProvider.class));
+        IConfigurationProvider configurations = mock(IConfigurationProvider.class);
+        when(activator.getConfigurationProvider()).thenReturn(configurations);
         manager = mock(IDtProjectManager.class);
         when(activator.getDtProjectManager()).thenReturn(manager);
         project = mock(IProject.class);
@@ -62,6 +69,20 @@ public class MetadataWriteContextReasonTest
         when(description.getNatureIds()).thenReturn(new String[] {
             "com._1c.g5.v8.dt.core.V8ConfigurationNature" });
         when(project.getDescription()).thenReturn(description);
+        IBmModelManager models = mock(IBmModelManager.class);
+        IBmModel model = mock(IBmModel.class);
+        when(activator.getBmModelManager()).thenReturn(models);
+        when(models.getModel(project)).thenReturn(model);
+        when(model.executeReadonlyTask(any())).thenAnswer(call -> {
+            reads++;
+            readDepth++;
+            try { return ((IBmTask<?>)call.getArgument(0)).execute(null, null); }
+            finally { readDepth--; }
+        });
+        when(configurations.getConfiguration(project)).thenAnswer(call -> {
+            assertTrue("Configuration lookup requires the BM read boundary", readDepth > 0);
+            return null;
+        });
         tool = mock(AbstractMetadataWriteTool.class, CALLS_REAL_METHODS);
     }
 
@@ -78,6 +99,14 @@ public class MetadataWriteContextReasonTest
         JsonObject error = JsonParser.parseString(context.error).getAsJsonObject();
         assertFalse(error.get("success").getAsBoolean());
         return error.get("error").getAsString();
+    }
+
+    @Test
+    public void rootLookupPerformsExactlyOneReadonlyTask()
+    {
+        refusal(true);
+        assertEquals(1, reads);
+        assertEquals(0, readDepth);
     }
 
     @Test

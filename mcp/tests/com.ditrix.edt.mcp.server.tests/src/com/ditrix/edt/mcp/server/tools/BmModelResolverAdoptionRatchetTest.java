@@ -10,7 +10,7 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 import org.junit.Test;
 
-/** Pins remaining direct model lookups, including calls inside nested classes. */
+/** Forbids direct model lookups, including calls inside nested classes. */
 public class BmModelResolverAdoptionRatchetTest
 {
     @Test public void directModelLookupsCannotGrow() throws Exception
@@ -20,20 +20,6 @@ public class BmModelResolverAdoptionRatchetTest
         assertNotNull("Cannot locate source tree", root);
         Path source = root.resolve("mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server");
         Map<String, Integer> expected = new TreeMap<>();
-        expected.put("groups/ui/GroupNavigatorAdapter.java", 1);
-        expected.put("pictures/CommonPicturesGalleryRenderer.java", 1);
-        expected.put("tags/ui/TagFilterView.java", 1);
-        expected.put("tools/impl/ApplyQuickFixTool.java", 1);
-        expected.put("tools/impl/BusinessProcessRouteMapTool.java", 1);
-        expected.put("tools/impl/ExportCommonPictureTool.java", 1);
-        expected.put("tools/impl/ImportProjectFromFileTool.java", 1);
-        expected.put("tools/impl/TranslateConfigurationTool.java", 1);
-        expected.put("tools/reference/MetadataReferenceService.java", 1);
-        expected.put("utils/EditorNavigation.java", 1);
-        expected.put("utils/FormElementWriter.java", 1);
-        expected.put("utils/QueryValidationService.java", 1);
-        expected.put("utils/ReferenceMembershipWriter.java", 1);
-        expected.put("utils/VendorSupportGuard.java", 1);
         Map<String, Integer> actual = new TreeMap<>();
         Pattern calls = Pattern.compile("(?<!ContentUtil)\\.getModel\\(\\s*[^\\s)]");
         Pattern nonCode = Pattern.compile("/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*|\"[^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+\"");

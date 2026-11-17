@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.doc;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1204,7 +1205,7 @@ public class PlatformDocumentationService
         {
             return false;
         }
-        return actualName.toLowerCase().contains(filter.toLowerCase());
+        return actualName.toLowerCase(Locale.ROOT).contains(filter.toLowerCase(Locale.ROOT));
     }
 
     /**

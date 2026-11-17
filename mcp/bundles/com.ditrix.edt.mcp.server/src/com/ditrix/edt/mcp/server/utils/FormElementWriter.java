@@ -1267,7 +1267,7 @@ public final class FormElementWriter
             throw new FormValidationException(
                 ToolResult.error("IBmModelManager not available").toJson()); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             throw new FormValidationException(ToolResult.error("BM model not available for project: " //$NON-NLS-1$
@@ -1911,7 +1911,7 @@ public final class FormElementWriter
         Set<String> availableLower = new HashSet<>();
         for (String name : available)
         {
-            availableLower.add(name.toLowerCase());
+            availableLower.add(name.toLowerCase(Locale.ROOT));
         }
         for (String fieldName : objectFields)
         {
@@ -1920,7 +1920,7 @@ public final class FormElementWriter
                 continue;
             }
             String trimmed = fieldName.trim();
-            if (!availableLower.contains(trimmed.toLowerCase()))
+            if (!availableLower.contains(trimmed.toLowerCase(Locale.ROOT)))
             {
                 List<String> sorted = new ArrayList<>(available);
                 Collections.sort(sorted);

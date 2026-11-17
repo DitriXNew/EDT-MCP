@@ -643,7 +643,7 @@ public final class ReferenceMembershipWriter
         {
             return null;
         }
-        return bmModelManager.getModel(project);
+        return BmModelResolver.resolve(project, bmModelManager).getModel();
     }
 
     // ---- internals ----------------------------------------------------------------------------

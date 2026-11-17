@@ -195,8 +195,6 @@ public class DcsTool implements IMcpTool
         String format = rawFormat == null ? FORMAT_MD : rawFormat;
         boolean hasLimit = params.containsKey(McpKeys.LIMIT);
         int defaultLimit = FORMAT_XML.equals(format) ? DcsXmlCodec.DEFAULT_CHUNK_CHARS : 0;
-        int rawLimit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
-        int offset = JsonUtils.extractIntArgument(params, KEY_OFFSET, 0);
 
         String required = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_FQN,
             KEY_ACTION, KEY_TYPE);
@@ -219,10 +217,29 @@ public class DcsTool implements IMcpTool
             return ToolResult.error("Unknown format '" + format + "'. Use 'md' (default) or 'xml'.") //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }
-        String integerError = validateIntegerArguments(params, offset);
-        if (integerError != null)
+        int rawLimit;
+        int offset;
+        try
         {
-            return integerError;
+            rawLimit = JsonUtils.extractStrictInt(params, McpKeys.LIMIT, defaultLimit,
+                Integer.MIN_VALUE, Integer.MAX_VALUE);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return invalidInteger(McpKeys.LIMIT, JsonUtils.extractStringArgument(params, McpKeys.LIMIT));
+        }
+        try
+        {
+            offset = JsonUtils.extractStrictInt(params, KEY_OFFSET, 0, Integer.MIN_VALUE, Integer.MAX_VALUE);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return invalidInteger(KEY_OFFSET, JsonUtils.extractStringArgument(params, KEY_OFFSET));
+        }
+        if (offset < 0)
+        {
+            return ToolResult.error("offset '" + offset //$NON-NLS-1$
+                + "' is negative. Pass offset=0 or a later zero-based collection offset.").toJson(); //$NON-NLS-1$
         }
         if (language != null && !language.equals(language.trim()))
         {
@@ -343,42 +360,14 @@ public class DcsTool implements IMcpTool
         }
     }
 
-    private static String validateIntegerArguments(Map<String, String> params, int offset)
+    private static String invalidInteger(String name, String raw)
     {
-        String rawLimit = JsonUtils.extractStringArgument(params, McpKeys.LIMIT);
-        if (rawLimit != null && !isInteger(rawLimit))
-        {
-            return ToolResult.error("limit '" + rawLimit //$NON-NLS-1$
-                + "' is not an integer. Pass a whole number; Markdown collection reads clamp it " //$NON-NLS-1$
-                + "to 1..1000 items, while exact-value and XML reads bound it by their " //$NON-NLS-1$
-                + "serialized-character output envelope.").toJson(); //$NON-NLS-1$
-        }
-        String rawOffset = JsonUtils.extractStringArgument(params, KEY_OFFSET);
-        if (rawOffset != null && !isInteger(rawOffset))
-        {
-            return ToolResult.error("offset '" + rawOffset //$NON-NLS-1$
-                + "' is not an integer. Pass a zero-based whole-number offset.").toJson(); //$NON-NLS-1$
-        }
-        if (offset < 0)
-        {
-            return ToolResult.error("offset '" + offset //$NON-NLS-1$
-                + "' is negative. Pass offset=0 or a later zero-based collection offset.").toJson(); //$NON-NLS-1$
-        }
-        return null;
-    }
-
-    private static boolean isInteger(String raw)
-    {
-        try
-        {
-            double value = Double.parseDouble(raw.trim());
-            return Double.isFinite(value) && value == Math.floor(value)
-                && value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE;
-        }
-        catch (NumberFormatException e)
-        {
-            return false;
-        }
+        return ToolResult.error(name + " '" + raw + "' is not an integer. " //$NON-NLS-1$ //$NON-NLS-2$
+            + (McpKeys.LIMIT.equals(name)
+                ? "Pass a whole number; Markdown collection reads clamp it " //$NON-NLS-1$
+                    + "to 1..1000 items, while exact-value and XML reads bound it by their " //$NON-NLS-1$
+                    + "serialized-character output envelope." //$NON-NLS-1$
+                : "Pass a zero-based whole-number offset.")).toJson(); //$NON-NLS-1$
     }
 
     private static String validateActionShape(Map<String, String> params, String action, String type, String body,

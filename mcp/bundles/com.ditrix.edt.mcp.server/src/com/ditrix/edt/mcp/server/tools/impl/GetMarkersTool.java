@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -108,12 +109,12 @@ public class GetMarkersTool implements IMcpTool
 
         // Validate the closed-vocabulary parameters up front (before any live
         // workspace access) so the validation branches are headless-testable.
-        if (hasKind && !MARKER_KINDS.contains(markerKind.toLowerCase()))
+        if (hasKind && !MARKER_KINDS.contains(markerKind.toLowerCase(Locale.ROOT)))
         {
             return ToolResult.error("Invalid markerKind: '" + markerKind //$NON-NLS-1$
                 + "'. Must be one of: " + String.join(", ", MARKER_KINDS)).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        if (hasPriority && !PRIORITY_VALUES.contains(priority.toLowerCase()))
+        if (hasPriority && !PRIORITY_VALUES.contains(priority.toLowerCase(Locale.ROOT)))
         {
             return ToolResult.error("Invalid priority: '" + priority //$NON-NLS-1$
                 + "'. Must be one of: " + String.join(", ", PRIORITY_VALUES)).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -416,7 +417,7 @@ public class GetMarkersTool implements IMcpTool
         {
             return true;
         }
-        return resourcePathStr.toLowerCase().contains(filePath.toLowerCase());
+        return resourcePathStr.toLowerCase(Locale.ROOT).contains(filePath.toLowerCase(Locale.ROOT));
     }
 
     /** Maps a priority filter string to the {@link IMarker} priority constant, or null. */
@@ -426,7 +427,7 @@ public class GetMarkersTool implements IMcpTool
         {
             return null;
         }
-        switch (priority.toLowerCase())
+        switch (priority.toLowerCase(Locale.ROOT))
         {
             case "high": //$NON-NLS-1$
                 return IMarker.PRIORITY_HIGH;
@@ -485,7 +486,7 @@ public class GetMarkersTool implements IMcpTool
             return "TASK"; //$NON-NLS-1$
         }
 
-        String upperMessage = message.toUpperCase();
+        String upperMessage = message.toUpperCase(Locale.ROOT);
         if (upperMessage.contains("TODO")) //$NON-NLS-1$
         {
             return "TODO"; //$NON-NLS-1$

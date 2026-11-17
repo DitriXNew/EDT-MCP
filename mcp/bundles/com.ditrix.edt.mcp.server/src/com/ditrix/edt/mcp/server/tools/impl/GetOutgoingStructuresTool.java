@@ -12,6 +12,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -375,8 +376,8 @@ public class GetOutgoingStructuresTool implements IMcpTool
         {
             return false;
         }
-        String lowerQualifier = qualifier.toLowerCase();
-        String lowerFilter = filter.toLowerCase();
+        String lowerQualifier = qualifier.toLowerCase(Locale.ROOT);
+        String lowerFilter = filter.toLowerCase(Locale.ROOT);
         return lowerQualifier.equals(lowerFilter) || lowerQualifier.startsWith(lowerFilter);
     }
 

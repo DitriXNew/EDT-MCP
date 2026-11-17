@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
 
 import com.ditrix.edt.mcp.server.HostKind;
@@ -2886,7 +2887,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "{types:[...]} vocabulary an attribute takes), 'keyParameter' or 'comment' " //$NON-NLS-1$
                     + "with modify_metadata. A parameter has no title and no parent.").toJson(); //$NON-NLS-1$
             }
-            switch (pName.toLowerCase())
+            switch (pName.toLowerCase(Locale.ROOT))
             {
                 case "title": //$NON-NLS-1$
                     out.titleVal = normReport.apply("title", asString(prop.get(KEY_VALUE))); //$NON-NLS-1$
@@ -3404,7 +3405,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
-            switch (pName.toLowerCase())
+            switch (pName.toLowerCase(Locale.ROOT))
             {
                 case "procedure": //$NON-NLS-1$
                 case "handler": //$NON-NLS-1$
@@ -3857,7 +3858,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
             String value = asString(prop.get(KEY_VALUE));
-            String lower = name.toLowerCase();
+            String lower = name.toLowerCase(Locale.ROOT);
             if ((KEY_SYNONYM.equals(lower) || "comment".equals(lower)) && value == null) //$NON-NLS-1$
             {
                 // An absent, null, object or array value reads as no text at all, and the object was created

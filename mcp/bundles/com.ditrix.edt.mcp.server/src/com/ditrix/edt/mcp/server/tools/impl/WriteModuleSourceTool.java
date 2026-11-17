@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -155,7 +156,7 @@ public class WriteModuleSourceTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
-            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             return "write-" + safeName + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "write-module-source.md"; //$NON-NLS-1$

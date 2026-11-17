@@ -11,6 +11,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -54,10 +56,19 @@ public class MetadataFormatterRegistryTest
     }
 
     @Test
-    public void testFormatNullReturnsErrorString()
+    public void testFormatNullKeepsFailureSeparateFromMarkdown()
     {
-        assertEquals("Error: MdObject is null", MetadataFormatterRegistry.format(null, false, "ru")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Error: MdObject is null", MetadataFormatterRegistry.format(null, true, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (boolean full : new boolean[] {false, true})
+        {
+            for (String language : new String[] {"ru", "en"})
+            {
+                var outcome = UniversalMetadataFormatter.getInstance().formatOutcome(null, full, language);
+                assertNull(outcome.text());
+                assertEquals("MdObject is null", outcome.error());
+                assertEquals(outcome.error(), assertThrows(IllegalArgumentException.class,
+                    () -> MetadataFormatterRegistry.format(null, full, language)).getMessage());
+            }
+        }
     }
 
     @Test

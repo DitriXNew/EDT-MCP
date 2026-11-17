@@ -241,7 +241,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
         // Reject an out-of-set severity instead of silently widening the filter to "all".
         if (severity != null && !severity.isEmpty()
-            && !SEVERITY_VALUES.contains(severity.toUpperCase()))
+            && !SEVERITY_VALUES.contains(severity.toUpperCase(Locale.ROOT)))
         {
             return ToolResult.error("Invalid severity: '" + severity + "'. Must be one of: " //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", SEVERITY_VALUES)).toJson(); //$NON-NLS-1$
@@ -347,7 +347,7 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             try
             {
-                return MarkerSeverity.valueOf(severity.toUpperCase());
+                return MarkerSeverity.valueOf(severity.toUpperCase(Locale.ROOT));
             }
             catch (IllegalArgumentException e)
             {

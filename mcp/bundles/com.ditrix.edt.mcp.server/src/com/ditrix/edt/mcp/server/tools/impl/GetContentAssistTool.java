@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -689,7 +690,7 @@ public class GetContentAssistTool implements IMcpTool
         {
             return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
-        String[] filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
+        String[] filterParts = containsFilter.toLowerCase(Locale.ROOT).split(","); //$NON-NLS-1$
         for (int i = 0; i < filterParts.length; i++)
         {
             filterParts[i] = filterParts[i].trim();
@@ -707,7 +708,7 @@ public class GetContentAssistTool implements IMcpTool
      */
     private static boolean matchesFilter(String displayString, String[] filterParts)
     {
-        String displayLower = displayString.toLowerCase();
+        String displayLower = displayString.toLowerCase(Locale.ROOT);
         for (String part : filterParts)
         {
             if (!part.isEmpty() && displayLower.contains(part))

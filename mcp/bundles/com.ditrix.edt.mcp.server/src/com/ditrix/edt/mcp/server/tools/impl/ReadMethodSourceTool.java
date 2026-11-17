@@ -145,7 +145,7 @@ public class ReadMethodSourceTool implements IMcpTool
         String methodName = JsonUtils.extractStringArgument(params, KEY_METHOD_NAME);
         if (methodName != null && !methodName.isEmpty())
         {
-            return "method-" + methodName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "method-" + methodName.toLowerCase(Locale.ROOT) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "method-source.md"; //$NON-NLS-1$
     }

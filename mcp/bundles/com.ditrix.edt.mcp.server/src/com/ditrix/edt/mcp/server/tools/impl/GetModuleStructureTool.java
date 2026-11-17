@@ -98,7 +98,7 @@ public class GetModuleStructureTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
-            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             return "structure-" + safeName + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "module-structure.md"; //$NON-NLS-1$

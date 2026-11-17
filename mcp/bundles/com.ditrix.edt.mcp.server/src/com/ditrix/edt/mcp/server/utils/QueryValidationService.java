@@ -70,8 +70,8 @@ public class QueryValidationService
             {
                 var manager = Activator.getDefault().getBmModelManager();
                 IV8Project v8Project = ExtensionOriginUtils.resolveV8Project(project);
-                IBmModel model = manager == null || v8Project == null
-                    ? null : manager.getModel(v8Project.getDtProject());
+                IBmModel model = BmModelResolver.resolveDtProject(
+                    v8Project == null ? null : v8Project.getDtProject(), manager).getModel();
                 result.set(model == null
                     ? Result.unavailable(dcsMode, "BM model is unavailable for project '" + project.getName()
                         + "'. Check list_projects, wait for project loading and retry.")

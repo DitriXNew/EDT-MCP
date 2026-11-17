@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
 
 import java.util.Map;
@@ -438,7 +439,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         if (projectName != null && !projectName.isEmpty())
         {
-            return "rename-refactoring-" + projectName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "rename-refactoring-" + projectName.toLowerCase(Locale.ROOT) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "rename-refactoring.md"; //$NON-NLS-1$
     }

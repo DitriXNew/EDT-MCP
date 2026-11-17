@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.protocol;
 
+import java.util.Locale;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -514,7 +515,7 @@ public final class JsonUtils
             return defaultValue;
         }
         
-        value = value.trim().toLowerCase();
+        value = value.trim().toLowerCase(Locale.ROOT);
         if ("true".equals(value) || "1".equals(value) || "yes".equals(value)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             return true;

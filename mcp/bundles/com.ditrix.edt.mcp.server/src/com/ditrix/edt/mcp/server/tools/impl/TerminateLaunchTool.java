@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -155,7 +156,7 @@ public class TerminateLaunchTool implements IMcpTool
         String name = JsonUtils.extractStringArgument(params, KEY_LAUNCH_CONFIGURATION_NAME);
         if (name != null && !name.isEmpty())
         {
-            String safe = name.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+            String safe = name.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             return "terminate-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         boolean all = JsonUtils.extractBooleanArgument(params, "all", false); //$NON-NLS-1$
@@ -164,7 +165,7 @@ public class TerminateLaunchTool implements IMcpTool
             String project = JsonUtils.extractStringArgument(params, KEY_PROJECT_NAME);
             if (project != null && !project.isEmpty())
             {
-                String safe = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+                String safe = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
                 return "terminate-all-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
             }
             return "terminate-all.md"; //$NON-NLS-1$
@@ -176,8 +177,8 @@ public class TerminateLaunchTool implements IMcpTool
         String appId = JsonUtils.extractStringArgument(params, KEY_APPLICATION_ID);
         if (project != null && !project.isEmpty() && appId != null && !appId.isEmpty())
         {
-            String safeProject = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
-            String safeAppId = appId.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+            String safeProject = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
+            String safeAppId = appId.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             // Truncate to keep the path short — agents sometimes pass long UUIDs.
             if (safeAppId.length() > 16)
             {

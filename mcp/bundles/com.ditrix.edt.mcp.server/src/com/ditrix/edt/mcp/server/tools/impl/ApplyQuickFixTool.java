@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -434,7 +435,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             return;
         }
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return;

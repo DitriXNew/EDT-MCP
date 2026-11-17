@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.reference;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -92,7 +93,7 @@ public class MetadataReferenceService
             return ToolResult.error("BM model manager not available").toJson(); //$NON-NLS-1$
         }
 
-        IBmModel bmModel = bmModelManager.getModel(project);
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$

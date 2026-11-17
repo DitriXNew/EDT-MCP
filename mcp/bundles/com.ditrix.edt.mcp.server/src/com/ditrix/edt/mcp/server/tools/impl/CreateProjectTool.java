@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -2532,17 +2533,17 @@ public class CreateProjectTool implements IMcpTool
      */
     private static CompatibilityMode matchCompatibilityModeByNormalizedName(String compatModeStr)
     {
-        String normalizedInput = compatModeStr.replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+        String normalizedInput = compatModeStr.replaceAll(RE_NON_ALNUM, "").toLowerCase(Locale.ROOT); //$NON-NLS-1$
         for (CompatibilityMode candidate : CompatibilityMode.VALUES)
         {
             String normalizedCandidate = candidate.getLiteral()
-                .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+                .replaceAll(RE_NON_ALNUM, "").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             if (normalizedInput.equals(normalizedCandidate))
             {
                 return candidate;
             }
             String normalizedName = candidate.getName()
-                .replaceAll(RE_NON_ALNUM, "").toLowerCase(); //$NON-NLS-1$
+                .replaceAll(RE_NON_ALNUM, "").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             if (normalizedInput.equals(normalizedName))
             {
                 return candidate;

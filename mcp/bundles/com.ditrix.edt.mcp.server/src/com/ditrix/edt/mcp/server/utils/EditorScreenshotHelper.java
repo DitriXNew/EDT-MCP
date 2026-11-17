@@ -3,6 +3,7 @@
  */
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -599,7 +600,7 @@ public final class EditorScreenshotHelper
         {
             String type = MetadataTypeUtils.toEnglishSingular(parts[0]);
             String typeKey = type != null ? type : parts[0];
-            return (typeKey + "." + parts[1]).toLowerCase(); //$NON-NLS-1$
+            return (typeKey + "." + parts[1]).toLowerCase(Locale.ROOT); //$NON-NLS-1$
         }
         if (parts.length == 4)
         {
@@ -609,7 +610,7 @@ public final class EditorScreenshotHelper
             }
             String type = MetadataTypeUtils.toEnglishSingular(parts[0]);
             String typeKey = type != null ? type : parts[0];
-            return (typeKey + "." + parts[1] + ".form." + parts[3]).toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+            return (typeKey + "." + parts[1] + ".form." + parts[3]).toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
     }
@@ -644,7 +645,7 @@ public final class EditorScreenshotHelper
      */
     private static boolean isContentFormSeparator(String segment)
     {
-        String s = segment.toLowerCase();
+        String s = segment.toLowerCase(Locale.ROOT);
         return "form".equals(s) || RU_FORM_SINGULAR.equals(s); //$NON-NLS-1$
     }
 

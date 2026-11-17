@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.rename;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -3357,7 +3358,7 @@ public class MetadataRenameService
     @SuppressWarnings("unchecked")
     private MdObject findChild(MdObject parent, String childType, String childName)
     {
-        String type = childType.toLowerCase();
+        String type = childType.toLowerCase(Locale.ROOT);
 
         // Determine which getter to use based on child type
         String getterName = resolveChildGetterName(type);

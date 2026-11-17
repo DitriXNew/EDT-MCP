@@ -2,6 +2,7 @@
 // Copyright (C) 2026 DitriX
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -2658,7 +2659,7 @@ public final class MetadataPropertyApplier
         {
             return null; // NOSONAR intentional tri-state Boolean; null is distinct from false for callers
         }
-        String v = value.trim().toLowerCase();
+        String v = value.trim().toLowerCase(Locale.ROOT);
         if ("true".equals(v) || "1".equals(v) || "yes".equals(v)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             return Boolean.TRUE;
@@ -2672,20 +2673,12 @@ public final class MetadataPropertyApplier
 
     public static Integer parseInteger(String value)
     {
-        if (value == null || value.isEmpty())
-        {
-            return null;
-        }
         try
         {
-            double d = Double.parseDouble(value.trim());
-            if (d != Math.floor(d) || d < Integer.MIN_VALUE || d > Integer.MAX_VALUE)
-            {
-                return null;
-            }
-            return Integer.valueOf((int)d);
+            return JsonUtils.extractStrictInt(java.util.Collections.singletonMap("value", value), //$NON-NLS-1$
+                "value", 0, Integer.MIN_VALUE, Integer.MAX_VALUE); //$NON-NLS-1$
         }
-        catch (NumberFormatException e)
+        catch (IllegalArgumentException e)
         {
             return null;
         }

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -445,7 +446,7 @@ public final class AppearanceValueBuilder
             for (MdObject item : items)
             {
                 // A configuration item shadows the platform name it shares, whatever it holds.
-                shadowed.add(item.getName().toLowerCase());
+                shadowed.add(item.getName().toLowerCase(Locale.ROOT));
                 if (kind.valueClass.isInstance(StyleValueBuilder.appearanceOf(item)))
                 {
                     candidates.add(source + "." + item.getName()); //$NON-NLS-1$
@@ -455,7 +456,7 @@ public final class AppearanceValueBuilder
         String prefix = source + "."; //$NON-NLS-1$
         List<String> platform = status == PlatformCatalogue.Status.UNAVAILABLE ? null
             : PlatformCatalogue.names(catalogue, n -> n.startsWith(prefix)
-                && !shadowed.contains(n.substring(prefix.length()).toLowerCase()));
+                && !shadowed.contains(n.substring(prefix.length()).toLowerCase(Locale.ROOT)));
         if (platform != null)
         {
             candidates.addAll(platform);

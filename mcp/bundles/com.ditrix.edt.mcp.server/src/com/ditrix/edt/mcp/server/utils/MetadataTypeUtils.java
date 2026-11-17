@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -333,11 +334,11 @@ public final class MetadataTypeUtils
         Set<String> singulars = new LinkedHashSet<>();
         for (MetadataTypeInfo info : MetadataTypeInfo.values())
         {
-            LOOKUP.put(info.englishSingular.toLowerCase(), info);
-            LOOKUP.put(info.englishPlural.toLowerCase(), info);
+            LOOKUP.put(info.englishSingular.toLowerCase(Locale.ROOT), info);
+            LOOKUP.put(info.englishPlural.toLowerCase(Locale.ROOT), info);
             for (String ru : info.russianNames)
             {
-                LOOKUP.put(ru.toLowerCase(), info);
+                LOOKUP.put(ru.toLowerCase(Locale.ROOT), info);
             }
             if (info.directoryName != null)
             {
@@ -543,10 +544,10 @@ public final class MetadataTypeUtils
         String englishPlural, String russianSingular, String russianPlural)
     {
         NestedKindInfo info = new NestedKindInfo(englishSingular, russianSingular);
-        map.put(englishSingular.toLowerCase(), info);
-        map.put(englishPlural.toLowerCase(), info);
-        map.put(russianSingular.toLowerCase(), info);
-        map.put(russianPlural.toLowerCase(), info);
+        map.put(englishSingular.toLowerCase(Locale.ROOT), info);
+        map.put(englishPlural.toLowerCase(Locale.ROOT), info);
+        map.put(russianSingular.toLowerCase(Locale.ROOT), info);
+        map.put(russianPlural.toLowerCase(Locale.ROOT), info);
     }
 
     /**
@@ -620,7 +621,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.englishSingular : null;
     }
 
@@ -637,7 +638,7 @@ public final class MetadataTypeUtils
         {
             return false;
         }
-        return LOOKUP.containsKey(name.toLowerCase());
+        return LOOKUP.containsKey(name.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -654,7 +655,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.directoryName : null;
     }
 
@@ -671,7 +672,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.configReferenceName : null;
     }
 
@@ -945,8 +946,8 @@ public final class MetadataTypeUtils
         {
             return false;
         }
-        String candidateLower = candidate.toLowerCase();
-        String nameLower = name.toLowerCase();
+        String candidateLower = candidate.toLowerCase(Locale.ROOT);
+        String nameLower = name.toLowerCase(Locale.ROOT);
         return candidateLower.contains(nameLower) || nameLower.contains(candidateLower);
     }
 
@@ -963,7 +964,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        return LOOKUP.get(typeName.toLowerCase());
+        return LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -1016,7 +1017,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        return NESTED_KIND_LOOKUP.get(segment.toLowerCase());
+        return NESTED_KIND_LOOKUP.get(segment.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -1112,7 +1113,7 @@ public final class MetadataTypeUtils
         }
 
         // Always add the original (lowercased)
-        variants.add(fqn.toLowerCase());
+        variants.add(fqn.toLowerCase(Locale.ROOT));
 
         int dotIdx = fqn.indexOf('.');
         if (dotIdx <= 0)
@@ -1123,8 +1124,8 @@ public final class MetadataTypeUtils
         }
 
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
-        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase());
-        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase());
+        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase(Locale.ROOT));
+        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase(Locale.ROOT));
 
         return variants;
     }
@@ -1162,7 +1163,7 @@ public final class MetadataTypeUtils
         {
             return variants;
         }
-        variants.add(fqn.toLowerCase());
+        variants.add(fqn.toLowerCase(Locale.ROOT));
         if (fqn.indexOf('.') < 0)
         {
             // A SINGLE token, i.e. NO separator at all. getAllFqnVariants returns it untranslated on
@@ -1178,8 +1179,8 @@ public final class MetadataTypeUtils
             // in here left it untranslated, which is the very same early-return hole one character
             // further along. It belongs to the parity expansion below, where its empty first segment
             // simply shifts the structural tokens onto the odd indexes.
-            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase());
-            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase());
+            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase(Locale.ROOT));
+            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase(Locale.ROOT));
             return variants;
         }
         // BOTH parities are produced HERE rather than by delegating the even one to
@@ -1192,8 +1193,8 @@ public final class MetadataTypeUtils
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
         for (int structuralOffset = 0; structuralOffset <= 1; structuralOffset++)
         {
-            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase());
-            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase());
+            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase(Locale.ROOT));
+            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase(Locale.ROOT));
         }
         return variants;
     }

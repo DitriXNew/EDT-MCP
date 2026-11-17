@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tags.ui;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -218,7 +219,7 @@ public class FilterByTagDialog extends SelectionDialog {
         searchText.setMessage(Messages.FilterByTagDialog_SearchPlaceholder);
         GridDataFactory.fillDefaults().grab(true, false).applyTo(searchText);
         searchText.addModifyListener((ModifyListener) e -> {
-            searchPattern = searchText.getText().toLowerCase().trim();
+            searchPattern = searchText.getText().toLowerCase(Locale.ROOT).trim();
             treeViewer.refresh();
             if (!searchPattern.isEmpty()) {
                 treeViewer.expandAll();
@@ -603,11 +604,11 @@ public class FilterByTagDialog extends SelectionDialog {
         }
         
         private boolean matchesSearch(Tag tag) {
-            if (tag.getName().toLowerCase().contains(searchPattern)) {
+            if (tag.getName().toLowerCase(Locale.ROOT).contains(searchPattern)) {
                 return true;
             }
             String description = tag.getDescription();
-            return description != null && description.toLowerCase().contains(searchPattern);
+            return description != null && description.toLowerCase(Locale.ROOT).contains(searchPattern);
         }
     }
 }

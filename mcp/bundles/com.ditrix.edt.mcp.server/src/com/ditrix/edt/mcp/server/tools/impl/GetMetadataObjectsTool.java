@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -135,7 +136,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         if (projectName != null && !projectName.isEmpty())
         {
-            return "metadata-" + projectName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "metadata-" + projectName.toLowerCase(Locale.ROOT) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "metadata-objects.md"; //$NON-NLS-1$
     }
@@ -368,7 +369,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         {
             return null;
         }
-        String lower = metadataType.toLowerCase();
+        String lower = metadataType.toLowerCase(Locale.ROOT);
         if (TYPE_ALL.equals(lower) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(lower)
             || TYPE_EXTERNAL_REPORTS.equals(lower))
         {
@@ -714,9 +715,9 @@ public class GetMetadataObjectsTool implements IMcpTool
         {
             return true;
         }
-        String lowerFilter = filter.toLowerCase();
+        String lowerFilter = filter.toLowerCase(Locale.ROOT);
         String name = mdObject == null ? null : mdObject.getName();
-        if (name != null && name.toLowerCase().contains(lowerFilter))
+        if (name != null && name.toLowerCase(Locale.ROOT).contains(lowerFilter))
         {
             return true;
         }
@@ -727,7 +728,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         EMap<String, String> synonyms = mdObject.getSynonym();
         String synonym = MetadataLanguageUtils.getSynonymForLanguage(
             synonyms == null ? null : synonyms.map(), language);
-        return synonym.toLowerCase().contains(lowerFilter);
+        return synonym.toLowerCase(Locale.ROOT).contains(lowerFilter);
     }
 
     private static boolean hasFilter(String filter)

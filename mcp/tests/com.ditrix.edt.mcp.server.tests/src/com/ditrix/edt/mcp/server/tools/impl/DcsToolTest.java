@@ -525,6 +525,29 @@ public class DcsToolTest
         }
     }
 
+    @Test
+    public void testExactIntegerValidationPreservesPublicErrors()
+    {
+        for (String key : new String[] {"limit", "offset"})
+        {
+            for (String raw : new String[] {"1.0000000000000001", "2147483647.00000001", "1.5", "NaN", "2147483648"})
+            {
+                var params = baseGet("Report.Sales", "schema");
+                params.put(key, raw);
+                String error = JsonParser.parseString(new DcsTool().execute(params))
+                    .getAsJsonObject().get("error").getAsString();
+                assertEquals(key + " '" + raw + "' is not an integer. " + (key.equals("limit")
+                    ? "Pass a whole number; Markdown collection reads clamp it to 1..1000 items, "
+                        + "while exact-value and XML reads bound it by their serialized-character output envelope."
+                    : "Pass a zero-based whole-number offset."), error);
+            }
+        }
+        var negative = baseGet("Report.Sales", "schema");
+        negative.put("offset", "-1.0");
+        assertEquals("offset '-1' is negative. Pass offset=0 or a later zero-based collection offset.",
+            JsonParser.parseString(new DcsTool().execute(negative)).getAsJsonObject().get("error").getAsString());
+    }
+
     private static Map<String, String> baseGet(String fqn, String type)
     {
         Map<String, String> params = new HashMap<>();

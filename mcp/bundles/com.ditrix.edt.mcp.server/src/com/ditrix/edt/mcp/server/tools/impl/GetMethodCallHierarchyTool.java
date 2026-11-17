@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -232,7 +233,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         String direction = normalizeArg(JsonUtils.extractStringArgument(params, KEY_DIRECTION));
         if (methodName != null && !methodName.isEmpty())
         {
-            return "call-hierarchy-" + methodName.toLowerCase() + //$NON-NLS-1$
+            return "call-hierarchy-" + methodName.toLowerCase(Locale.ROOT) + //$NON-NLS-1$
                    "-" + (direction != null ? direction : KEY_CALLERS) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         // Module-wide outgoing scope has no method name; keep a distinct, descriptive file name.
@@ -330,7 +331,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         {
             direction = KEY_CALLERS;
         }
-        direction = direction.toLowerCase();
+        direction = direction.toLowerCase(Locale.ROOT);
         request.direction = direction;
 
         if (!KEY_CALLERS.equals(direction) && !"callees".equals(direction) //$NON-NLS-1$
@@ -600,7 +601,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         {
             return candidates;
         }
-        final String lowerName = methodName.toLowerCase();
+        final String lowerName = methodName.toLowerCase(Locale.ROOT);
         try
         {
             srcFolder.accept(res -> {
@@ -609,7 +610,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 {
                     IFile file = (IFile)res;
                     String text = readCandidateText(file);
-                    if (text != null && text.toLowerCase().contains(lowerName))
+                    if (text != null && text.toLowerCase(Locale.ROOT).contains(lowerName))
                     {
                         candidates.add(file);
                     }

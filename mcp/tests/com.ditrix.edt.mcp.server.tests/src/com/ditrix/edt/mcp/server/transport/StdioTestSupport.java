@@ -12,10 +12,16 @@ import com.google.gson.*;
 abstract class StdioTestSupport
 {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    private int registries;
     @Before public void secureTemporaryDirectory() throws Exception
     { PrivatePaths.directory(temporary.getRoot().toPath()); }
     protected EndpointRegistry registry() throws Exception
-    { return new EndpointRegistry(PrivatePaths.directory(temporary.newFolder().toPath()), temporary.newFolder().toPath()); }
+    {
+        int index = registries++;
+        // Nested random JUnit names can exceed the real Unix-domain socket path limit.
+        return new EndpointRegistry(PrivatePaths.directory(temporary.newFolder("r" + index).toPath()),
+            temporary.newFolder("w" + index).toPath());
+    }
     protected EndpointRegistry.Endpoint endpoint(EndpointRegistry registry, String generation, long pid)
     {
         return new EndpointRegistry.Endpoint(registry.workspace().toString(), generation, pid,
