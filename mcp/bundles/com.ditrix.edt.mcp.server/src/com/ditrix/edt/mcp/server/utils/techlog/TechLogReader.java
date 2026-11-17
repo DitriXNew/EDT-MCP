@@ -274,7 +274,7 @@ public final class TechLogReader
      */
     static boolean endsBefore(Source source, LocalDateTime lower)
     {
-        if (lower == LocalDateTime.MIN || !source.member().isEmpty()) return false;
+        if (LocalDateTime.MIN.equals(lower) || !source.member().isEmpty()) return false;
         LocalDateTime hour = namedHour(source.file().getFileName().toString());
         if (hour == null || hour.plusHours(1).isAfter(lower)) return false;
         try (RandomAccessFile file = new RandomAccessFile(source.file().toFile(), "r"))
