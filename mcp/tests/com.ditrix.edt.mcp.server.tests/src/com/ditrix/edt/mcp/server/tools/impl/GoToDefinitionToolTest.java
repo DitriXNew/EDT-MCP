@@ -10,12 +10,25 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayInputStream;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.Path;
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.resource.impl.ResourceImpl;
+import org.eclipse.xtext.parser.IParser;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.bsl.BslStandaloneSetup;
+import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
@@ -34,6 +47,92 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class GoToDefinitionToolTest
 {
+    @Test
+    public void adoptedModuleUsesBaseIdentityAndPrivateMethodsInBothDialects() throws Exception
+    {
+        String localPath = "CommonModules/Calc/Module.bsl";
+        String basePath = "CommonModules/Калькулятор/Module.bsl";
+        String localText = "Procedure LocalOnly()\nEndProcedure\n";
+        String baseText = "// Base-only documentation\nProcedure InternalCheck()\nEndProcedure\n"
+            + "\nФункция Закрытая()\n    Возврат 42;\nКонецФункции\n";
+        var parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
+        Module localModule = parseModule(parser, "Extension", localPath, localText);
+        Module baseModule = parseModule(parser, "Base", basePath, baseText);
+        IProject extension = projectWithSource("Extension", localPath, localText);
+        IProject base = projectWithSource("Base", basePath, baseText);
+        int[] baseReads = {0};
+        var tool = new GoToDefinitionTool((project, path) -> localModule, (project, module, lookup) -> {
+            assertEquals(extension, project);
+            assertEquals(localModule, module);
+            baseReads[0]++;
+            return lookup.apply(base, baseModule);
+        });
+
+        String local = tool.resolveMethodInModule(extension, "Extension", localPath, "localonly", true, null);
+        assertTrue(local, local.contains("projectName: Extension\n"));
+        assertFalse(local, local.contains("base configuration"));
+        assertEquals(0, baseReads[0]);
+
+        String english = tool.resolveMethodInModule(extension, "Extension", localPath, "INTERNALCHECK", true, null);
+        assertTrue(english, english.contains("projectName: Base\nmodule: " + basePath + "\nmethod: InternalCheck\n"
+            + "type: Procedure\nexport: false\nstartLine: 1\nendLine: 3\n"));
+        assertTrue(english, english.contains("Declared in the base configuration."));
+        assertTrue(english, english.contains("// Base-only documentation\nProcedure InternalCheck()\nEndProcedure"));
+        String russian = tool.resolveMethodInModule(extension, "Extension", localPath, "зАКРЫТАЯ", false, "Calc");
+        assertTrue(russian, russian.contains("projectName: Base"));
+        assertTrue(russian, russian.contains("method: Закрытая\ntype: Function\nexport: false\nstartLine: 5\nendLine: 7"));
+        assertTrue(russian, russian.contains("qualifiedName: Calc.Закрытая"));
+        assertFalse(russian, russian.contains("Возврат 42;"));
+        assertTrue(russian, russian.contains("Declared in the base configuration."));
+
+        String missing = tool.resolveMethodInModule(extension, "Extension", localPath, "Missing", true, null);
+        var error = com.google.gson.JsonParser.parseString(missing).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean());
+        String message = error.get("error").getAsString();
+        assertTrue(message, message.contains("Method 'Missing'"));
+        assertTrue(message, message.contains("**Available methods** (1):\n\n- LocalOnly\n\nBase configuration"));
+        assertTrue(message, message.contains("**Available methods** (2):\n\n- InternalCheck\n- Закрытая\n"));
+        assertEquals(3, baseReads[0]);
+    }
+
+    @Test
+    public void findsDefinitionInSavedTextBeforeLookingInBase()
+        throws Exception
+    {
+        String path = "CommonModules/Calc/Module.bsl";
+        String source = "#Region Internal\nFunction Recovered() Export\n    Return 42;\nEndFunction\n#EndRegion\n";
+        IProject project = projectWithSource("Extension", path, source);
+        Module partial = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createModule();
+        var tool = new GoToDefinitionTool((p, modulePath) -> partial, (p, m, lookup) -> {
+            throw new AssertionError("Found the local declaration in saved text");
+        });
+        String result = tool.resolveMethodInModule(project, "Extension", path, "recovered", true, null);
+        assertTrue(result, result.contains("method: Recovered\ntype: Function\nexport: true\nstartLine: 2\nendLine: 4"));
+        assertTrue(result, result.contains("region: Internal"));
+        assertTrue(result, result.contains("Span recovered from saved source text because EDT's parse of the module is incomplete."));
+        assertTrue(result, result.contains("Return 42;"));
+    }
+
+    private static Module parseModule(IParser parser, String project, String path, String source)
+    {
+        Module module = (Module)parser.parse(new StringReader(source)).getRootASTElement();
+        var resource = new ResourceImpl(URI.createPlatformResourceURI("/" + project + "/src/" + path, true));
+        resource.getContents().add(module);
+        return module;
+    }
+
+    private static IProject projectWithSource(String name, String path, String source) throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IFile file = mock(IFile.class);
+        when(project.getName()).thenReturn(name);
+        when(project.getFile(new Path("src/" + path))).thenReturn(file);
+        when(file.exists()).thenReturn(true);
+        when(file.getContents()).thenAnswer(invocation -> new ByteArrayInputStream(source.getBytes(StandardCharsets.UTF_8)));
+        when(file.getCharset()).thenReturn("UTF-8");
+        return project;
+    }
+
     @Test
     public void anUnmappedAbsoluteModulePathIsAnActionableError() throws Exception
     {

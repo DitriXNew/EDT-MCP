@@ -67,21 +67,30 @@ public final class ModuleQueryExtractor
         // The EDT resource's syntax diagnostics, not the raw grammar's: EDT drops the grammar's "expected ';'"
         // after the last statement of a block before a preprocessor end (#EndRegion/#КонецОбласти, #EndIf, ...),
         // as the platform does. Refusing on raw errors rejected modules EDT itself accepts (#921).
+        Method methodScope = methodName == null ? null : BslModuleUtils.findMethod(module, methodName);
+        String missingScope = null;
+        if (methodName != null && methodScope == null)
+        {
+            var scan = BslMethodRecovery.scan(source.lines().toList());
+            List<String> modelNames = BslModuleUtils.methodNames(module);
+            if (scan.find(methodName) != null || !scan.availableNames(modelNames).equals(modelNames))
+            {
+                missingScope = BslMethodRecovery.missingMethodForAnalysis(module, "the stored BSL module", methodName, scan);
+            }
+        }
         for (Resource.Diagnostic error : resource.getErrors())
         {
             if (error instanceof XtextSyntaxDiagnostic)
                 throw new IllegalArgumentException("Stored BSL has a syntax error at line " + error.getLine()
                     + " (" + error.getMessage() + "). This is the module's BSL, not a query; fix it using "
-                    + "read_module_source or pass queryText directly.");
+                    + "read_module_source or pass queryText directly." + (missingScope == null ? "" : "\n\n" + missingScope));
         }
-        EObject scope = module;
-        if (methodName != null)
+        if (methodName != null && methodScope == null)
         {
-            scope = BslModuleUtils.findMethod(module, methodName);
-            if (scope == null)
-                throw new IllegalArgumentException("Method '" + methodName
-                    + "' not found. Use get_module_structure to choose a procedure/function name.");
+            throw new IllegalArgumentException(missingScope == null ? "Method '" + methodName
+                + "' not found. Use get_module_structure to choose a procedure/function name." : missingScope);
         }
+        EObject scope = methodScope == null ? module : methodScope;
         List<Literal> result = new ArrayList<>();
         var contents = scope.eAllContents();
         while (contents.hasNext())

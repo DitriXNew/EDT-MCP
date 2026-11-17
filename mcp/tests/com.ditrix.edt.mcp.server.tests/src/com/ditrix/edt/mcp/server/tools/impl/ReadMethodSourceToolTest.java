@@ -813,4 +813,30 @@ public class ReadMethodSourceToolTest
         assertEquals(com.ditrix.edt.mcp.server.protocol.ToolResult.error(expected).toJson(), new ReadMethodSourceTool(emfAccess()).readViaEmf(null, PROJECT, PATH,
             List.of("Nope"), false)); //$NON-NLS-1$
     }
+
+    @Test
+    public void missingModelMethodsAreRecoveredInRequestOrderWithTheirOwnSpans()
+    {
+        CountingAccess access = emfAccess();
+        access.lines = new java.util.ArrayList<>(LINES);
+        access.lines.addAll(List.of("#Область Служебная", "// Documentation", "Функция Остаток() Экспорт",
+            "    Возврат 42;", "КонецФункции", "#КонецОбласти",
+            "Procedure AfterTail()", "EndProcedure"));
+        var tool = new ReadMethodSourceTool(access);
+        String result = tool.readViaEmf(null, PROJECT, PATH, List.of("остаток", "Add", "aftertail", "Nope"), true);
+        assertTrue(result, result.contains("methodsFound: 3\n"));
+        assertTrue(result, result.contains("methodsNotFound: [\"Nope\"]"));
+        assertTrue(result, result.contains("### Остаток\nFunction · export · lines 12-15 · region Служебная\n"
+            + "```bsl\n// Documentation\nФункция Остаток() Экспорт\n    Возврат 42;\nКонецФункции\n```\n"));
+        assertTrue(result, result.contains("### AfterTail\nProcedure · lines 17-18\n"));
+        assertTrue(result, result.indexOf("### Остаток") < result.indexOf("### Add")
+            && result.indexOf("### Add") < result.indexOf("### AfterTail"));
+        assertEquals(2, count(result, "Span recovered from saved source text because EDT's parse of the module is incomplete."));
+        assertEquals(1, access.reads);
+        assertEquals(1, access.hashes);
+        String missing = tool.readViaEmf(null, PROJECT, PATH, List.of("Nope"), false);
+        assertTrue(missing, missing.contains("Available methods** (4)"));
+        assertTrue(missing, missing.contains("Остаток"));
+        assertTrue(missing, missing.contains("AfterTail"));
+    }
 }
