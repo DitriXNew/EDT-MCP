@@ -41,10 +41,13 @@ import com._1c.g5.v8.dt.metadata.mdclass.Indexing;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ControlledMetadataProperties.Row;
+import com.ditrix.edt.mcp.server.utils.ControlledMetadataProperties.Status;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
@@ -158,9 +161,68 @@ public class GetMetadataDetailsToolTest
         assertTrue(schema.contains("\"full\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"assignable\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"language\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"controlledMismatches\""));
+        assertTrue(schema.contains("\"limit\""));
+        assertTrue(schema.contains("\"offset\""));
         assertTrue("assignable mode should advertise managed-form root addresses", //$NON-NLS-1$
             schema.contains("Catalog.Products.Form.ItemForm") //$NON-NLS-1$
                 && schema.contains("CommonForm.Main")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testControlledMismatchAuditExcludesTheOtherViews()
+    {
+        for (String flag : List.of("full", "assignable"))
+        {
+            String result = new GetMetadataDetailsTool().execute(Map.of("projectName", "Extension",
+                "objectFqns", "[\"Catalog.Goods\"]", "controlledMismatches", "true", flag, "true"));
+            assertTrue(result, result.contains("controlledMismatches:true requires full and assignable to be false"));
+        }
+    }
+
+    @Test
+    public void testControlledAuditResolvesAndPagesNestedMembersInBothLanguages()
+    {
+        var factory = MdClassFactory.eINSTANCE;
+        var config = factory.createConfiguration();
+        var catalog = factory.createCatalog();
+        catalog.setName("\u0422\u043e\u0432\u0430\u0440\u044b");
+        config.getCatalogs().add(catalog);
+        var tabular = factory.createCatalogTabularSection();
+        tabular.setName("Lines");
+        catalog.getTabularSections().add(tabular);
+        var adopted = factory.createTabularSectionAttribute();
+        adopted.setName("\u0412\u0435\u0441");
+        adopted.setObjectBelonging(ObjectBelonging.ADOPTED);
+        tabular.getAttributes().add(adopted);
+        var nativeMember = factory.createTabularSectionAttribute();
+        nativeMember.setName("Native");
+        tabular.getAttributes().add(nativeMember);
+        var scope = MetadataScope.ofConfiguration(config);
+        java.util.function.Function<com._1c.g5.v8.dt.metadata.mdclass.MdObject, List<Row>> compare = object ->
+        {
+            assertEquals(adopted, object);
+            return List.of(new Row("type", "String(10, Variable)", "String(15, Variable)", Status.MISMATCH, true),
+                new Row("checkedProperty", "old", "base unavailable", Status.UNAVAILABLE, false));
+        };
+        String canonical = "Catalog." + catalog.getName() + ".TabularSection.Lines.Attribute." + adopted.getName();
+        for (String top : List.of("Catalog." + catalog.getName(), "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a." + catalog.getName()))
+        {
+            var fqns = List.of(top, canonical);
+            String first = GetMetadataDetailsTool.renderControlledMismatches(scope, fqns,
+                new GetMetadataDetailsTool.MismatchPage(1, 0), compare);
+            assertTrue(first, first.contains("**Mismatches:** 1 · **Unavailable:** 1 · **Adopted objects scanned:** 1"));
+            assertTrue(first, first.contains("next page: offset=1"));
+            assertTrue(first, first.contains("| " + canonical + " | type | String(10, Variable) | String(15, Variable) | MISMATCH |"));
+            assertFalse(first, first.contains("| checkedProperty |"));
+            String second = GetMetadataDetailsTool.renderControlledMismatches(scope, fqns,
+                new GetMetadataDetailsTool.MismatchPage(1, 1), compare);
+            assertTrue(second, second.contains("| " + canonical + " | checkedProperty | old | base unavailable | UNAVAILABLE |"));
+            assertFalse(second, second.contains("| type |"));
+        }
+        String missing = GetMetadataDetailsTool.renderControlledMismatches(scope, List.of(canonical + "Missing"),
+            new GetMetadataDetailsTool.MismatchPage(1, 0), compare);
+        assertTrue(missing, missing.contains("Missing") && missing.contains("get_metadata_objects"));
     }
 
     /**

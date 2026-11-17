@@ -8,10 +8,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Locale;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EClass;
@@ -21,6 +24,7 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
@@ -45,14 +49,17 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
+import com.ditrix.edt.mcp.server.utils.AdoptedTypeCell;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
+import com.ditrix.edt.mcp.server.utils.ControlledMetadataProperties;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.ExtensionServices;
 import com.ditrix.edt.mcp.server.utils.ExcludedCommandsSupport;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -66,6 +73,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
@@ -154,6 +162,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "owner each belongs to).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
+            .booleanProperty("controlledMismatches",
+                "Compare adopted objects and nested members with the base project (extension only, excludes full and assignable).")
+            .integerProperty(McpKeys.LIMIT, "Rows per controlledMismatches page (default 100, max 1000).")
+            .integerProperty("offset", "Zero-based row offset for controlledMismatches (default 0).")
             .build();
     }
 
@@ -185,6 +197,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Role-matrix pagination offset (0-based objects). Only the ROLE branch consumes it; a negative
         // request is clamped to 0 downstream. Ignored in full mode.
         int roleObjectOffset = JsonUtils.extractIntArgument(params, "roleObjectOffset", 0); //$NON-NLS-1$
+        boolean controlledMismatches = JsonUtils.extractBooleanArgument(params, "controlledMismatches", false);
+        int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, Pagination.DEFAULT_LIMIT);
+        int offset = JsonUtils.extractIntArgument(params, "offset", 0);
 
         // Validate required parameters
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
@@ -199,6 +214,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
+        if (controlledMismatches && (full || assignable))
+        {
+            return ToolResult.error("controlledMismatches:true requires full and assignable to be false or omitted.").toJson();
+        }
+        MismatchPage page = controlledMismatches
+            ? new MismatchPage(Pagination.clampLimit(limit, Pagination.MAX_LIMIT), Math.max(0, offset)) : null;
 
         // Preserve windowed dispatch; headless reads stay on the calling thread.
         AtomicReference<String> resultRef = new AtomicReference<>();
@@ -212,7 +233,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             try
             {
                 String result =
-                    getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang, roleOffset);
+                    getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang, roleOffset, page);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -230,7 +251,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     private String getMetadataDetailsInternal(String projectName, List<String> objectFqns,
                                                boolean full, boolean assignable, String language,
-                                               int roleObjectOffset)
+                                               int roleObjectOffset, MismatchPage page)
     {
         ProjectContext project = ProjectContext.of(projectName);
         if (!project.exists())
@@ -241,6 +262,19 @@ public class GetMetadataDetailsTool implements IMcpTool
             model -> prepareRead(projectName, full, assignable, language, roleObjectOffset, model));
         if (setup.error() != null) { return setup.error(); }
         RenderContext ctx = setup.context();
+        if (page != null)
+        {
+            if (!ctx.isExtensionProject)
+            {
+                return ToolResult.error("controlledMismatches:true requires an extension project. '"
+                    + projectName + "' is not an extension; select one with list_projects.").toJson();
+            }
+            return BmTransactions.read(ctx.bmModel, NAME, (tx, monitor) -> {
+                var version = ProjectContext.platformVersion(ctx.project);
+                return renderControlledMismatches(ctx.scope, objectFqns, page,
+                    object -> ControlledMetadataProperties.differences(ctx.project, object, version));
+            });
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("# Metadata Details: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         List<String[]> failures = new ArrayList<>();
@@ -257,6 +291,67 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         return sb.toString();
+    }
+
+    record MismatchPage(int limit, int offset) { }
+
+    private record ControlledRow(String fqn, ControlledMetadataProperties.Row comparison) { }
+
+    static String renderControlledMismatches(MetadataScope scope, List<String> fqns, MismatchPage page,
+        Function<MdObject, List<ControlledMetadataProperties.Row>> compare)
+    {
+        Set<MdObject> visited = new LinkedHashSet<>();
+        List<ControlledRow> rows = new ArrayList<>();
+        for (String fqn : fqns)
+        {
+            MdObject target = MetadataNodeResolver.resolveAddress(scope, fqn, true);
+            if (target == null || target instanceof Configuration)
+            {
+                return ToolResult.error("Cannot check controlled properties for '" + fqn
+                    + "'. Use get_metadata_objects to list valid extension object FQNs.").toJson();
+            }
+            collectControlledRows(target, compare, visited, rows);
+            for (EObject child : PersistedContents.descendants(target))
+            {
+                if (child instanceof MdObject member)
+                {
+                    collectControlledRows(member, compare, visited, rows);
+                }
+            }
+        }
+        int start = Math.min(page.offset(), rows.size());
+        int end = Math.min(start + page.limit(), rows.size());
+        long mismatches = rows.stream().filter(row -> row.comparison.status()
+            == ControlledMetadataProperties.Status.MISMATCH).count();
+        StringBuilder result = new StringBuilder("## Controlled property mismatches\n\n")
+            .append("**Mismatches:** ").append(mismatches)
+            .append(" · **Unavailable:** ").append(rows.size() - mismatches)
+            .append(" · **Adopted objects scanned:** ").append(visited.size())
+            .append(start == end && !rows.isEmpty() ? " (no rows at offset " + page.offset() + ")"
+                : Pagination.pageNotice(start, end - start, rows.size())).append("\n\n");
+        if (start < end)
+        {
+            result.append(MarkdownUtils.tableHeader("Object", "Property", "Controlled", "Base", "Status"));
+            for (ControlledRow row : rows.subList(start, end))
+            {
+                var comparison = row.comparison;
+                result.append(MarkdownUtils.tableRow(row.fqn, comparison.property(), comparison.controlled(),
+                    comparison.base(), comparison.status().toString()));
+            }
+        }
+        return result.toString();
+    }
+
+    private static void collectControlledRows(MdObject object,
+        Function<MdObject, List<ControlledMetadataProperties.Row>> compare, Set<MdObject> visited, List<ControlledRow> rows)
+    {
+        if (ExtensionServices.isAdopted(object) && visited.add(object))
+        {
+            for (var row : compare.apply(object))
+            {
+                rows.add(new ControlledRow(MetadataNodeResolver.addressOf(object), row));
+            }
+        }
     }
 
     private record ReadSetup(RenderContext context, String error) { }
@@ -447,6 +542,12 @@ public class GetMetadataDetailsTool implements IMcpTool
             && ReferencedTopObjects.isReferencedTopCollection(referenced.feature);
         if (nestedChain == null && !referencedTop && normalizedFqn.split("\\.", -1).length > 2) //$NON-NLS-1$
         {
+            if (referenced != null && referenced.object instanceof BasicFeature
+                && ExtensionServices.isAdopted(referenced.object))
+            {
+                sb.append(MetadataFormatterRegistry.format(referenced.object, ctx.full, ctx.effectiveLanguage, ctx.project));
+                return;
+            }
             failures.add(new String[] { fqn, memberAddressReason(ctx.scope, normalizedFqn) });
             return;
         }
@@ -469,7 +570,8 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
-        sb.append(MetadataFormatterRegistry.format(mdObject, ctx.full, ctx.effectiveLanguage));
+        sb.append(MetadataFormatterRegistry.format(mdObject, ctx.full, ctx.effectiveLanguage,
+            ctx.isExtensionProject ? ctx.project : null));
         // Type-specific properties the universal reflective formatter's default view omits
         // (issue #288): ScheduledJob / CommonModule / an InformationRegister's dimension Indexing.
         sb.append(formatTypeSpecificProperties(mdObject, ctx.full));
@@ -663,7 +765,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         // CommonForm.Name is BOTH a first-class mdclass top object and a form root. Keep the mdclass
         // assignable table byte-for-byte first, then add the content root under an unmistakable
         // heading. Every other mdclass FQN remains the single-table path.
-        sb.append(formatAssignable(normFqn, node.object));
+        sb.append(formatAssignableSection("## Assignable properties: ", normFqn, node.object, ctx.project));
         if (node.object instanceof CommonForm)
         {
             formRootPath = FormElementWriter.parseFormPath(normFqn);
@@ -959,6 +1061,11 @@ public class GetMetadataDetailsTool implements IMcpTool
     /** Shared table body; callers supply the heading that identifies the represented surface. */
     private static String formatAssignableSection(String heading, String fqn, EObject obj)
     {
+        return formatAssignableSection(heading, fqn, obj, null);
+    }
+
+    private static String formatAssignableSection(String heading, String fqn, EObject obj, IProject project)
+    {
         StringBuilder sb = new StringBuilder();
         sb.append(heading).append(fqn).append("\n\n"); //$NON-NLS-1$
         sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
@@ -1009,7 +1116,9 @@ public class GetMetadataDetailsTool implements IMcpTool
                     : p.valueKind == MetadataPropertyIntrospector.ValueKind.EXCLUDED_COMMANDS
                         ? Pagination.boundedListing(p.allowedValues, ExcludedCommandsSupport.MAX_LISTED)
                         : String.join(", ", p.allowedValues); //$NON-NLS-1$
-            sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
+            String current = p.feature == MdClassPackage.Literals.BASIC_FEATURE__TYPE
+                ? AdoptedTypeCell.render(obj, p.feature, p.currentValue, project) : p.currentValue;
+            sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), current, allowed));
         }
         return sb.toString();
     }

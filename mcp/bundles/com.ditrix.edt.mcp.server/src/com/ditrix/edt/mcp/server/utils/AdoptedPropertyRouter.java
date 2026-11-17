@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EClass;
@@ -46,6 +47,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectExtension;
+import com._1c.g5.v8.dt.metadata.mdclass.extension.BasicFeatureExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.ConfigurationExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.DefinedTypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.EventSubscriptionExtension;
@@ -106,6 +108,8 @@ import com.google.gson.JsonObject;
  */
 public final class AdoptedPropertyRouter
 {
+    static final EStructuralFeature BASIC_FEATURE_TYPE = MdClassPackage.Literals.BASIC_FEATURE__TYPE;
+    static final String FROM_BASE = "fromBase"; //$NON-NLS-1$
     /** The defined type's type feature (#709). */
     private static final EStructuralFeature DEFINED_TYPE_TYPE = MdClassPackage.Literals.DEFINED_TYPE__TYPE;
 
@@ -397,12 +401,13 @@ public final class AdoptedPropertyRouter
             for (Map.Entry<EStructuralFeature, BaseRead> planned : bases.entrySet())
             {
                 EStructuralFeature feature = planned.getKey();
-                BaseRead now = env == PLATFORM && com.ditrix.edt.mcp.server.HostKind.current()
-                    == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                BaseRead now = env == PLATFORM
                     ? ReadToolExecution.readOnHost(request.project, "Recheck adopted property base", () -> {
                         var current = ProjectContext.of(request.project.getName()).resolveMetadataRootInTransaction();
-                        MdObject target = MetadataNodeResolver.resolveAddress(current.scope(), request.fqn, true);
-                        return env.readBase(request.project, target, feature);
+                        MdObject target = current.ok()
+                            ? MetadataNodeResolver.resolveAddress(current.scope(), request.fqn, true) : null;
+                        return target == null || !ExtensionServices.isAdopted(target)
+                            ? BaseRead.notFound() : env.readBase(request.project, target, feature);
                     }) : env.readBase(request.project, request.target, feature);
                 String text = baseChanged(planned.getValue(), now, feature.getName(), request.fqn, base);
                 if (text != null)
@@ -486,15 +491,17 @@ public final class AdoptedPropertyRouter
         {
             Change change = changes.get(i);
             EStructuralFeature feature = change.feature;
-            if (feature == DEFINED_TYPE_TYPE || feature == SUBSCRIPTION_SOURCE)
+            boolean refresh = feature == BASIC_FEATURE_TYPE && FROM_BASE.equals(change.value);
+            if (feature == DEFINED_TYPE_TYPE || feature == SUBSCRIPTION_SOURCE || refresh)
             {
                 if (lastWrite.get(feature).intValue() != i)
                 {
                     decisions.set(i, Decision.DROP);
                     continue;
                 }
-                Routed routed = feature == DEFINED_TYPE_TYPE ? routeDefinedType(request, change, env)
-                    : routeSource(request, change, env);
+                Routed routed = refresh ? routeBasicFeatureRefresh(request, env)
+                    : feature == DEFINED_TYPE_TYPE ? routeDefinedType(request, change, env)
+                        : routeSource(request, change, env);
                 if (routed.refusal != null)
                 {
                     return new Routing(ToolResult.error(routed.refusal).toJson(), decisions, notes);
@@ -521,8 +528,7 @@ public final class AdoptedPropertyRouter
                     request.project, request.version, env)).toJson(), decisions, notes);
             }
         }
-        Request recheck = env == PLATFORM && com.ditrix.edt.mcp.server.HostKind.current()
-            == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+        Request recheck = env == PLATFORM
             ? new Request(null, request.fqn, request.project, null, null, request.version, List.of()) : request;
         return new Routing(null, decisions, notes, recheck, env, bases);
     }
@@ -657,7 +663,7 @@ public final class AdoptedPropertyRouter
         {
             return Routed.refuse(unreadable);
         }
-        String compositionRefusal = compositionRefusal(predicted, baseRead, infos, fqn, base);
+        String compositionRefusal = compositionRefusal(predicted.next, baseRead, infos, fqn, base);
         if (compositionRefusal != null)
         {
             return Routed.refuse(compositionRefusal);
@@ -666,6 +672,159 @@ public final class AdoptedPropertyRouter
             classified.requestedBase, classified.requestedKept, predicted.added, predicted.removed,
             statesByName(current), Qualifiers.of(current));
         return Routed.plan(new Decision(Decision.Kind.TYPE_EXTENSION, plan), baseRead);
+    }
+
+    private static Routed routeBasicFeatureRefresh(Request request, Environment env)
+    {
+        MdObject target = request.target;
+        String fqn = request.fqn;
+        String baseName = env.baseProjectName(request.project);
+        if (request.version == null)
+        {
+            return Routed.refuse(unknownVersionRefusal("type", fqn, baseName));
+        }
+        if (!(target.getExtension() instanceof BasicFeatureExtension block))
+        {
+            return Routed.refuse(noBlockRefusal("type", fqn, baseName));
+        }
+        Collection<MdPropertyType> types = basicFeaturePropertyTypes(target, request.version, env);
+        if (types == null)
+        {
+            return Routed.refuse(serviceRefusal("type", fqn, "IMdPropertyTypeProvider", baseName));
+        }
+        boolean multiState = types.contains(MdPropertyType.MULTI_STATE);
+        if (!multiState && (!types.contains(MdPropertyType.CHECKABLE) || block.getType() != MdPropertyState.CHECKED))
+        {
+            return Routed.refuse("'type' of " + fqn + " is not controlled. Mark it Checked in EDT before using 'fromBase'.");
+        }
+        IMdAdoptedPropertyAccess access = multiState ? null : env.access();
+        if (!multiState && access == null)
+        {
+            return Routed.refuse(serviceRefusal("type", fqn, "IMdAdoptedPropertyAccess", baseName));
+        }
+        BaseRead base = env.readBase(request.project, target, BASIC_FEATURE_TYPE);
+        String refusal = baseRefusal(base, "type", fqn, baseName);
+        if (refusal != null)
+        {
+            return Routed.refuse(refusal);
+        }
+        TypeDescriptionExtension current = block.getTypeExtension();
+        refusal = unreadableTypeRefusal(current, fqn, baseName);
+        if (refusal != null)
+        {
+            return Routed.refuse(refusal);
+        }
+
+        TypeDescription nativeType = (TypeDescription)target.eGet(BASIC_FEATURE_TYPE);
+        BaseRead nativeRead = snapshotType(nativeType);
+        Map<String, MdPropertyState> states = extensionStates(current);
+        TypeDescription replacement = McoreFactory.eINSTANCE.createTypeDescription();
+        Map<String, TypeItem> existing = new LinkedHashMap<>();
+        if (multiState && current != null)
+        {
+            for (TypeExtension item : current.getTypes())
+            {
+                existing.put(typeKey(item.getType()), item.getType());
+            }
+        }
+        else if (nativeType != null)
+        {
+            for (TypeItem item : nativeType.getTypes())
+            {
+                existing.put(typeKey(item), item);
+            }
+        }
+        for (int i = 0; i < base.typeNames.size(); i++)
+        {
+            String name = base.typeNames.get(i);
+            boolean set = base.typeSets.get(i);
+            String key = typeKey(name, set);
+            if (states.get(key) == MdPropertyState.EXTENDED || states.get(key) == MdPropertyState.NOTIFY)
+            {
+                return Routed.refuse("Base type '" + name + "' collides with a retained type of " + fqn
+                    + ". Review its state in EDT's type-extension editor and retry 'fromBase'.");
+            }
+            TypeItem item = existing.get(key);
+            if (item == null)
+            {
+                item = env.buildFeatureItem(request, name);
+            }
+            if (item == null || !key.equals(typeKey(item)))
+            {
+                return Routed.refuse("Cannot refresh 'type' of " + fqn + " from base type '" + name
+                    + "'. Adopt the referenced metadata in the extension or refresh the type in EDT.");
+            }
+            replacement.getTypes().add(item);
+        }
+        base.qualifiers.applyTo(replacement);
+        if (multiState)
+        {
+            TypeDescriptionExtension next = refreshedTypeExtension(current, replacement, replacement.getTypes());
+            if (states.equals(extensionStates(next)) && Qualifiers.of(current).equals(Qualifiers.of(next)))
+            {
+                return Routed.unchanged("'type' of " + fqn + " already matches the base configuration.");
+            }
+            if (states.containsValue(MdPropertyState.EXTENDED))
+            {
+                TypeInfos infos = env.typeInfos(target, BASIC_FEATURE_TYPE);
+                if (infos == null)
+                {
+                    return Routed.refuse(serviceRefusal("type", fqn, "type information", baseName));
+                }
+                refusal = compositionRefusal(next, base, infos, fqn, baseName);
+                if (refusal != null)
+                {
+                    return Routed.refuse(refusal + " Review the retained Extended types in EDT.");
+                }
+            }
+        }
+        else if (nativeRead.status == BaseRead.Status.FOUND && sameTypes(nativeRead, base)
+            && nativeRead.qualifiers.equals(base.qualifiers))
+        {
+            return Routed.unchanged("'type' of " + fqn + " already matches the base configuration.");
+        }
+        TypePlan plan = new TypePlan(fqn, new Refresh(replacement, multiState, block.getType(),
+            nativeRead, states, Qualifiers.of(current), access));
+        return Routed.plan(new Decision(Decision.Kind.TYPE_EXTENSION, plan), base);
+    }
+
+    private static Map<String, MdPropertyState> extensionStates(TypeDescriptionExtension extension)
+    {
+        Map<String, MdPropertyState> states = new LinkedHashMap<>();
+        if (extension != null)
+        {
+            for (TypeExtension item : extension.getTypes())
+            {
+                states.put(typeKey(item.getType()), item.getState());
+            }
+        }
+        return states;
+    }
+
+    private static TypeDescriptionExtension refreshedTypeExtension(TypeDescriptionExtension current,
+        TypeDescription replacement, List<TypeItem> checked)
+    {
+        TypeDescriptionExtension next = MdExtensionTypeUtil.newTypeDescriptionExtension();
+        Set<String> checkedNames = new HashSet<>();
+        Set<String> keptNames = new HashSet<>();
+        for (TypeItem item : checked)
+        {
+            next.getTypes().add(MdExtensionTypeUtil.newTypeExtension(item, MdPropertyState.CHECKED));
+            checkedNames.add(typeName(item));
+        }
+        if (current != null)
+        {
+            for (TypeExtension item : current.getTypes())
+            {
+                if (item.getState() == MdPropertyState.EXTENDED || item.getState() == MdPropertyState.NOTIFY)
+                {
+                    next.getTypes().add(MdExtensionTypeUtil.newTypeExtension(item.getType(), item.getState()));
+                    keptNames.add(typeName(item.getType()));
+                }
+            }
+        }
+        setQualifiers(next, replacement, current, checkedNames, keptNames);
+        return next;
     }
 
     /** The request's types sorted into base types, types the extension checks, and additions. */
@@ -781,20 +940,20 @@ public final class AdoptedPropertyRouter
      * String, an unlimited BinaryData) in a composition of more than one type; and an {@code Extended} type
      * next to a base type that cannot be part of a composite type.
      */
-    private static String compositionRefusal(Composition composition, BaseRead baseRead, TypeInfos infos,
+    private static String compositionRefusal(TypeDescriptionExtension next, BaseRead baseRead, TypeInfos infos,
         String fqn, String base)
     {
         boolean mix = infos.mixSingleEnable();
         List<String> names = new ArrayList<>();
         List<String> singles = new ArrayList<>();
-        for (TypeExtension type : composition.next.getTypes())
+        for (TypeExtension type : next.getTypes())
         {
             String name = typeName(type.getType());
             names.add(name);
             TypeInfoView info = infos.info(name, type.getType() instanceof TypeSet);
             boolean single = info != null && (info.single && !mix || info.strongSingle)
-                || STRING.equals(name) && unlimited(composition.next.getStringQualifiers())
-                || BINARY.equals(name) && unlimited(composition.next.getBinaryQualifiers());
+                || STRING.equals(name) && unlimited(next.getStringQualifiers())
+                || BINARY.equals(name) && unlimited(next.getBinaryQualifiers());
             if (single)
             {
                 singles.add(name);
@@ -822,7 +981,7 @@ public final class AdoptedPropertyRouter
         if (blob != null)
         {
             List<String> blocked = new ArrayList<>();
-            for (TypeExtension type : composition.next.getTypes())
+            for (TypeExtension type : next.getTypes())
             {
                 String name = typeName(type.getType());
                 if (type.getState() == MdPropertyState.EXTENDED && !blob.equals(name))
@@ -1057,6 +1216,7 @@ public final class AdoptedPropertyRouter
         /** The type extension the routing judged: its states by type name, and its qualifier values. */
         private final Map<String, MdPropertyState> readStates;
         private final Qualifiers readQualifiers;
+        private final Refresh refresh;
         private Outcome outcome;
 
         TypePlan(String fqn, EStructuralFeature feature, Set<String> baseNames, List<TypeItem> additions, // NOSONAR the plan is the whole of what the write needs
@@ -1076,6 +1236,23 @@ public final class AdoptedPropertyRouter
             this.predictedRemoved = Collections.unmodifiableList(new ArrayList<>(predictedRemoved));
             this.readStates = Collections.unmodifiableMap(new LinkedHashMap<>(readStates));
             this.readQualifiers = readQualifiers;
+            this.refresh = null;
+        }
+
+        TypePlan(String fqn, Refresh refresh)
+        {
+            this.fqn = fqn;
+            this.feature = BASIC_FEATURE_TYPE;
+            this.baseNames = Set.of();
+            this.additions = List.of();
+            this.request = null;
+            this.requestedBase = List.of();
+            this.requestedKept = List.of();
+            this.predictedAdded = List.of();
+            this.predictedRemoved = List.of();
+            this.readStates = Map.of();
+            this.readQualifiers = Qualifiers.NONE;
+            this.refresh = refresh;
         }
 
         /** @return what the write did, or {@code null} before it ran */
@@ -1087,6 +1264,10 @@ public final class AdoptedPropertyRouter
         /** @return the warning of the consent preview: what the write adds and what it removes */
         public String consentWarning()
         {
+            if (refresh != null)
+            {
+                return "Refreshes the controlled type from the base configuration and keeps Extended types.";
+            }
             String text = "Adds " + (predictedAdded.isEmpty() ? "no type" : String.join(", ", predictedAdded)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + " to the type extension of the adopted defined type; its base types are left as they are"; //$NON-NLS-1$
             if (!predictedRemoved.isEmpty())
@@ -1095,6 +1276,18 @@ public final class AdoptedPropertyRouter
                     + ", which can drop values of those types on the next database update"; //$NON-NLS-1$
             }
             return text + "."; //$NON-NLS-1$
+        }
+    }
+
+    private record Refresh(TypeDescription replacement, boolean multiState, MdPropertyState nativeState,
+        BaseRead nativeType, Map<String, MdPropertyState> states, Qualifiers qualifiers, IMdAdoptedPropertyAccess access)
+    {
+        Refresh
+        {
+            if (com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS)
+            {
+                replacement = MetadataTypeBuilder.snapshotTypeDescription(replacement);
+            }
         }
     }
 
@@ -1182,6 +1375,11 @@ public final class AdoptedPropertyRouter
 
     public static void applyTypeExtension(EObject target, TypePlan plan, com._1c.g5.v8.bm.core.IBmTransaction tx)
     {
+        if (plan.refresh != null)
+        {
+            applyRefresh(target, plan, tx);
+            return;
+        }
         ObjectExtension extension = target instanceof MdObject ? ((MdObject)target).getExtension() : null;
         EStructuralFeature typeExtensionFeature = extension instanceof DefinedTypeExtension
             ? MdExtensionTypeUtil.getTypeExtensionFeature(extension) : null;
@@ -1213,6 +1411,42 @@ public final class AdoptedPropertyRouter
             }
         }
         plan.outcome = new Outcome(composition.changed, typeNote(plan, composition));
+    }
+
+    private static void applyRefresh(EObject target, TypePlan plan, com._1c.g5.v8.bm.core.IBmTransaction tx)
+    {
+        Refresh refresh = plan.refresh;
+        if (!(target instanceof MdObject owner) || !ExtensionServices.isAdopted(owner)
+            || !(owner.getExtension() instanceof BasicFeatureExtension block))
+        {
+            throw Refusals.state(changedRefusal("type", plan.fqn, "its adoption"));
+        }
+        TypeDescriptionExtension current = block.getTypeExtension();
+        BaseRead nativeType = snapshotType((TypeDescription)target.eGet(BASIC_FEATURE_TYPE));
+        String unreadable = unreadableTypeRefusal(current, plan.fqn, null);
+        if (unreadable != null)
+        {
+            throw Refusals.state(unreadable);
+        }
+        if (!refresh.states.equals(extensionStates(current)) || !refresh.qualifiers.equals(Qualifiers.of(current))
+            || refresh.nativeState != block.getType() || nativeType.status != refresh.nativeType.status
+            || !sameTypes(nativeType, refresh.nativeType) || !nativeType.qualifiers.equals(refresh.nativeType.qualifiers))
+        {
+            throw Refusals.state(changedRefusal("type", plan.fqn, "its controlled type"));
+        }
+        if (refresh.multiState)
+        {
+            List<TypeItem> checked = refresh.replacement.getTypes().stream().map(item -> currentType(item, tx)).toList();
+            TypeDescriptionExtension next = refreshedTypeExtension(current, refresh.replacement, checked);
+            block.setTypeExtension(next.getTypes().isEmpty() ? null : next);
+        }
+        else
+        {
+            TypeDescription replacement = tx == null ? refresh.replacement
+                : MetadataTypeBuilder.typesInTransaction(refresh.replacement, tx);
+            refresh.access.setValue(target, BASIC_FEATURE_TYPE, MdPropertyType.CHECKABLE, replacement);
+        }
+        plan.outcome = new Outcome(true, "Refreshed the controlled type of " + plan.fqn + " from the base configuration.");
     }
 
     /**
@@ -1605,14 +1839,30 @@ public final class AdoptedPropertyRouter
         return typeKeys(a).equals(typeKeys(b));
     }
 
-    private static Set<String> typeKeys(BaseRead read)
+    static Set<String> typeKeys(BaseRead read)
     {
         Set<String> keys = new HashSet<>();
         for (int i = 0; i < read.typeNames.size(); i++)
         {
-            keys.add(read.typeNames.get(i) + (read.typeSets.get(i).booleanValue() ? "|set" : "|type")); //$NON-NLS-1$ //$NON-NLS-2$
+            keys.add(typeKey(read.typeNames.get(i), read.typeSets.get(i)));
         }
         return keys;
+    }
+
+    static String typeKey(String name, boolean typeSet)
+    {
+        return name + (typeSet ? "|set" : "|type");
+    }
+
+    static String typeKey(TypeItem item)
+    {
+        String name = typeName(item);
+        return name == null ? null : typeKey(name, item instanceof TypeSet);
+    }
+
+    static boolean isCompositeReference(BaseRead type)
+    {
+        return type.typeNames.size() > 1 && type.typeNames.stream().anyMatch(name -> name.indexOf('.') > 0);
     }
 
     /**
@@ -1758,12 +2008,19 @@ public final class AdoptedPropertyRouter
         String base = env.baseProjectName(request.project);
         String property = feature.getName();
         Version version = request.version;
-        Collection<MdPropertyType> types = version == null ? null
-            : env.propertyTypes(request.target, feature, version);
+        Collection<MdPropertyType> types = version == null ? null : feature == BASIC_FEATURE_TYPE
+            ? basicFeaturePropertyTypes(request.target, version, env) : env.propertyTypes(request.target, feature, version);
         String head = "'" + property + "' of " + request.fqn + " was not written: " + request.fqn + " is adopted from the " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + "base configuration" + named(base) + ", and "; //$NON-NLS-1$ //$NON-NLS-2$
         String way;
-        if (types == null)
+        if (feature == BASIC_FEATURE_TYPE && types != null && (types.contains(MdPropertyType.MULTI_STATE)
+            || types.contains(MdPropertyType.CHECKABLE) && stateOf(request.target, feature) == MdPropertyState.CHECKED))
+        {
+            way = "modify_metadata accepts 'fromBase' as the type value to refresh the controlled type. "
+                + "For a different type, change it in the base configuration" + named(base)
+                + " or use EDT's editor for the adopted object.";
+        }
+        else if (types == null)
         {
             way = "modify_metadata writes the type of an adopted object only for a defined type's 'type' (and " //$NON-NLS-1$
                 + "changes an adopted event subscription's 'source'). Change it in the base configuration" //$NON-NLS-1$
@@ -1789,6 +2046,20 @@ public final class AdoptedPropertyRouter
                 + "'; change it in the base configuration" + named(base) + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return head + way + NOTHING_CHANGED;
+    }
+
+    private static Collection<MdPropertyType> basicFeaturePropertyTypes(MdObject target, Version version, Environment env)
+    {
+        if (version.isGreaterThan(Version.V8_3_17) && target.getExtension() instanceof BasicFeatureExtension block)
+        {
+            var types = env.propertyTypes(block, MdClassExtensionPackage.Literals.BASIC_FEATURE_EXTENSION__TYPE_EXTENSION,
+                version);
+            if (types == null || !types.isEmpty())
+            {
+                return types;
+            }
+        }
+        return env.propertyTypes(target, BASIC_FEATURE_TYPE, version);
     }
 
     /**
@@ -1929,6 +2200,38 @@ public final class AdoptedPropertyRouter
             return type == null ? NONE
                 : of(type.getStringQualifiers(), type.getNumberQualifiers(), type.getDateQualifiers(),
                     type.getBinaryQualifiers());
+        }
+
+        void applyTo(TypeDescription description)
+        {
+            if (stringLength != null)
+            {
+                StringQualifiers q = McoreFactory.eINSTANCE.createStringQualifiers();
+                q.setLength(stringLength);
+                q.setFixed(stringFixed);
+                description.setStringQualifiers(q);
+            }
+            if (numberPrecision != null)
+            {
+                NumberQualifiers q = McoreFactory.eINSTANCE.createNumberQualifiers();
+                q.setPrecision(numberPrecision);
+                q.setScale(numberScale);
+                q.setNonNegative(numberNonNegative);
+                description.setNumberQualifiers(q);
+            }
+            if (dateFractions != null)
+            {
+                DateQualifiers q = McoreFactory.eINSTANCE.createDateQualifiers();
+                q.setDateFractions(dateFractions);
+                description.setDateQualifiers(q);
+            }
+            if (binaryLength != null)
+            {
+                BinaryQualifiers q = McoreFactory.eINSTANCE.createBinaryQualifiers();
+                q.setLength(binaryLength);
+                q.setFixed(binaryFixed);
+                description.setBinaryQualifiers(q);
+            }
         }
 
         private static Qualifiers of(StringQualifiers string, NumberQualifiers number, DateQualifiers date,
@@ -2158,6 +2461,11 @@ public final class AdoptedPropertyRouter
          */
         TypeItem buildSourceItem(Request request, String typeName);
 
+        default TypeItem buildFeatureItem(Request request, String typeName)
+        {
+            return buildSourceItem(request, typeName);
+        }
+
         /** @return EDT's adopted-property access, or {@code null} when it is not available */
         IMdAdoptedPropertyAccess access();
 
@@ -2193,22 +2501,10 @@ public final class AdoptedPropertyRouter
         @Override
         public BaseRead readBase(IProject extensionProject, MdObject adopted, EStructuralFeature feature)
         {
-            IProject baseProject = ExtensionOriginUtils.resolveBaseProject(extensionProject);
-            if (baseProject == null)
-            {
-                return BaseRead.notReady();
-            }
-            BmModelResolver.Resolution model = BmModelResolver.resolve(baseProject);
-            if (!model.isAvailable())
-            {
-                return BaseRead.notReady();
-            }
-            IModelObjectAdopter adopter = ExtensionServices.modelObjectAdopter();
-            if (adopter == null)
-            {
-                return BaseRead.unavailable("EDT's IModelObjectAdopter service is not available"); //$NON-NLS-1$
-            }
-            return AdoptedPropertyRouter.readBase(model.getModel(), adopter, adopted, feature);
+            BaseValue<BaseRead> base = readBaseValue(extensionProject, adopted,
+                source -> snapshotType((TypeDescription)source.eGet(feature)));
+            return base.status() == BaseRead.Status.FOUND ? base.value()
+                : new BaseRead(base.status(), base.detail(), List.of(), List.of(), Qualifiers.NONE);
         }
 
         @Override
@@ -2252,6 +2548,17 @@ public final class AdoptedPropertyRouter
         @Override
         public TypeItem buildSourceItem(Request request, String typeName)
         {
+            return buildNamedType(request, typeName, MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+        }
+
+        @Override
+        public TypeItem buildFeatureItem(Request request, String typeName)
+        {
+            return buildNamedType(request, typeName, MetadataTypeBuilder.TypeTarget.METADATA);
+        }
+
+        private TypeItem buildNamedType(Request request, String typeName, MetadataTypeBuilder.TypeTarget target)
+        {
             int dot = typeName.indexOf('.');
             JsonObject item = new JsonObject();
             item.addProperty("kind", dot < 0 ? typeName : typeName.substring(0, dot)); //$NON-NLS-1$
@@ -2266,7 +2573,7 @@ public final class AdoptedPropertyRouter
             try
             {
                 MetadataTypeBuilder.Result built = MetadataTypeBuilder.build(spec, request.config, request.scope,
-                    request.version, true, MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+                    request.version, true, target);
                 return built.error == null && built.typeDescription != null
                     && built.typeDescription.getTypes().size() == 1 ? built.typeDescription.getTypes().get(0) : null;
             }
@@ -2274,7 +2581,7 @@ public final class AdoptedPropertyRouter
             {
                 // A resolution miss comes back in Result.error; a throw is a platform failure - logged, and
                 // the source is still refused by name rather than guessed.
-                Activator.logError("Error building the event-subscription source " + typeName //$NON-NLS-1$
+                Activator.logError("Error building the adopted property's type " + typeName //$NON-NLS-1$
                     + " in the extension", e); //$NON-NLS-1$
                 return null;
             }
@@ -2309,6 +2616,65 @@ public final class AdoptedPropertyRouter
     static BaseRead readBase(IBmModel baseModel, IModelObjectAdopter adopter, MdObject adopted,
         EStructuralFeature feature)
     {
+        BaseValue<BaseRead> base = readBaseValue(baseModel, adopter, adopted,
+            source -> snapshotType((TypeDescription)source.eGet(feature)));
+        return base.status() == BaseRead.Status.FOUND ? base.value()
+            : new BaseRead(base.status(), base.detail(), List.of(), List.of(), Qualifiers.NONE);
+    }
+
+    static BaseRead snapshotType(TypeDescription value)
+    {
+        List<String> names = new ArrayList<>();
+        List<Boolean> sets = new ArrayList<>();
+        if (value != null)
+        {
+            for (TypeItem item : value.getTypes())
+            {
+                String name = typeName(item);
+                if (name == null)
+                {
+                    return BaseRead.unavailable("a type's name cannot be read");
+                }
+                names.add(name);
+                sets.add(item instanceof TypeSet);
+            }
+        }
+        return BaseRead.found(names, sets, Qualifiers.of(value));
+    }
+
+    record BaseValue<T>(BaseRead.Status status, String detail, T value)
+    {
+        String statusText()
+        {
+            return switch (status)
+            {
+                case BASE_NOT_READY -> "base project is unavailable or still loading; check list_projects";
+                case NOT_FOUND -> "EDT cannot find the base object; check the adoption";
+                case UNAVAILABLE -> detail;
+                case FOUND -> "";
+            };
+        }
+    }
+
+    static <T> BaseValue<T> readBaseValue(IProject project, MdObject adopted, Function<EObject, T> snapshot)
+    {
+        IProject base = ExtensionOriginUtils.resolveBaseProject(project);
+        BmModelResolver.Resolution model = base == null ? null : BmModelResolver.resolve(base);
+        if (model == null || !model.isAvailable())
+        {
+            return new BaseValue<>(BaseRead.Status.BASE_NOT_READY, null, null);
+        }
+        IModelObjectAdopter adopter = ExtensionServices.modelObjectAdopter();
+        if (adopter == null)
+        {
+            return new BaseValue<>(BaseRead.Status.UNAVAILABLE, "EDT's IModelObjectAdopter service is unavailable", null);
+        }
+        return readBaseValue(model.getModel(), adopter, adopted, snapshot);
+    }
+
+    private static <T> BaseValue<T> readBaseValue(IBmModel baseModel, IModelObjectAdopter adopter,
+        MdObject adopted, Function<EObject, T> snapshot)
+    {
         try
         {
             return BmTransactions.read(baseModel, "Read the base value of an adopted object", (tx, monitor) -> //$NON-NLS-1$
@@ -2316,7 +2682,7 @@ public final class AdoptedPropertyRouter
                 EObject source = adopter.getSource(adopted);
                 if (source == null)
                 {
-                    return BaseRead.notFound();
+                    return new BaseValue<>(BaseRead.Status.NOT_FOUND, null, null);
                 }
                 EObject base = source;
                 if (source.eIsProxy())
@@ -2327,34 +2693,17 @@ public final class AdoptedPropertyRouter
                 {
                     base = (EObject)tx.getObjectById(((IBmObject)source).bmGetId());
                 }
-                if (base == null)
+                if (base == null || base.eIsProxy())
                 {
-                    return BaseRead.notFound();
+                    return new BaseValue<>(BaseRead.Status.NOT_FOUND, null, null);
                 }
-                Object value = base.eGet(feature);
-                List<String> names = new ArrayList<>();
-                List<Boolean> typeSets = new ArrayList<>();
-                if (value instanceof TypeDescription)
-                {
-                    for (TypeItem item : ((TypeDescription)value).getTypes())
-                    {
-                        String name = typeName(item);
-                        if (name == null)
-                        {
-                            return BaseRead.unavailable("a base type's name cannot be read"); //$NON-NLS-1$
-                        }
-                        names.add(name);
-                        typeSets.add(Boolean.valueOf(item instanceof TypeSet));
-                    }
-                }
-                return BaseRead.found(names, typeSets,
-                    Qualifiers.of(value instanceof TypeDescription ? (TypeDescription)value : null));
+                return new BaseValue<>(BaseRead.Status.FOUND, null, snapshot.apply(base));
             });
         }
         catch (RuntimeException e)
         {
             Activator.logError("Error reading the base value of an adopted object", e); //$NON-NLS-1$
-            return BaseRead.unavailable(describe(e));
+            return new BaseValue<>(BaseRead.Status.UNAVAILABLE, describe(e), null);
         }
     }
 

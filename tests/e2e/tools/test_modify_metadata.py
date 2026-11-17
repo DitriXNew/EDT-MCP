@@ -39,14 +39,17 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    assert_no_diff_rel,
     assert_tree_unchanged,
     assert_diff_contains,
+    calls_aborted,
     poll_diff_contains,
     tree_snapshot,
     wait_for_project_ready,
     diff,
     poll_disk_contains,
     read_disk,
+    read_fixture_file,
     e2e_test,
     _fail,
     PROJECT,
@@ -57,6 +60,105 @@ from harness import (
     restore_extension_fixture,
     poll_disk_contains_all,
 )
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_exchange_plan_uuid_property_round_trips_in_an_extension():
+    name = "УзлыОбмена958"
+    fqn = "ExchangePlan." + name
+    mdo = "src/ExchangePlans/%s/%s.mdo" % (name, name)
+    try:
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}))
+        assert_contains(read_disk(mdo), "<name>" + name + "</name>")
+        assert_ok(call("adopt_metadata_object", {"projectName": PROJECT, "fqn": fqn,
+                                                "extensionProjectName": TESTS_PROJECT}))
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        identity = ET.fromstring(before).attrib
+
+        for address in (fqn, "ПланОбмена." + name):
+            fresh = str(uuid.uuid4())
+            result = call("modify_metadata", {"projectName": TESTS_PROJECT, "fqn": address,
+                                              "properties": [{"name": "thisNode", "value": fresh}]})
+            assert_ok(result)
+            exported = read_fixture_file(TESTS_PROJECT_REL, mdo)
+            root = ET.fromstring(exported)
+            assert root.findtext("thisNode") == fresh
+            assert root.attrib["uuid"] == identity["uuid"]
+            assert root.attrib["extendedConfigurationObject"] == identity["extendedConfigurationObject"]
+            details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [address],
+                                                     "assignable": True})
+            assert_ok(details)
+            assert_contains(details.text, "| thisNode | UUID | " + fresh + " |")
+            assert_not_contains(details.text, "| uuid |")
+            assert_not_contains(details.text, "| extendedConfigurationObject |")
+            full = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [address], "full": True})
+            assert_ok(full)
+            assert_contains(full.text, "| Uuid | " + identity["uuid"] + " |")
+            assert_contains(full.text, "| Extended Configuration Object | " + identity["extendedConfigurationObject"] + " |")
+            for prop, value, hint in (("thisNode", "bad-uuid", "random UUID"),
+                                      ("uuid", fresh, "Remove it"),
+                                      ("extendedConfigurationObject", fresh, "Remove it")):
+                error = assert_error(call("modify_metadata", {"projectName": TESTS_PROJECT, "fqn": address,
+                                     "properties": [{"name": prop, "value": value}]}))
+                assert_error_quality(error, names=[prop] + ([value] if prop == "thisNode" else []),
+                                     suggests=[hint])
+                assert read_fixture_file(TESTS_PROJECT_REL, mdo) == exported
+    finally:
+        if not calls_aborted():
+            restore_extension_fixture("exchange plan UUID update")
+            assert_no_diff_rel(TESTS_PROJECT_REL)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_from_base_refreshes_adopted_tabular_attribute_type():
+    fqn = "Document.QueryOrder.TabularSection.Items.Attribute.Quantity"
+    ru_fqn = "Документ.QueryOrder.ТабличнаяЧасть.Items.Реквизит.Quantity"
+    mdo = "src/Documents/QueryOrder/QueryOrder.mdo"
+    try:
+        assert_ok(call("adopt_metadata_object", {"projectName": PROJECT, "fqn": fqn,
+                                                "extensionProjectName": TESTS_PROJECT}))
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        qualifier = "tabularSections/attributes/extension/typeExtension/numberQualifiers/"
+        assert ET.fromstring(before).findtext(qualifier + "precision") == "15"
+        assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                  "properties": [{"name": "type", "value": {"types": [
+                      {"kind": "Number", "precision": 18, "scale": 3}]}}]}))
+        base = read_disk(mdo)
+        assert ET.fromstring(base).findtext("tabularSections/attributes/type/numberQualifiers/scale") == "3"
+
+        args = {"projectName": TESTS_PROJECT, "objectFqns": [fqn], "controlledMismatches": True}
+        report = call("get_metadata_details", args)
+        assert_ok(report)
+        assert_contains(report.text, "| Number(18, 3, Signed) | MISMATCH |")
+        refresh = call("modify_metadata", {"projectName": TESTS_PROJECT, "fqn": ru_fqn,
+                                             "properties": [{"name": "type", "value": "fromBase"}]})
+        assert_ok(refresh)
+        exported = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        root = ET.fromstring(exported)
+        assert root.findtext(qualifier + "precision") == "18"
+        assert root.findtext(qualifier + "scale") == "3"
+        assert root.findtext("tabularSections/attributes/extension/typeExtension/types/state") == "Checked"
+        assert root.find("tabularSections/attributes/type") is None
+        assert read_disk(mdo) == base, "refresh leaves the base file alone"
+
+        read_back = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [ru_fqn],
+                                                  "assignable": True})
+        assert_ok(read_back)
+        assert_contains(read_back.text, "Number(18, 3, Signed) (Checked)")
+        assert_contains(read_back.text, "Base: Number(18, 3, Signed) [MATCH]")
+        clear = call("get_metadata_details", args)
+        assert_ok(clear)
+        assert_contains(clear.text, "**Mismatches:** 0")
+        assert_contains(clear.text, "**Unavailable:** 0")
+
+        refused = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                            "properties": [{"name": "type", "value": "fromBase"}]})
+        assert_error_quality(assert_error(refused), names=["fromBase"], suggests=["structured type"])
+        assert read_disk(mdo) == base
+    finally:
+        if not calls_aborted():
+            restore_extension_fixture("refresh a controlled tabular-section attribute")
+            assert_no_diff_rel(TESTS_PROJECT_REL)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

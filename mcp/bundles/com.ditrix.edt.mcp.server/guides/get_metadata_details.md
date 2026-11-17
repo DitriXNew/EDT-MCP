@@ -18,10 +18,13 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - `full` - `true` returns every reflected section, `false` (default) returns only key info. In full mode each section is capped and a `[truncated]` row marks omitted rows. With `full: true`, collections are printed in full; compact mode prints up to five items and uses a count for larger collections.
 - `roleObjectOffset` - for a ROLE FQN only: 0-based object offset into the rights matrix. The default (non-`full`) view shows only the first 100 authored objects; page past them by passing the next offset (the matrix notice tells you the exact value), or use `full: true` (which renders every object, capped at 1000). Ignored in `full` mode.
 - `language` - language **code** (`en`/`ru`) used for the synonym columns. Defaults to the configuration's default language; the synonym map is keyed by code, not by the language's display name. For a ROLE FQN it ALSO selects the language of the RIGHT names in the rights matrix and of the RLS section's `Right` / `Fields` columns (`Read` / `Чтение`, `Update` / `Изменение`), so a role's matrix is read in Russian right names by passing `ru`.
+- `controlledMismatches: true` checks adopted basic-feature types and checked scalar attributes under the supplied extension object or member FQNs, including contained members, without loading the extension into an infobase. Page mismatch and unavailable rows with `limit` and `offset`.
 
 ## Output
 - Form-structure headings use canonical English structural tokens (`# Form Structure: Catalog.X.Form.Y`), preserving programmatic Names regardless of the input token language; EMF collection names such as `forms` are not echoed.
 - Markdown, one section per resolved object, separated by `---`.
+- Full details include read-only `typeId` and `valueTypeId` for produced types of the object and its nested metadata.
+- Adopted attribute, dimension and resource type cells show stored qualifiers, the current base type and comparison status in details and assignable views.
 - A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), an `Attribute columns` table (Attribute / Name / Synonym / Type) listing the columns of each collection-typed attribute, an `Additional columns` table (Attribute / Table path / Name / Synonym / Type) when there are any, a Commands table and an Event handlers section.
 - A template FQN whose content is a Data Composition Schema renders the schema's structure (see above) instead of an mdclass object section, headed `# Data Composition Schema: <fqn>`.
 - A command's group - the `Group` column of a `### Commands` table and, with `full: true`, a common command's `group` property - is printed as `modify_metadata`'s `group` takes it: `CommandGroup.<Name>` for a configuration command group, the bare name (`ActionsPanelTools`) for a platform standard group.
@@ -43,6 +46,7 @@ FQN cannot resolve, and the failure row says which project kind holds that type.
 
 ## Examples
 - Basic, one object: `{projectName: "MyProject", objectFqns: ["Catalog.Products"]}`.
+- Check extension controls: `{projectName: "MyExtension", objectFqns: ["Catalog.Products"], controlledMismatches: true}`.
 - Full details, several objects: `{projectName: "MyProject", objectFqns: ["Catalog.Products", "Document.SalesOrder"], full: true}`.
 - Russian type token + Russian synonyms: `{projectName: "MyProject", objectFqns: ["Справочник.Products"], language: "ru"}`.
 - A report's Data Composition Schema template: `{projectName: "MyProject", objectFqns: ["Report.Sales.Template.ОсновнаяСхемаКомпоновкиДанных"]}`.

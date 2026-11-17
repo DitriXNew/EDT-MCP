@@ -390,7 +390,7 @@ public class AdoptedPropertyRouterTest
     }
 
     @Test
-    public void testAnAdoptedAttributesTypeIsRefused()
+    public void testAnAdoptedAttributesArbitraryTypeReplacementPointsToRefresh()
     {
         CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
         attribute.setObjectBelonging(ObjectBelonging.ADOPTED);
@@ -398,8 +398,9 @@ public class AdoptedPropertyRouterTest
         Routing routing = AdoptedPropertyRouter.route(request(attribute, "Catalog.Goods.Attribute.Weight", V8_5_1, //$NON-NLS-1$
             new AdoptedPropertyRouter.Change(MdClassPackage.Literals.BASIC_FEATURE__TYPE, description(type("String")), //$NON-NLS-1$
                 null)), new FakePlatform());
-        assertRefused(routing, "'type' of Catalog.Goods.Attribute.Weight", "type extension", //$NON-NLS-1$ //$NON-NLS-2$
-            "defined type's 'type' alone", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused(routing, "'type' of Catalog.Goods.Attribute.Weight",
+            "modify_metadata accepts 'fromBase' as the type value to refresh the controlled type.",
+            "For a different type, change it in the base configuration 'TestConfiguration' or use EDT's editor");
     }
 
     @Test
@@ -426,13 +427,13 @@ public class AdoptedPropertyRouterTest
             + "configuration 'TestConfiguration'. Nothing was changed."); //$NON-NLS-1$
         assertNoTypeExtensionAdvice(routing);
 
-        // From 8.3.18 the type is multi-state: EDT keeps it in the object's type extension.
+        // From 8.3.18 the multi-state control can be refreshed from the base.
         routing = AdoptedPropertyRouter.route(request(attribute, fqn, V8_5_1, retype),
             new FakePlatform().propertyTypes(basicType, MdPropertyType.MULTI_STATE));
-        assertRefused(routing, ", and EDT changes an adopted object's type only in its type extension, which " //$NON-NLS-1$
-            + "modify_metadata writes for an adopted defined type's 'type' alone", //$NON-NLS-1$
-            "Change it in EDT's type-extension editor of the adopted object, or in the base configuration " //$NON-NLS-1$
-                + "'TestConfiguration'. Nothing was changed."); //$NON-NLS-1$
+        assertRefused(routing, "'type' of " + fqn + " was not written: " + fqn
+            + " is adopted from the base configuration 'TestConfiguration', and modify_metadata accepts 'fromBase'"
+            + " as the type value to refresh the controlled type. For a different type, change it in the base"
+            + " configuration 'TestConfiguration' or use EDT's editor for the adopted object. Nothing was changed.");
         assertFalse(routing.refusal(), routing.refusal().contains("can only check")); //$NON-NLS-1$
 
         // An owner whose types EDT's type-extension editor only checks, even where the type is multi-state.
@@ -441,8 +442,7 @@ public class AdoptedPropertyRouterTest
         flag.setExtension(MdClassExtensionFactory.eINSTANCE.createBasicFeatureExtension());
         routing = AdoptedPropertyRouter.route(request(flag, "ChartOfAccounts.Main.AccountingFlag.Currency", V8_5_1, //$NON-NLS-1$
             retype), new FakePlatform().propertyTypes(basicType, MdPropertyType.MULTI_STATE));
-        assertRefused(routing, "an extension for platform 8.5.1 can only check 'type' against the base " //$NON-NLS-1$
-            + "configuration, not change it"); //$NON-NLS-1$
+        assertRefused(routing, "modify_metadata accepts 'fromBase' as the type value to refresh the controlled type.");
         assertNoTypeExtensionAdvice(routing);
 
         // A platform at which EDT offers no state for it.

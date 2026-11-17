@@ -253,9 +253,14 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      */
     protected String typeFeatureCell(EObject owner, EStructuralFeature feature)
     {
+        return typeFeatureCell(owner, feature, null);
+    }
+
+    protected String typeFeatureCell(EObject owner, EStructuralFeature feature, org.eclipse.core.resources.IProject project)
+    {
         Object value = owner.eGet(feature);
         String text = value instanceof TypeDescription ? formatType((TypeDescription)value) : DASH;
-        return AdoptedTypeCell.render(owner, feature, text);
+        return AdoptedTypeCell.render(owner, feature, text, project);
     }
     
     /**

@@ -55,6 +55,39 @@ import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
  */
 public class UniversalMetadataFormatterTypePropertiesTest
 {
+    @Test
+    public void fullDetailsShowProducedTypeIdsIncludingTabularRows()
+    {
+        var md = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE;
+        var types = com._1c.g5.v8.dt.metadata.mdtype.MdTypeFactory.eINSTANCE;
+        var document = md.createDocument();
+        document.setName("\u0417\u0430\u043a\u0430\u0437");
+        var tabular = md.createDocumentTabularSection();
+        tabular.setName("Lines");
+        document.getTabularSections().add(tabular);
+        var documentTypes = types.createDocumentTypes();
+        var sectionTypes = types.createTabularSectionTypes();
+        var documentRef = types.createMdRefType();
+        var tabularRow = types.createMdRowType();
+        documentRef.setTypeId(java.util.UUID.fromString("128de61f-d9c7-4580-9915-5665ba827aec"));
+        documentRef.setValueTypeId(java.util.UUID.fromString("d6157aa9-358d-43a8-8d13-e37f1bf0a557"));
+        tabularRow.setTypeId(java.util.UUID.fromString("75698dee-7a6a-4078-9412-a5e9f938ab7a"));
+        tabularRow.setValueTypeId(java.util.UUID.fromString("48fe4ad7-ecc0-4816-9f0e-94d240539cce"));
+        documentTypes.setRefType(documentRef);
+        sectionTypes.setRowType(tabularRow);
+        document.setProducedTypes(documentTypes);
+        tabular.setProducedTypes(sectionTypes);
+
+        var formatter = UniversalMetadataFormatter.getInstance();
+        String details = formatter.format(document, true, "en");
+        assertTrue(details, details.contains("| Object | Type | typeId | valueTypeId |"));
+        assertTrue(details, details.contains("| Document." + document.getName() + " | refType | "
+            + documentRef.getTypeId() + " | " + documentRef.getValueTypeId() + " |"));
+        assertTrue(details, details.contains("| Document." + document.getName() + ".TabularSection.Lines | rowType | "
+            + tabularRow.getTypeId() + " | " + tabularRow.getValueTypeId() + " |"));
+        assertFalse(formatter.format(document, false, "en").contains("| typeId | valueTypeId |"));
+    }
+
     private final UniversalMetadataFormatter f = UniversalMetadataFormatter.getInstance();
 
     private static final String EN = "en"; //$NON-NLS-1$

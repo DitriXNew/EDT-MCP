@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -827,6 +828,8 @@ public final class MetadataPropertyApplier
                 }
                 out.add(PreparedChange.excludedCommands(info.feature, plan));
                 return null;
+            case UUID:
+                return prepareUuid(name, value, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -837,6 +840,12 @@ public final class MetadataPropertyApplier
     public static String nonAssignablePropertyError(EObject target, String name, EClass extInfoEClass,
         String additionalHint)
     {
+        if (MetadataPropertyIntrospector.isReadOnlyUuid(target, name))
+        {
+            return ToolResult.error("Property '" + name + "' is a read-only identifier on "
+                + target.eClass().getName() + ". Remove it from properties; use get_metadata_details with "
+                + "assignable:true for writable properties.").toJson();
+        }
         String discovery = additionalHint == null
             ? "Use get_metadata_details with assignable:true for kinds + allowed values." //$NON-NLS-1$
             : additionalHint;
@@ -1205,6 +1214,29 @@ public final class MetadataPropertyApplier
      * JSON error on a missing value, or {@code null} on success. Extracted verbatim from
      * {@link #prepare}.
      */
+    static String prepareUuid(String name, String value, PropertyInfo info, List<PreparedChange> out)
+    {
+        if (value != null)
+        {
+            try
+            {
+                UUID uuid = (UUID)EcoreUtil.createFromString(((EAttribute)info.feature).getEAttributeType(), value);
+                if (uuid.toString().equalsIgnoreCase(value))
+                {
+                    out.add(PreparedChange.scalar(info.feature, uuid));
+                    return null;
+                }
+            }
+            catch (IllegalArgumentException e)
+            {
+                // Reject input that the UUID factory cannot parse.
+            }
+        }
+        return ToolResult.error("Invalid UUID '" + value + "' for '" + name
+            + "'. Use the 8-4-4-4-12 hexadecimal form, for example 2bc60566-bc4b-4562-93c5-42512dd76d2f. "
+            + "Any random UUID can be used as a fresh value.").toJson();
+    }
+
     public static String prepareString(String name, String value, PropertyInfo info,
         List<PreparedChange> out, MdNameNormalizer.Report normReport)
     {
@@ -1261,6 +1293,16 @@ public final class MetadataPropertyApplier
     public static String prepareTypeDescription(PrepareContext ctx, EObject target, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
+        if (AdoptedPropertyRouter.FROM_BASE.equals(strictString(prop.get(KEY_VALUE))))
+        {
+            if (info.feature != AdoptedPropertyRouter.BASIC_FEATURE_TYPE || !ExtensionServices.isAdopted(target))
+            {
+                return ToolResult.error("Type value 'fromBase' requires an adopted metadata attribute, dimension "
+                    + "or resource. Use the structured type value for this object.").toJson();
+            }
+            out.add(PreparedChange.scalar(info.feature, AdoptedPropertyRouter.FROM_BASE));
+            return null;
+        }
         if (ctx.version == null)
         {
             return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
