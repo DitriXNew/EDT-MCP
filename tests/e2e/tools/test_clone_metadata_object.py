@@ -168,11 +168,74 @@ def _registered(fqn):
 
 # Configuration.mdo element per kind; Role also has defaultRoles, which a clone must never join.
 _CONFIGURATION_TAG = {"Constant": "constants", "Enum": "enums", "InformationRegister": "informationRegisters",
-                   "ScheduledJob": "scheduledJobs", "CommonModule": "commonModules", "Role": "roles"}
+                   "ScheduledJob": "scheduledJobs", "CommonModule": "commonModules", "Role": "roles",
+                   "CommonForm": "commonForms", "ExchangePlan": "exchangePlans"}
 
 
 def _uuids(root):
     return [node.attrib["uuid"] for node in root.iter() if "uuid" in node.attrib]
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_common_form_copies_the_separate_form_and_module():
+    source = "CommonForm.E2ECloneWindow"
+    source_folder = "src/CommonForms/E2ECloneWindow/"
+    clone_folder = "src/CommonForms/E2ECloneWindowCopy/"
+    _seed(("create_metadata", {"fqn": source}, "seed common form"),
+          ("create_metadata", {"fqn": source + ".Decoration.CloneLabel"}, "seed form label"),
+          _write_module("CommonForms/E2ECloneWindow/Module.bsl",
+                        "&AtClient\nProcedure CloneProbe()\nEndProcedure\n", "seed form module"))
+    source_mdo = source_folder + "E2ECloneWindow.mdo"
+    before = {path: _read_bytes(path) for path in (source_mdo, source_folder + "Form.form",
+                                                   source_folder + "Module.bsl")}
+    scope = {"fqn": "ОбщаяФорма.E2ECloneWindow", "newName": "E2ECloneWindowCopy"}
+    preview = _preview(**scope)
+    assert preview["sourceFqn"] == source, preview
+    data = _apply(preview, **scope)
+
+    clone = _xml(clone_folder + "E2ECloneWindowCopy.mdo")
+    assert clone.findtext("name") == "E2ECloneWindowCopy"
+    assert clone.attrib["uuid"] != _xml(source_mdo).attrib["uuid"]
+    assert "CloneLabel" in [node.findtext("name") for node in _xml(clone_folder + "Form.form").findall("items")]
+    assert clone_folder + "Form.form" in {row["file"] for row in data["resources"]}, data
+    assert _read_bytes(clone_folder + "Module.bsl") == before[source_folder + "Module.bsl"]
+    for path, expected in before.items():
+        assert _read_bytes(path) == expected, "Source bytes changed: " + path
+    assert data["fqn"] == "CommonForm.E2ECloneWindowCopy" and _registered(data["fqn"]), data
+    details = _details(data["fqn"])
+    assert_contains(details, "Form Structure", "cloned common form content is attached")
+    assert_contains(details, "CloneLabel", "cloned form label read-back")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_exchange_plan_regenerates_this_node_and_other_identities():
+    source = "ExchangePlan.E2ECloneQueue"
+    _seed(("create_metadata", {"fqn": source}, "seed exchange plan"),
+          ("create_metadata", {"fqn": source + ".Attribute.QueueField"}, "seed exchange plan attribute"))
+    path = "src/ExchangePlans/E2ECloneQueue/E2ECloneQueue.mdo"
+    before = _read_bytes(path)
+    original = ET.fromstring(before)
+    scope = {"fqn": source, "newName": "E2ECloneQueueCopy"}
+    data = _apply(_preview(**scope), **scope)
+
+    clone = _xml("src/ExchangePlans/E2ECloneQueueCopy/E2ECloneQueueCopy.mdo")
+    assert clone.findtext("name") == "E2ECloneQueueCopy"
+    assert clone.findtext("attributes/name") == "QueueField"
+    assert not set(_uuids(original)) & set(_uuids(clone)), "exchange plan and member UUIDs must be fresh"
+    assert clone.attrib["uuid"] and clone.find("attributes").attrib["uuid"]
+    original_node, cloned_node = original.findtext("thisNode"), clone.findtext("thisNode")
+    assert original_node and cloned_node and original_node != cloned_node, (original_node, cloned_node)
+    type_kinds = {"objectType", "refType", "selectionType", "listType", "managerType"}
+    types_before = {node.tag: node for node in original.findall("producedTypes/*")}
+    types_after = {node.tag: node for node in clone.findall("producedTypes/*")}
+    assert types_before.keys() == types_after.keys() == type_kinds
+    for attr in ("typeId", "valueTypeId"):
+        old_ids = {node.attrib[attr] for node in types_before.values()}
+        new_ids = {node.attrib[attr] for node in types_after.values()}
+        assert len(new_ids) == len(type_kinds) and not old_ids & new_ids, (attr, old_ids, new_ids)
+    assert _read_bytes(path) == before, "exchange plan source bytes changed"
+    assert data["fqn"] == "ExchangePlan.E2ECloneQueueCopy" and _registered(data["fqn"]), data
+    assert_contains(_details(data["fqn"]), "QueueField", "cloned exchange plan attribute read-back")
 
 
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
@@ -254,6 +317,25 @@ def test_clone_information_register_reports_recorders_left_on_the_source():
     assert _hash_file("src/Documents/QueryOrder/QueryOrder.mdo") == recorder, "recorders must not be redirected"
     assert _registered(data["fqn"])
     assert_contains(_details(data["fqn"]), "Amount", "cloned register fields read-back")
+
+
+@e2e_test(tool="clone_metadata_object", kind="write-metadata")
+def test_clone_register_with_a_generated_list_form_is_not_refused_as_drift():
+    # A generated list table's search additions omit 'enabled' on disk; EDT's import reads that as true.
+    register = "InformationRegister.E2ECloneListed"
+    form_path = "src/InformationRegisters/E2ECloneListed/Forms/ListForm/Form.form"
+    _seed(("create_metadata", {"fqn": register}, "seed register"),
+          ("create_metadata", {"fqn": register + ".Dimension.Key"}, "seed dimension"),
+          ("create_metadata", {"fqn": register + ".Form.ListForm", "formType": "LIST", "generateContent": True},
+           "seed generated list form"))
+    source_form = _read_bytes(form_path)
+    assert b"<searchStringAddition>" in source_form, "the generated list form must carry table additions"
+    scope = {"fqn": register, "newName": "E2ECloneListedCopy"}
+    data = _apply(_preview(**scope), **scope)
+    clone_form = "src/InformationRegisters/E2ECloneListedCopy/Forms/ListForm/Form.form"
+    assert b"<searchStringAddition>" in _read_bytes(clone_form), "the clone keeps the list table additions"
+    assert _read_bytes(form_path) == source_form, "the source form must stay byte-identical"
+    assert _registered(data["fqn"]), data
 
 
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
@@ -530,7 +612,7 @@ def test_clone_source_module_drift_refuses_before_copy():
 @e2e_test(tool="clone_metadata_object", kind="write-metadata")
 def test_clone_negative_contract():
     cases = [
-        ({"fqn": "ExchangePlan.X"}, ["ExchangePlan.X"], ["Catalog", "Role"]),
+        ({"fqn": "AccumulationRegister.X"}, ["AccumulationRegister.X"], ["CommonForm", "ExchangePlan"]),
         ({"fqn": "Catalog.Catalog.Form.ItemForm"}, ["ItemForm"], ["top object"]),
         ({"fqn": "Catalog.Catalog", "confirm": True}, ["expectedHash"], ["without confirm"]),
         ({"fqn": "Catalog.Catalog", "newName": "1bad"}, ["1bad"], ["identifier"]),

@@ -9,10 +9,14 @@ import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.any;
 
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.core.naming.ISymbolicNameService;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.Table;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -118,6 +122,48 @@ public class MetadataCloneDiskVerifierTest
     }
 
     @Test
+    public void tableAdditionEnabledMatchesEdtImportDefault()
+    {
+        Form model = formWithSearchString();
+        Form disk = formWithSearchString();
+        var modelAddition = ((Table)model.getItems().get(0)).getSearchStringAddition();
+        var diskAddition = ((Table)disk.getItems().get(0)).getSearchStringAddition();
+        modelAddition.setEnabled(true);
+        assertFalse(diskAddition.isSetEnabled());
+        assertFalse(diskAddition.isEnabled());
+        ISymbolicNameService names = mock(ISymbolicNameService.class);
+        MetadataCloneDiskVerifier.compare(model, disk, names);
+        MetadataCloneDiskVerifier.compare(disk, model, names);
+
+        modelAddition.setEnabled(false);
+        assertRefused(model, disk, names, "/items/0/searchStringAddition/0/enabled");
+        assertRefused(disk, model, names, "/items/0/searchStringAddition/0/enabled");
+        diskAddition.setEnabled(false);
+        MetadataCloneDiskVerifier.compare(model, disk, names);
+        modelAddition.setEnabled(true);
+        assertRefused(model, disk, names, "/items/0/searchStringAddition/0/enabled");
+    }
+
+    @Test
+    public void unrelatedEnabledChangeStillFails()
+    {
+        Form model = formWithSearchString();
+        Form disk = formWithSearchString();
+        ((Table)model.getItems().get(0)).setEnabled(true);
+        assertRefused(model, disk, mock(ISymbolicNameService.class), "/items/0/enabled");
+    }
+
+    private static Form formWithSearchString()
+    {
+        FormFactory factory = FormFactory.eINSTANCE;
+        Form form = factory.createForm();
+        Table table = factory.createTable();
+        table.setSearchStringAddition(factory.createAddition());
+        form.getItems().add(table);
+        return form;
+    }
+
+    @Test
     public void sameNodeCountWithCorruptPropertyFails()
     {
         Catalog model = MdClassFactory.eINSTANCE.createCatalog();
@@ -145,7 +191,7 @@ public class MetadataCloneDiskVerifierTest
         assertRefused(model, disk, names, "/owners");
     }
 
-    private static void assertRefused(Catalog model, Catalog disk, ISymbolicNameService names, String feature)
+    private static void assertRefused(EObject model, EObject disk, ISymbolicNameService names, String feature)
     {
         try
         {

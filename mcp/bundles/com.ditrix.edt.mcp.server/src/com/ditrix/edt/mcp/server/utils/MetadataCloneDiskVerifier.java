@@ -28,6 +28,9 @@ import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.provider.NoopLazyLinkerProvider;
 import com._1c.g5.v8.dt.core.resource.IDtProjectAware;
+import com._1c.g5.v8.dt.form.model.Addition;
+import com._1c.g5.v8.dt.form.model.AdditionContainer;
+import com._1c.g5.v8.dt.form.model.FormPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport;
 import com._1c.g5.wiring.ServiceAccess;
@@ -171,8 +174,8 @@ public final class MetadataCloneDiskVerifier
                 continue;
             }
             String location = path + "/" + feature.getName();
-            Object wanted = model.eGet(feature, false);
-            Object actual = disk.eGet(feature, false);
+            Object wanted = persistedValue(model, feature);
+            Object actual = persistedValue(disk, feature);
             List<?> expectedValues = values(wanted);
             List<?> actualValues = values(actual);
             if (expectedValues.size() != actualValues.size())
@@ -207,6 +210,17 @@ public final class MetadataCloneDiskVerifier
                 }
             }
         }
+    }
+
+    private static Object persistedValue(EObject object, EStructuralFeature feature)
+    {
+        // EDT's FormImporter supplies true when a table addition omits enabled.
+        if (feature == FormPackage.Literals.VISIBLE__ENABLED && object instanceof Addition
+            && object.eContainer() instanceof AdditionContainer && !object.eIsSet(feature))
+        {
+            return Boolean.TRUE;
+        }
+        return object.eGet(feature, false);
     }
 
     private static List<?> values(Object value)

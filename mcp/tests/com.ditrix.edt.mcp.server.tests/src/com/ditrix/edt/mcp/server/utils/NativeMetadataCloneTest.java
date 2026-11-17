@@ -9,6 +9,8 @@ import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.any;
 
+import java.util.UUID;
+
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -67,6 +69,28 @@ public class NativeMetadataCloneTest
         copier.attachModelObject(contained, false);
         verify(contained, never()).bmGetFqn();
         assertEquals("Unattached containment must not be added to the export roots", 4, copier.attachedTopFqns().size());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public void exchangePlanCopyPreservesTheInitializedThisNode()
+    {
+        Injector services = mock(Injector.class);
+        when(services.getInstance(any(Class.class))).thenAnswer(call -> mock((Class)call.getArgument(0)));
+        var source = MdClassFactory.eINSTANCE.createExchangePlan();
+        UUID sourceNode = UUID.randomUUID();
+        source.setThisNode(sourceNode);
+        var target = MdClassFactory.eINSTANCE.createExchangePlan();
+        UUID initializedNode = UUID.randomUUID();
+        target.setThisNode(initializedNode);
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var copier = new NativeMetadataClone(services, mock(IBmTransaction.class), mock(IBmModel.class),
+            config, source, "Copy");
+        var thisNode = MdClassPackage.Literals.EXCHANGE_PLAN__THIS_NODE;
+        copier.copyAttribute(source, thisNode, target, thisNode, config,
+            MdClassPackage.Literals.CONFIGURATION__EXCHANGE_PLANS, new CopyContext());
+        assertEquals(initializedNode, target.getThisNode());
+        assertEquals(sourceNode, source.getThisNode());
     }
 
     @Test

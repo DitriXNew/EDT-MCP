@@ -12,6 +12,7 @@ import java.util.List;
 import org.eclipse.emf.ecore.EClass;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
@@ -81,12 +82,53 @@ public class MetadataCloneKindsTest
     }
 
     @Test
+    public void commonFormAndExchangePlanUseTheirConfigurationCollections()
+    {
+        assertCollection(MdClassPackage.Literals.COMMON_FORM, "commonForms");
+        assertCollection(MdClassPackage.Literals.EXCHANGE_PLAN, "exchangePlans");
+    }
+
+    @Test
+    public void commonFormAndExchangePlanResolveByNameInBothLanguages()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        var form = MdClassFactory.eINSTANCE.createCommonForm();
+        form.setName("Window");
+        form.getSynonym().put("en", "WindowLabel");
+        config.getCommonForms().add(form);
+        assertSame(form, MetadataClonePlan.source(config, "CommonForm.Window"));
+        assertSame(form, MetadataClonePlan.source(config, "ОбщаяФорма.Window"));
+        assertThrows(IllegalArgumentException.class, () -> MetadataClonePlan.source(config, "ОбщаяФорма.WindowLabel"));
+
+        var plan = MdClassFactory.eINSTANCE.createExchangePlan();
+        plan.setName("Очередь");
+        plan.getSynonym().put("ru", "СинонимОчереди");
+        config.getExchangePlans().add(plan);
+        assertSame(plan, MetadataClonePlan.source(config, "ExchangePlan.Очередь"));
+        assertSame(plan, MetadataClonePlan.source(config, "ПланОбмена.Очередь"));
+        assertThrows(IllegalArgumentException.class, () -> MetadataClonePlan.source(config, "ExchangePlan.СинонимОчереди"));
+    }
+
+    @Test
+    public void commonFormGraphIncludesExternalContent()
+    {
+        var owner = MdClassFactory.eINSTANCE.createCommonForm();
+        var form = FormFactory.eINSTANCE.createForm();
+        owner.setForm(form);
+        form.getItems().add(FormFactory.eINSTANCE.createDecoration());
+        var graph = MetadataClonePlan.graph(owner);
+        assertSame(owner, graph.get(""));
+        assertSame(form, graph.get("/form"));
+        assertSame(form.getItems().get(0), graph.get("/form/items/0"));
+    }
+
+    @Test
     public void unsupportedKindNamesTheWholeSupportedList()
     {
         String error = MetadataClonePlan.requestError("AccumulationRegister.Stock", null, false, null, null);
         assertNotNull(error);
         for (String kind : List.of("Catalog", "Document", "Report", "DataProcessor", "Constant", "Enum",
-            "InformationRegister", "ScheduledJob", "CommonModule", "Role"))
+            "InformationRegister", "ScheduledJob", "CommonModule", "Role", "CommonForm", "ExchangePlan"))
         {
             assertTrue(kind + " missing from: " + error, error.contains(kind));
         }
