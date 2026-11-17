@@ -4,7 +4,6 @@
  */
 package com.ditrix.edt.mcp.server.utils;
 
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +44,7 @@ public class EdtDialogs
     private final Map<Shell, Entry> entries = new IdentityHashMap<>();
     private volatile List<JsonObject> snapshot = List.of();
     private volatile Display installedDisplay;
+    private Runnable filterDisposable;
     private final java.util.function.Supplier<Display> displaySource;
 
     public EdtDialogs()
@@ -115,20 +115,41 @@ public class EdtDialogs
         }
     }
 
-    void install(Display display)
+    Runnable install(Display display)
     {
         if (display.isDisposed() || installedDisplay == display)
         {
-            return;
+            return filterDisposable;
         }
         entries.clear();
         snapshot = List.of();
-        for (int type : new int[] {SWT.Show, SWT.Activate, SWT.Hide, SWT.Dispose})
-        {
-            display.addFilter(type, event -> observe(display, event));
-        }
+        org.eclipse.swt.widgets.Listener listener = event -> observe(display, event);
+        int[] types = {SWT.Show, SWT.Activate, SWT.Hide, SWT.Dispose};
+        for (int type : types) { display.addFilter(type, listener); }
         installedDisplay = display;
         sweep(display);
+        filterDisposable = ListenerDisposables.register(() -> removeFilters(display, () -> {
+            for (int type : types) { display.removeFilter(type, listener); }
+            installedDisplay = null;
+            entries.clear();
+            snapshot = List.of();
+        }));
+        return filterDisposable;
+    }
+
+    /** Dispatches filter removal on its owning display without blocking bundle shutdown. */
+    static void removeFilters(Display display, Runnable removal)
+    {
+        if (display == null || display.isDisposed()) { return; }
+        try
+        {
+            if (Display.getCurrent() == display) { removal.run(); }
+            else { display.asyncExec(() -> { if (!display.isDisposed()) { removal.run(); } }); }
+        }
+        catch (org.eclipse.swt.SWTException e)
+        {
+            if (!display.isDisposed()) { throw e; }
+        }
     }
 
     private void observe(Display display, Event event)
@@ -258,11 +279,11 @@ public class EdtDialogs
         Entry entry = entries.computeIfAbsent(shell, ignored -> new Entry());
         JsonObject data = new JsonObject();
         data.addProperty("dialogId", entry.id);
-        data.addProperty("title", shell.getText());
-        StringBuilder message = new StringBuilder();
-        Map<String, List<Button>> buttons = new LinkedHashMap<>();
-        boolean complete = readControls(shell, 0, new int[] {500}, message, buttons);
-        data.addProperty("message", message.toString().strip());
+        var shellSnapshot = com.ditrix.edt.mcp.server.utils.ui.ShellSnapshot.read(shell);
+        data.addProperty("title", shellSnapshot.title());
+        Map<String, List<Button>> buttons = shellSnapshot.buttons();
+        boolean complete = shellSnapshot.complete();
+        data.addProperty("message", shellSnapshot.message());
         JsonArray labels = new JsonArray();
         buttons.keySet().forEach(labels::add);
         data.add("buttons", labels);
@@ -284,56 +305,6 @@ public class EdtDialogs
         }
         entry.data = data;
         publish();
-    }
-
-    private static boolean readControls(Control control, int depth, int[] budget, StringBuilder text,
-        Map<String, List<Button>> buttons)
-    {
-        if (control.isDisposed())
-        {
-            return true;
-        }
-        if (depth > 6 || budget[0] <= 0)
-        {
-            return false;
-        }
-        budget[0]--;
-        String value = null;
-        if (control instanceof Button && (control.getStyle() & SWT.PUSH) != 0)
-        {
-            Button button = (Button)control;
-            buttons.computeIfAbsent(button.getText(), ignored -> new ArrayList<>()).add(button);
-        }
-        else if (control instanceof Label)
-        {
-            value = ((Label)control).getText();
-        }
-        else if (control instanceof CLabel)
-        {
-            value = ((CLabel)control).getText();
-        }
-        else if (control instanceof Link)
-        {
-            value = ((Link)control).getText();
-        }
-        else if (control instanceof Text && (control.getStyle() & SWT.READ_ONLY) != 0
-            && (control.getStyle() & SWT.PASSWORD) == 0)
-        {
-            value = ((Text)control).getText();
-        }
-        if (value != null && !value.isBlank() && text.length() < 8192)
-        {
-            text.append(value, 0, Math.min(value.length(), 8192 - text.length())).append('\n');
-        }
-        boolean complete = true;
-        if (control instanceof Composite)
-        {
-            for (Control child : ((Composite)control).getChildren())
-            {
-                complete &= readControls(child, depth + 1, budget, text, buttons);
-            }
-        }
-        return complete;
     }
 
     private void publish()
@@ -402,7 +373,7 @@ public class EdtDialogs
                 + "' has changed or been replaced. Call edt_dialog with action=list again.").toJson();
         }
         Map<String, List<Button>> buttons = new LinkedHashMap<>();
-        boolean complete = readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
+        boolean complete = com.ditrix.edt.mcp.server.utils.ui.ShellSnapshot.readControls(shell, 0, new int[] {500}, new StringBuilder(), buttons);
         if (!answerable(shell, buttons, complete))
         {
             return ToolResult.error("Dialog '" + dialogId + "': " + HUMAN_REASON + ".").toJson();

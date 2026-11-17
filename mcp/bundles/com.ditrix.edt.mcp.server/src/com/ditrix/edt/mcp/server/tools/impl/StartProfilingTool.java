@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.debug.core.model.IDebugTarget;
 
@@ -19,6 +18,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
+import com.ditrix.edt.mcp.server.utils.ProfilingSessionRegistry;
 
 /**
  * Starts 1C performance measurement on the active
@@ -33,7 +33,7 @@ import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
  *
  * <p><b>Determinism.</b> The underlying EDT API ({@code IProfilingService})
  * exposes only a single {@code toggleProfiling(target)} primitive and no public
- * "is profiling active" query, so the on/off state is tracked here — keyed by
+ * "is profiling active" query, so {@link ProfilingSessionRegistry} tracks the state by
  * {@code applicationId} — as the single source of truth shared with
  * {@code stop_profiling} and {@code get_profiling_results}. {@code start_profiling}
  * is start-only and idempotent: calling it while profiling is already active does
@@ -49,155 +49,66 @@ public class StartProfilingTool implements IMcpTool
     /** Output key: whether this call started profiling (vs. already active). */
     private static final String KEY_STARTED = "started"; //$NON-NLS-1$
 
-    /**
-     * Shared on/off state, keyed by {@code applicationId}. The EDT profiling
-     * service keeps its per-target state internally with no public getter, so this
-     * set mirrors it for the application ids we drive via start/stop. It is the
-     * single source of truth reused by {@link StopProfilingTool} and
-     * {@link GetProfilingResultsTool} — do not add a parallel state holder.
-     */
-    private static final Map<String, Object> ACTIVE_APPLICATION_IDS = new ConcurrentHashMap<>();
+    static final Object TRANSITIONS = ProfilingSessionRegistry.TRANSITIONS;
 
-    /**
-     * Serializes start and stop: each one's lookup, its reading of EDT's state, the toggle and the flag change as
-     * one step, so a concurrent call never acts on a snapshot the other has already changed.
-     */
-    static final Object TRANSITIONS = new Object();
-
-    /** Owner of a flag set without a known target (tests, legacy callers). */
-    private static final Object UNKNOWN_TARGET = new Object();
-
-    /**
-     * @param applicationId the application id of a debug session
-     * @return {@code true} when profiling is currently marked active for the given id
-     */
     public static boolean isProfilingActive(String applicationId)
     {
-        return applicationId != null && ACTIVE_APPLICATION_IDS.containsKey(applicationId);
+        return ProfilingSessionRegistry.isProfilingActive(applicationId);
     }
 
-    /**
-     * Aligns the flag with the live target: EDT's own per-target state when readable, otherwise the flag is
-     * dropped when it was set for an earlier, ended session of the same applicationId (a relaunch keeps the id).
-     */
     static void reconcile(String applicationId, IDebugTarget target)
     {
-        if (applicationId == null) { return; }
-        if (target == null)
-        {
-            // A lookup miss proves nothing by itself (a relaunch may not be registered yet): drop the flag
-            // only when its own target has ended.
-            if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget owner && ended(owner))
-            {
-                // Only the owner checked: a concurrent start may have replaced it meanwhile.
-                ACTIVE_APPLICATION_IDS.remove(applicationId, owner);
-            }
-            return;
-        }
-        Boolean enabled;
-        try { enabled = ProfilingSupport.enabled(ProfilingSupport.service(), target); }
-        catch (RuntimeException e) { enabled = null; }
-        if (enabled != null)
-        {
-            boolean on = enabled;
-            ACTIVE_APPLICATION_IDS.compute(applicationId,
-                (key, current) -> ownerAfterReading(current, target, on, StartProfilingTool::ended));
-            return;
-        }
-        // Another owner is dropped only once it has ended: a stale lookup may predate a newer live owner.
-        if (ACTIVE_APPLICATION_IDS.get(applicationId) instanceof IDebugTarget owner && owner != target && ended(owner))
-        {
-            ACTIVE_APPLICATION_IDS.remove(applicationId, owner);
-        }
+        ProfilingSessionRegistry.reconcile(applicationId, target);
     }
 
-    /**
-     * The target start and stop reconcile and act on: the live target that owns the flag (several targets can
-     * share an applicationId, and discovery may pick another one), else the looked-up target.
-     */
     static IDebugTarget profiledTarget(String applicationId, IDebugTarget lookedUp)
     {
-        return profiledTarget(ACTIVE_APPLICATION_IDS.get(applicationId), lookedUp, StartProfilingTool::ended);
+        return ProfilingSessionRegistry.profiledTarget(applicationId, lookedUp);
     }
 
-    static IDebugTarget profiledTarget(Object owner, IDebugTarget lookedUp,
-        java.util.function.Predicate<IDebugTarget> ended)
+    static IDebugTarget profiledTarget(Object owner, IDebugTarget lookedUp, java.util.function.Predicate<IDebugTarget> ended)
     {
-        return owner instanceof IDebugTarget target && !ended.test(target) ? target : lookedUp;
+        return ProfilingSessionRegistry.profiledTarget(owner, lookedUp, ended);
     }
 
-    /**
-     * The flag owner after EDT reported the looked-up target's own profiling state ({@code null} = no flag). A
-     * live other owner is kept either way: the lookup may predate a relaunch that owner belongs to.
-     */
-    static Object ownerAfterReading(Object current, IDebugTarget target, boolean enabled,
-        java.util.function.Predicate<IDebugTarget> ended)
+    static Object ownerAfterReading(Object current, IDebugTarget target, boolean enabled, java.util.function.Predicate<IDebugTarget> ended)
     {
-        boolean replaceable = current == null || current == target || !(current instanceof IDebugTarget owner)
-            || ended.test(owner);
-        if (!replaceable)
-        {
-            return current;
-        }
-        return enabled && !ended.test(target) ? target : null;
+        return ProfilingSessionRegistry.ownerAfterReading(current, target, enabled, ended);
     }
 
-    /**
-     * A target is ended when it or its launch reports so, or when its launch has left the launch manager AND its
-     * client process has exited (a removed launch whose client still runs is kept live).
-     */
     static boolean ended(IDebugTarget target)
     {
-        org.eclipse.debug.core.DebugPlugin debug = org.eclipse.debug.core.DebugPlugin.getDefault();
-        return ended(target, launch -> debug != null
-            && java.util.Arrays.asList(debug.getLaunchManager().getLaunches()).contains(launch));
+        return ProfilingSessionRegistry.ended(target);
     }
 
     static boolean ended(IDebugTarget target, java.util.function.Predicate<org.eclipse.debug.core.ILaunch> registered)
     {
-        if (target.isTerminated()) { return true; }
-        org.eclipse.debug.core.ILaunch launch = target.getLaunch();
-        return launch == null || launch.isTerminated()
-            || !registered.test(launch) && com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.clientExited(launch);
+        return ProfilingSessionRegistry.ended(target, registered);
     }
 
-    /**
-     * @return {@code true} when profiling is currently marked active for at least
-     *         one application id (used to surface a global on/off hint when no
-     *         specific id is supplied).
-     */
     public static boolean isAnyProfilingActive()
     {
-        return !ACTIVE_APPLICATION_IDS.isEmpty();
+        return ProfilingSessionRegistry.isAnyProfilingActive();
     }
 
-    /** Marks profiling active for the given application id. Package-visible for the stop tool. */
     static void markActive(String applicationId)
     {
-        markActive(applicationId, null);
+        ProfilingSessionRegistry.markActive(applicationId);
     }
 
     static void markActive(String applicationId, IDebugTarget target)
     {
-        if (applicationId != null)
-        {
-            ACTIVE_APPLICATION_IDS.put(applicationId, target == null ? UNKNOWN_TARGET : target);
-        }
+        ProfilingSessionRegistry.markActive(applicationId, target);
     }
 
-    /** Marks profiling inactive for the given application id. Package-visible for the stop tool. */
     static void markInactive(String applicationId)
     {
-        if (applicationId != null)
-        {
-            ACTIVE_APPLICATION_IDS.remove(applicationId);
-        }
+        ProfilingSessionRegistry.markInactive(applicationId);
     }
 
-    /** For tests only — drops all tracked profiling state. */
     static void clearStateForTests()
     {
-        ACTIVE_APPLICATION_IDS.clear();
+        ProfilingSessionRegistry.clearStateForTests();
     }
 
     @Override
@@ -261,6 +172,12 @@ public class StartProfilingTool implements IMcpTool
             IDebugTarget lookedUp = DebugSessionRegistry.findActiveTarget(applicationId);
             // Read EDT's state of the target that owns the flag, so a run stopped elsewhere is noticed.
             IDebugTarget owner = profiledTarget(applicationId, lookedUp);
+            if (owner != null && ProfilingSupport.enabled(ProfilingSupport.service(), owner) == null)
+            {
+                return ToolResult.error("Profiling state is unknown; EDT's profiling state could not be read. "
+                    + "Inspect the profiling view before retrying; no toggle was sent.").toJson();
+            }
+
             reconcile(applicationId, owner);
             // The toggle acts on the looked-up target, so its own state is read too before it is toggled.
             if (lookedUp != null && lookedUp != owner && !isProfilingActive(applicationId))
@@ -291,7 +208,7 @@ public class StartProfilingTool implements IMcpTool
             // Resolve the profiling service + profile target and flip profiling on.
             // Gated above on our shared OFF state, so this toggle deterministically
             // switches profiling ON.
-            String toggleError = ProfilingSupport.toggleProfiling(target);
+            String toggleError = ProfilingSupport.startProfilingIfKnown(ProfilingSupport.service(), target);
             if (toggleError != null)
             {
                 return ToolResult.error(toggleError).toJson();

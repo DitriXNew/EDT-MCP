@@ -25,6 +25,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -1103,10 +1104,10 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("|---|---|---|---|---|\n"); //$NON-NLS-1$
             for (TerminationResult r : matching)
             {
-                sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.debugServerUrl)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.infobaseAlias)) //$NON-NLS-1$
+                sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.debugServerUrl)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.infobaseAlias)) //$NON-NLS-1$
                     .append(" | ").append(r.durationMs).append(" ms |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
@@ -1116,10 +1117,10 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("|---|---|---|---|---|---|\n"); //$NON-NLS-1$
             for (TerminationResult r : matching)
             {
-                sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.applicationId)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.mode)) //$NON-NLS-1$
+                sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.applicationId)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.mode)) //$NON-NLS-1$
                     .append(" | ").append(r.code) //$NON-NLS-1$
                     .append(" | ").append(r.durationMs).append(" ms |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
@@ -1146,11 +1147,11 @@ public class TerminateLaunchTool implements IMcpTool
         sb.append("|---|---|---|---|---|\n"); //$NON-NLS-1$
         for (TerminationResult r : matching)
         {
-            sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                .append(" | ").append(escape(r.applicationId)) //$NON-NLS-1$
+            sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.applicationId)) //$NON-NLS-1$
                 .append(" | ").append(r.attach ? "Yes" : "No") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .append(" | ").append(escape(r.note)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.note)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -1181,16 +1182,6 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("applicationId=").append(applicationId); //$NON-NLS-1$
         }
         return sb.length() > 0 ? sb.toString() : "<empty>"; //$NON-NLS-1$
-    }
-
-    private static String escape(String value)
-    {
-        if (value == null || value.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-        // Markdown table cell: escape pipes and collapse newlines.
-        return value.replace("|", "\\|").replace("\n", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     /**

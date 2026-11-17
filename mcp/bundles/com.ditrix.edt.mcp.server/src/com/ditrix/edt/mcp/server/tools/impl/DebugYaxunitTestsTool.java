@@ -32,6 +32,9 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
 {
     public static final String NAME = "debug_yaxunit_tests"; //$NON-NLS-1$
 
+    /** Release that removes this compatibility alias. */
+    public static final String REMOVAL_RELEASE = "2.27.0"; //$NON-NLS-1$
+
     /** Input param: comma-separated update scope for the pre-launch auto-chain. */
     private static final String KEY_UPDATE_SCOPE = "updateScope"; //$NON-NLS-1$
 

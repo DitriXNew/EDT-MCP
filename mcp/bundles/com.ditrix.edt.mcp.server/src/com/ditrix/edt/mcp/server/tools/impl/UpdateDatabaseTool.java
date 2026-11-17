@@ -52,10 +52,6 @@ import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-
 /**
  * Tool to update database (infobase) for an application.
  * Supports full and incremental update modes.
@@ -775,26 +771,15 @@ public class UpdateDatabaseTool implements IMcpTool
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
             
-            // Find application by ID. Bounded (#622): a deadline is NOT a not-found — nothing was
-            // measured and, importantly here, nothing was updated.
-            ApplicationSupport.BoundedRead<Optional<IApplication>> appRead =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
-            if (!appRead.concluded())
-            {
-                return ToolResult.error("Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
-                        + appRead.deadlineFailure()
-                        + ". The database was NOT updated. Retry once EDT is responsive.").toJson(); //$NON-NLS-1$
-            }
-            Optional<IApplication> appOpt = appRead.valueOrRethrow();
-            if (!appOpt.isPresent())
-            {
-                return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
-                        + "." + describeLaunchIdentifierHint(applicationId) //$NON-NLS-1$
-                        + " Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
-            }
-
-            IApplication application = appOpt.get();
+            ApplicationSupport.ApplicationResolution resolved = ApplicationSupport.resolveApplication(
+                appManager, project, applicationId, ApplicationSupport.LOOKUP_TIMEOUT_MS,
+                failure -> ToolResult.error("Could not resolve application '" + applicationId + "': "
+                    + failure + ". The database was NOT updated. Retry once EDT is responsive.").toJson(),
+                ToolResult.error("Application not found: " + applicationId + "."
+                    + describeLaunchIdentifierHint(applicationId)
+                    + " Use get_applications to get valid application IDs.").toJson());
+            if (resolved.errorJson() != null) { return resolved.errorJson(); }
+            IApplication application = resolved.application();
 
             // A standalone-server application stays listed after a branch switch; refuse a target
             // the current branch does not bind (checked again right before the update).
@@ -914,10 +899,10 @@ public class UpdateDatabaseTool implements IMcpTool
                     if (sessions.isReadable())
                     {
                         designerSessionsSeen = sessions.sessions().stream()
-                            .filter(InfobaseSessionsTool::isDesignerSession)
+                            .filter(InfobaseSessionSupport::isDesignerSession)
                             .toList();
                         List<SessionInfo> blockers = sessions.sessions().stream()
-                            .filter(session -> !InfobaseSessionsTool.isDesignerSession(session))
+                            .filter(session -> !InfobaseSessionSupport.isDesignerSession(session))
                             .toList();
                         if (!blockers.isEmpty())
                         {
@@ -1119,32 +1104,8 @@ public class UpdateDatabaseTool implements IMcpTool
 
     static String appendAccessSettingsDialogFailure(String result, long before, long after)
     {
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return result;
-        }
-        try
-        {
-            JsonElement parsed = JsonParser.parseString(result);
-            if (!parsed.isJsonObject())
-            {
-                return result;
-            }
-            JsonObject object = parsed.getAsJsonObject();
-            JsonElement success = object.get("success"); //$NON-NLS-1$
-            JsonElement error = object.get("error"); //$NON-NLS-1$
-            if (success == null || success.getAsBoolean() || error == null || !error.isJsonPrimitive())
-            {
-                return result;
-            }
-            object.addProperty("error", error.getAsString() + " " + note); //$NON-NLS-1$ //$NON-NLS-2$
-            return object.toString();
-        }
-        catch (RuntimeException e)
-        {
-            return result;
-        }
+        return ToolResult.appendErrorNote(result,
+            InfobaseAuthDialogSuppressor.appendFailureNote("", before, after));
     }
 
     /**

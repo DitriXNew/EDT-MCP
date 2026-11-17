@@ -18,7 +18,6 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
@@ -49,6 +48,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
@@ -73,7 +73,6 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.YaxunitJobCancellation;
 import com.ditrix.edt.mcp.server.utils.YaxunitReportUtils;
 import com.e1c.g5.dt.applications.ApplicationException;
-import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
@@ -181,6 +180,7 @@ public class RunYaxunitTestsTool implements IMcpTool
 
     /** Lazily registered listener that evicts terminated launches from {@link #ACTIVE_LAUNCHES}. */
     private static final AtomicBoolean LISTENER_REGISTERED = new AtomicBoolean(false);
+    private static Runnable listenerDisposable;
 
     /** Per-launch counter for the unique debug-mode report directory name. */
     private static final AtomicLong DEBUG_LAUNCH_COUNTER = new AtomicLong(0);
@@ -1394,7 +1394,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         if (appManager == null)
         {
             return LaunchContext.failure(
-                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+                ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson()); //$NON-NLS-1$
         }
 
         // A runtime-client launch config may carry no applicationId (it was not
@@ -2355,23 +2355,13 @@ public class RunYaxunitTestsTool implements IMcpTool
     String validateApplicationExists(IApplicationManager appManager, IProject project,
             String applicationId, long timeoutMs)
     {
-        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-            ApplicationSupport.getApplicationBounded(appManager, project, applicationId, timeoutMs);
-        if (!read.concluded())
-        {
-            return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
-                    + " (" + read.deadlineFailure() //$NON-NLS-1$
-                    + "). No test run was started.").toJson(); //$NON-NLS-1$
-        }
         try
         {
-            Optional<IApplication> appOpt = read.valueOrRethrow();
-            if (!appOpt.isPresent())
-            {
-                return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
-                        + ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
-            }
-            return null;
+            return ApplicationSupport.resolveApplication(appManager, project, applicationId, timeoutMs,
+                failure -> ToolResult.error("Failed to validate application: " + applicationId + " ("
+                    + failure + "). No test run was started.").toJson(),
+                ToolResult.error("Application not found: " + applicationId
+                    + ". Use get_applications to get valid application IDs.").toJson()).errorJson();
         }
         catch (ApplicationException e)
         {
@@ -2387,7 +2377,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * tool never observes itself (for example because the caller never polls
      * again after a Pending response and the launch then crashes or finishes).
      */
-    private static void ensureLaunchListenerRegistered()
+    private static synchronized Runnable ensureLaunchListenerRegistered()
     {
         if (LISTENER_REGISTERED.compareAndSet(false, true))
         {
@@ -2395,15 +2385,15 @@ public class RunYaxunitTestsTool implements IMcpTool
             if (debugPlugin == null)
             {
                 LISTENER_REGISTERED.set(false);
-                return;
+                return listenerDisposable;
             }
             ILaunchManager launchManager = debugPlugin.getLaunchManager();
             if (launchManager == null)
             {
                 LISTENER_REGISTERED.set(false);
-                return;
+                return listenerDisposable;
             }
-            launchManager.addLaunchListener(new ILaunchListener()
+            ILaunchListener listener = new ILaunchListener()
             {
                 @Override
                 public void launchAdded(ILaunch launch)
@@ -2425,9 +2415,15 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     evict(launch);
                 }
+            };
+            launchManager.addLaunchListener(listener);
+            listenerDisposable = com.ditrix.edt.mcp.server.utils.ListenerDisposables.register(() -> {
+                launchManager.removeLaunchListener(listener);
+                LISTENER_REGISTERED.set(false);
             });
             Activator.logInfo("YAXUnit launch listener registered"); //$NON-NLS-1$
         }
+        return listenerDisposable;
     }
 
     /** Removes the given launch from {@link #ACTIVE_LAUNCHES} regardless of which key it lives under. */
@@ -2885,9 +2881,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             sb.append("|------|---------|----------------|\n"); //$NON-NLS-1$
             for (ILaunchConfiguration config : allConfigs)
             {
-                sb.append("| ").append(config.getName()); //$NON-NLS-1$
-                sb.append(" | ").append(LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, "")); //$NON-NLS-1$ //$NON-NLS-2$
-                sb.append(" | ").append(LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_APPLICATION_ID, "")); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append("| ").append(MarkdownUtils.escapeForTable(config.getName())); //$NON-NLS-1$
+                sb.append(" | ").append(MarkdownUtils.escapeForTable(LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, ""))); //$NON-NLS-1$ //$NON-NLS-2$
+                sb.append(" | ").append(MarkdownUtils.escapeForTable(LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_APPLICATION_ID, ""))); //$NON-NLS-1$ //$NON-NLS-2$
                 sb.append(" |\n"); //$NON-NLS-1$
             }
         }

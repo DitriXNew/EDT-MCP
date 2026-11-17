@@ -1660,8 +1660,8 @@ public final class LaunchLifecycleUtils
             ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
         if (!read.concluded())
         {
-            Activator.logError("Error resolving default application for project " //$NON-NLS-1$
-                + project.getName() + ": " + read.deadlineFailure(), null); //$NON-NLS-1$
+            Activator.logWarning("Error resolving default application for project " //$NON-NLS-1$
+                + project.getName() + ": " + read.deadlineFailure()); //$NON-NLS-1$
             return new DefaultApplicationLookup(applicationId, read.deadlineFailure());
         }
         try
@@ -1853,7 +1853,7 @@ public final class LaunchLifecycleUtils
     {
         if (appManager == null)
         {
-            return Optional.of("IApplicationManager service is not available"); //$NON-NLS-1$
+            return Optional.of(ApplicationSupport.MANAGER_UNAVAILABLE); //$NON-NLS-1$
         }
         if (project == null || !project.exists() || !project.isOpen())
         {
@@ -1944,7 +1944,7 @@ public final class LaunchLifecycleUtils
     {
         if (appManager == null)
         {
-            return Optional.of("IApplicationManager service is not available"); //$NON-NLS-1$
+            return Optional.of(ApplicationSupport.MANAGER_UNAVAILABLE); //$NON-NLS-1$
         }
         if (project == null || !project.exists() || !project.isOpen())
         {
@@ -2144,27 +2144,6 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Resolves the display name of {@code applicationId} — the string EDT interpolates into its
-     * "Infobase \"<name>\" configuration was changed…" conflict modal — so a launch window can
-     * arm the auto-confirmer with an ATTRIBUTABLE name. Fully guarded and best-effort: a name
-     * that cannot be resolved simply yields {@code null}.
-     *
-     * <p>A caller that also needs the server name, or that has to tell "no name" from "the name
-     * could not be READ", uses {@link #attributionNames} instead — this form collapses both into
-     * {@code null} and pays a second bounded read for the second name.
-     *
-     * @param appManager the EDT application manager (may be {@code null})
-     * @param project the project the application belongs to (may be {@code null})
-     * @param applicationId the application id (may be {@code null})
-     * @return the application display name, or {@code null}
-     */
-    public static String attributionInfobaseName(IApplicationManager appManager, IProject project,
-        String applicationId)
-    {
-        return attributionNames(appManager, project, applicationId).infobaseName();
-    }
-
-    /**
      * Resolves BOTH attribution names from ONE bounded application read.
      *
      * <p>The two names come off the same {@link IApplication}, so reading it twice doubled the
@@ -2277,8 +2256,8 @@ public final class LaunchLifecycleUtils
             {
                 // Logged, not swallowed: this is the read whose failure silently degrades a
                 // writing policy to 'cancel', so it must leave a trace the reader can find.
-                Activator.logError("Attribution lookup for application '" + applicationId //$NON-NLS-1$
-                    + "' did not conclude: " + read.deadlineFailure(), null); //$NON-NLS-1$
+                Activator.logWarning("Attribution lookup for application '" + applicationId //$NON-NLS-1$
+                    + "' did not conclude: " + read.deadlineFailure()); //$NON-NLS-1$
                 return new AttributionNames(null, null, true);
             }
             if (read.failure() != null)

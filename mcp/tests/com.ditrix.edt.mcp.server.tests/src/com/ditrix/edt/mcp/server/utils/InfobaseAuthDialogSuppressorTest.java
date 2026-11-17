@@ -495,4 +495,21 @@ public class InfobaseAuthDialogSuppressorTest
             return "{\"success\":true}"; //$NON-NLS-1$
         }
     }
+
+    @Test
+    public void sharedFailureNotePreservesMultiStatusAndSuccess()
+    {
+        var child = new org.eclipse.core.runtime.Status(org.eclipse.core.runtime.IStatus.ERROR, "test", "Child");
+        var status = new org.eclipse.core.runtime.MultiStatus("test", 7,
+            new org.eclipse.core.runtime.IStatus[] {child}, "Primary", null);
+        var result = InfobaseAuthDialogSuppressor.appendFailureNote(status, 1, 2);
+        assertTrue(result.isMultiStatus());
+        assertEquals(7, result.getCode());
+        assertEquals(child, result.getChildren()[0]);
+        assertTrue(result.getMessage().startsWith("Primary "));
+        assertEquals(status, InfobaseAuthDialogSuppressor.appendFailureNote(status, 2, 2));
+        assertEquals(org.eclipse.core.runtime.Status.OK_STATUS, InfobaseAuthDialogSuppressor.appendFailureNote(
+            org.eclipse.core.runtime.Status.OK_STATUS, 1, 2));
+    }
+
 }

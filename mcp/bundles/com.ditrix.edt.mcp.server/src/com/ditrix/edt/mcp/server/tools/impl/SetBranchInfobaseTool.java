@@ -1325,7 +1325,7 @@ public class SetBranchInfobaseTool implements IMcpTool
         if (appManager == null)
         {
             return ApplicationReferenceResolution.error(ToolResult.error(
-                "IApplicationManager service is not available. EDT may still be starting up — retry " //$NON-NLS-1$
+                ApplicationSupport.MANAGER_UNAVAILABLE + ". EDT may still be starting up — retry " //$NON-NLS-1$
                 + "in a moment.").toJson()); //$NON-NLS-1$
         }
         // Bounded (#622): an unbounded lookup would hold this call open with nothing bound.
@@ -1334,7 +1334,7 @@ public class SetBranchInfobaseTool implements IMcpTool
                 ApplicationSupport.LOOKUP_TIMEOUT_MS);
         if (!read.concluded())
         {
-            Activator.logError("set_branch_infobase: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            Activator.logWarning("set_branch_infobase: " + read.deadlineFailure()); //$NON-NLS-1$
             return ApplicationReferenceResolution.error(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
                 + applicationId + "': " + read.deadlineFailure() //$NON-NLS-1$
                 + ". Nothing was bound.").toJson()); //$NON-NLS-1$

@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +21,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTException;
 import org.eclipse.swt.custom.CLabel;
 import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
@@ -646,7 +644,8 @@ public final class LaunchUpdateDialogAutoConfirmer
         try
         {
             StringBuilder sb = new StringBuilder();
-            appendLabelTexts(shell, 0, sb, new int[] {MAX_DIALOG_CONTROLS});
+            com.ditrix.edt.mcp.server.utils.ui.ShellSnapshot.appendLabelTexts(
+                shell, 0, sb, new int[] {MAX_DIALOG_CONTROLS}, MAX_BODY_SCAN_DEPTH, MAX_DIALOG_TEXT_CHARS);
             return sb.length() == 0 ? null : sb.toString();
         }
         catch (RuntimeException e)
@@ -661,29 +660,6 @@ public final class LaunchUpdateDialogAutoConfirmer
      * (each label is truncated to what is left of the budget) and by the number of controls
      * visited ({@code budget[0]}, decremented per node).
      */
-    private static void appendLabelTexts(Control control, int depth, StringBuilder sb, int[] budget)
-    {
-        if (control == null || control.isDisposed() || depth > MAX_BODY_SCAN_DEPTH || budget[0] <= 0
-            || sb.length() >= MAX_DIALOG_TEXT_CHARS)
-        {
-            return;
-        }
-        budget[0]--;
-        String own = labelLikeText(control);
-        if (own != null && !own.isEmpty())
-        {
-            int room = MAX_DIALOG_TEXT_CHARS - sb.length();
-            sb.append(own, 0, Math.min(own.length(), room)).append('\n');
-        }
-        if (control instanceof Composite)
-        {
-            for (Control child : ((Composite)control).getChildren())
-            {
-                appendLabelTexts(child, depth + 1, sb, budget);
-            }
-        }
-    }
-
     /**
      * Pure decision (and test seam): does the dialog body name any of {@code names}, quoted the
      * way EDT renders it? A blank body or an empty name list yields {@code false} — an
@@ -1888,90 +1864,8 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static String findBodyText(Control control, int depth)
     {
-        if (control == null || control.isDisposed() || depth > MAX_BODY_SCAN_DEPTH)
-        {
-            return null;
-        }
-        // This control's own label-like text: a 1003-prefix match short-circuits; // NOSONAR explanatory comment, not commented-out code
-        // otherwise it is the running best-effort fallback.
-        String firstSeen = ownLabelMatch(control);
-        if (firstSeen != null && isDebugSessionExistsBody(firstSeen))
-        {
-            return firstSeen;
-        }
-        if (control instanceof Composite)
-        {
-            return scanChildren((Composite)control, depth, firstSeen);
-        }
-        return firstSeen;
-    }
-
-    /**
-     * The control's OWN label-like text when non-blank, else {@code null}. Pure
-     * sub-block of {@link #findBodyText}: a {@link #isDebugSessionExistsBody}
-     * prefix match is preserved for the caller to short-circuit on.
-     */
-    private static String ownLabelMatch(Control control)
-    {
-        String text = labelLikeText(control);
-        return text != null && !text.trim().isEmpty() ? text : null;
-    }
-
-    /**
-     * Pre-order scan of a composite's children for {@link #findBodyText}: returns
-     * the first child text matching a 1003 prefix, else {@code firstSeen} (the
-     * parent's running best-effort fallback, kept if the parent already had one or
-     * promoted to the first non-blank child text otherwise). Same skipping and
-     * first-wins fallback semantics as the inline loop it replaces.
-     */
-    private static String scanChildren(Composite composite, int depth, String firstSeen)
-    {
-        String best = firstSeen;
-        for (Control child : composite.getChildren())
-        {
-            String childText = findBodyText(child, depth + 1);
-            if (childText != null)
-            {
-                if (isDebugSessionExistsBody(childText))
-                {
-                    return childText;
-                }
-                if (best == null)
-                {
-                    best = childText;
-                }
-            }
-        }
-        return best;
-    }
-
-    /** @return the text of a {@link Label}/{@link CLabel}/{@link Text}/{@link Link}, else {@code null}. */
-    private static String labelLikeText(Control control)
-    {
-        try
-        {
-            if (control instanceof Label)
-            {
-                return ((Label)control).getText();
-            }
-            if (control instanceof CLabel)
-            {
-                return ((CLabel)control).getText();
-            }
-            if (control instanceof Text)
-            {
-                return ((Text)control).getText();
-            }
-            if (control instanceof Link)
-            {
-                return ((Link)control).getText();
-            }
-        }
-        catch (RuntimeException e)
-        {
-            return null;
-        }
-        return null;
+        return com.ditrix.edt.mcp.server.utils.ui.ShellSnapshot.findBodyText(control, depth,
+            MAX_BODY_SCAN_DEPTH, LaunchUpdateDialogAutoConfirmer::isDebugSessionExistsBody);
     }
 
     /**
@@ -2223,37 +2117,8 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static Button findButtonByLabel(Control control, int depth, Set<String> labels)
     {
-        if (control == null || control.isDisposed() || depth > MAX_BODY_SCAN_DEPTH)
-        {
-            return null;
-        }
-        if (control instanceof Button)
-        {
-            Button b = (Button)control;
-            try
-            {
-                if (matchesButtonLabel(b.getText(), labels))
-                {
-                    return b;
-                }
-            }
-            catch (RuntimeException e)
-            {
-                // ignore this button, keep scanning
-            }
-        }
-        if (control instanceof Composite)
-        {
-            for (Control child : ((Composite)control).getChildren())
-            {
-                Button found = findButtonByLabel(child, depth + 1, labels);
-                if (found != null)
-                {
-                    return found;
-                }
-            }
-        }
-        return null;
+        return com.ditrix.edt.mcp.server.utils.ui.ShellSnapshot.findButton(control, depth,
+            MAX_BODY_SCAN_DEPTH, label -> matchesButtonLabel(label, labels));
     }
 
     /**

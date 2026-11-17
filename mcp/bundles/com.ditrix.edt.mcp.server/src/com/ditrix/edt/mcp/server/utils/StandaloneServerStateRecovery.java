@@ -3025,27 +3025,14 @@ public final class StandaloneServerStateRecovery
     }
 
     /**
-     * The pre-flight for a caller that names no application: EDT prepares the project's DEFAULT
-     * application (that is what the external-object dump does), so that is the server whose state
-     * has to be settled.
-     *
-     * @param project the project whose default application will be prepared (may be {@code null} —
-     *     no-op)
-     */
-    public static void ensureDefaultApplicationStartable(IProject project)
-    {
-        ensureDefaultApplicationStartableThen(project, 0L, null, null, null);
-    }
-
-    /**
      * The default-application pre-flight followed by {@code work} (the dump that prepares, and so
      * starts, that application), BOTH under the application's infobase lock
      * ({@link LaunchLifecycleUtils#lockFor}) - the lock an explicit {@code standalone_server}
      * stop takes first. Without it a confirmed stop could land between the pre-flight and the
      * prepare, and the work would start the server the stop just held.
      *
-     * <p>When the default application cannot be resolved, the pre-flight is skipped exactly as
-     * {@link #ensureDefaultApplicationStartable} always did (logged) and {@code work} runs unlocked:
+     * <p>When the default application cannot be resolved, the failure is logged and
+     * {@code work} runs unlocked:
      * there is no application id to lock, and EDT's own prepare then fails on its own terms.
      *
      * @param project the project whose default application the work prepares (may be {@code null})

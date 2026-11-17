@@ -225,4 +225,16 @@ public class StartProfilingToolTest
         assertFalse(StartProfilingTool.isProfilingActive("x")); //$NON-NLS-1$
         assertFalse(StartProfilingTool.isAnyProfilingActive());
     }
+
+    @Test public void unknownPlatformStateRefusesWithoutToggling()
+    {
+        var target = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class,
+            org.mockito.Mockito.withSettings().extraInterfaces(com._1c.g5.v8.dt.profiling.core.IProfileTarget.class));
+        var service = org.mockito.Mockito.mock(com._1c.g5.v8.dt.profiling.core.IProfilingService.class);
+        String refusal = com.ditrix.edt.mcp.server.utils.ProfilingSupport.startProfilingIfKnown(service, target);
+        assertTrue(refusal, refusal.contains("unknown"));
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).toggleProfiling(
+            org.mockito.ArgumentMatchers.any());
+    }
+
 }

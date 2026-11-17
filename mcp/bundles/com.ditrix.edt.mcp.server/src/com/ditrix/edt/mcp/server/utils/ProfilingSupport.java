@@ -28,7 +28,20 @@ import com.ditrix.edt.mcp.server.Activator;
 /** Typed EDT service access and bounded completion of asynchronous measurements. */
 public final class ProfilingSupport
 {
+    private static final java.util.concurrent.atomic.AtomicBoolean STATE_WARNING =
+        new java.util.concurrent.atomic.AtomicBoolean();
+
     private ProfilingSupport() { }
+
+    private static Boolean unknownState(String reason)
+    {
+        if (STATE_WARNING.compareAndSet(false, true))
+        {
+            Activator.logWarning("ProfilingService.states is unreadable: " + reason
+                + "; profiling state is unknown.");
+        }
+        return null;
+    }
 
     public static IProfilingService service()
     {
@@ -134,13 +147,28 @@ public final class ProfilingSupport
             {
                 Field field = type.getDeclaredField("states"); //$NON-NLS-1$
                 field.setAccessible(true);
-                if (!(field.get(service) instanceof Map<?, ?> states)) { return null; }
+                if (!(field.get(service) instanceof Map<?, ?> states)) { return unknownState("not a map"); }
                 Object state = states.get(profile);
                 return state != null && "ENABLED".equals(String.valueOf(state)); //$NON-NLS-1$
             }
             catch (NoSuchFieldException e) { continue; }
-            catch (ReflectiveOperationException | RuntimeException e) { return null; }
+            catch (ReflectiveOperationException | RuntimeException e)
+            {
+                return unknownState(PlatformFailures.describe(e));
+            }
         }
+        return unknownState("member not found");
+    }
+
+    /** Refuses an unsafe start toggle when EDT's current state cannot be established. */
+    public static String startProfilingIfKnown(IProfilingService service, IDebugTarget target)
+    {
+        Boolean state = enabled(service, target);
+        if (state == null)
+        {
+            return "Profiling state is unknown; inspect the EDT profiling view before retrying. No toggle was sent.";
+        }
+        if (!state) { service.toggleProfiling(profileTarget(target)); }
         return null;
     }
 

@@ -1199,7 +1199,7 @@ public class CreateInfobaseTool implements IMcpTool
         IApplicationManager manager = managerLookup.get();
         return manager == null
             ? new ApplicationContext(null, null,
-                ToolResult.error("IApplicationManager service is not available").toJson()) //$NON-NLS-1$
+                ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson()) //$NON-NLS-1$
             : new ApplicationContext(project, manager, null);
     }
 
@@ -1269,19 +1269,6 @@ public class CreateInfobaseTool implements IMcpTool
                 + "existing file infobase; use mode='create' to make a new one.").toJson(); //$NON-NLS-1$
         }
         return null;
-    }
-
-    /**
-     * Builds the FILE {@link InfobaseReference} for the new infobase (read-only construction). The
-     * reference MUST carry a UUID before {@code perform()}: the creation operation locks the infobase
-     * by its UUID very early ({@code LockManager.getLock}), which NPEs on a null id.
-     */
-    private static InfobaseReference buildInfobaseReference(Path infobaseDir, String infobaseName)
-    {
-        InfobaseReference ibRef =
-            InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
-        InfobaseReferenceFactory.named(ibRef, infobaseName);
-        return ibRef;
     }
 
     /**

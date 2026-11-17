@@ -372,4 +372,20 @@ public class TerminateLaunchToolTest
         stale.clear(); // must not throw on an unmodifiable list
         assertTrue(stale.isEmpty());
     }
+
+    @Test public void issueTableEscapesPipesAndAllLineBreaks() throws Exception
+    {
+        var launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        var result = new TerminateLaunchTool.TerminationResult(launch);
+        result.code = "failed";
+        result.note = "Part|one\r\nPart two";
+        var method = TerminateLaunchTool.class.getDeclaredMethod("appendIssueSection",
+            StringBuilder.class, String.class, List.class, String.class);
+        method.setAccessible(true);
+        StringBuilder rendered = new StringBuilder();
+        method.invoke(null, rendered, "Failed", List.of(result), "failed");
+        assertTrue(rendered.toString(), rendered.toString().contains("Part\\|one Part two"));
+        assertFalse(rendered.toString().contains("\r"));
+    }
+
 }
