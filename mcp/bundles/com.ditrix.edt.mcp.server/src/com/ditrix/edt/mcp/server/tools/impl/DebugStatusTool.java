@@ -181,6 +181,7 @@ public class DebugStatusTool implements IMcpTool
         {
             entry.put("stateNote", note); //$NON-NLS-1$
         }
+        entry.putAll(com.ditrix.edt.mcp.server.utils.clientwindow.ClientWindowRegistry.describe(launch));
         return entry;
     }
 

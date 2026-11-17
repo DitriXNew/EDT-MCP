@@ -60,6 +60,9 @@ import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StartOutcome;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparation;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparationStage;
 import com.ditrix.edt.mcp.server.utils.AttributableCancel;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.clientwindow.ClientWindowLaunch;
+import com.ditrix.edt.mcp.server.utils.clientwindow.WindowRequest;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
@@ -204,6 +207,130 @@ public class LaunchToolTest
         when(config.getType()).thenReturn(type);
         assertNull(new LaunchTool().performLaunch(config, false, null));
         verify(config).launch(eq(ILaunchManager.DEBUG_MODE), any());
+    }
+
+    @Test
+    public void isolatedLaunchRefusesHeldLockAndNamesRunningUpdateBeforePreparation() throws Exception
+    {
+        String project = "isolated-busy-launch-project";
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        String jobId = null;
+        try
+        {
+            String pending = new UpdateDatabaseTool().startUpdateJob(project, "app", 0, () -> {
+                assertTrue(lock.tryAcquire(0, null).acquired());
+                try
+                {
+                    held.countDown();
+                    try { assertTrue(release.await(10, TimeUnit.SECONDS)); }
+                    catch (InterruptedException e) { throw new AssertionError(e); }
+                    return "{}";
+                }
+                finally { lock.unlock(); }
+            });
+            jobId = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
+            assertTrue(held.await(5, TimeUnit.SECONDS));
+            var config = lockedLaunchConfig(project, "app");
+            var result = LaunchTool.startClientWindow(LaunchLifecycleUtils.tryLaunchOperation(project, "app"),
+                () -> ClientWindowLaunch.start(config, WindowRequest.parse("isolated", null),
+                    ILaunchManager.RUN_MODE, true, ExternalInfobaseChangesPolicy.DEFAULT,
+                    StandaloneServerPortConflictPolicy.DEFAULT, null,
+                    ignored -> { throw new AssertionError("Isolated launch must not dispatch the delegate"); }));
+            assertTrue(result.error(), result.error().contains("launch lock"));
+            assertTrue(result.error(), result.error().contains("update_database job " + jobId));
+            assertTrue(result.error(), result.error().contains("get_job_status"));
+            verify(config, never()).getAttribute(anyString(), anyString());
+            verify(config, never()).launch(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            if (jobId != null) { BackgroundJobs.shared().await(jobId, 5_000); }
+        }
+    }
+
+    /** A competing thread distinguishes exclusion from same-thread reentrancy. */
+    private static void assertWindowLaunchLockAvailable(String project, boolean expected) throws Exception
+    {
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        AtomicReference<Boolean> acquired = new AtomicReference<>();
+        Thread contender = new Thread(() -> {
+            boolean free = lock.tryAcquire(0, null).acquired();
+            acquired.set(free);
+            if (free) { lock.unlock(); }
+        });
+        contender.start();
+        contender.join(5_000);
+        assertEquals(Boolean.valueOf(expected), acquired.get());
+    }
+
+    @Test
+    public void isolatedPreparationAndProcessStartHoldLeaseButClientLifetimeDoesNot() throws Exception
+    {
+        String project = "isolated-start-launch-project";
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        List<String> events = new ArrayList<>();
+        var expected = new ClientWindowLaunch.Execution(null, Map.of("windowMode", "isolated", "status", "running"));
+        var result = LaunchTool.startClientWindow(LaunchLifecycleUtils.tryLaunchOperation(project, "app"), () -> {
+            // Synchronous isolated preparation and process start are one dispatch, with no normal callback.
+            assertTrue(lock.isHeldByCurrentThread());
+            try { assertWindowLaunchLockAvailable(project, false); }
+            catch (Exception e) { throw new AssertionError(e); }
+            events.add("prepare/update");
+            assertTrue(lock.isHeldByCurrentThread());
+            events.add("process started");
+            return new ClientWindowLaunch.Started(expected);
+        });
+        assertSame(expected, result);
+        assertEquals(List.of("prepare/update", "process started"), events);
+        assertFalse(lock.isHeldByCurrentThread());
+        // Released once the process is started: the client's lifetime does not hold the lease.
+        assertWindowLaunchLockAvailable(project, true);
+    }
+
+    @Test
+    public void windowAdjustmentRunsAfterDispatchLeaseRelease() throws Exception
+    {
+        String project = "window-adjustment-launch-project";
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        AtomicInteger adjustments = new AtomicInteger();
+        var result = LaunchTool.startClientWindow(LaunchLifecycleUtils.tryLaunchOperation(project, "app"), () -> {
+            assertTrue(lock.isHeldByCurrentThread());
+            return new ClientWindowLaunch.Started(null, () -> {
+                assertFalse(lock.isHeldByCurrentThread());
+                try { assertWindowLaunchLockAvailable(project, true); }
+                catch (Exception e) { throw new AssertionError(e); }
+                adjustments.incrementAndGet();
+                return new ClientWindowLaunch.Execution(null, Map.of("windowModeApplied", true));
+            });
+        });
+        assertNull(result.error());
+        assertEquals(1, adjustments.get());
+    }
+
+    @Test
+    public void windowDispatchFailureReleasesLeaseAndReentrantDispatchPreservesCaller() throws Exception
+    {
+        String project = "window-failure-launch-project";
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        org.junit.Assert.assertThrows(IllegalStateException.class, () ->
+            LaunchTool.startClientWindow(LaunchLifecycleUtils.tryLaunchOperation(project, "app"), () -> {
+                assertTrue(lock.isHeldByCurrentThread());
+                throw new IllegalStateException("preparation failed");
+            }));
+        assertWindowLaunchLockAvailable(project, true);
+        assertTrue(lock.tryAcquire(0, null).acquired());
+        try
+        {
+            var result = LaunchTool.startClientWindow(LaunchLifecycleUtils.tryLaunchOperation(project, "app"),
+                () -> new ClientWindowLaunch.Started(new ClientWindowLaunch.Execution(null, Map.of())));
+            assertNull(result.error());
+            assertTrue(lock.isHeldByCurrentThread());
+        }
+        finally { lock.unlock(); }
+        assertWindowLaunchLockAvailable(project, true);
     }
 
     private static final String STANDALONE_SERVER_TYPE_ID =
@@ -2718,4 +2845,23 @@ public class LaunchToolTest
             resolution.error.contains("Application not found")); //$NON-NLS-1$
         assertNull("and it must not hand on a resolved application", resolution.application); //$NON-NLS-1$
     }
+    @Test
+    public void windowModeAndScreenAreValidatedBeforeAnyLaunch()
+    {
+        LaunchTool tool = new LaunchTool();
+        var invalidMode = JsonParser.parseString(tool.execute(Map.of("windowMode", "hidden"))).getAsJsonObject();
+        assertFalse(invalidMode.get("success").getAsBoolean());
+        assertTrue(invalidMode.toString().contains("hidden"));
+        assertTrue(invalidMode.toString().contains("isolated"));
+        var invalidScreen = JsonParser.parseString(tool.execute(Map.of("windowMode", "otherScreen", "screen", "1.5"))).getAsJsonObject();
+        assertFalse(invalidScreen.get("success").getAsBoolean());
+        assertTrue(invalidScreen.toString().contains("integer"));
+        var wrongMode = JsonParser.parseString(tool.execute(Map.of("windowMode", "normal", "screen", "2"))).getAsJsonObject();
+        assertFalse(wrongMode.get("success").getAsBoolean());
+        assertTrue(wrongMode.toString().contains("otherScreen"));
+        var schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject().getAsJsonObject("properties");
+        assertEquals(4, schema.getAsJsonObject("windowMode").getAsJsonArray("enum").size());
+        assertEquals("integer", schema.getAsJsonObject("screen").get("type").getAsString());
+    }
+
 }

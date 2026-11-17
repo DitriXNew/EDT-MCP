@@ -45,6 +45,8 @@ import com.ditrix.edt.mcp.server.utils.LaunchAbortReason;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.clientwindow.ClientWindowLaunch;
+import com.ditrix.edt.mcp.server.utils.clientwindow.WindowRequest;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchOperation;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
@@ -83,6 +85,8 @@ public class LaunchTool implements IMcpTool
     public static final String NAME = "launch"; //$NON-NLS-1$
 
     /** Input/output key: requested EDT launch mode. */
+    private static final String KEY_WINDOW_MODE = "windowMode";
+    private static final String KEY_SCREEN = "screen";
     private static final String KEY_MODE = "mode"; //$NON-NLS-1$
 
     /** MCP launch-mode token preserving the historical behaviour. */
@@ -167,6 +171,9 @@ public class LaunchTool implements IMcpTool
                 "Launch mode: debug (default) or run. Attach configurations support debug only; " //$NON-NLS-1$
                     + "standalone servers always start in debug mode.", //$NON-NLS-1$
                 MODE_DEBUG, MODE_RUN)
+            .property(KEY_WINDOW_MODE, "Client window; default normal.", Map.of("type", "string",
+                "enum", List.of("normal", "minimized", "otherScreen", "isolated"), "default", "normal"))
+            .integerProperty(KEY_SCREEN, "1-based monitor index for otherScreen; default first non-primary.")
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
@@ -218,6 +225,10 @@ public class LaunchTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_LAUNCH_CONFIGURATION, "Name of the launched/running launch configuration") //$NON-NLS-1$
             .stringProperty(KEY_CONFIGURATION_TYPE, "Launch configuration type id") //$NON-NLS-1$
+            .stringProperty(KEY_WINDOW_MODE, "Requested client window mode")
+            .booleanProperty("windowModeApplied", "Whether the requested window mode was applied")
+            .stringProperty("windowModeReason", "Adjustment failure or platform limitation")
+            .integerProperty("pid", "Client process id")
             .booleanProperty(KEY_ATTACH, "True if this is an Attach (server-side debug) configuration") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "EDT project name associated with the launch") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Application id of the launched configuration") //$NON-NLS-1$
@@ -264,6 +275,16 @@ public class LaunchTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        WindowRequest windowRequest;
+        try
+        {
+            windowRequest = WindowRequest.parse(JsonUtils.extractStringArgument(params, KEY_WINDOW_MODE),
+                JsonUtils.extractStringArgument(params, KEY_SCREEN));
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
         String rawMode = JsonUtils.extractStringArgument(params, KEY_MODE);
         String mode = extractLaunchMode(params);
         if (mode == null)
@@ -316,11 +337,14 @@ public class LaunchTool implements IMcpTool
             return prepared.errorJson;
         }
 
+        String windowPreflight = ClientWindowLaunch.preflight(windowRequest);
+        if (windowPreflight != null) { return ToolResult.error(windowPreflight).toJson(); }
+
         // Target form 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
             return launchByConfigName(configName, updateBeforeLaunch, updateRequested, policyRequested,
-                restartIfRunning, policy, portPolicy, overrides, prepared, mode);
+                restartIfRunning, policy, portPolicy, overrides, prepared, mode, windowRequest);
         }
 
         // Target form 2: project + application (runtime-client only).
@@ -344,7 +368,7 @@ public class LaunchTool implements IMcpTool
         }
 
         return launch(projectName, applicationId, updateBeforeLaunch, restartIfRunning, policy,
-            portPolicy, overrides, prepared, mode);
+            portPolicy, overrides, prepared, mode, windowRequest);
     }
 
     /**
@@ -389,7 +413,7 @@ public class LaunchTool implements IMcpTool
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean updateRequested, boolean policyRequested, boolean restartIfRunning,
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode)
+        LaunchOverrides.Prepared prepared, String mode, WindowRequest windowRequest)
     {
         LaunchOperation operation = null;
         try
@@ -416,6 +440,8 @@ public class LaunchTool implements IMcpTool
                 return err.toJson();
             }
 
+            String windowRefusal = ClientWindowLaunch.configurationRefusal(config, windowRequest);
+            if (windowRefusal != null) { return windowRefusal; }
             String typeId = LaunchConfigUtils.getConfigTypeId(config);
             boolean isAttach = LaunchConfigUtils.isAttachConfigTypeId(typeId);
             String configProject = LaunchConfigUtils.readAttribute(config,
@@ -537,19 +563,22 @@ public class LaunchTool implements IMcpTool
             }
 
             boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, isAttach, configProject, effectiveAppId);
-            String launchError = performLaunch(applied.config, updateBeforeLaunch,
-                isAttach ? null : policy, isAttach ? null : portPolicy,
-                eclipseLaunchMode(mode));
-            if (operation != null) { operation.close(); }
+            LaunchOperation dispatchOperation = operation;
             operation = null;
+            ClientWindowLaunch.Execution windowExecution = startClientWindow(dispatchOperation, () ->
+                ClientWindowLaunch.start(applied.config, windowRequest,
+                eclipseLaunchMode(mode), updateBeforeLaunch, policy, portPolicy, prepared,
+                windowConfig -> performLaunch(windowConfig, updateBeforeLaunch,
+                    isAttach ? null : policy, isAttach ? null : portPolicy, eclipseLaunchMode(mode))));
+            String launchError = windowExecution.error();
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
                     + launchError).toJson();
             }
 
-            return reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
-                overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance());
+            return windowExecution.decorate(reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach,
+                configProject, effectiveAppId, overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance()));
         }
         catch (Exception e)
         {
@@ -1541,7 +1570,7 @@ public class LaunchTool implements IMcpTool
     private String launch(String projectName, String applicationId, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
         StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode)
+        LaunchOverrides.Prepared prepared, String mode, WindowRequest windowRequest)
     {
         LaunchOperation operation = null;
         try
@@ -1640,6 +1669,9 @@ public class LaunchTool implements IMcpTool
                 return errorResult.toJson();
             }
 
+            String windowRefusal = ClientWindowLaunch.configurationRefusal(matchingConfig, windowRequest);
+            if (windowRefusal != null) { return windowRefusal; }
+
             // An unbound configuration's launch is tracked under its own id, not the application's.
             String trackedId = LaunchConfigUtils.getApplicationIdFor(matchingConfig);
             boolean unboundMatch = trackedId != null && !trackedId.equals(applicationId);
@@ -1690,11 +1722,13 @@ public class LaunchTool implements IMcpTool
             }
 
             boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, false, projectName, applicationId);
-            String launchError =
-                performLaunch(applied.config, updateBeforeLaunch, policy, portPolicy,
-                    eclipseLaunchMode(mode));
-            if (operation != null) { operation.close(); }
+            LaunchOperation dispatchOperation = operation;
             operation = null;
+            ClientWindowLaunch.Execution windowExecution = startClientWindow(dispatchOperation, () ->
+                ClientWindowLaunch.start(applied.config, windowRequest,
+                eclipseLaunchMode(mode), updateBeforeLaunch, policy, portPolicy, prepared,
+                windowConfig -> performLaunch(windowConfig, updateBeforeLaunch, policy, portPolicy, eclipseLaunchMode(mode))));
+            String launchError = windowExecution.error();
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1708,7 +1742,7 @@ public class LaunchTool implements IMcpTool
                     + "against the project's default application " + applicationId + "; debug tools track " //$NON-NLS-1$ //$NON-NLS-2$
                     + "it as applicationId '" + trackedId + "'. " + message; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            return reportLaunchDialogs(echoOverrides(ToolResult.success()
+            return windowExecution.decorate(reportLaunchDialogs(echoOverrides(ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(McpKeys.APPLICATION_ID, unboundMatch ? trackedId : applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
@@ -1717,7 +1751,7 @@ public class LaunchTool implements IMcpTool
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, message)
-                .toJson(), watchDialogs, EdtDialogs.getInstance());
+                .toJson(), watchDialogs, EdtDialogs.getInstance()));
         }
         catch (Exception e)
         {
@@ -2656,6 +2690,22 @@ public class LaunchTool implements IMcpTool
             if (operation != null && operation.error() != null) { return operation.error(); }
             return performLaunchLocked(config, autoConfirmUpdateDialog, policy, portPolicy, launchMode);
         }
+    }
+
+    /** Owns the caller's lease through dispatch, then adjusts windows after releasing it. */
+    static ClientWindowLaunch.Execution startClientWindow(LaunchOperation operation,
+        java.util.function.Supplier<ClientWindowLaunch.Started> dispatch)
+    {
+        ClientWindowLaunch.Started started;
+        try (operation)
+        {
+            if (operation != null && operation.error() != null)
+            {
+                return new ClientWindowLaunch.Execution(operation.error(), Map.of());
+            }
+            started = dispatch.get();
+        }
+        return started.finish();
     }
 
     private String performLaunchLocked(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,

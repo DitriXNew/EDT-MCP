@@ -66,8 +66,30 @@ public final class ExternalProcess
 
     public static void destroyTree(Process process)
     {
+        destroyDescendants(process::descendants);
+        process.destroyForcibly();
+        try { process.waitFor(CLEANUP_MS, TimeUnit.MILLISECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    /** Launch Services exposes a ProcessHandle rather than a Java Process. */
+    public static void destroyTree(ProcessHandle process)
+    {
+        destroyDescendants(process::descendants);
+        process.destroyForcibly();
+        try { process.onExit().get(CLEANUP_MS, TimeUnit.MILLISECONDS); }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the external process to terminate.", e);
+        }
+        catch (Exception e) { throw new IllegalStateException("The external process did not terminate; retry terminate_launch.", e); }
+    }
+
+    private static void destroyDescendants(java.util.function.Supplier<java.util.stream.Stream<ProcessHandle>> children)
+    {
         List<ProcessHandle> descendants;
-        try { descendants = process.descendants().toList(); }
+        try (var stream = children.get()) { descendants = stream.toList(); }
         catch (UnsupportedOperationException e) { descendants = List.of(); }
         catch (RuntimeException e)
         {
@@ -82,8 +104,5 @@ public final class ExternalProcess
                 com.ditrix.edt.mcp.server.Activator.logWarning("Could not terminate an external process descendant: " + e);
             }
         }
-        process.destroyForcibly();
-        try { process.waitFor(CLEANUP_MS, TimeUnit.MILLISECONDS); }
-        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 }

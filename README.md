@@ -24,7 +24,7 @@ The plugin ships both local stdio and HTTP transports; choose the setup your cli
 - Search code, inspect types, follow references and call hierarchies.
 - Edit BSL, metadata, forms, text templates and XDTO packages.
 - Inspect form layouts and capture screenshots.
-- Launch applications, update databases and manage infobase sessions.
+- Launch clients normally, minimized, on another screen or isolated (Windows/Linux; hidden on macOS); update databases and manage infobase sessions.
 - Debug, profile and run YAXUnit tests.
 - Compare configurations against git revisions.
 - Organize the Navigator with metadata tags and groups.
