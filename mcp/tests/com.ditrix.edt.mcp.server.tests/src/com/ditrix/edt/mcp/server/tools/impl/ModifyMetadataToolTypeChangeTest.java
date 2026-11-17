@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -99,7 +101,7 @@ import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
  * type is unchanged), so writing the type a member already has resets nothing; and a batch that writes
  * the type twice is reset for the type it ends with.
  *
- * <p>Driven through the production apply step ({@link ModifyMetadataTool.PreparedChange#applyTo}) on
+ * <p>Driven through the production apply step ({@link MetadataPropertyApplier.PreparedChange#applyTo}) on
  * bare metadata objects. The transaction is a mock: the task asks it only for a DefinedType's
  * referrers. EDT's editing-support service is the one {@link VendorSupportGuard} hands out, replaced
  * here by a mock that allows every edit.</p>
@@ -127,14 +129,14 @@ public class ModifyMetadataToolTypeChangeTest
     {
         CatalogAttribute attribute = designerString10Attribute();
         var feature = attribute.eClass().getEStructuralFeature("fillValue");
-        var fill = ModifyMetadataTool.PreparedChange.memberValues(feature,
+        var fill = MetadataPropertyApplier.PreparedChange.memberValues(feature,
             com.ditrix.edt.mcp.server.utils.MetadataMemberValues.prepare(null, attribute, "fillValue",
                 com.google.gson.JsonParser.parseString("{kind:'number',value:42}")));
-        var parameters = ModifyMetadataTool.PreparedChange.memberValues(
+        var parameters = MetadataPropertyApplier.PreparedChange.memberValues(
             attribute.eClass().getEStructuralFeature("choiceParameters"),
             com.ditrix.edt.mcp.server.utils.MetadataMemberValues.prepare(null, attribute, "choiceParameters",
                 com.google.gson.JsonParser.parseString("[{name:'Free',value:{kind:'string',value:'kept'}}]")));
-        ModifyMetadataTool.applyChanges(attribute, List.of(fill, parameters, typeWrite(number(10, 2))),
+        MetadataPropertyApplier.applyChanges(attribute, List.of(fill, parameters, typeWrite(number(10, 2))),
             mock(IBmTransaction.class));
         assertEquals(42, ((NumberValue)attribute.getFillValue()).getValue().intValueExact());
         assertEquals("kept", ((StringValue)attribute.getChoiceParameters().get(0).getValue()).getValue());
@@ -562,7 +564,7 @@ public class ModifyMetadataToolTypeChangeTest
         assertEquals("EDT resets nothing on a chart's retype", Reset.NONE, //$NON-NLS-1$
             applyType(chart, MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES__TYPE, types("UUID"))); //$NON-NLS-1$
         assertEquals("a property that is not a type resets nothing", Reset.NONE, //$NON-NLS-1$
-            ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
+            MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
                 UseQuickChoice.USE).applyTo(designerString10Attribute(), mock(IBmTransaction.class)));
 
         DefinedType definedType = mock(DefinedType.class, withSettings().extraInterfaces(IBmObject.class));
@@ -577,15 +579,15 @@ public class ModifyMetadataToolTypeChangeTest
         // undo them (quick choice back to Auto, indexing off for a value storage); the type goes first.
         CatalogAttribute attribute = designerString10Attribute();
         TypeDescription valueStorage = types("ValueStorage"); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> batch = List.of(
-            ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
+        List<MetadataPropertyApplier.PreparedChange> batch = List.of(
+            MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
                 UseQuickChoice.DONT_USE),
-            ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.DB_OBJECT_ATTRIBUTE__INDEXING,
+            MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.DB_OBJECT_ATTRIBUTE__INDEXING,
                 Indexing.INDEX),
-            ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE,
+            MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE,
                 valueStorage));
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute, batch, mock(IBmTransaction.class));
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute, batch, mock(IBmTransaction.class));
 
         assertEquals(Reset.OWNER, reset);
         assertSame(valueStorage, attribute.getType());
@@ -601,8 +603,8 @@ public class ModifyMetadataToolTypeChangeTest
         CatalogAttribute attribute = designerString10Attribute();
         Value fill = attribute.getFillValue();
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute, List.of(
-            ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.DB_OBJECT_ATTRIBUTE__INDEXING,
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute, List.of(
+            MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.DB_OBJECT_ATTRIBUTE__INDEXING,
                 Indexing.INDEX)), mock(IBmTransaction.class));
 
         assertEquals(Reset.NONE, reset);
@@ -619,7 +621,7 @@ public class ModifyMetadataToolTypeChangeTest
         attribute.setFillFromFillingValue(true);
         TypeDescription string20 = string(20, false);
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute,
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute,
             List.of(typeWrite(types("UUID")), typeWrite(string20)), mock(IBmTransaction.class)); //$NON-NLS-1$
 
         assertEquals("String(10) to String(20) is still a type change", Reset.OWNER, reset); //$NON-NLS-1$
@@ -640,7 +642,7 @@ public class ModifyMetadataToolTypeChangeTest
         attribute.setQuickChoice(UseQuickChoice.DONT_USE);
         TypeDescription same = string(10, false);
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute,
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute,
             List.of(typeWrite(number(10, 2)), typeWrite(same)), mock(IBmTransaction.class));
 
         assertEquals("a batch that ends on the stored type changes no type", Reset.NONE, reset); //$NON-NLS-1$
@@ -657,7 +659,7 @@ public class ModifyMetadataToolTypeChangeTest
         attribute.setIndexing(Indexing.INDEX);
         TypeDescription valueStorage = types("ValueStorage"); //$NON-NLS-1$
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute,
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute,
             List.of(typeWrite(number(10, 2)), typeWrite(valueStorage)), mock(IBmTransaction.class));
 
         assertEquals(Reset.OWNER, reset);
@@ -667,7 +669,7 @@ public class ModifyMetadataToolTypeChangeTest
         // The same new type twice is one change, reported once.
         CatalogAttribute twice = designerString10Attribute();
         TypeDescription second = number(10, 2);
-        assertEquals(Reset.OWNER, ModifyMetadataTool.applyChanges(twice,
+        assertEquals(Reset.OWNER, MetadataPropertyApplier.applyChanges(twice,
             List.of(typeWrite(number(10, 2)), typeWrite(second)), mock(IBmTransaction.class)));
         assertSame(second, twice.getType());
         assertUndefined("the fill value is reset", twice.getFillValue()); //$NON-NLS-1$
@@ -680,7 +682,7 @@ public class ModifyMetadataToolTypeChangeTest
         // repeated around the type is decided by its last write, as everywhere else.
         CatalogAttribute attribute = designerString10Attribute();
 
-        Reset reset = ModifyMetadataTool.applyChanges(attribute, List.of(quickChoice(UseQuickChoice.USE),
+        Reset reset = MetadataPropertyApplier.applyChanges(attribute, List.of(quickChoice(UseQuickChoice.USE),
             typeWrite(number(10, 2)), quickChoice(UseQuickChoice.DONT_USE)), mock(IBmTransaction.class));
 
         assertEquals(Reset.OWNER, reset);
@@ -794,19 +796,19 @@ public class ModifyMetadataToolTypeChangeTest
     private static void retype(EObject owner, EStructuralFeature feature, TypeDescription newType,
         IBmTransaction tx)
     {
-        ModifyMetadataTool.PreparedChange.typeDescription(feature, newType).applyTo(owner, tx);
+        MetadataPropertyApplier.PreparedChange.typeDescription(feature, newType).applyTo(owner, tx);
     }
 
     /** A prepared {@code type} write of a BasicFeature, as modify_metadata prepares it. */
-    private static ModifyMetadataTool.PreparedChange typeWrite(TypeDescription newType)
+    private static MetadataPropertyApplier.PreparedChange typeWrite(TypeDescription newType)
     {
-        return ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE,
+        return MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE,
             newType);
     }
 
-    private static ModifyMetadataTool.PreparedChange quickChoice(UseQuickChoice value)
+    private static MetadataPropertyApplier.PreparedChange quickChoice(UseQuickChoice value)
     {
-        return ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
+        return MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
             value);
     }
 
@@ -819,7 +821,7 @@ public class ModifyMetadataToolTypeChangeTest
     {
         try
         {
-            ModifyMetadataTool.PreparedChange.typeDescription(feature, newType).applyTo(owner, tx);
+            MetadataPropertyApplier.PreparedChange.typeDescription(feature, newType).applyTo(owner, tx);
             fail("a native type write on an adopted " + owner.getClass().getSimpleName() //$NON-NLS-1$
                 + " must fail closed"); //$NON-NLS-1$
         }
@@ -833,7 +835,7 @@ public class ModifyMetadataToolTypeChangeTest
     /** The type of a native owner after a type write through the production apply step. */
     private static TypeDescription setTypeOf(CatalogAttribute owner, TypeDescription newType)
     {
-        ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE, newType)
+        MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE, newType)
             .applyTo(owner, mock(IBmTransaction.class));
         return owner.getType();
     }
@@ -841,7 +843,7 @@ public class ModifyMetadataToolTypeChangeTest
     /** {@link #retype} answering what the write reset besides the type. */
     private static Reset applyType(EObject owner, EStructuralFeature feature, TypeDescription newType)
     {
-        return ModifyMetadataTool.PreparedChange.typeDescription(feature, newType).applyTo(owner,
+        return MetadataPropertyApplier.PreparedChange.typeDescription(feature, newType).applyTo(owner,
             mock(IBmTransaction.class));
     }
 

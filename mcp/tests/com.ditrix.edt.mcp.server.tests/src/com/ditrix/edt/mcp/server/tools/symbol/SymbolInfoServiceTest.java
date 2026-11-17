@@ -570,4 +570,19 @@ public class SymbolInfoServiceTest
         assertTrue("kind is Module", info.contains("| **Kind** | Module |"));
         assertTrue("emf type row", info.contains("| **EMF type** | Module |"));
     }
+
+    @Test public void typedOutcomesKeepFailureTextSeparateFromHoverText()
+    {
+        var text = SymbolInfoService.Outcome.value("Error: is part of the symbol documentation");
+        assertEquals("Error: is part of the symbol documentation", text.text());
+        assertNull(text.error());
+        assertFalse(text.canFallback());
+        var unavailable = SymbolInfoService.Outcome.unavailable("No active workbench window");
+        assertEquals("No active workbench window", unavailable.error());
+        assertTrue(unavailable.canFallback());
+        var error = SymbolInfoService.Outcome.failure("Invalid line number: 7");
+        assertEquals("Invalid line number: 7", error.error());
+        assertFalse(error.canFallback());
+    }
+
 }

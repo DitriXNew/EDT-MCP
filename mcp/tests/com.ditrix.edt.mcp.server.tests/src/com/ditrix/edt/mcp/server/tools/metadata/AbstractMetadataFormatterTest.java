@@ -717,4 +717,11 @@ public class AbstractMetadataFormatterTest
         }
         return n;
     }
+
+    @Test public void tableEscapingKeepsPipesAndNewlinesInsideOneCell()
+    {
+        assertEquals("left\\|right next", f.escapeTableCell("left|right\r\nnext"));
+        assertEquals("-", f.escapeTableCell(null));
+    }
+
 }

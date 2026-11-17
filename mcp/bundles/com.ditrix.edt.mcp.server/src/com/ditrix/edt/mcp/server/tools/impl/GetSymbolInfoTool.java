@@ -115,6 +115,7 @@ public class GetSymbolInfoTool implements IMcpTool
             return ToolResult.error("Invalid line or column number").toJson(); //$NON-NLS-1$
         }
 
-        return new SymbolInfoService().getSymbolInfo(projectName, filePath, line, column);
+        SymbolInfoService.Outcome result = new SymbolInfoService().getSymbolInfo(projectName, filePath, line, column);
+        return result.error() == null ? result.text() : ToolResult.error(result.error()).toJson();
     }
 }

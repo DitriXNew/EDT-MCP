@@ -112,10 +112,10 @@ public class UniversalMetadataFormatterTest
     // ==================== format() null / header guards ====================
 
     @Test
-    public void testFormatNullReturnsErrorString()
+    public void testFormatNullReturnsTypedFailure()
     {
-        // The null guard must return a stable error sentinel, never NPE.
-        assertEquals("Error: MdObject is null", f.format(null, false, EN)); //$NON-NLS-1$
+        assertEquals("MdObject is null", f.formatOutcome(null, false, EN).error());
+        org.junit.Assert.assertThrows(IllegalArgumentException.class, () -> f.format(null, false, EN)); //$NON-NLS-1$
     }
 
     @Test
@@ -523,6 +523,24 @@ public class UniversalMetadataFormatterTest
             assertTrue(md, md.contains("PaletteColor: Accent"));
             assertTrue(md, md.contains("| Color | RGB(12, 34, 56) |"));
         }
+    }
+
+
+    @Test public void typedFlagsAndTabularSectionValuesAreRendered() throws Exception
+    {
+        var catalog = MdClassFactory.eINSTANCE.createCatalog(); catalog.setName("Test");
+        var attribute = MdClassFactory.eINSTANCE.createCatalogAttribute(); attribute.setName("Text");
+        attribute.setPasswordMode(true); attribute.setMultiLine(true);
+        catalog.getAttributes().add(attribute);
+        var flags = new StringBuilder();
+        var method = UniversalMetadataFormatter.class.getDeclaredMethod("formatAttributesExtended",
+            StringBuilder.class, java.util.Collection.class, boolean.class, String.class);
+        method.setAccessible(true);
+        method.invoke(f, flags, catalog.getAttributes(), false, EN);
+        assertTrue(flags.toString(), flags.toString().contains("| Yes | Yes |"));
+        var section = MdClassFactory.eINSTANCE.createCatalogTabularSection(); section.setName("Lines");
+        section.setLineNumberLength(7); catalog.getTabularSections().add(section);
+        assertTrue(f.format(catalog, false, EN).contains("| Line Number Length | 7 |"));
     }
 
 }

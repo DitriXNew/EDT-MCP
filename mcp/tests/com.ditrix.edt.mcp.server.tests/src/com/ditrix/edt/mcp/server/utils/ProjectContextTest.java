@@ -89,4 +89,20 @@ public class ProjectContextTest
         String generic = ProjectContext.noConfigurationMessage("MyConfig", false); //$NON-NLS-1$
         assertEquals("Could not get configuration for project: MyConfig", generic); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test public void platformVersionUsesTheProjectAndStaysUnknownWhenUnavailable() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            ProjectContext context = ProjectContext.of(fixture.name());
+            assertNull(context.platformVersion());
+            var manager = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IV8ProjectManager.class);
+            var project = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IV8Project.class);
+            org.mockito.Mockito.when(com.ditrix.edt.mcp.server.Activator.getDefault().getV8ProjectManager()).thenReturn(manager);
+            org.mockito.Mockito.when(manager.getProject(fixture.project())).thenReturn(project);
+            org.mockito.Mockito.when(project.getVersion()).thenReturn(com._1c.g5.v8.dt.platform.version.Version.V8_3_24);
+            assertEquals(com._1c.g5.v8.dt.platform.version.Version.V8_3_24, context.platformVersion());
+            assertNull(ProjectContext.of(null).platformVersion());
+        }
+    }
 }

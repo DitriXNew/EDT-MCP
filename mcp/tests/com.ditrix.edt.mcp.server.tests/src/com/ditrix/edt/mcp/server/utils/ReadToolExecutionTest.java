@@ -402,4 +402,21 @@ public class ReadToolExecutionTest
         }
         finally { org.eclipse.core.runtime.Platform.removeLogListener(listener); }
     }
+
+    @Test public void windowedReadsAndNestedPreparationShareOneBoundary() throws Exception
+    {
+        try (var fixture = new HeadlessReadFixture())
+        {
+            System.setProperty("eclipse.application", "org.eclipse.ui.ide.workbench");
+            String name = ReadToolExecution.readOnHost(fixture.project(), "windowed outer", () ->
+                ReadToolExecution.readOnHost(fixture.name(), "nested root", () -> {
+                    assertEquals(1, fixture.depth);
+                    return fixture.config.getCommonModules().get(0).getName();
+                }));
+            assertEquals("EnglishName", name);
+            assertEquals(1, fixture.reads);
+            assertEquals(0, fixture.depth);
+        }
+    }
+
 }

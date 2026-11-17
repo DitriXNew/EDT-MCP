@@ -21,6 +21,7 @@ import org.eclipse.core.runtime.Path;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
@@ -224,10 +225,23 @@ public final class ProjectContext
         }
     }
 
-    /**
-     * @return the resolved project handle; may be {@code null} (empty name) or a
-     *         handle to a project that does not exist in the workspace
-     */
+    /** Returns the platform version, or null while the EDT project is unavailable. */
+    public static Version platformVersion(IProject project)
+    {
+        if (project == null) return null;
+        var plugin = Activator.getDefault();
+        var manager = plugin == null ? null : plugin.getV8ProjectManager();
+        var v8Project = manager == null ? null : manager.getProject(project);
+        return v8Project == null ? null : v8Project.getVersion();
+    }
+
+    /** Returns this project's platform version, or null while unavailable. */
+    public Version platformVersion()
+    {
+        return platformVersion(project);
+    }
+
+    /** Returns the resolved handle, which can be null or refer to a missing project. */
     public IProject project()
     {
         return project;

@@ -42,6 +42,8 @@ import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.MarkerCheckIds;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -984,7 +986,7 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 // Only an OPEN project can be asked; a closed one goes straight to the unreadable
                 // branch instead of being probed (and instead of being silently dropped).
-                bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+                bmModel = bmModelManager != null ? BmModelResolver.resolve(project, bmModelManager).getModel() : null;
                 ProjectContext.ConfigurationResult rootResult =
                     ProjectContext.of(project.getName()).resolveMetadataRoot();
                 metadataScope = rootResult.scope();
@@ -2555,7 +2557,7 @@ public class GetProjectErrorsTool implements IMcpTool
             // resolve the marker target inside a read transaction. The getModel(IProject)
             // overload is the idiomatic path used across the plugin (FindReferencesTool,
             // CreateMetadataTool, tag tools), so no IDtProjectManager is needed.
-            IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
+            IBmModel bmModel = bmModelManager != null ? BmModelResolver.resolve(entry.getKey(), bmModelManager).getModel() : null;
             if (bmModel != null)
             {
                 BmTransactions.<Void>read(bmModel, "CollectProjectErrors", (tx, pm) -> { //$NON-NLS-1$
@@ -3102,44 +3104,28 @@ public class GetProjectErrorsTool implements IMcpTool
             unresolvedFilteredOut, exactScope);
     }
 
-    /**
-     * Resolves the symbolic check id (e.g. "bsl-legacy-check-expression-type") for a marker's
-     * short UID (e.g. "SU23") exactly once. Returns {@code null} when it cannot be resolved.
-     */
+    /** Compatibility entry for callers migrating to MarkerCheckIds. */
     static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
     {
-        CheckUid uid = resolveCheckUid(marker, shortUid, checkRepository);
-        return uid != null ? uid.getCheckId() : null;
+        return MarkerCheckIds.resolveSymbolicCheckId(marker, shortUid, checkRepository);
     }
 
     /** @see MarkerRows#resolveCheckUid(Marker, String, ICheckRepository) */
     static CheckUid resolveCheckUid(Marker marker, String shortUid, ICheckRepository checkRepository)
     {
-        return MarkerRows.resolveCheckUid(marker, shortUid, checkRepository);
+        return MarkerCheckIds.resolveCheckUid(marker, shortUid, checkRepository);
     }
 
     /** @see MarkerRows#checkIdMatches(String, String, String) */
     static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
-        return MarkerRows.checkIdMatches(shortUid, symbolicCheckId, checkId);
+        return MarkerCheckIds.checkIdMatches(shortUid, symbolicCheckId, checkId);
     }
 
-    /**
-     * Returns true when {@code checkId} is EXACTLY (case-insensitively) either the marker short
-     * UID or its resolved symbolic check id. Unlike {@link #checkIdMatches}, this is NOT a
-     * substring match: a read-only filter (get_project_errors) can afford to over-match and show
-     * extra rows, but a mutation locator (apply_quick_fix) cannot - a loose needle like "doc"
-     * would substring-match several unrelated checks, and if only one marker among them currently
-     * exists the tool would silently auto-fix it without ever surfacing the ambiguity.
-     */
+    /** Compatibility entry for exact mutation-locator matching. */
     static boolean checkIdMatchesExact(String shortUid, String symbolicCheckId, String checkId)
     {
-        String needle = checkId.toLowerCase(Locale.ROOT);
-        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).equals(needle))
-        {
-            return true;
-        }
-        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).equals(needle);
+        return MarkerCheckIds.checkIdMatchesExact(shortUid, symbolicCheckId, checkId);
     }
 
     /** @see MarkerRows#unresolvedPlaceholder(Marker) */

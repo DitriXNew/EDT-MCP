@@ -56,6 +56,7 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
@@ -89,6 +90,18 @@ import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
  */
 public class MetadataRenameService
 {
+    private static final Set<String> WARNED_REFLECTION_MEMBERS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private int droppedMatchCount;
+    private final Map<String, Integer> droppedMatchSites = new LinkedHashMap<>();
+    private Exception firstDroppedMatchFailure;
+
+    private ExactMatchInfo droppedMatch(String memberName, Exception failure)
+    {
+        droppedMatchCount++;
+        droppedMatchSites.merge(memberName, 1, Integer::sum);
+        if (firstDroppedMatchFailure == null) firstDroppedMatchFailure = failure;
+        return null;
+    }
     /** MCP operation name used in actionable preflight refusals. */
     private static final String TOOL_NAME = "rename_metadata_object"; //$NON-NLS-1$
 
@@ -1324,7 +1337,7 @@ public class MetadataRenameService
     /** Escapes pipe characters in markdown table cells. */
     private static String escapeMarkdownCell(String s)
     {
-        return s == null ? "" : s.replace("|", "\\|"); //$NON-NLS-1$ //$NON-NLS-2$
+        return MarkdownUtils.escapeForTable(s); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -1805,6 +1818,7 @@ public class MetadataRenameService
 
     private Map<String, ExactMatchInfo> toExactMatchMap(Collection<?> matches)
     {
+        int droppedBefore = droppedMatchCount;
         Map<String, ExactMatchInfo> result = new HashMap<>();
         for (Object match : matches)
         {
@@ -1832,6 +1846,11 @@ public class MetadataRenameService
                 }
             }
         }
+        if (droppedMatchCount > droppedBefore)
+        {
+            Activator.logWarning("Dropped " + (droppedMatchCount - droppedBefore)
+                + " unreadable rename exact match(es): " + droppedMatchSites + "; " + firstDroppedMatchFailure);
+        }
         return result;
     }
 
@@ -1842,7 +1861,7 @@ public class MetadataRenameService
             IFile file = (IFile) invokeNoArg(match, GET_FILE);
             if (file == null)
             {
-                return null;
+                return droppedMatch("getFile/getLineNumber/getFileOffset", null);
             }
             int lineNumber = ((Number) invokeNoArg(match, "getLineNumber")).intValue(); //$NON-NLS-1$
             String fqn = getBslFqn(file);
@@ -1866,7 +1885,7 @@ public class MetadataRenameService
         }
         catch (Exception e)
         {
-            return null;
+            return droppedMatch("getFile/getLineNumber/getFileOffset", e);
         }
     }
 
@@ -1878,18 +1897,18 @@ public class MetadataRenameService
             boolean present = Boolean.TRUE.equals(invokeNoArg(optional, "isPresent")); //$NON-NLS-1$
             if (!present)
             {
-                return null;
+                return droppedMatch("resolveMatchObject/getFeature/getTextOffset", null);
             }
             Object resolved = invokeNoArg(optional, "get"); //$NON-NLS-1$
             if (!(resolved instanceof EObject object))
             {
-                return null;
+                return droppedMatch("resolveMatchObject/getFeature/getTextOffset", null);
             }
             EStructuralFeature feature = (EStructuralFeature) invokeNoArg(match, "getFeature"); //$NON-NLS-1$
             String content = getFeatureText(object, feature);
             if (content == null)
             {
-                return null;
+                return droppedMatch("resolveMatchObject/getFeature/getTextOffset", null);
             }
             int textOffset = ((Number) invokeNoArg(match, "getTextOffset")).intValue(); //$NON-NLS-1$
             int lineNumber = computeLineNumber(content, textOffset);
@@ -1901,7 +1920,7 @@ public class MetadataRenameService
         }
         catch (Exception e)
         {
-            return null;
+            return droppedMatch("resolveMatchObject/getFeature/getTextOffset", e);
         }
     }
 
@@ -2147,6 +2166,7 @@ public class MetadataRenameService
         {
             return null;
         }
+        Exception failure = null;
         Class<?> type = target.getClass();
         while (type != null)
         {
@@ -2158,8 +2178,14 @@ public class MetadataRenameService
             }
             catch (Exception e)
             {
+                failure = e;
                 type = type.getSuperclass();
             }
+        }
+        String memberName = target.getClass().getName() + "." + fieldName;
+        if (WARNED_REFLECTION_MEMBERS.add(memberName))
+        {
+            Activator.logWarning("Cannot read rename match member " + memberName + "; value is unknown: " + failure);
         }
         return null;
     }
@@ -2488,6 +2514,11 @@ public class MetadataRenameService
         }
         catch (Exception e)
         {
+            String memberName = (target == null ? "null" : target.getClass().getName()) + "." + methodName;
+            if (WARNED_REFLECTION_MEMBERS.add(memberName))
+            {
+                Activator.logWarning("Cannot read rename match member " + memberName + "; value is unknown: " + e);
+            }
             return null;
         }
     }

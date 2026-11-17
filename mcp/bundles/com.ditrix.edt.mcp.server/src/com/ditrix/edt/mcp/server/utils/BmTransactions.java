@@ -12,6 +12,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.core.event.BmEvent;
@@ -34,9 +35,8 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
  * {@link IBmModel#execute} (writes). This helper collapses that to a lambda and,
  * crucially, makes the read/write choice explicit at the call site:
  * <ul>
- * <li>{@link #read} -&gt; {@link IBmModel#executeReadonlyTask} (a read MUST NOT run
- * in a write-capable transaction - that is exactly the class of bug fixed in
- * {@code 25d7851});</li>
+ * <li>{@link #read} -&gt; {@link IBmModel#executeReadonlyTask}, borrowing the calling
+ * thread's transaction on the same engine when one is already active;</li>
  * <li>{@link #write} -&gt; {@link IBmModel#execute} (the only place a mutation is
  * allowed).</li>
  * </ul>
@@ -76,8 +76,8 @@ public final class BmTransactions
     }
 
     /**
-     * Runs {@code operation} inside a <b>read-only</b> BM transaction
-     * ({@link IBmModel#executeReadonlyTask}). The model must not be mutated here.
+     * Runs {@code operation} in the current transaction on this model engine, or opens a read-only
+     * transaction with {@link IBmModel#executeReadonlyTask}. The operation must not mutate the model.
      *
      * @param model the BM model (must be non-null; resolved by the caller)
      * @param taskName a short task name for diagnostics
@@ -87,6 +87,12 @@ public final class BmTransactions
      */
     public static <T> T read(IBmModel model, String taskName, BmOperation<T> operation)
     {
+        var engine = model.getEngine();
+        IBmTransaction current = engine == null ? null : engine.getCurrentTransaction();
+        if (current != null)
+        {
+            return operation.execute(current, new NullProgressMonitor());
+        }
         return model.executeReadonlyTask(new AbstractBmTask<T>(taskName)
         {
             @Override

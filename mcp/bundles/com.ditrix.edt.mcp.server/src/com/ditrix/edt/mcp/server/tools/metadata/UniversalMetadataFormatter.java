@@ -18,6 +18,8 @@ import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.AutoRegistrationChanges;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicFeature;
+import com._1c.g5.v8.dt.metadata.mdclass.DbObjectTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.HierarchicalDbObjectTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
@@ -85,13 +87,24 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         return mdObject != null;
     }
     
+    public record Outcome(String text, String error) { }
+
+    public Outcome formatOutcome(MdObject mdObject, boolean full, String language)
+    {
+        return mdObject == null ? new Outcome(null, "MdObject is null")
+            : new Outcome(formatValue(mdObject, full, language), null);
+    }
+
     @Override
     public String format(MdObject mdObject, boolean full, String language)
     {
-        if (mdObject == null)
-        {
-            return "Error: MdObject is null"; //$NON-NLS-1$
-        }
+        Outcome result = formatOutcome(mdObject, full, language);
+        if (result.error() != null) throw new IllegalArgumentException(result.error());
+        return result.text();
+    }
+
+    private String formatValue(MdObject mdObject, boolean full, String language)
+    {
         
         StringBuilder sb = new StringBuilder();
         
@@ -552,8 +565,8 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
                     indexing = formatEnum(((DbObjectAttribute) attr).getIndexing());
                 }
 
-                String passwordMode = formatReflectiveBoolean(attr, "isPasswordMode"); //$NON-NLS-1$
-                String multiLine = formatReflectiveBoolean(attr, "isMultiLine"); //$NON-NLS-1$
+                String passwordMode = formatBoolean(attr.isPasswordMode()); //$NON-NLS-1$
+                String multiLine = formatBoolean(attr.isMultiLine()); //$NON-NLS-1$
 
                 // Get fullTextSearch if it's DbObjectAttribute
                 String fullTextSearch = DASH;
@@ -582,27 +595,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         }
     }
 
-    /**
-     * Reads a boolean-returning method (e.g. {@code isPasswordMode} / {@code isMultiLine}) that lives
-     * in BasicFeature but not in the API interface, via reflection. Returns {@link #NO} when the
-     * method is absent or any error occurs, matching the original default. Never throws.
-     */
-    private String formatReflectiveBoolean(BasicFeature attr, String methodName)
-    {
-        try
-        {
-            java.lang.reflect.Method method = attr.getClass().getMethod(methodName);
-            Boolean flag = (Boolean) method.invoke(attr);
-            return formatBoolean(flag != null && flag);
-        }
-        catch (Exception e)
-        {
-            // Method doesn't exist or error - use default
-            return NO;
-        }
-    }
-
-    /**
+/**
      * Renders the compact (full=false) attribute table: Name, Synonym, Type (plus an Origin column
      * when {@code showOrigin}). Output matches the original inline code exactly.
      */
@@ -697,47 +690,21 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         formatTabularSectionAttributes(sb, ts, full, language);
     }
 
-    /**
-     * Adds the "Use" row of a tabular section, read reflectively (available in
-     * HierarchicalDbObjectTabularSection). No-op when the getter is absent or returns {@code null}.
-     */
+    /** Renders the hierarchical tabular section use policy. */
     private void formatTabularSectionUse(StringBuilder sb, BasicTabularSection ts)
     {
-        // Use (via reflection, available in HierarchicalDbObjectTabularSection)
-        try
+        if (ts instanceof HierarchicalDbObjectTabularSection section && section.getUse() != null)
         {
-            java.lang.reflect.Method method = ts.getClass().getMethod("getUse");
-            Object use = method.invoke(ts);
-            if (use != null)
-            {
-                addPropertyRow(sb, "Use", formatEnum(use));
-            }
-        }
-        catch (Exception e)
-        {
-            // Method doesn't exist - skip
+            addPropertyRow(sb, "Use", formatEnum(section.getUse()));
         }
     }
 
-    /**
-     * Adds the "Line Number Length" row of a tabular section, read reflectively. No-op when the getter
-     * is absent or returns {@code null}.
-     */
+    /** Renders the database tabular section line number length. */
     private void formatTabularSectionLineNumberLength(StringBuilder sb, BasicTabularSection ts)
     {
-        // LineNumberLength (via reflection)
-        try
+        if (ts instanceof DbObjectTabularSection section)
         {
-            java.lang.reflect.Method method = ts.getClass().getMethod("getLineNumberLength");
-            Object lineNumLen = method.invoke(ts);
-            if (lineNumLen != null)
-            {
-                addPropertyRow(sb, "Line Number Length", lineNumLen.toString());
-            }
-        }
-        catch (Exception e)
-        {
-            // Method doesn't exist - skip
+            addPropertyRow(sb, "Line Number Length", Integer.toString(section.getLineNumberLength()));
         }
     }
 

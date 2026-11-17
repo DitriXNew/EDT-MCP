@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedDefinedType;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubscription;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubsystem;
@@ -89,10 +91,10 @@ public class ModifyMetadataToolAdoptedTest
         // (applyGenericPropertyChanges returns the refusal before the consent gate and the write), pinned by the
         // e2e refusal tests of test_modify_metadata_adopted.py.
         Catalog catalog = adoptedCatalog();
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        ModifyMetadataTool.PreparedChange comment = ModifyMetadataTool.PreparedChange.scalar(
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        MetadataPropertyApplier.PreparedChange comment = MetadataPropertyApplier.PreparedChange.scalar(
             MdClassPackage.Literals.MD_OBJECT__COMMENT, "note"); //$NON-NLS-1$
-        ModifyMetadataTool.PreparedChange synonym = ModifyMetadataTool.PreparedChange.localized(
+        MetadataPropertyApplier.PreparedChange synonym = MetadataPropertyApplier.PreparedChange.localized(
             MdClassPackage.Literals.MD_OBJECT__SYNONYM, "en", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
         changes.add(comment);
         changes.add(synonym);
@@ -114,8 +116,8 @@ public class ModifyMetadataToolAdoptedTest
         TypeItem own = catalogRefType("Own", ObjectBelonging.NATIVE); //$NON-NLS-1$
         TypeDescription request = description(type("String"), own); //$NON-NLS-1$
         request.setStringQualifiers(stringQualifiers(10));
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
             request));
         FakePlatform platform = new FakePlatform().baseWithString(10, "String").offer("String") //$NON-NLS-1$ //$NON-NLS-2$
             .offer("CatalogRef.Own"); //$NON-NLS-1$
@@ -123,12 +125,12 @@ public class ModifyMetadataToolAdoptedTest
         AdoptedPropertyRouter.Routing routing = route("DefinedType.Amount", definedType, changes, platform); //$NON-NLS-1$
         assertFalse(routing.refusal(), routing.isRefused());
         assertEquals(1, changes.size());
-        ModifyMetadataTool.PreparedChange routed = changes.get(0);
+        MetadataPropertyApplier.PreparedChange routed = changes.get(0);
         assertTrue("the consent gate still sees a type change", routed.isTypeChange()); //$NON-NLS-1$
         assertNotNull("with its own warning", routed.routedConsentWarning()); //$NON-NLS-1$
         assertEquals("type", routed.featureName()); //$NON-NLS-1$
 
-        TypeChangeDefaults.Reset reset = ModifyMetadataTool.applyChanges(definedType, changes,
+        TypeChangeDefaults.Reset reset = MetadataPropertyApplier.applyChanges(definedType, changes,
             mock(IBmTransaction.class));
 
         assertEquals(TypeChangeDefaults.Reset.NONE, reset);
@@ -154,13 +156,13 @@ public class ModifyMetadataToolAdoptedTest
         TypeItem base = type("CatalogObject.Goods"); //$NON-NLS-1$
         EventSubscription subscription = adoptedSubscription("OnWrite", description(base), null); //$NON-NLS-1$
         TypeItem own = type("CatalogObject.Own"); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.typeDescription(
             MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE, description(own)));
         FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", base); //$NON-NLS-1$ //$NON-NLS-2$
 
         route("EventSubscription.OnWrite", subscription, changes, platform); //$NON-NLS-1$
-        ModifyMetadataTool.applyChanges(subscription, changes, mock(IBmTransaction.class));
+        MetadataPropertyApplier.applyChanges(subscription, changes, mock(IBmTransaction.class));
 
         assertEquals(List.of(base, own), subscription.getSource().getTypes());
         assertEquals(MdPropertyState.EXTENDED, AdoptedPropertyRouter.stateOf(subscription,
@@ -174,8 +176,8 @@ public class ModifyMetadataToolAdoptedTest
         // C9: no additions while the source already follows the base - reported unchanged, never applied.
         TypeItem base = type("CatalogObject.Goods"); //$NON-NLS-1$
         EventSubscription subscription = adoptedSubscription("OnWrite", null, MdPropertyState.NONE); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.typeDescription(
             MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE, description(base)));
         FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", base); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -194,8 +196,8 @@ public class ModifyMetadataToolAdoptedTest
         // C8: a pure addition to an adopted defined type's type extension never claims the retype's data loss.
         DefinedType definedType = adoptedDefinedType("Amount", //$NON-NLS-1$
             typeExtension(type("String"), MdPropertyState.CHECKED)); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
             description(catalogRefType("Own", ObjectBelonging.NATIVE)))); //$NON-NLS-1$
         route("DefinedType.Amount", definedType, changes, new FakePlatform().base("String") //$NON-NLS-1$ //$NON-NLS-2$
             .offer("String").offer("CatalogRef.Own")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -210,8 +212,8 @@ public class ModifyMetadataToolAdoptedTest
         // The same type change of an object the extension owns is a retype, with the retype's warning.
         DefinedType own = adoptedDefinedType("Own", typeExtension()); //$NON-NLS-1$
         own.setObjectBelonging(ObjectBelonging.NATIVE);
-        List<ModifyMetadataTool.PreparedChange> nativeChanges = new ArrayList<>();
-        nativeChanges.add(ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
+        List<MetadataPropertyApplier.PreparedChange> nativeChanges = new ArrayList<>();
+        nativeChanges.add(MetadataPropertyApplier.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
             description(type("String")))); //$NON-NLS-1$
         route("DefinedType.Own", own, nativeChanges, new FakePlatform()); //$NON-NLS-1$
         ConsentPreview retype = ModifyMetadataTool.typeChangePreview("DefinedType.Own", nativeChanges); //$NON-NLS-1$
@@ -219,7 +221,7 @@ public class ModifyMetadataToolAdoptedTest
         assertTrue(retype.getSubtitle(), retype.getSubtitle().startsWith("Retyping stored data")); //$NON-NLS-1$
 
         assertNull("no type change, no preview", ModifyMetadataTool.typeChangePreview("Catalog.Goods", //$NON-NLS-1$ //$NON-NLS-2$
-            List.of(ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "x")))); //$NON-NLS-1$
+            List.of(MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "x")))); //$NON-NLS-1$
     }
 
     @Test
@@ -230,9 +232,9 @@ public class ModifyMetadataToolAdoptedTest
         Catalog catalog = adoptedCatalog();
         CatalogExtension block = (CatalogExtension)catalog.getExtension();
         block.setSynonym(MdPropertyState.EXTENDED);
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "note")); //$NON-NLS-1$
-        changes.add(ModifyMetadataTool.PreparedChange.localized(MdClassPackage.Literals.MD_OBJECT__SYNONYM, "en", //$NON-NLS-1$
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "note")); //$NON-NLS-1$
+        changes.add(MetadataPropertyApplier.PreparedChange.localized(MdClassPackage.Literals.MD_OBJECT__SYNONYM, "en", //$NON-NLS-1$
             "Goods")); //$NON-NLS-1$
         AdoptedPropertyRouter.Routing routing = route("Catalog.Goods", catalog, changes, new FakePlatform()); //$NON-NLS-1$
         assertFalse(routing.refusal(), routing.isRefused());
@@ -240,7 +242,7 @@ public class ModifyMetadataToolAdoptedTest
         block.setSynonym(MdPropertyState.NONE);
         try
         {
-            ModifyMetadataTool.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
+            MetadataPropertyApplier.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
             fail("a value EDT would now drop must roll the write back"); //$NON-NLS-1$
         }
         catch (IllegalStateException e)
@@ -253,7 +255,7 @@ public class ModifyMetadataToolAdoptedTest
 
         // While the state stays Extended the batch is written.
         block.setSynonym(MdPropertyState.EXTENDED);
-        ModifyMetadataTool.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
+        MetadataPropertyApplier.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
         assertEquals("note", catalog.getComment()); //$NON-NLS-1$
         assertEquals("Goods", catalog.getSynonym().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -391,8 +393,8 @@ public class ModifyMetadataToolAdoptedTest
         // read again only once consent is given, and a changed base refuses the call before the write.
         TypeItem goods = type("CatalogObject.Goods"); //$NON-NLS-1$
         EventSubscription subscription = adoptedSubscription("OnWrite", null, null); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        changes.add(MetadataPropertyApplier.PreparedChange.typeDescription(
             MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE, description(type("CatalogObject.Own")))); //$NON-NLS-1$
         FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", goods); //$NON-NLS-1$ //$NON-NLS-2$
         AdoptedPropertyRouter.Routing routing = route("EventSubscription.OnWrite", subscription, changes, platform); //$NON-NLS-1$
@@ -429,8 +431,8 @@ public class ModifyMetadataToolAdoptedTest
     {
         Catalog catalog = adoptedCatalog();
         catalog.setObjectBelonging(ObjectBelonging.NATIVE);
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        ModifyMetadataTool.PreparedChange synonym = ModifyMetadataTool.PreparedChange.localized(
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        MetadataPropertyApplier.PreparedChange synonym = MetadataPropertyApplier.PreparedChange.localized(
             MdClassPackage.Literals.MD_OBJECT__SYNONYM, "en", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
         changes.add(synonym);
 
@@ -618,7 +620,7 @@ public class ModifyMetadataToolAdoptedTest
     }
 
     private static AdoptedPropertyRouter.Routing route(String fqn, MdObject target,
-        List<ModifyMetadataTool.PreparedChange> changes, FakePlatform platform)
+        List<MetadataPropertyApplier.PreparedChange> changes, FakePlatform platform)
     {
         return ModifyMetadataTool.routeAdopted(fqn, null, null, null, V8_5_1, target, changes,
             AdoptedPropertyRouterTestAccess.router(platform));

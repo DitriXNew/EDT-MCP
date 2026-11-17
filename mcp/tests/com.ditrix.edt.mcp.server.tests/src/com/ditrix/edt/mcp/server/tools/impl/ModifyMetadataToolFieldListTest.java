@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -147,7 +149,7 @@ public class ModifyMetadataToolFieldListTest
     private static String validateAndPrepare(MdObject target, List<Object> changesOut,
         JsonObject... properties) throws Exception
     {
-        Method validate = ModifyMetadataTool.class.getDeclaredMethod("validateAndPrepare", IProject.class, //$NON-NLS-1$
+        Method validate = MetadataPropertyApplier.class.getDeclaredMethod("validateAndPrepare", IProject.class, //$NON-NLS-1$
             MetadataScope.class, Configuration.class, Version.class, MdObject.class, List.class, List.class,
             MdNameNormalizer.Report.class, boolean.class);
         validate.setAccessible(true);
@@ -573,7 +575,7 @@ public class ModifyMetadataToolFieldListTest
     /** The batch guard's own verdict: its refusal as plain text, or {@code null} when it lets the batch pass. */
     private static String batchRefusal(EObject target, JsonObject... properties)
     {
-        String json = ModifyMetadataTool.fieldListBatchError(target, Arrays.asList(properties));
+        String json = MetadataPropertyApplier.fieldListBatchError(target, Arrays.asList(properties));
         return json == null ? null : errorText(json);
     }
 
@@ -1437,7 +1439,7 @@ public class ModifyMetadataToolFieldListTest
     @Test
     public void testAFieldListChangeIsAppliedThroughTheFieldListWriter()
     {
-        ModifyMetadataTool.PreparedChange change = ModifyMetadataTool.PreparedChange.fieldList(
+        MetadataPropertyApplier.PreparedChange change = MetadataPropertyApplier.PreparedChange.fieldList(
             MdClassPackage.Literals.BASIC_DB_OBJECT__INPUT_BY_STRING,
             Collections.singletonList("StandardAttribute:Code")); //$NON-NLS-1$
         try

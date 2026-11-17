@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import com.ditrix.edt.mcp.server.HostKind;
 
 import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
@@ -67,6 +69,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.MetadataWriteServices;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataOrdering;
 import com.ditrix.edt.mcp.server.utils.MetadataAutoSort;
@@ -931,7 +934,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return () -> ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
             }
-            IBmModel bmModel = bmModelManager.getModel(ctx.project);
+            IBmModel bmModel = BmModelResolver.resolve(ctx.project, bmModelManager).getModel();
             if (bmModel == null)
             {
                 return () -> ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
@@ -1456,7 +1459,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     factory.fillDefaultReferences(newObject);
                     // A subsystem's properties beyond synonym / comment, by modify_metadata's own writer,
                     // after the factory defaults they replace (issue #930); empty for every other kind.
-                    ModifyMetadataTool.applyChanges(newObject, req.props.writerChanges, tx, req.normFqn);
+                    MetadataPropertyApplier.applyChanges(newObject, req.props.writerChanges, tx, req.normFqn);
                     if (newObject instanceof BasicTemplate)
                     {
                         templateContentFqnHolder[0] = templates.initialize((BasicTemplate)newObject,
@@ -1700,7 +1703,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     factory.fillDefaultReferences(newObject);
                     // The properties beyond synonym / comment, by modify_metadata's own writer, after the
                     // factory defaults they replace (issue #930).
-                    ModifyMetadataTool.applyChanges(newObject, props.writerChanges, tx, childFqn);
+                    MetadataPropertyApplier.applyChanges(newObject, props.writerChanges, tx, childFqn);
                     parentFqnHolder[0] = ownerFqn;
                     createdFqnHolder[0] = childFqn;
                     return null;
@@ -3137,12 +3140,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static FormObjectServices resolveFormObjectServices(IProject project, String projectName)
     {
         FormObjectServices svc = new FormObjectServices();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        svc.mdFactory = Activator.getDefault().getModelObjectFactory();
+        MetadataWriteServices shared = MetadataWriteServices.resolve(project);
         svc.formFactory = Activator.getDefault().getFormModelObjectFactory();
         svc.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || svc.mdFactory == null || bmModelManager == null)
+        if (shared.failure == MetadataWriteServices.Failure.SERVICES_UNAVAILABLE)
         {
             svc.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
             return svc;
@@ -3152,20 +3153,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             svc.error = ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
             return svc;
         }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
+        if (shared.error != null)
         {
-            svc.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
+            svc.error = ToolResult.error((shared.failure == MetadataWriteServices.Failure.PROJECT_UNAVAILABLE
+                ? ERR_NO_V8_PROJECT : ERR_NO_BM_MODEL) + projectName).toJson();
             return svc;
         }
-        svc.version = v8Project.getVersion();
-        svc.v8Project = v8Project;
-        svc.bmModel = bmModelManager.getModel(project);
-        if (svc.bmModel == null)
-        {
-            svc.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-            return svc;
-        }
+        svc.mdFactory = shared.factory;
+        svc.version = shared.version;
+        svc.v8Project = shared.v8Project;
+        svc.bmModel = shared.model;
         return svc;
     }
 
@@ -3675,28 +3672,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static BmContext resolveBmContext(IProject project, String projectName)
     {
         BmContext ctx = new BmContext();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        ctx.factory = Activator.getDefault().getModelObjectFactory();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || ctx.factory == null || bmModelManager == null)
+        MetadataWriteServices shared = MetadataWriteServices.resolve(project);
+        if (shared.error != null)
         {
-            ctx.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            ctx.error = ToolResult.error(switch (shared.failure)
+            {
+                case SERVICES_UNAVAILABLE -> ERR_SERVICES_UNAVAILABLE;
+                case PROJECT_UNAVAILABLE -> ERR_NO_V8_PROJECT + projectName;
+                case MODEL_UNAVAILABLE -> ERR_NO_BM_MODEL + projectName;
+            }).toJson();
             return ctx;
         }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
-        {
-            ctx.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
-            return ctx;
-        }
-        ctx.v8Project = v8Project;
-        ctx.version = v8Project.getVersion();
-        ctx.bmModel = bmModelManager.getModel(project);
-        if (ctx.bmModel == null)
-        {
-            ctx.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-            return ctx;
-        }
+        ctx.factory = shared.factory;
+        ctx.version = shared.version;
+        ctx.v8Project = shared.v8Project;
+        ctx.bmModel = shared.model;
         return ctx;
     }
 
@@ -3716,7 +3706,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
          */
         final List<JsonObject> writerProperties = new ArrayList<>();
         /** {@link #writerProperties} as modify_metadata prepared them, applied in the creating transaction. */
-        final List<ModifyMetadataTool.PreparedChange> writerChanges = new ArrayList<>();
+        final List<MetadataPropertyApplier.PreparedChange> writerChanges = new ArrayList<>();
     }
 
     /**
@@ -3784,7 +3774,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
         }
         MdObject prototype = (MdObject)MdClassFactory.eINSTANCE.create(eClass);
-        String error = ModifyMetadataTool.prepareForCreate(project, scope, config, version, prototype,
+        String error = MetadataPropertyApplier.prepareForCreate(project, scope, config, version, prototype,
             props.writerProperties, props.writerChanges, normReport, isExtensionProject);
         if (error != null)
         {
@@ -3837,9 +3827,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** The project's platform version best-effort, or {@code null} when EDT cannot tell yet. */
     private static Version projectVersion(IProject project)
     {
-        IV8ProjectManager manager = Activator.getDefault() == null ? null : Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = manager == null ? null : manager.getProject(project);
-        return v8Project == null ? null : v8Project.getVersion();
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(project);
     }
 
     /**
@@ -4072,7 +4060,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     static String writerNote(Props props)
     {
         List<String> names = new ArrayList<>();
-        for (ModifyMetadataTool.PreparedChange change : props.writerChanges)
+        for (MetadataPropertyApplier.PreparedChange change : props.writerChanges)
         {
             String name = change.feature().getName();
             if (!names.contains(name))

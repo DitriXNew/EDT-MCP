@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -118,7 +120,7 @@ public class CreateMetadataToolSubsystemPropertiesTest
         Subsystem created = MdClassFactory.eINSTANCE.createSubsystem();
         created.setIncludeInCommandInterface(true);
         created.setIncludeHelpInContents(true);
-        ModifyMetadataTool.applyChanges(created, writerChanges(props), null);
+        MetadataPropertyApplier.applyChanges(created, writerChanges(props), null);
         assertFalse("the value the call asked for lands on the new subsystem", created.isIncludeInCommandInterface());
         assertFalse(created.isIncludeHelpInContents());
     }
@@ -248,9 +250,9 @@ public class CreateMetadataToolSubsystemPropertiesTest
     }
 
     @SuppressWarnings("unchecked")
-    private static List<ModifyMetadataTool.PreparedChange> writerChanges(CreateMetadataTool.Props props)
+    private static List<MetadataPropertyApplier.PreparedChange> writerChanges(CreateMetadataTool.Props props)
     {
-        return (List<ModifyMetadataTool.PreparedChange>)field(props, "writerChanges");
+        return (List<MetadataPropertyApplier.PreparedChange>)field(props, "writerChanges");
     }
 
     @SuppressWarnings("unchecked")

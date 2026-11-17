@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -62,8 +64,8 @@ public class ModifyMetadataToolAdjustableAndUseAlwaysTest
                 + "\": \"false\", \"clerk\": \"default\"}}", prepared); //$NON-NLS-1$
 
         assertNull(verdict, verdict);
-        ModifyMetadataTool.AdjustableBooleanEdit edit =
-            (ModifyMetadataTool.AdjustableBooleanEdit)prepared.get(0).change().value();
+        MetadataPropertyApplier.AdjustableBooleanEdit edit =
+            (MetadataPropertyApplier.AdjustableBooleanEdit)prepared.get(0).change().value();
         assertEquals(Boolean.FALSE, edit.common);
         List<Role> roles = new ArrayList<>(edit.roles.keySet());
         assertSame(config.getRoles().get(0), roles.get(0));
@@ -82,7 +84,7 @@ public class ModifyMetadataToolAdjustableAndUseAlwaysTest
         assertNull(verdict(configWithRoles("Manager"), formAttribute("Price"), "edit", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "{\"roles\": {\"Manager\": false}}", prepared)); //$NON-NLS-1$
         assertNull("no 'common' means keep the stored one", //$NON-NLS-1$
-            ((ModifyMetadataTool.AdjustableBooleanEdit)prepared.get(0).change().value()).common);
+            ((MetadataPropertyApplier.AdjustableBooleanEdit)prepared.get(0).change().value()).common);
     }
 
     @Test

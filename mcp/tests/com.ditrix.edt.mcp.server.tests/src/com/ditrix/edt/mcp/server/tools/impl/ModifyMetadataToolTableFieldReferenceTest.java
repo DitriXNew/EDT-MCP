@@ -5,6 +5,8 @@
  */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static com.ditrix.edt.mcp.server.utils.ExternalDataSourceFixtures.*;
 import static org.junit.Assert.*;
 
@@ -38,7 +40,7 @@ public class ModifyMetadataToolTableFieldReferenceTest
     @Test
     public void presentationFieldAcceptsTheTablesOwnFieldByItsAddress()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
         String err = prepare(f.table, "presentationField", FIELD, out); //$NON-NLS-1$
         assertNull("the Table's own Field must be accepted, got: " + err, err); //$NON-NLS-1$
         assertEquals(1, out.size());
@@ -47,7 +49,7 @@ public class ModifyMetadataToolTableFieldReferenceTest
     @Test
     public void presentationFieldAcceptsTheRussianAddressOfTheOwnField()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
         String err = prepare(f.table, "presentationField", //$NON-NLS-1$
             RU_EDS + ".Eds." + RU_TABLE + ".T." + RU_FIELD + ".F", out); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull("the Russian address of the own Field must be accepted, got: " + err, err); //$NON-NLS-1$
@@ -124,13 +126,13 @@ public class ModifyMetadataToolTableFieldReferenceTest
     public void aFieldWithoutAnOwnerOrForAnotherReferenceIsRefused()
     {
         EStructuralFeature presentation = MdClassPackage.Literals.TABLE__PRESENTATION_FIELD;
-        String noOwner = ModifyMetadataTool.validateReferenceTarget("presentationField", presentation, //$NON-NLS-1$
+        String noOwner = MetadataPropertyApplier.validateReferenceTarget("presentationField", presentation, //$NON-NLS-1$
             f.field, FIELD);
         assertNotNull("without an owner a Field never passes", noOwner); //$NON-NLS-1$
         assertTrue(noOwner, noOwner.contains("must be a Field of the object being modified")); //$NON-NLS-1$
 
         EStructuralFeature defaultForm = MdClassPackage.Literals.TABLE__DEFAULT_LIST_FORM;
-        String other = ModifyMetadataTool.validateReferenceTarget("defaultListForm", defaultForm, //$NON-NLS-1$
+        String other = MetadataPropertyApplier.validateReferenceTarget("defaultListForm", defaultForm, //$NON-NLS-1$
             f.field, FIELD, null, f.table);
         assertNotNull(other);
         assertTrue("a Field is still not a target of a non-Field reference: " + other, //$NON-NLS-1$
@@ -143,7 +145,7 @@ public class ModifyMetadataToolTableFieldReferenceTest
         f.eds.getTables().add(other);
         other.setParentDataSource(f.eds);
         other.getTableFields().add(named(MdClassFactory.eINSTANCE.createField(), "G")); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         String err = prepare(f.table, property, EDS + ".Table.U.Field.G", out); //$NON-NLS-1$
 
@@ -155,18 +157,18 @@ public class ModifyMetadataToolTableFieldReferenceTest
 
     private void assertOwnParentFieldAccepted()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
         String err = prepare(f.table, "parentField", FIELD, out); //$NON-NLS-1$
         assertNull("the Table's own Field must be accepted regardless of its type, got: " + err, err); //$NON-NLS-1$
         assertEquals(1, out.size());
     }
 
     private String prepare(Table owner, String property, String value,
-        List<ModifyMetadataTool.PreparedChange> out)
+        List<MetadataPropertyApplier.PreparedChange> out)
     {
         PropertyInfo info = MetadataPropertyIntrospector.find(owner, property);
         assertNotNull("precondition: '" + property + "' must be an addressable Table property", info); //$NON-NLS-1$ //$NON-NLS-2$
-        return ModifyMetadataTool.prepareReferenceWith(null, f.scope(), owner, property, value, info, out);
+        return MetadataPropertyApplier.prepareReferenceWith(null, f.scope(), owner, property, value, info, out);
     }
 
     /** The reference type of a Table - a type item contained in its produced types, as in EDT. */

@@ -1227,18 +1227,7 @@ public final class MergeRulesCodec
         return read(file).sourceDigest();
     }
 
-    /**
-     * Whether a file of this size is small enough to be a merge-rules document at all - the same
-     * {@link #MAX_DOCUMENT_BYTES} bound {@link #read} applies, exposed so a caller can decide not
-     * to hash an input the parse would refuse anyway.
-     *
-     * @param sizeInBytes the file's size
-     * @return {@code true} when it is within the document bound
-     */
-    public static boolean withinDocumentBound(long sizeInBytes)
-    {
-        return sizeInBytes <= MAX_DOCUMENT_BYTES;
-    }
+
 
     /**
      * The half {@link #isTheSameFile} and {@link #isTheFileRead} share: both instants, and the key

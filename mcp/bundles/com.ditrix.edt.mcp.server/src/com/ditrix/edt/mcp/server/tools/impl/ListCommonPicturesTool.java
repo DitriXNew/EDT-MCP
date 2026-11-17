@@ -17,6 +17,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -170,7 +171,7 @@ public class ListCommonPicturesTool implements IMcpTool
         {
             return ToolResult.error("IBmModelManager not available. The EDT platform may not be ready.").toJson(); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$

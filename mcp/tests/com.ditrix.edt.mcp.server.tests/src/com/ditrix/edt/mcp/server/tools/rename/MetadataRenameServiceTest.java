@@ -726,4 +726,26 @@ public class MetadataRenameServiceTest
             return reference;
         }
     }
+
+    @Test public void unreadableExactMatchesAreCountedAndMarkdownCellsStayOnOneLine() throws Exception
+    {
+        var service = new MetadataRenameService();
+        var method = MetadataRenameService.class.getDeclaredMethod("createFileExactMatchInfo", Object.class);
+        method.setAccessible(true);
+        assertNull(method.invoke(service, new BrokenExactMatch()));
+        assertNull(method.invoke(service, new BrokenExactMatch()));
+        var count = MetadataRenameService.class.getDeclaredField("droppedMatchCount"); count.setAccessible(true);
+        assertEquals(2, count.getInt(service));
+        assertNull(method.invoke(service, new Object()));
+        assertEquals(3, count.getInt(service));
+        var escape = MetadataRenameService.class.getDeclaredMethod("escapeMarkdownCell", String.class);
+        escape.setAccessible(true);
+        assertEquals("a\\|b next", escape.invoke(null, "a|b\r\nnext"));
+    }
+
+    public static class BrokenExactMatch
+    {
+        public org.eclipse.core.resources.IFile getFile() { return org.mockito.Mockito.mock(org.eclipse.core.resources.IFile.class); }
+        public int getLineNumber() { throw new IllegalStateException("broken match getter"); }
+    }
 }

@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +29,7 @@ import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -545,7 +548,7 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
             }
             IBmModelManager manager = Activator.getDefault().getBmModelManager();
-            IBmModel model = manager == null ? null : manager.getModel(context.project());
+            IBmModel model = manager == null ? null : BmModelResolver.resolve(context.project(), manager).getModel();
             if (model == null)
             {
                 return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$
@@ -639,7 +642,7 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
             }
             IBmModelManager manager = Activator.getDefault().getBmModelManager();
-            IBmModel model = manager == null ? null : manager.getModel(context.project());
+            IBmModel model = manager == null ? null : BmModelResolver.resolve(context.project(), manager).getModel();
             if (model == null)
             {
                 return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$
@@ -657,10 +660,7 @@ public class DcsTool implements IMcpTool
                     new DcsPresentationParser.LanguageContext(currentRoot(context).scope().declaredLanguageCodes(),
                         effectiveLanguage, currentRoot(context).scope().defaultLanguageCode(),
                         language != null && !language.isEmpty()));
-            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-            IV8Project v8Project = v8ProjectManager == null
-                ? null : v8ProjectManager.getProject(context.project());
-            Version version = v8Project == null ? null : v8Project.getVersion();
+            Version version = ProjectContext.platformVersion(context.project());
             if (version == null)
             {
                 return ToolResult.error("The platform version is unavailable for DCS target '" //$NON-NLS-1$
@@ -983,7 +983,7 @@ public class DcsTool implements IMcpTool
                 {
                     return ""; //$NON-NLS-1$
                 }
-                return ModifyMetadataTool.dynamicListRetypeVerdict(configurationInTransaction(context, tx), version,
+                return MetadataPropertyApplier.dynamicListRetypeVerdict(configurationInTransaction(context, tx), version,
                     formModel, member, planned.plan().mainTable());
             });
         if (verdict != null && !verdict.isEmpty())
@@ -1061,7 +1061,7 @@ public class DcsTool implements IMcpTool
                 }
                 if (extInfo == null && planned.plan().canConvertPlainAttribute())
                 {
-                    String recheck = ModifyMetadataTool.dynamicListRetypeVerdict(
+                    String recheck = MetadataPropertyApplier.dynamicListRetypeVerdict(
                         configurationInTransaction(context, tx), version, formModel, member,
                         planned.plan().mainTable());
                     if (recheck != null && !recheck.isEmpty())
@@ -1127,7 +1127,7 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
             }
             IBmModelManager manager = Activator.getDefault().getBmModelManager();
-            IBmModel model = manager == null ? null : manager.getModel(context.project());
+            IBmModel model = manager == null ? null : BmModelResolver.resolve(context.project(), manager).getModel();
             if (model == null)
             {
                 return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$
@@ -1139,10 +1139,7 @@ public class DcsTool implements IMcpTool
             {
                 return ToolResult.error(resolution.failure().message()).toJson();
             }
-            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-            IV8Project v8Project = v8ProjectManager == null
-                ? null : v8ProjectManager.getProject(context.project());
-            Version version = v8Project == null ? null : v8Project.getVersion();
+            Version version = ProjectContext.platformVersion(context.project());
             if (version == null)
             {
                 return ToolResult.error("The platform version is unavailable for DCS target '" //$NON-NLS-1$
