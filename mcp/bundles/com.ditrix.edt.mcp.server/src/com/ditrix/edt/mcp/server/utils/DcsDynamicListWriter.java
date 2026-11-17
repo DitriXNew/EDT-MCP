@@ -36,9 +36,12 @@ import com.google.gson.JsonObject;
  */
 public final class DcsDynamicListWriter
 {
-    /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
-    private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
-        new ThreadLocal<>();
+    /**
+     * Recursive helpers keep their reset/read order, with errors confined to the calling thread;
+     * bound only by a {@link ThreadLocalScope}, so it never outlives the planner call.
+     */
+    private static final ThreadLocalScope.Slot<ParseScratch> PARSE_SCRATCH =
+        new ThreadLocalScope.Slot<>();
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
 

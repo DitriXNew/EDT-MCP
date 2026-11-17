@@ -340,8 +340,9 @@ public final class GitCloneTarget
     public static final class Claim implements AutoCloseable
     {
         private final Path real;
-        private volatile Path staging;
-        private volatile BooleanSupplier alive;
+        // The fields below are guarded by CLAIMS: claim() reads them while it holds that lock.
+        private Path staging;
+        private BooleanSupplier alive;
         private boolean released;
 
         private Claim(Path real)
@@ -359,9 +360,13 @@ public final class GitCloneTarget
          */
         public void bindTo(BooleanSupplier stillRunning)
         {
-            alive = stillRunning;
+            synchronized (CLAIMS)
+            {
+                alive = stillRunning;
+            }
         }
 
+        /** Called with {@code CLAIMS} held. */
         boolean live()
         {
             BooleanSupplier check = alive;
@@ -376,10 +381,17 @@ public final class GitCloneTarget
          */
         public void coverStaging(Path container)
         {
-            staging = container;
+            synchronized (CLAIMS)
+            {
+                staging = container;
+            }
         }
 
-        /** @return whether {@code path} overlaps the target or the staging directory this claim holds */
+        /**
+         * Called with {@code CLAIMS} held.
+         *
+         * @return whether {@code path} overlaps the target or the staging directory this claim holds
+         */
         boolean overlaps(Path path)
         {
             Path held = staging;
@@ -454,6 +466,10 @@ public final class GitCloneTarget
      * Declared residual: what another program writes INTO the container while the clone runs is treated
      * as the clone's own; and the identity is checked, then the walk opens the directory - an exchange in
      * between is not seen (no portable open-by-handle walk exists in {@code java.nio}).
+     * <p>
+     * The test seams of this class are plain fields: a staging directory is created, used and taken back
+     * by the one thread that runs its clone, a test sets a seam on that thread before it calls in, and
+     * production never writes them.
      */
     public static final class Staging
     {
@@ -474,16 +490,16 @@ public final class GitCloneTarget
         }
 
         /** Test seam: how the emptied container itself is deleted. */
-        public volatile ContainerDelete containerDelete = Files::deleteIfExists;
+        public ContainerDelete containerDelete = Files::deleteIfExists;
 
         /** Test seam: runs right after the install's rename, before the emptied container is cleaned up. */
-        volatile Runnable afterInstallMove = () -> { };
+        Runnable afterInstallMove = () -> { };
 
         /** Test seam: runs at the start of the emptied-container cleanup, after ownership was proved. */
-        volatile Runnable beforeEmptyCheck = () -> { };
+        Runnable beforeEmptyCheck = () -> { };
 
         /** Test seam: how the container's presence is read (without following links). */
-        volatile Presence presence = GitCloneTarget::presenceOf;
+        Presence presence = GitCloneTarget::presenceOf;
 
         /** @return the container directory this run created (a real path) */
         public Path path()
@@ -522,7 +538,7 @@ public final class GitCloneTarget
         }
 
         /** Test seam: runs before every removal attempt after the first. */
-        volatile Runnable beforeRetry = () -> { };
+        Runnable beforeRetry = () -> { };
 
         /**
          * Removes the container and everything in it. Ownership is proved again before EVERY attempt

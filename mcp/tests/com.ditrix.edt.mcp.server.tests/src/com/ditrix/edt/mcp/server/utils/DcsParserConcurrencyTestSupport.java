@@ -30,7 +30,7 @@ final class DcsParserConcurrencyTestSupport
     {
         var field = DcsSettingsWriter.class.getDeclaredField("PARSE_SCRATCH");
         field.setAccessible(true);
-        ThreadLocal<Object> local = (ThreadLocal<Object>)field.get(null);
+        ThreadLocalScope.Slot<Object> local = (ThreadLocalScope.Slot<Object>)field.get(null);
         var constructor = Class.forName(DcsSettingsWriter.class.getName() + "$ParseScratch").getDeclaredConstructor();
         constructor.setAccessible(true);
         return ThreadLocalScope.open(local, local.get() == null ? constructor.newInstance() : local.get());

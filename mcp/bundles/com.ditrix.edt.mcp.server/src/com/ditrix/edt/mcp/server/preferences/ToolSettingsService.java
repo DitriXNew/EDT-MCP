@@ -23,7 +23,7 @@ import com.ditrix.edt.mcp.server.SseStreamRegistry;
 /**
  * Service managing tool enablement state.
  * Keeps stored preferences separate from the effective launch-preset view used for tool enablement.
- * Thread-safe: the launch selection is resolved once and published through an immutable volatile holder.
+ * Thread-safe: the launch selection is resolved once and published as one enum constant in a volatile field.
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
@@ -249,12 +249,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     /** Package-visible environment seam; tests never change the process environment. */
     Function<String, String> environment = System::getenv;
 
-    /** Null until first use; a holder with a null preset records a resolved stored-selection launch. */
-    private volatile SessionPreset sessionPreset;
-
-    private record SessionPreset(ToolPreset preset)
-    {
-    }
+    /**
+     * The launch decision: null until first use, then the resolved preset, with {@link ToolPreset#CUSTOM}
+     * recording a launch that uses the stored selection (an enum constant is immutable, so publishing it
+     * through the volatile field publishes the whole decision).
+     */
+    private volatile ToolPreset sessionPreset;
 
     private ToolSettingsService()
     {
@@ -275,11 +275,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * An unset or blank value, or {@code custom}, uses the stored selection. Explicit {@code custom}
      * logs once at INFO; unknown IDs log once at WARNING with only the predefined override IDs.
      * Resolves once on first use, including bridge calls and manual starts without earlyStartup.
-     * The immutable holder publishes the complete decision atomically, including blank/invalid values.
+     * The decision is published as one enum constant, including blank/invalid values (as {@code CUSTOM}).
      */
     public ToolPreset getSessionPreset()
     {
-        SessionPreset resolved = sessionPreset;
+        ToolPreset resolved = sessionPreset;
         if (resolved == null)
         {
             synchronized (this)
@@ -288,12 +288,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 if (resolved == null)
                 {
                     ToolPreset preset = resolveSessionPreset(environment.apply(ENV_TOOL_PRESET));
-                    resolved = new SessionPreset(preset);
+                    resolved = preset == null ? ToolPreset.CUSTOM : preset;
                     sessionPreset = resolved;
                 }
             }
         }
-        return resolved.preset();
+        return resolved == ToolPreset.CUSTOM ? null : resolved;
     }
 
     private ToolPreset resolveSessionPreset(String value)

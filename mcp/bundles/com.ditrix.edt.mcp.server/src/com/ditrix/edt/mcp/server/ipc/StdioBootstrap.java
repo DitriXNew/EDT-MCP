@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CompletableFuture;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonArray;
@@ -38,7 +39,8 @@ public final class StdioBootstrap implements AutoCloseable
     @FunctionalInterface public interface RegistryProvider { EndpointRegistry open() throws IOException; }
     private final RegistryProvider registries;
     private final StartupCoordinator.Starter starter;
-    private final OutputStream output;
+    /** The client's stdout: written by the request thread, the attach worker and the reply threads. */
+    private final JsonFrames.Writer output;
     private final JsonObject catalog;
     private final boolean headless;
     private final Boolean plainTextMode;
@@ -48,7 +50,8 @@ public final class StdioBootstrap implements AutoCloseable
     private final AtomicBoolean attaching = new AtomicBoolean();
     private record Pending(JsonElement id, boolean toolCall, JsonFrames.Socket owner) { }
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
-    private volatile JsonFrames.Socket connection;
+    /** The attached EDT connection, or null while none is attached. */
+    private final AtomicReference<JsonFrames.Socket> connection = new AtomicReference<>();
     private volatile String status = "EDT is connecting. Retry the same call in about 2 seconds. No tool ran.";
     private volatile String launchFailure;
     private CompletableFuture<String> preparation;
@@ -71,8 +74,8 @@ public final class StdioBootstrap implements AutoCloseable
     public StdioBootstrap(RegistryProvider registries, StartupCoordinator.Starter starter, OutputStream output,
         JsonObject catalog, boolean headless, Boolean plainTextMode)
     {
-        this.registries = registries; this.starter = starter; this.output = output; this.catalog = catalog;
-        this.headless = headless; this.plainTextMode = plainTextMode;
+        this.registries = registries; this.starter = starter; this.output = new JsonFrames.Writer(output);
+        this.catalog = catalog; this.headless = headless; this.plainTextMode = plainTextMode;
     }
 
     public static boolean headlessRequested(String[] args) { return java.util.Arrays.asList(args).contains("-headless"); }
@@ -206,13 +209,13 @@ public final class StdioBootstrap implements AutoCloseable
         if (method.equals("notifications/initialized")) { initialized = initialize != null; return; }
         if (id.isJsonNull())
         {
-            JsonFrames.Socket current = connection;
+            JsonFrames.Socket current = connection.get();
             if (current != null) { try { current.write(frame); } catch (IOException e) { disconnected(current); } }
             return;
         }
         if (method.equals("ping")) { send(success(id, new JsonObject())); return; }
         if (!initialized) { send(error(id, -32600, "Initialize this MCP connection first")); return; }
-        JsonFrames.Socket current = connection;
+        JsonFrames.Socket current = connection.get();
         if (current != null) { forward(request, id, current); return; }
         if (method.equals("tools/list"))
         {
@@ -246,7 +249,7 @@ public final class StdioBootstrap implements AutoCloseable
         catch (java.util.concurrent.TimeoutException e) { /* No invocation is retained by preparation. */ }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         catch (java.util.concurrent.ExecutionException e) { /* Preparation sets the actionable refusal. */ }
-        current = connection;
+        current = connection.get();
         if (current != null) { forward(request, id, current); }
         else
         {
@@ -263,7 +266,7 @@ public final class StdioBootstrap implements AutoCloseable
         // IPC-owned string ids preserve external numeric ids beyond the dispatcher's Double precision.
         String key = "request-" + UUID.randomUUID();
         pending.put(key, new Pending(id.deepCopy(), "tools/call".equals(request.get("method").getAsString()), current));
-        if (connection != current) { disconnected(current); return; }
+        if (connection.get() != current) { disconnected(current); return; }
         JsonObject forwarded = request.deepCopy(); forwarded.addProperty("id", key);
         try { current.write(forwarded.toString()); }
         catch (IOException e) { disconnected(current); }
@@ -333,7 +336,7 @@ public final class StdioBootstrap implements AutoCloseable
                 socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
                 ready.set(true);
                 if (closed) { socket.close(); return; }
-                connection = socket;
+                connection.set(socket);
                 launchFailure = null;
                 Thread receiver = new Thread(() -> receive(socket), "edt-mcp-replies");
                 receiver.setDaemon(true); receiver.start();
@@ -377,9 +380,8 @@ public final class StdioBootstrap implements AutoCloseable
 
     private synchronized void disconnected(JsonFrames.Socket socket)
     {
-        if (connection == socket)
+        if (connection.compareAndSet(socket, null))
         {
-            connection = null;
             status = "EDT disconnected. Retry a read to reconnect. This call has not executed.";
         }
         try { socket.close(); } catch (IOException ignored) { }
@@ -397,7 +399,7 @@ public final class StdioBootstrap implements AutoCloseable
         });
     }
 
-    private void send(String json) throws IOException { JsonFrames.write(output, json); }
+    private void send(String json) throws IOException { output.write(json); }
     private static String idKey(JsonElement id)
     {
         return id.getAsJsonPrimitive().isNumber() ? "n:" + id.getAsBigDecimal().stripTrailingZeros().toString()
@@ -425,7 +427,7 @@ public final class StdioBootstrap implements AutoCloseable
     {
         closed = true;
         worker.shutdownNow();
-        JsonFrames.Socket current = connection;
+        JsonFrames.Socket current = connection.get();
         if (current != null) { disconnected(current); }
     }
 }

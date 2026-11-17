@@ -33,14 +33,21 @@ public final class TechLogAnalysis
     private static final java.util.regex.Pattern CRASH = java.util.regex.Pattern.compile(
         "crash|abnormal|fatal|unexpected|exception|\\u0430\\u0432\\u0430\\u0440|\\u043d\\u0435\\u0448\\u0442\\u0430\\u0442");
     private static final Set<String> DB = Set.of("DBMSSQL", "DBPOSTGRS", "DBV8DBENG", "SDBL");
+    /**
+     * The tokens other than quoted ones. String literals and "quoted"/[bracketed] identifiers are
+     * scanned by {@link #quotedEnd}: as a regex, {@code '(?:''|\\.|[^'\\])*'} recurses once per
+     * character in java.util.regex and threw StackOverflowError on a literal of about two thousand
+     * characters, which a real statement or exception text easily carries.
+     */
     private static final Pattern SQL_TOKEN = Pattern.compile(
-        "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|[NEXB]?'(?:''|\\\\.|[^'\\\\])*'|"
-        + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|"
+        "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|"
+        + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|"
         + "#t(?:t\\d+|[0-9a-f]{32})(?![\\w])|(?<![\\w])\\d+:[0-9a-f]{32}(?![\\w])|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
         Pattern.CASE_INSENSITIVE);
 
     private static final Pattern PARAMETERS = Pattern.compile("(?is)\\n\\s*(?:Parameters|Params)\\s*:.*$");
-    private static final Pattern QUOTED_OR_SPACE = Pattern.compile("\"(?:\"\"|[^\"])*\"|\\[(?:]]|[^]])*]|\\s+");
+    /** {@link #quotedEnd}: no quoted form opens at the position. */
+    private static final int NOT_QUOTED = -2;
 
     private TechLogAnalysis() { }
 
@@ -56,9 +63,13 @@ public final class TechLogAnalysis
         int last = 0;
         for (int at = 0; at < sql.length();)
         {
-            if (!tokenMayStart(sql, at) || !matcher.region(at, sql.length()).lookingAt()) { at++; continue; }
-            appendCollapsed(out, sql, last, matcher.start());
-            String token = matcher.group(), replacement;
+            int end = quotedEnd(sql, at);
+            if (end == NOT_QUOTED && tokenMayStart(sql, at) && matcher.region(at, sql.length()).lookingAt())
+                end = matcher.end();
+            // An unclosed quote is not a token, exactly as the regex alternative failed on it.
+            if (end < 0) { at++; continue; }
+            appendCollapsed(out, sql, last, at);
+            String token = sql.substring(at, end), replacement;
             if (token.startsWith("--") || token.startsWith("/*")) replacement = " ";
             else if (token.startsWith("\"") || token.startsWith("[")) replacement = token;
             // MSSQL #ttN and file-infobase #t<32 hex> temp tables; numbering keeps self-joins apart.
@@ -66,12 +77,86 @@ public final class TechLogAnalysis
                 replacement = tables.computeIfAbsent(token.toLowerCase(Locale.ROOT), k -> "#temp" + (tables.size() + 1));
             else replacement = "?";
             out.append(replacement);
-            last = at = matcher.end();
+            last = at = end;
         }
         appendCollapsed(out, sql, last, sql.length());
-        return QUOTED_OR_SPACE.matcher(out.toString())
-            .replaceAll(m -> m.group().isBlank() ? " " : java.util.regex.Matcher.quoteReplacement(m.group())).trim();
+        return collapseOutsideIdentifiers(out.toString());
     }
+
+    /**
+     * End (exclusive) of the quoted token opening at {@code at}: a string literal with an optional
+     * N/E/X/B prefix (any case), a "quoted" identifier or a [bracketed] one. No other token can
+     * start at these characters, so this replaces the regex alternatives one for one.
+     *
+     * @return the end, {@code -1} when a quoted form opens here but never closes, or
+     *     {@link #NOT_QUOTED}
+     */
+    static int quotedEnd(String s, int at)
+    {
+        char c = s.charAt(at);
+        if (c == '"') return closingEnd(s, at + 1, '"', false);
+        if (c == '[') return closingEnd(s, at + 1, ']', false);
+        int open = "nexb".indexOf(c | 0x20) >= 0 && at + 1 < s.length() && s.charAt(at + 1) == '\'' ? at + 1 : at;
+        return s.charAt(open) == '\'' ? closingEnd(s, open + 1, '\'', true) : NOT_QUOTED;
+    }
+
+    /**
+     * The greedy {@code (?:CC|\\.|[^C\\])*C} (the backslash escape only for literals) as a loop:
+     * a doubled closer is an escaped one, and a run that never closes backs off to the LAST doubled
+     * closer and ends there, as the regex's backtracking did.
+     *
+     * @return the end (exclusive), or {@code -1} when nothing closes
+     */
+    private static int closingEnd(String s, int from, char close, boolean backslashEscapes)
+    {
+        int lastDoubled = -1;
+        int i = from;
+        int n = s.length();
+        while (i < n)
+        {
+            char c = s.charAt(i);
+            if (c == close)
+            {
+                if (i + 1 < n && s.charAt(i + 1) == close) { lastDoubled = i; i += 2; continue; }
+                return i + 1;
+            }
+            if (backslashEscapes && c == '\\')
+            {
+                // '\\.' - the dot does not match a line terminator.
+                if (i + 1 < n && !isLineTerminator(s.charAt(i + 1))) { i += 2; continue; }
+                break;
+            }
+            i++;
+        }
+        return lastDoubled < 0 ? -1 : lastDoubled + 1;
+    }
+
+    private static boolean isLineTerminator(char c)
+    { return c == '\n' || c == '\r' || c == '\u0085' || c == '\u2028' || c == '\u2029'; }
+
+    /** Collapses \s runs to one space outside "quoted" and [bracketed] identifiers, which stay verbatim. */
+    private static String collapseOutsideIdentifiers(String s)
+    {
+        StringBuilder out = new StringBuilder(s.length());
+        int n = s.length();
+        for (int i = 0; i < n;)
+        {
+            char c = s.charAt(i);
+            int end = c == '"' ? closingEnd(s, i + 1, '"', false) : c == '[' ? closingEnd(s, i + 1, ']', false) : -1;
+            if (end >= 0) { out.append(s, i, end); i = end; }
+            else if (isAsciiSpace(c))
+            {
+                out.append(' ');
+                while (i < n && isAsciiSpace(s.charAt(i))) i++;
+            }
+            else { out.append(c); i++; }
+        }
+        return out.toString().trim();
+    }
+
+    /** The {@code \s} class without UNICODE_CHARACTER_CLASS. */
+    private static boolean isAsciiSpace(char c)
+    { return c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\f' || c == '\r'; }
 
     /** A superset of the first characters SQL_TOKEN can match at, honouring its look-behinds. */
     static boolean tokenMayStart(String s, int i)

@@ -68,8 +68,7 @@ public class DcsParseScratchLifecycleTest
     {
         Field field = writer.getDeclaredField("PARSE_SCRATCH");
         field.setAccessible(true);
-        ThreadLocal<?> scratch = (ThreadLocal<?>)field.get(null);
-        try { assertNull(writer.getSimpleName() + " retained parse state on the caller thread", scratch.get()); }
-        finally { scratch.remove(); }
+        ThreadLocalScope.Slot<?> scratch = (ThreadLocalScope.Slot<?>)field.get(null);
+        assertNull(writer.getSimpleName() + " retained parse state on the caller thread", scratch.get());
     }
 }

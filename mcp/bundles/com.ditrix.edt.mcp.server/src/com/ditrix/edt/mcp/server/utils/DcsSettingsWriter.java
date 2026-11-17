@@ -145,15 +145,18 @@ public final class DcsSettingsWriter
 {
     /**
      * One planner invocation's project lookup. Planning is synchronous and every public entry is
-     * synchronized; a ThreadLocal keeps nested schema/dynamic-list planner calls supplied without
-     * turning the already-wide recursive settings API into another parallel parameter chain.
+     * synchronized; a per-thread slot keeps nested schema/dynamic-list planner calls supplied without
+     * turning the already-wide recursive settings API into another parallel parameter chain. Slots
+     * are bound only by a {@link ThreadLocalScope}, so nothing outlives the planner call on a
+     * pooled thread.
      */
-    private static final ThreadLocal<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
-        new ThreadLocal<>();
-    private static final ThreadLocal<AppearanceCatalogue> APPEARANCE_CATALOGUE = new ThreadLocal<>();
+    private static final ThreadLocalScope.Slot<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
+        new ThreadLocalScope.Slot<>();
+    private static final ThreadLocalScope.Slot<AppearanceCatalogue> APPEARANCE_CATALOGUE =
+        new ThreadLocalScope.Slot<>();
     /** Recursive helpers keep their reset/read order, with errors confined to the calling thread. */
-    private static final ThreadLocal<ParseScratch> PARSE_SCRATCH =
-        new ThreadLocal<>();
+    private static final ThreadLocalScope.Slot<ParseScratch> PARSE_SCRATCH =
+        new ThreadLocalScope.Slot<>();
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$

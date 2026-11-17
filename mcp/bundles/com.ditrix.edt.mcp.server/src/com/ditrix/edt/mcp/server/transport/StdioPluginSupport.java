@@ -13,6 +13,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.osgi.service.datalocation.Location;
 import com.ditrix.edt.mcp.server.Activator;
@@ -23,35 +24,36 @@ import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
 /** Plugin lifecycle adapter and read-only client configuration export. */
 public final class StdioPluginSupport
 {
-    private static volatile IpcListener listener;
+    /** The running listener; replaced only under the class lock, read lock-free by {@link #isIpcRunning}. */
+    private static final AtomicReference<IpcListener> LISTENER = new AtomicReference<>();
     private StdioPluginSupport() { }
 
     public static synchronized void start()
     {
-        if (listener != null) { return; }
+        if (LISTENER.get() != null) { return; }
         Path bootstrap = null;
         try { bootstrap = extractBootstrap(); }
         catch (Exception e) { Log.warning("Cannot extract the stdio bootstrap (" + e.getClass().getSimpleName() + "); HTTP is unaffected.", e); }
         try
         {
             Path workspace = realLocation(Platform.getInstanceLocation(), "instance");
-            listener = new IpcListener(new EndpointRegistry(EndpointRegistry.privateDirectory(
+            LISTENER.set(new IpcListener(new EndpointRegistry(EndpointRegistry.privateDirectory(
                 EndpointRegistry.userDirectory().resolve("ipc")), workspace),
-                Activator.getDefault().getBundle().getVersion().toString(), bootstrap);
+                Activator.getDefault().getBundle().getVersion().toString(), bootstrap));
             Activator.logInfo("EDT MCP IPC listener started for " + workspace);
         }
         catch (Exception e) { Log.warning("Cannot start EDT MCP IPC listener (" + e.getClass().getSimpleName() + "); HTTP is unaffected.", e); }
     }
 
     public static boolean isIpcRunning()
-    { IpcListener current = listener; return current != null && current.isRunning(); }
+    { IpcListener current = LISTENER.get(); return current != null && current.isRunning(); }
 
     public static synchronized void stop()
     {
-        if (listener != null)
+        IpcListener current = LISTENER.getAndSet(null);
+        if (current != null)
         {
-            try { listener.close(); } catch (IOException e) { Activator.logError("Cannot close EDT MCP IPC listener", e); }
-            listener = null;
+            try { current.close(); } catch (IOException e) { Activator.logError("Cannot close EDT MCP IPC listener", e); }
         }
     }
 

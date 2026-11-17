@@ -43,10 +43,33 @@ public final class JsonFrames
             .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString().stripTrailing();
     }
 
+    /**
+     * Writes one frame. Not synchronized: a stream that several threads write to goes through one
+     * {@link Writer}, which owns the lock that keeps their frames whole.
+     */
     public static void write(OutputStream output, String json) throws IOException
     {
         byte[] bytes = encode(json);
-        synchronized (output) { output.write(bytes); output.flush(); }
+        output.write(bytes);
+        output.flush();
+    }
+
+    /**
+     * The single writer of a frame stream that several threads share. Each frame is written and
+     * flushed under the writer's own lock, so concurrent frames never interleave.
+     */
+    public static final class Writer
+    {
+        private final OutputStream output;
+        private final Object writeLock = new Object();
+
+        public Writer(OutputStream output) { this.output = output; }
+
+        public void write(String json) throws IOException
+        {
+            byte[] bytes = encode(json);
+            synchronized (writeLock) { output.write(bytes); output.flush(); }
+        }
     }
 
     private static byte[] encode(String json) throws IOException

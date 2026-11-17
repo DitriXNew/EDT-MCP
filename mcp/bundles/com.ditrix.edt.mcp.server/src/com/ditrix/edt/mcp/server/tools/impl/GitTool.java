@@ -163,7 +163,7 @@ public class GitTool implements IMcpTool
     static final String CLONE = "clone"; //$NON-NLS-1$
 
     /** The most a clone may run before its process is killed: a large repository over a slow link. */
-    static final long CLONE_TIMEOUT_SECONDS = 30 * 60;
+    static final long CLONE_TIMEOUT_SECONDS = 30L * 60;
 
     /**
      * How long the {@code clone} call itself waits for the job before it answers with the job id: a
@@ -1262,7 +1262,7 @@ public class GitTool implements IMcpTool
             display.set(2 + clone.directoryIndex(), directory.toString());
             String safeCommand = redactCredentialUrls(String.join(" ", display)); //$NON-NLS-1$
             CloneControl control = controls.get();
-            control.claim = claim;
+            control.claim.set(claim);
             AtomicReference<String> outcome = new AtomicReference<>();
             BackgroundJobs.JobSnapshot started;
             try
@@ -1370,10 +1370,11 @@ public class GitTool implements IMcpTool
             control.finished(json);
             return new CloneRun(false, json, error);
         }
-        if (control.claim != null)
+        GitCloneTarget.Claim held = control.claim.get();
+        if (held != null)
         {
             // No other clone of this server may target a path inside this staging directory meanwhile.
-            control.claim.coverStaging(staging.path());
+            held.coverStaging(staging.path());
         }
         List<String> run = new ArrayList<>(argv);
         run.set(2 + clone.directoryIndex(), staging.repository().toString());
@@ -1498,6 +1499,10 @@ public class GitTool implements IMcpTool
      * review round 1): either the worker CONCLUDES first - it is about to install a clone git finished,
      * or has failed on its own - and a later cancel leaves it alone, or the cancel STOPS it first, and
      * the worker then takes the staging directory back however git ended, an exit 0 included.
+     * <p>
+     * The test seams of this class are plain fields: production never writes them, and a test sets them
+     * before it calls the run seam on its own thread, or before the clone job starts (the job's scheduling
+     * publishes them to the worker that reads them).
      */
     static final class CloneControl
     {
@@ -1513,16 +1518,16 @@ public class GitTool implements IMcpTool
         volatile long cancelWaitMillis = CLONE_CANCEL_WAIT_MILLIS;
 
         /** The target's claim, extended to the staging directory once it exists (null in a direct test run). */
-        volatile GitCloneTarget.Claim claim;
+        private final AtomicReference<GitCloneTarget.Claim> claim = new AtomicReference<>();
 
         /** Test seam: runs once the staging directory exists, before it is proved and handed to git. */
-        volatile Runnable beforeGit = () -> { };
+        Runnable beforeGit = () -> { };
 
         /** Test seam: runs after git succeeded, right before the install, with the staging directory. */
-        volatile java.util.function.Consumer<GitCloneTarget.Staging> beforeInstall = staging -> { };
+        java.util.function.Consumer<GitCloneTarget.Staging> beforeInstall = staging -> { };
 
         /** Test seam: runs right after git's process has ended, before the worker concludes. */
-        volatile Runnable afterGit = () -> { };
+        Runnable afterGit = () -> { };
 
         CloneControl()
         {

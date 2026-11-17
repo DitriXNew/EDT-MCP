@@ -4,6 +4,7 @@ package com.ditrix.edt.mcp.server;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
 
@@ -29,13 +30,21 @@ public class StdioHostApplication implements IApplication
     public StdioHostApplication() { this(new StdioHostPlatform()); }
     StdioHostApplication(Runtime runtime) { this.runtime = runtime; }
 
+    /**
+     * The longest idle timeout {@link HeadlessLifetime} can arm: it schedules the expiry in
+     * nanoseconds, and a {@code long} holds about 292 years of them.
+     */
+    static final long MAX_IDLE_MINUTES = Long.MAX_VALUE / TimeUnit.MINUTES.toNanos(1);
+
     static Duration idleDuration(String value)
     {
         long minutes = value == null ? 30 : Long.parseLong(value);
         if (minutes < 0) { throw new IllegalArgumentException("edt.mcp.headlessIdleMinutes must be nonnegative"); }
-        Duration duration = Duration.ofMinutes(minutes);
-        duration.toNanos();
-        return duration;
+        if (minutes > MAX_IDLE_MINUTES) {
+            throw new IllegalArgumentException("edt.mcp.headlessIdleMinutes must be at most " + MAX_IDLE_MINUTES
+                + " (0 disables the idle shutdown)");
+        }
+        return Duration.ofMinutes(minutes);
     }
 
     @Override public Object start(IApplicationContext context)

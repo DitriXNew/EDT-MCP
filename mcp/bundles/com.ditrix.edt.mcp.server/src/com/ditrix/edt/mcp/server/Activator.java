@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server;
 
 import java.util.Dictionary;
 import java.util.Hashtable;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
@@ -70,7 +71,11 @@ public class Activator extends AbstractUIPlugin
     /** MCP Server instance */
     private McpServer mcpServer;
 
-    private volatile HeadlessLifetime headlessLifetime;
+    /**
+     * The headless host's lifetime, set by {@link #startHeadlessCore} and taken back exactly once by
+     * {@link #stop}; read from request threads.
+     */
+    private final AtomicReference<HeadlessLifetime> headlessLifetime = new AtomicReference<>();
 
     /** In-process bridge exposed to sibling OSGi bundles by string service name. */
     private ServiceRegistration<?> bridgeRegistration;
@@ -138,7 +143,7 @@ public class Activator extends AbstractUIPlugin
 
     void startHeadlessCore(HeadlessLifetime lifetime)
     {
-        headlessLifetime = lifetime;
+        headlessLifetime.set(lifetime);
         mcpServer.registerTools();
         services.init(getBundle().getBundleContext(), false);
         publishBridge(getBundle().getBundleContext());
@@ -146,7 +151,7 @@ public class Activator extends AbstractUIPlugin
         new McpCoreStartup(System::getenv).start();
     }
 
-    public HeadlessLifetime getHeadlessLifetime() { return headlessLifetime; }
+    public HeadlessLifetime getHeadlessLifetime() { return headlessLifetime.get(); }
 
     /**
      * Publishes the stable in-process bridge.
@@ -173,7 +178,8 @@ public class Activator extends AbstractUIPlugin
     public void stop(BundleContext context) throws Exception
     {
         com.ditrix.edt.mcp.server.transport.StdioPluginSupport.stop();
-        if (headlessLifetime != null) { headlessLifetime.close(); headlessLifetime = null; }
+        HeadlessLifetime lifetime = headlessLifetime.getAndSet(null);
+        if (lifetime != null) { lifetime.close(); }
         if (bridgeRegistration != null)
         {
             bridgeRegistration.unregister();

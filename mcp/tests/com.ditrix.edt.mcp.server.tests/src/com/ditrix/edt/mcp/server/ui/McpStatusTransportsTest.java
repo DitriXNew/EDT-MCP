@@ -10,6 +10,7 @@ import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
@@ -42,12 +43,13 @@ public class McpStatusTransportsTest
         PrivatePaths.directory(temporary.getRoot().toPath());
         EndpointRegistry registry = new EndpointRegistry(PrivatePaths.directory(temporary.newFolder().toPath()),
             temporary.newFolder().toPath());
-        Field listenerField = StdioPluginSupport.class.getDeclaredField("listener");
+        Field listenerField = StdioPluginSupport.class.getDeclaredField("LISTENER");
         listenerField.setAccessible(true);
-        Object previous = listenerField.get(null);
+        AtomicReference<IpcListener> slot = (AtomicReference<IpcListener>) listenerField.get(null);
+        IpcListener previous = slot.get();
         try (IpcListener listener = new IpcListener(registry, "test"))
         {
-            listenerField.set(null, listener);
+            slot.set(listener);
             contribution.createControl(new Composite(shell, SWT.NONE));
             Field current = McpStatusContribution.class.getDeclaredField("currentImage");
             Field green = McpStatusContribution.class.getDeclaredField("greenImage");
@@ -70,7 +72,7 @@ public class McpStatusTransportsTest
         }
         finally
         {
-            listenerField.set(null, previous);
+            slot.set(previous);
             contribution.dispose();
             shell.dispose();
             if (ownsDisplay) { display.dispose(); }
