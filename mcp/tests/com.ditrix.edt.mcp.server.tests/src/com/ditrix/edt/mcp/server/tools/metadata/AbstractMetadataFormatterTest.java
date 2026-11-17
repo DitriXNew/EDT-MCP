@@ -215,14 +215,13 @@ public class AbstractMetadataFormatterTest
     }
 
     @Test
-    public void testFormatTypeSingleTypeReturnsItsName()
+    public void testFormatTypeStringWithoutQualifiersIsUnlimited()
     {
-        // McoreUtil.getTypeName returns getName() directly for a non-proxy (in-memory) TypeItem,
-        // so a single named Type renders as exactly that name.
+        // An absent string qualifier group has the same unlimited semantics as a defaulted one.
         com._1c.g5.v8.dt.mcore.TypeDescription td =
             com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
         td.getTypes().add(newType("String")); //$NON-NLS-1$
-        assertEquals("String", f.formatType(td)); //$NON-NLS-1$
+        assertEquals("String(unlimited)", f.formatType(td)); //$NON-NLS-1$
     }
 
     @Test
@@ -234,7 +233,7 @@ public class AbstractMetadataFormatterTest
             com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
         td.getTypes().add(newType("String")); //$NON-NLS-1$
         td.getTypes().add(newType("Number")); //$NON-NLS-1$
-        assertEquals("String, Number", f.formatType(td)); //$NON-NLS-1$
+        assertEquals("String(unlimited), Number", f.formatType(td)); //$NON-NLS-1$
     }
 
     /** Creates an in-memory, non-proxy {@link com._1c.g5.v8.dt.mcore.Type} with the given name. */
@@ -466,10 +465,10 @@ public class AbstractMetadataFormatterTest
     @Test
     public void testFormatDynamicValueTypeDescription()
     {
-        // A TypeDescription value is delegated to formatType (single named type -> its name).
+        // Dynamic values use the same qualified type renderer as owner tables.
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         td.getTypes().add(newType("String")); //$NON-NLS-1$
-        assertEquals("String", f.formatDynamicValue(td, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("String(unlimited)", f.formatDynamicValue(td, "en")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -722,6 +721,50 @@ public class AbstractMetadataFormatterTest
     {
         assertEquals("left\\|right next", f.escapeTableCell("left|right\r\nnext"));
         assertEquals("-", f.escapeTableCell(null));
+    }
+
+    @Test
+    public void testQualifiedTypesRenderInOwnerTablesAndAssignableValues()
+    {
+        TypeDescription type = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String name : new String[] {"String", "Number", "Date", "BinaryData", "Boolean"})
+        {
+            type.getTypes().add(newType(name));
+        }
+        var string = McoreFactory.eINSTANCE.createStringQualifiers();
+        string.setLength(400);
+        type.setStringQualifiers(string);
+        var number = McoreFactory.eINSTANCE.createNumberQualifiers();
+        number.setPrecision(15);
+        number.setScale(2);
+        number.setNonNegative(true);
+        type.setNumberQualifiers(number);
+        var date = McoreFactory.eINSTANCE.createDateQualifiers();
+        type.setDateQualifiers(date);
+        var binary = McoreFactory.eINSTANCE.createBinaryQualifiers();
+        binary.setLength(64);
+        type.setBinaryQualifiers(binary);
+        String expected = "String(400, Variable), Number(15, 2, Nonnegative), Date(DateTime), "
+            + "BinaryData(64, Variable), Boolean";
+        assertEquals(expected, f.formatType(type));
+        var owner = MdClassFactory.eINSTANCE.createInformationRegister();
+        owner.setName("Регистр");
+        var dimension = MdClassFactory.eINSTANCE.createInformationRegisterDimension();
+        dimension.setName("Измерение");
+        dimension.setType(type);
+        owner.getDimensions().add(dimension);
+        assertTrue(f.format(owner, false, "en").contains(expected));
+        assertEquals(expected, com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector
+            .find(dimension, "type").currentValue);
+        string.setFixed(true);
+        date.setDateFractions(com._1c.g5.v8.dt.mcore.DateFractions.TIME);
+        assertTrue(f.formatType(type).contains("String(400, Fixed)"));
+        assertTrue(f.formatType(type).contains("Date(Time)"));
+        date.setDateFractions(com._1c.g5.v8.dt.mcore.DateFractions.DATE);
+        assertTrue(f.formatType(type).contains("Date(Date)"));
+        string.setFixed(false);
+        string.setLength(0);
+        assertTrue(f.formatType(type).startsWith("String(unlimited), "));
     }
 
 }

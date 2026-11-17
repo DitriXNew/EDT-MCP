@@ -966,3 +966,57 @@ def test_assignable_input_choice_lists_use_the_form_path_grammar888():
         assert_contains(result.text, '| choiceParameterLinks | FORM_CHOICE_VALUES | [] |')
         assert_contains(result.text, 'name,dataPath,changeMode:')
         assert_no_diff("reading input-field lists must leave the fixture clean")
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_type_qualifiers915_in_assignable_and_owner_tables():
+    owner = "InformationRegister.Квалификаторы915"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner}))
+    mdo = "src/InformationRegisters/Квалификаторы915/Квалификаторы915.mdo"
+    assert_contains(read_disk(mdo), "<name>Квалификаторы915</name>")
+    members = (
+        ("Dimension.Строка", [{"kind": "String", "length": 400}],
+         "String(400, Variable)", ("<length>400</length>",)),
+        ("Resource.Сумма", [{"kind": "Number", "precision": 15, "scale": 2, "nonNegative": True}],
+         "Number(15, 2, Nonnegative)", ("<precision>15</precision>", "<scale>2</scale>",
+                                       "<nonNegative>true</nonNegative>")),
+        ("Attribute.Составной", [{"kind": "String", "length": 12, "fixed": True},
+                                 {"kind": "Number", "precision": 9, "scale": 3},
+                                 {"kind": "Date", "fractions": "Time"}],
+         "String(12, Fixed), Number(9, 3, Signed), Date(Time)",
+         ("<length>12</length>", "<fixed>true</fixed>", "<precision>9</precision>",
+          "<scale>3</scale>", "<dateFractions>Time</dateFractions>")),
+        ("Attribute.БезОграничения", [{"kind": "String", "length": 0}],
+         "String(unlimited)", ("<name>БезОграничения</name>",)),
+    )
+    for member, types, expected, disk_values in members:
+        fqn = owner + "." + member
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
+                  "properties": [{"name": "type", "value": {"types": [
+                      {"kind": "String", "length": 5}]}}]}), "seed " + fqn)
+        assert_contains(read_disk(mdo), "<name>" + member.split(".")[1] + "</name>")
+        assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                  "properties": [{"name": "type", "value": {"types": types}}]}), "set qualifiers on " + fqn)
+        disk = read_disk(mdo)
+        for value in disk_values:
+            assert_contains(disk, value, "qualifiers persisted before model read-back: " + fqn)
+        for address in (fqn, fqn.replace("InformationRegister", "РегистрСведений")
+                       .replace(".Dimension.", ".Измерение.").replace(".Resource.", ".Ресурс.")
+                       .replace(".Attribute.", ".Реквизит.")):
+            result = call("get_metadata_details", {"projectName": PROJECT,
+                          "objectFqns": [address], "assignable": True})
+            assert_ok(result)
+            assert_not_contains(result.text, "## Errors", "Russian names and type tokens must resolve")
+            assert_contains(result.text, "| type | TYPE_DESCRIPTION | " + expected + " |",
+                            "assignable current value retains qualifiers: " + address)
+    for address in (owner, owner.replace("InformationRegister", "РегистрСведений")):
+        for full in (False, True):
+            result = call("get_metadata_details", {"projectName": PROJECT,
+                          "objectFqns": [address], "full": full})
+            assert_ok(result)
+            assert_not_contains(result.text, "## Errors")
+            for member, types, expected, disk_values in members:
+                row = next((line for line in result.text.splitlines()
+                            if line.startswith("| " + member.split(".")[1] + " |")), None)
+                assert row is not None, "owner table must list " + member + ": " + result.text
+                assert_contains(row, expected, "owner table retains the member's qualifiers")

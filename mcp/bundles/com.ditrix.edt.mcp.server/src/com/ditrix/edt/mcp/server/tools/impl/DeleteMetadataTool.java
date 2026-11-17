@@ -1623,6 +1623,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static String deletedDirectoryError(String projectName, String fqn)
     {
         if (fqn == null || fqn.split("\\.").length != 2) return null; //$NON-NLS-1$
+        String featureName = MetadataTypeUtils.getConfigReferenceName(fqn.substring(0, fqn.indexOf('.')));
+        EStructuralFeature feature = featureName == null ? null
+            : MdClassPackage.Literals.CONFIGURATION.getEStructuralFeature(featureName);
+        // Contained configuration entries have no directory; their removal is verified in Configuration.mdo.
+        if (feature instanceof EReference && ((EReference)feature).isContainment()) return null;
         String file = registeringFilePath(MetadataTypeUtils.toCanonicalEnglishFqn(fqn));
         var context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
         var location = file != null && context.exists() ? context.project().getFile(file).getLocation() : null;
@@ -1653,18 +1658,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if ("Configuration".equals(containerFqn)) //$NON-NLS-1$
         {
             return "src/Configuration/Configuration.mdo"; //$NON-NLS-1$
-        }
-        // Subsystem has no entry in the general directory map, and each nested level has its
-        // own folder. Parse before the generic path mapper; these are separate top objects.
-        String[] chain = SubsystemUtils.parseSubsystemPath(containerFqn);
-        if (chain != null)
-        {
-            StringBuilder path = new StringBuilder("src"); //$NON-NLS-1$
-            for (String name : chain)
-            {
-                path.append("/Subsystems/").append(name); //$NON-NLS-1$
-            }
-            return path.append('/').append(chain[chain.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
         }
         String referencedPath = ReferencedTopObjects.mdoPath(containerFqn);
         return referencedPath != null ? referencedPath : MetadataPathResolver.resolveTopObjectMdoPath(containerFqn);

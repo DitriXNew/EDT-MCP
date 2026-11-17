@@ -126,8 +126,7 @@ import com.ditrix.edt.mcp.server.Activator;
  * ({@link VendorSupportGuard#moduleOwnerFqn(String, boolean)}): {@code <Dir>/<Name>/<Stem>.bsl},
  * {@code <Dir>/<Name>/Commands/<Command>/CommandModule.bsl} and {@code Configuration/<Stem>.bsl}. So it
  * does not cover the modules of an external data source's tables, cubes and dimension tables (deeper
- * paths), nor {@code Bot}, {@code IntegrationService} and {@code WebSocketClient} modules (no source
- * directory is mapped for those types): their state has to be set in EDT. A recalculation's module has
+ * paths): their state has to be set in EDT. A recalculation's module has
  * no extension state at all, and a form's module needs none: the form's own state
  * ({@code <form>Extended</form>}) is set when the form is adopted.
  * <p>
@@ -736,13 +735,12 @@ public final class AdoptedModuleState
      * listener does not restrict it, so a file named after an attribute ({@code Comment.bsl}) would be
      * taken for a module there; here it is no module. A form has no such feature ({@code BasicForm}
      * holds a {@code form}, not a {@code module}), so form modules fall out on their own.
-     * Package-visible for tests.
      *
      * @param ownerClass the owner's class, may be {@code null}
      * @param stem the file name without {@code .bsl}
      * @return the module feature, or {@code null}
      */
-    static EStructuralFeature moduleFeature(EClass ownerClass, String stem)
+    public static EStructuralFeature moduleFeature(EClass ownerClass, String stem)
     {
         if (ownerClass == null || stem == null)
         {

@@ -40,10 +40,8 @@ import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
-import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
-import com.ditrix.edt.mcp.server.utils.MarkerCheckIds;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -3102,30 +3100,6 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         return MarkerRows.excludedByObjectsFilter(objects, presentationResolved, objectPresentation,
             unresolvedFilteredOut, exactScope);
-    }
-
-    /** Compatibility entry for callers migrating to MarkerCheckIds. */
-    static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
-    {
-        return MarkerCheckIds.resolveSymbolicCheckId(marker, shortUid, checkRepository);
-    }
-
-    /** @see MarkerRows#resolveCheckUid(Marker, String, ICheckRepository) */
-    static CheckUid resolveCheckUid(Marker marker, String shortUid, ICheckRepository checkRepository)
-    {
-        return MarkerCheckIds.resolveCheckUid(marker, shortUid, checkRepository);
-    }
-
-    /** @see MarkerRows#checkIdMatches(String, String, String) */
-    static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
-    {
-        return MarkerCheckIds.checkIdMatches(shortUid, symbolicCheckId, checkId);
-    }
-
-    /** Compatibility entry for exact mutation-locator matching. */
-    static boolean checkIdMatchesExact(String shortUid, String symbolicCheckId, String checkId)
-    {
-        return MarkerCheckIds.checkIdMatchesExact(shortUid, symbolicCheckId, checkId);
     }
 
     /** @see MarkerRows#unresolvedPlaceholder(Marker) */

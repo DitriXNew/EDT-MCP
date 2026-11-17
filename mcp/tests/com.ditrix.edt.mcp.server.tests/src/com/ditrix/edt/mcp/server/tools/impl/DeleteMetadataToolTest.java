@@ -2672,4 +2672,35 @@ public class DeleteMetadataToolTest
         assertNull("a container chain with no top object names no file", //$NON-NLS-1$
             DeleteMetadataTool.containerExportFqn((EObject)orphan));
     }
+    @Test
+    public void testDeletedDirectoryPathForEveryPreviouslyUnmappedType()
+    {
+        for (String type : new String[] {"StyleItem", "CommonAttribute", "EventSubscription", "ScheduledJob", "SessionParameter", "FunctionalOption", "FunctionalOptionsParameter", "CommonPicture", "DefinedType", "CommonTemplate", "CommandGroup", "DocumentNumerator", "WSReference", "XDTOPackage", "Style", "Interface", "IntegrationService", "Bot", "WebSocketClient", "Role", "Subsystem"})
+        {
+            String directory = com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil
+                .getPluralFormOfModelObjectName(type);
+            assertEquals(type, "src/" + directory + "/Проба/Проба.mdo",
+                DeleteMetadataTool.registeringFilePath(type + ".Проба"));
+        }
+    }
+
+    @Test
+    public void testHeadlessContainedLanguageDeleteChecksRegistrationWithoutInventingADirectory() throws Exception
+    {
+        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            int[] reads = {0};
+            var tool = new DeleteMetadataTool((name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW,
+                (name, timeout) -> null, (project, fqn) -> true, project -> Collections.emptyList(),
+                (project, file, container, fqn) -> { reads[0]++; return DeleteMetadataTool.RegistrationState.ABSENT; });
+            String raw = "{\"success\":true,\"action\":\"executed\",\"fqn\":\"Language.Удаляемый\","
+                + "\"registeringFile\":\"src/Configuration/Configuration.mdo\",\"registeringContainer\":\"Configuration\"}";
+            JsonObject result = JsonParser.parseString(tool.refreshAfterExportAwait(
+                Map.of("projectName", fixture.name()), raw, true)).getAsJsonObject();
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            assertEquals(1, reads[0]);
+            assertFalse(result.toString(), result.has("registeringFile"));
+        }
+    }
+
 }

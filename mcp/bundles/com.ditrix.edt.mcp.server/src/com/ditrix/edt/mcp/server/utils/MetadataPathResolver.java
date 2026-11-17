@@ -152,7 +152,7 @@ public final class MetadataPathResolver
      * <p>The type token is bilingual (English/Russian, singular/plural, via
      * {@link MetadataTypeUtils}); the object Name passes through verbatim. Only TOP
      * object FQNs ({@code Type.Name}) are supported - member FQNs have no own
-     * {@code .mdo} file.
+     * {@code .mdo} file. Nested subsystems have their own top-object files below each ancestor's directory.
      *
      * @param fqn the top-object FQN (e.g. {@code "Catalog.Products"})
      * @return the {@code .mdo} path relative to the project root (e.g.
@@ -160,12 +160,22 @@ public final class MetadataPathResolver
      */
     public static String resolveTopObjectMdoPath(String fqn)
     {
-        if (fqn == null || fqn.isEmpty())
+        if (fqn == null || fqn.isEmpty() || fqn.endsWith(".")) //$NON-NLS-1$
         {
             return null;
         }
+        String[] subsystems = SubsystemUtils.nestedChain(fqn);
+        if (subsystems != null)
+        {
+            StringBuilder path = new StringBuilder("src"); //$NON-NLS-1$
+            for (String name : subsystems)
+            {
+                path.append("/Subsystems/").append(name); //$NON-NLS-1$
+            }
+            return path.append('/').append(subsystems[subsystems.length - 1]).append(".mdo").toString(); //$NON-NLS-1$
+        }
         int dot = fqn.indexOf('.');
-        if (dot <= 0 || dot >= fqn.length() - 1)
+        if (dot <= 0 || dot >= fqn.length() - 1 || fqn.indexOf('.', dot + 1) >= 0)
         {
             // Dotless FQN (e.g. the Configuration root) - not a type-directory object.
             return null;

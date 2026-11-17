@@ -271,4 +271,15 @@ public class GoToDefinitionToolTest
         assertEquals("definition.md", //$NON-NLS-1$
             new GoToDefinitionTool().getResultFileName(new HashMap<>()));
     }
+    @Test
+    public void testNewModuleOwnersHaveTheirExportedCollectionFolder() throws Exception
+    {
+        var method = GoToDefinitionTool.class.getDeclaredMethod("getCollectionFolder", String.class);
+        method.setAccessible(true);
+        for (String type : new String[] {"Bot", "IntegrationService", "WebSocketClient"})
+        {
+            assertEquals(type + "s", method.invoke(new GoToDefinitionTool(), type));
+        }
+    }
+
 }
