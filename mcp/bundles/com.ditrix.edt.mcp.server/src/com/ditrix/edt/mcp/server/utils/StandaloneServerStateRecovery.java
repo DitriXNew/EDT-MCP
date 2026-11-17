@@ -150,8 +150,12 @@ public final class StandaloneServerStateRecovery
     static volatile long explicitStartGuardCapMs =
         StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS;
 
-    /** Test seam for a UI thread that never answers the bounded shell probe. */
-    static volatile LongFunction<LaunchLifecycleUtils.ShellProbe> stopShellProbe =
+    /**
+     * Test seam for a UI thread that never answers the bounded shell probe. A plain field: production never
+     * writes it, and a test sets it before it starts the stop, whose job scheduling publishes the value to
+     * the job thread that reads it.
+     */
+    static LongFunction<LaunchLifecycleUtils.ShellProbe> stopShellProbe =
         LaunchLifecycleUtils::grabActiveShellWithin;
 
     /**

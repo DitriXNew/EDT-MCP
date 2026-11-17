@@ -28,6 +28,14 @@ import com.ditrix.edt.mcp.server.Activator;
 /** Typed EDT service access and bounded completion of asynchronous measurements. */
 public final class ProfilingSupport
 {
+    /**
+     * Serializes this plugin's check-then-write changes to the measurement store (a rename checks that
+     * the name is free, an import that no UUID or name is taken). Our own lock, not EDT's: the service's
+     * monitor is also held by EDT's {@code toggleProfiling} across a debug-server command, so a change
+     * that synchronized on the service would wait - on the UI thread - for that command to return.
+     */
+    private static final Object STORE_CHANGE_LOCK = new Object();
+
     private ProfilingSupport() { }
 
     public static IProfilingService service()
@@ -40,7 +48,11 @@ public final class ProfilingSupport
         return service;
     }
 
-    /** EDT saves before notifying UI listeners. A listener failure must not hide an observed write. */
+    /**
+     * EDT saves before notifying UI listeners. A listener failure must not hide an observed write. The
+     * mutation - a check and the write it guards - runs under {@link #STORE_CHANGE_LOCK} on the thread that
+     * executes it, never across the UI dispatch.
+     */
     public static String applyObserved(Runnable mutation, BooleanSupplier observed, String action)
     {
         return applyObserved(BoundedUiCall.workbenchExecutorOrNull(), mutation, observed, action, 5000);
@@ -49,7 +61,12 @@ public final class ProfilingSupport
     static String applyObserved(BoundedUiCall.UiExecutor executor, Runnable mutation,
         BooleanSupplier observed, String action, long timeoutMillis)
     {
-        FutureTask<Void> task = new FutureTask<>(mutation, null);
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            synchronized (STORE_CHANGE_LOCK)
+            {
+                mutation.run();
+            }
+        }, null);
         Exception failure = null;
         try
         {

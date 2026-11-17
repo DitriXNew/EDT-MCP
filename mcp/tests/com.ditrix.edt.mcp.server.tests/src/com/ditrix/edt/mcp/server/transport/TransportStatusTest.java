@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.transport;
 
 import static org.junit.Assert.*;
 import java.lang.reflect.Field;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.tools.impl.GetServerStatusTool;
@@ -38,17 +39,18 @@ public class TransportStatusTest extends StdioTestSupport
     @Test
     public void defaultReaderMatchesDiagnosticAcrossRealIpcLifecycle() throws Exception
     {
-        Field field = StdioPluginSupport.class.getDeclaredField("listener");
+        Field field = StdioPluginSupport.class.getDeclaredField("LISTENER");
         field.setAccessible(true);
-        Object previous = field.get(null);
+        AtomicReference<IpcListener> slot = (AtomicReference<IpcListener>) field.get(null);
+        IpcListener previous = slot.get();
         try (IpcListener listener = new IpcListener(registry(), "test"))
         {
-            field.set(null, listener);
+            slot.set(listener);
             assertIpc(true);
             listener.close();
             assertIpc(false);
         }
-        finally { field.set(null, previous); }
+        finally { slot.set(previous); }
     }
 
     private void assertIpc(boolean expected)

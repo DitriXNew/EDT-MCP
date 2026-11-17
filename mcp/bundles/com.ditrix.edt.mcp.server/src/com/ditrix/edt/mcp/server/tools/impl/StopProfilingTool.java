@@ -223,17 +223,14 @@ public class StopProfilingTool implements IMcpTool
             try
             {
                 var attempted = new java.util.concurrent.atomic.AtomicBoolean();
+                // applyObserved runs the check and the write together under the store-change lock.
                 viewNote = ProfilingSupport.applyObserved(() -> {
-                    // Acquire the service lock on the executing thread, never across a UI dispatch.
-                    synchronized (service)
+                    if (service.getResults().stream().anyMatch(r -> !r.getUuid().equals(measurement.getUuid()) && name.equalsIgnoreCase(r.getName())))
                     {
-                        if (service.getResults().stream().anyMatch(r -> !r.getUuid().equals(measurement.getUuid()) && name.equalsIgnoreCase(r.getName())))
-                        {
-                            throw new IllegalArgumentException("The requested name now exists. Choose a unique name next time.");
-                        }
-                        attempted.set(true);
-                        service.setResultName(measurement, name);
+                        throw new IllegalArgumentException("The requested name now exists. Choose a unique name next time.");
                     }
+                    attempted.set(true);
+                    service.setResultName(measurement, name);
                 }, () -> attempted.get() && service.getResults().stream().anyMatch(r -> r.getUuid().equals(measurement.getUuid())
                     && name.equals(r.getName())), "Rename to '" + name + "'");
             }
