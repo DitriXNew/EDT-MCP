@@ -2609,4 +2609,23 @@ public class LaunchToolTest
             resolution.error.contains("Application not found")); //$NON-NLS-1$
         assertNull("and it must not hand on a resolved application", resolution.application); //$NON-NLS-1$
     }
+    @Test
+    public void windowModeAndScreenAreValidatedBeforeAnyLaunch()
+    {
+        LaunchTool tool = new LaunchTool();
+        var invalidMode = JsonParser.parseString(tool.execute(Map.of("windowMode", "hidden"))).getAsJsonObject();
+        assertFalse(invalidMode.get("success").getAsBoolean());
+        assertTrue(invalidMode.toString().contains("hidden"));
+        assertTrue(invalidMode.toString().contains("isolated"));
+        var invalidScreen = JsonParser.parseString(tool.execute(Map.of("windowMode", "otherScreen", "screen", "1.5"))).getAsJsonObject();
+        assertFalse(invalidScreen.get("success").getAsBoolean());
+        assertTrue(invalidScreen.toString().contains("integer"));
+        var wrongMode = JsonParser.parseString(tool.execute(Map.of("windowMode", "normal", "screen", "2"))).getAsJsonObject();
+        assertFalse(wrongMode.get("success").getAsBoolean());
+        assertTrue(wrongMode.toString().contains("otherScreen"));
+        var schema = JsonParser.parseString(tool.getInputSchema()).getAsJsonObject().getAsJsonObject("properties");
+        assertEquals(4, schema.getAsJsonObject("windowMode").getAsJsonArray("enum").size());
+        assertEquals("integer", schema.getAsJsonObject("screen").get("type").getAsString());
+    }
+
 }

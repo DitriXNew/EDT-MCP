@@ -89,4 +89,17 @@ public class ExternalProcessTest
         verify(process).destroyForcibly();
     }
 
+    @Test
+    public void processHandleLaunchesUseTheSameTreeCleanup()
+    {
+        ProcessHandle process = mock(ProcessHandle.class);
+        ProcessHandle child = mock(ProcessHandle.class);
+        when(process.descendants()).thenReturn(Stream.of(child));
+        when(process.onExit()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(process));
+        ExternalProcess.destroyTree(process);
+        var order = inOrder(child, process);
+        order.verify(child).destroyForcibly();
+        order.verify(process).destroyForcibly();
+    }
+
 }

@@ -4320,6 +4320,10 @@
           "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
           "type": "boolean"
         },
+        "screen": {
+          "description": "1-based monitor index for otherScreen; default first non-primary.",
+          "type": "integer"
+        },
         "standaloneServerPortConflict": {
           "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
@@ -4330,6 +4334,16 @@
         "updateBeforeLaunch": {
           "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
           "type": "boolean"
+        },
+        "windowMode": {
+          "default": "normal",
+          "enum": [
+            "normal",
+            "minimized",
+            "otherScreen",
+            "isolated"
+          ],
+          "type": "string"
         }
       },
       "required": [],
@@ -4381,6 +4395,9 @@
         "mode": {
           "type": "string"
         },
+        "pid": {
+          "type": "integer"
+        },
         "project": {
           "type": "string"
         },
@@ -4395,6 +4412,15 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "windowMode": {
+          "type": "string"
+        },
+        "windowModeApplied": {
+          "type": "boolean"
+        },
+        "windowModeReason": {
+          "type": "string"
         }
       },
       "required": [
