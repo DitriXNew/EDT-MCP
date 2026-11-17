@@ -1286,8 +1286,42 @@ public final class MetadataPropertyApplier
         {
             return ToolResult.error(problem.message()).toJson();
         }
+        String offerError = genericReferenceOfferError(typeTarget, target, info.feature, name, tr.typeDescription);
+        if (offerError != null)
+        {
+            return ToolResult.error(offerError).toJson();
+        }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
+    }
+
+    /**
+     * EDT's verdict on a generic reference type ({@code {kind:'DocumentRef'}}, issue #966) for a stored
+     * feature or a session parameter: EDT's type editor of that very feature decides
+     * ({@link GenericReferenceTypeOffer}). A form member is judged by the form type picker
+     * ({@link FormValueTypePolicy}) and a defined type by its own category, so neither is asked twice.
+     *
+     * @return the refusal message, or {@code null} when the type may be written
+     */
+    static String genericReferenceOfferError(MetadataTypeBuilder.TypeTarget typeTarget, EObject target,
+        EStructuralFeature feature, String name, TypeDescription built)
+    {
+        if (typeTarget != MetadataTypeBuilder.TypeTarget.METADATA
+            && typeTarget != MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER)
+        {
+            return null;
+        }
+        GenericReferenceTypeOffer.Problem offer = GenericReferenceTypeOffer.check(target, feature, built);
+        if (offer == null)
+        {
+            return null;
+        }
+        String message = "Invalid 'type' for '" + name + "': " + offer.message(); //$NON-NLS-1$ //$NON-NLS-2$
+        if (offer.platformFailure())
+        {
+            Activator.logError("Error checking the type for '" + name + "'", new IllegalStateException(message)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return message;
     }
 
     /** Platform dependency seam; preparation and its guards remain shared with the live writer. */
