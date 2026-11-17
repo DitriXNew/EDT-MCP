@@ -744,11 +744,11 @@ def test_extobj_go_to_definition_hints_for_a_type_shaped_module_name():
     """
     r = call("go_to_definition",
              {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Catalog.SomeMethod"})
-    assert_ok(r, "a type-shaped module name on an external-objects project")
-    assert_contains(r.text, "Symbol not found", "neither reading resolves in this project")
-    assert_contains(r.text, "no common modules",
+    message = assert_error(r, "a type-shaped module name on an external-objects project")
+    assert_contains(message, "Symbol not found", "neither reading resolves in this project")
+    assert_contains(message, "no common modules",
                     "the module reading must be answered, not silently dropped")
-    assert_contains(r.text, PROJECT, "the base project must be named as where to ask")
+    assert_contains(message, PROJECT, "the base project must be named as where to ask")
     assert_no_diff("a read tool must not touch the base project on disk")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
 
