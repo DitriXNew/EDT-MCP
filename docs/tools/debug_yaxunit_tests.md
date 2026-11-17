@@ -42,8 +42,6 @@ The parameters match `run_yaxunit_tests(debug=true)`:
 - `standaloneServerPortConflict`: `cancel` (default) refuses busy ports; `reassign` lets EDT select free ports and rewrite its configuration.
 - `updateBeforeLaunch` defaults to `true` and performs the pre-launch recompute/update chain. `updateScope` narrows that chain; `externalInfobaseChanges` selects how its blocking external-change prompt is answered.
 
-`standaloneServerPortConflict` answers a server-port conflict: `cancel` (default) refuses; `reassign` lets EDT choose free ports.
-
 The progress journal uses the same `resolve`, `prep:terminate`, `prep:check-changes`, `prep:recompute`, `prep:settle`, `prep:db-update`, and `spawn` phases as `run_yaxunit_tests`; `prep:recompute` appears only when the gate found something to recompute. A phase that stops advancing may be slow work or an EDT modal dialog; inspect EDT instead of waiting indefinitely.
 
 The job commits before pre-launch work and `launch(DEBUG_MODE)`: interrupting the worker cannot undo either.
