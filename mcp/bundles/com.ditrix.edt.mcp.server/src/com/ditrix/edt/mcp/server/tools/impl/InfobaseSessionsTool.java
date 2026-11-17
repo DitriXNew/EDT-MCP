@@ -843,12 +843,6 @@ public class InfobaseSessionsTool implements IMcpTool
             : session.sessionId() + " (session-id " + session.sessionNumber() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Compatibility forwarding for callers outside the launch refactor scope. */
-    static boolean isDesignerSession(SessionInfo session)
-    {
-        return InfobaseSessionSupport.isDesignerSession(session);
-    }
-
     private static ToolResult baseResult(String action, String projectName, IApplication application)
     {
         return ToolResult.success().put(McpKeys.ACTION, action)

@@ -23,6 +23,7 @@ import org.junit.rules.TemporaryFolder;
 import com._1c.g5.v8.dt.profiling.core.*;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.google.gson.JsonParser;
+import com.ditrix.edt.mcp.server.utils.ProfilingSessionRegistry;
 
 /** Drives real execute/render/file branches through typed EDT service mocks. */
 public class ManageProfilingResultsToolTest
@@ -51,7 +52,7 @@ public class ManageProfilingResultsToolTest
 
     @Before public void setup()
     {
-        StartProfilingTool.clearStateForTests();
+        ProfilingSessionRegistry.clearStateForTests();
         service = mock(IProfilingService.class);
         store = mock(IResultsStore.class);
         first = measurement("Before", 1, List.of(line("Module", "Slow()", 1, 2, 8_000_000, 4_000_000, "a | b"),
@@ -61,7 +62,7 @@ public class ManageProfilingResultsToolTest
         when(service.getResults()).thenReturn(List.of(first, second));
         tool = new TestTool();
     }
-    @After public void clear() { StartProfilingTool.clearStateForTests(); }
+    @After public void clear() { ProfilingSessionRegistry.clearStateForTests(); }
 
     private Map<String, String> named(String... extra)
     {

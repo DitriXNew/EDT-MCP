@@ -1934,8 +1934,8 @@ public final class LaunchLifecycleUtils
      * The pre-launch check of a launch whose infobase update EDT's launch delegate performs inside
      * the launch Job (its "Application update" dialog is pressed by the armed confirmer), so the call
      * returns "launching" at once and {@code debug_status} reports {@code state: starting} until the
-     * client is up (EDT's update state does not change to BEING_UPDATED on this path). Refuses only what that path cannot recover from: an application that
-     * cannot be read or does not exist, or one another caller is updating right now.
+     * client is up. An active MCP update job is left to EDT's coordinated wait. Otherwise refuses
+     * an unreadable/missing application or an update that EDT itself reports as in progress.
      *
      * @return {@link Optional#empty()} to launch, otherwise an actionable refusal
      */
@@ -1950,6 +1950,11 @@ public final class LaunchLifecycleUtils
         {
             return Optional.of("Project is not available: " //$NON-NLS-1$
                 + (project != null ? project.getName() : "<null>")); //$NON-NLS-1$
+        }
+        if (ApplicationUpdateJobs.shared().runningJobId(project.getName(), applicationId) != null)
+        {
+            // EDT's launch delegate waits for the load; a cached update state must not refuse it.
+            return Optional.empty();
         }
         ApplicationSupport.BoundedRead<Optional<IApplication>> lookup =
             ApplicationSupport.getApplicationBounded(appManager, project, applicationId,

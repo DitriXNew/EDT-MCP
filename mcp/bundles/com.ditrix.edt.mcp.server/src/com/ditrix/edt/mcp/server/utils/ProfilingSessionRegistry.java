@@ -109,7 +109,7 @@ public final class ProfilingSessionRegistry
         return !ACTIVE_APPLICATION_IDS.isEmpty();
     }
 
-    /** Marks profiling active for the given application id. Package-visible for the stop tool. */
+    /** Marks profiling active for the given application id. */
     public static void markActive(String applicationId)
     {
         markActive(applicationId, null);
@@ -123,7 +123,7 @@ public final class ProfilingSessionRegistry
         }
     }
 
-    /** Marks profiling inactive for the given application id. Package-visible for the stop tool. */
+    /** Marks profiling inactive for the given application id. */
     public static void markInactive(String applicationId)
     {
         if (applicationId != null)

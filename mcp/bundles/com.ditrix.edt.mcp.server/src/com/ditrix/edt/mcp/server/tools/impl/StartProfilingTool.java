@@ -49,68 +49,6 @@ public class StartProfilingTool implements IMcpTool
     /** Output key: whether this call started profiling (vs. already active). */
     private static final String KEY_STARTED = "started"; //$NON-NLS-1$
 
-    static final Object TRANSITIONS = ProfilingSessionRegistry.TRANSITIONS;
-
-    public static boolean isProfilingActive(String applicationId)
-    {
-        return ProfilingSessionRegistry.isProfilingActive(applicationId);
-    }
-
-    static void reconcile(String applicationId, IDebugTarget target)
-    {
-        ProfilingSessionRegistry.reconcile(applicationId, target);
-    }
-
-    static IDebugTarget profiledTarget(String applicationId, IDebugTarget lookedUp)
-    {
-        return ProfilingSessionRegistry.profiledTarget(applicationId, lookedUp);
-    }
-
-    static IDebugTarget profiledTarget(Object owner, IDebugTarget lookedUp, java.util.function.Predicate<IDebugTarget> ended)
-    {
-        return ProfilingSessionRegistry.profiledTarget(owner, lookedUp, ended);
-    }
-
-    static Object ownerAfterReading(Object current, IDebugTarget target, boolean enabled, java.util.function.Predicate<IDebugTarget> ended)
-    {
-        return ProfilingSessionRegistry.ownerAfterReading(current, target, enabled, ended);
-    }
-
-    static boolean ended(IDebugTarget target)
-    {
-        return ProfilingSessionRegistry.ended(target);
-    }
-
-    static boolean ended(IDebugTarget target, java.util.function.Predicate<org.eclipse.debug.core.ILaunch> registered)
-    {
-        return ProfilingSessionRegistry.ended(target, registered);
-    }
-
-    public static boolean isAnyProfilingActive()
-    {
-        return ProfilingSessionRegistry.isAnyProfilingActive();
-    }
-
-    static void markActive(String applicationId)
-    {
-        ProfilingSessionRegistry.markActive(applicationId);
-    }
-
-    static void markActive(String applicationId, IDebugTarget target)
-    {
-        ProfilingSessionRegistry.markActive(applicationId, target);
-    }
-
-    static void markInactive(String applicationId)
-    {
-        ProfilingSessionRegistry.markInactive(applicationId);
-    }
-
-    static void clearStateForTests()
-    {
-        ProfilingSessionRegistry.clearStateForTests();
-    }
-
     @Override
     public String getName()
     {
@@ -159,7 +97,7 @@ public class StartProfilingTool implements IMcpTool
             return err;
         }
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
-        synchronized (TRANSITIONS)
+        synchronized (ProfilingSessionRegistry.TRANSITIONS)
         {
             return start(applicationId);
         }
@@ -171,24 +109,24 @@ public class StartProfilingTool implements IMcpTool
         {
             IDebugTarget lookedUp = DebugSessionRegistry.findActiveTarget(applicationId);
             // Read EDT's state of the target that owns the flag, so a run stopped elsewhere is noticed.
-            IDebugTarget owner = profiledTarget(applicationId, lookedUp);
+            IDebugTarget owner = ProfilingSessionRegistry.profiledTarget(applicationId, lookedUp);
             if (owner != null && ProfilingSupport.enabled(ProfilingSupport.service(), owner) == null)
             {
                 return ToolResult.error("Profiling state is unknown; EDT's profiling state could not be read. "
                     + "Inspect the profiling view before retrying; no toggle was sent.").toJson();
             }
 
-            reconcile(applicationId, owner);
+            ProfilingSessionRegistry.reconcile(applicationId, owner);
             // The toggle acts on the looked-up target, so its own state is read too before it is toggled.
-            if (lookedUp != null && lookedUp != owner && !isProfilingActive(applicationId))
+            if (lookedUp != null && lookedUp != owner && !ProfilingSessionRegistry.isProfilingActive(applicationId))
             {
-                reconcile(applicationId, lookedUp);
+                ProfilingSessionRegistry.reconcile(applicationId, lookedUp);
             }
             IDebugTarget target = lookedUp;
             // Start-only: if we already track profiling as active for this id, do
             // NOT toggle (toggling would silently switch profiling OFF). Return an
             // idempotent "already profiling" result instead.
-            if (isProfilingActive(applicationId))
+            if (ProfilingSessionRegistry.isProfilingActive(applicationId))
             {
                 return ToolResult.success()
                     .put(KEY_ACTIVE, true)
@@ -214,7 +152,7 @@ public class StartProfilingTool implements IMcpTool
                 return ToolResult.error(toggleError).toJson();
             }
 
-            markActive(applicationId, target);
+            ProfilingSessionRegistry.markActive(applicationId, target);
 
             Activator.logInfo("Profiling started via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 

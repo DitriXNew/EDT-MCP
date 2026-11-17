@@ -860,7 +860,7 @@ public class StandaloneServerTool implements IMcpTool
             int count = 0;
             for (SessionInfo session : sessions.sessions())
             {
-                if (InfobaseSessionsTool.isDesignerSession(session))
+                if (InfobaseSessionSupport.isDesignerSession(session))
                 {
                     count++;
                 }
