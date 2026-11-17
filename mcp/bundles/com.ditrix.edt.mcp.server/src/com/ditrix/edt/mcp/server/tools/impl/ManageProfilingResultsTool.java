@@ -166,22 +166,20 @@ public class ManageProfilingResultsTool implements IMcpTool
             if (denied != null) { return denied; }
             // Another call can import while consent is pending. Recheck both UUID and name before writing.
             var attempted = new java.util.concurrent.atomic.AtomicBoolean();
+            // applyObserved runs the recheck and the import together under the store-change lock.
             viewNote = ProfilingSupport.applyObserved(() -> {
-                synchronized (service)
+                for (IProfilingResult current : service.getResults())
                 {
-                    for (IProfilingResult current : service.getResults())
+                    for (IProfilingResult candidate : added)
                     {
-                        for (IProfilingResult candidate : added)
+                        if (current.getUuid().equals(candidate.getUuid()) || current.getName().equalsIgnoreCase(candidate.getName()))
                         {
-                            if (current.getUuid().equals(candidate.getUuid()) || current.getName().equalsIgnoreCase(candidate.getName()))
-                            {
-                                throw new IllegalArgumentException("Measurement '" + current.getName() + "' appeared while awaiting consent. Retry mode=import to skip loaded UUIDs.");
-                            }
+                            throw new IllegalArgumentException("Measurement '" + current.getName() + "' appeared while awaiting consent. Retry mode=import to skip loaded UUIDs.");
                         }
                     }
-                    attempted.set(true);
-                    service.importResults(added);
                 }
+                attempted.set(true);
+                service.importResults(added);
             }, () -> attempted.get() && ProfilingSupport.ids(service).containsAll(added.stream().map(IProfilingResult::getUuid).toList()),
                 "Import of " + added.size() + " measurement(s)");
         }

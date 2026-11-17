@@ -10,6 +10,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Owner-only IPC storage. Never traverse symbolic links or Windows directory reparse points. */
 public final class PrivatePaths
@@ -17,19 +18,20 @@ public final class PrivatePaths
     private static final String SYSTEM_SID = "S-1-5-18";
     private static final String ADMINISTRATORS_SID = "S-1-5-32-544";
     private static final String PRIVILEGED_LOOKUP_FAILED = "Cannot resolve privileged Windows accounts for IPC storage validation";
-    private static volatile UserPrincipal currentOwner;
+    /** The current account's principal, looked up once; a racing first lookup yields an equal principal. */
+    private static final AtomicReference<UserPrincipal> CURRENT_OWNER = new AtomicReference<>();
     private static Set<UserPrincipal> windowsPrivilegedAccounts;
     private PrivatePaths() { }
 
     private static UserPrincipal owner(Path path) throws IOException
     {
-        UserPrincipal result = currentOwner;
+        UserPrincipal result = CURRENT_OWNER.get();
         if (result == null)
         {
             String account = ProcessHandle.current().info().user().orElseThrow(
                 () -> new IOException("Cannot determine the current account"));
             result = path.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(account);
-            currentOwner = result;
+            CURRENT_OWNER.set(result);
         }
         return result;
     }

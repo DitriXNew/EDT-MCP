@@ -15,6 +15,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.jface.preference.PreferenceStore;
 import org.eclipse.swt.SWT;
@@ -314,12 +315,13 @@ public class GeneralTabTest
         PrivatePaths.directory(temporary.getRoot().toPath());
         EndpointRegistry registry = new EndpointRegistry(PrivatePaths.directory(temporary.newFolder().toPath()),
             temporary.newFolder().toPath());
-        Field listenerField = StdioPluginSupport.class.getDeclaredField("listener");
+        Field listenerField = StdioPluginSupport.class.getDeclaredField("LISTENER");
         listenerField.setAccessible(true);
-        Object previous = listenerField.get(null);
+        AtomicReference<IpcListener> slot = (AtomicReference<IpcListener>) listenerField.get(null);
+        IpcListener previous = slot.get();
         try (IpcListener listener = new IpcListener(registry, "test"))
         {
-            listenerField.set(null, listener);
+            slot.set(listener);
             when(server.isRunning()).thenReturn(true);
             selectHttp(false);
             tab.performOk();
@@ -330,7 +332,7 @@ public class GeneralTabTest
             tab.refreshServerState();
             assertEquals(Messages.GeneralTab_StdioUnavailable, field("stdioStatusLabel", Label.class).getText());
         }
-        finally { listenerField.set(null, previous); }
+        finally { slot.set(previous); }
     }
 
     private void prepareEnable() throws Exception
