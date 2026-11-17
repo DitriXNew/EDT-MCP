@@ -6,7 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 
@@ -14,6 +14,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
 import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumpSupport;
 import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumper;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
@@ -39,6 +41,31 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ExternalObjectDumpSupport
 {
+    /** Mirrors EDT's AbstractExternalObjectOperator before it reads the default application. */
+    public static IProject infobaseProject(IProject project)
+    {
+        Activator activator = Activator.getDefault();
+        return infobaseProject(project, activator == null ? null : activator.getDtProjectManager());
+    }
+
+    static IProject infobaseProject(IProject project,
+        IDtProjectManager manager)
+    {
+        if (manager == null)
+        {
+            throw new ApplicationException("The EDT project manager is unavailable; the external-object "
+                + "dump's infobase lock cannot be resolved. Retry once EDT is responsive.");
+        }
+        var model = manager.getDtProject(project);
+        if (model == null)
+        {
+            throw new ApplicationException("The EDT project '" + project.getName()
+                + "' could not be resolved; no external objects were built. Check list_projects and retry.");
+        }
+        var parent = manager.findParentProject(model);
+        return parent == null ? null : parent.getWorkspaceProject();
+    }
+
     /** File extension of a dumped external data processor. */
     public static final String EXTENSION_EPF = "epf"; //$NON-NLS-1$
 

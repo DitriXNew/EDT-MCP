@@ -110,7 +110,7 @@ JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCR
 
 Only `confirm=true` starts a background job; previews remain synchronous. `waitSeconds` defaults to **20**, accepts **0–45**, and limits only this call's wait. Use `0` to return immediately. A load has no operation deadline and can run for a very long time. Keep EDT running.
 
-If finished within the wait, the response is the usual final JSON. Otherwise it contains `jobId`, `status` and a polling hint. Poll `get_job_status(jobId="<id>", waitSeconds=20)` until terminal; its Result contains the same final JSON, including failure notes. A second confirmed update for the same project/application is refused and names the running jobId. `launch` defers to EDT's coordinated launch delegate while the update runs.
+If finished within the wait, the response is the usual final JSON. Otherwise it contains `jobId`, `status` and a polling hint. Poll `get_job_status(jobId="<id>", waitSeconds=20)` until terminal; its Result contains the same final JSON, including failure notes. A second confirmed update for the same project/application is refused and names the running jobId. `launch` is refused during the update; poll its jobId before launching.
 
 The job runs on its own thread: a client timeout, disconnect or interruption of the caller's wait does not cancel the load. `cancel_job` can cancel queued work before it starts. Once started, cancellation is refused: EDT accepts a progress monitor but provides no verified clean-cancel/rollback guarantee for a configuration load, so the job is left to finish.
 

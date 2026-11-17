@@ -287,7 +287,7 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void launchDefersToEdtWhileUpdateJobRuns() throws Exception
+    public void launchRefusesRunningUpdateAndPreflightStillChecksPlatformState() throws Exception
     {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -296,19 +296,36 @@ public class UpdateDatabaseToolTest
         when(project.isOpen()).thenReturn(true);
         when(project.getName()).thenReturn("launch-job-project");
         IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication application = mock(IApplication.class);
+        when(manager.getApplication(project, "app")).thenReturn(Optional.of(application));
+        when(manager.getUpdateState(application)).thenReturn(ApplicationUpdateState.BEING_UPDATED);
         String jobId = null;
         try
         {
             String pending = new UpdateDatabaseTool().startUpdateJob("launch-job-project", "app", 0, () -> {
-                entered.countDown();
-                awaitJobRelease(release);
-                return "{}";
+                var lock = com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.lockFor("launch-job-project", "app");
+                assertTrue(lock.tryAcquire(0, null).acquired());
+                try
+                {
+                    entered.countDown();
+                    awaitJobRelease(release);
+                    return "{}";
+                }
+                finally { lock.unlock(); }
             });
             jobId = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            assertTrue(com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils
-                .deferredUpdatePreflight(project, "app", manager).isEmpty());
-            verify(manager, never()).getApplication(any(), any());
+            String refusal = com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils
+                .deferredUpdatePreflight(project, "app", manager).orElseThrow();
+            assertTrue(refusal, refusal.contains("being updated right now"));
+            verify(manager).getApplication(project, "app");
+            ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+            when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn("launch-job-project");
+            when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")).thenReturn("app");
+            String launchError = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
+            assertTrue(launchError, launchError.contains("update_database job " + jobId));
+            assertTrue(launchError, launchError.contains("poll get_job_status and launch after it finishes"));
+            verify(config, never()).launch(any(), any());
         }
         finally
         {

@@ -67,6 +67,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
@@ -97,6 +98,114 @@ import com.google.gson.JsonParser;
  */
 public class LaunchToolTest
 {
+    private static ILaunchConfiguration lockedLaunchConfig(String project, String application) throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getName()).thenReturn("lock-test");
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn(project);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")).thenReturn(application);
+        return config;
+    }
+
+    @Test
+    public void launchRefusesHeldInfobaseBeforeDelegateAndAfterAsyncHandoff() throws Exception
+    {
+        String project = "busy-launch-project";
+        var lock = LaunchLifecycleUtils.lockFor(project, "app");
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            assertTrue(lock.tryAcquire(0, null).acquired());
+            try
+            {
+                held.countDown();
+                try { release.await(); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            finally { lock.unlock(); }
+        });
+        holder.start();
+        try
+        {
+            assertTrue(held.await(5, TimeUnit.SECONDS));
+            ILaunchConfiguration config = lockedLaunchConfig(project, "app");
+            String error = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
+            assertTrue(error, error.contains("launch lock for application 'app'"));
+            assertTrue(error, error.contains(project));
+            IStatus status = LaunchTool.runLaunchJobBody(config, false,
+                ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
+            assertEquals(IStatus.ERROR, status.getSeverity());
+            assertTrue(status.getMessage(), status.getMessage().contains("launch lock"));
+            verify(config, never()).launch(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(5_000);
+        }
+    }
+
+    @Test
+    public void freeLaunchLocksDelegateAndReleasesWhileClientStillLives() throws Exception
+    {
+        ILaunchConfiguration config = lockedLaunchConfig("free-launch-project", "app");
+        var lock = LaunchLifecycleUtils.lockFor("free-launch-project", "app");
+        ILaunch client = mock(ILaunch.class);
+        when(config.launch(any(), any())).thenAnswer(invocation -> {
+            assertTrue("the delegate must own the infobase lock", lock.isHeldByCurrentThread());
+            return client;
+        });
+        assertNull(new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT));
+        assertFalse(client.isTerminated());
+        AtomicReference<Boolean> free = new AtomicReference<>();
+        Thread contender = new Thread(() -> {
+            boolean acquired = lock.tryAcquire(0, null).acquired();
+            free.set(acquired);
+            if (acquired) { lock.unlock(); }
+        });
+        contender.start();
+        contender.join(5_000);
+        assertEquals(Boolean.TRUE, free.get());
+    }
+
+    @Test
+    public void reentrantLaunchDoesNotRefuseOrReleaseCallersAcquisition() throws Exception
+    {
+        ILaunchConfiguration config = lockedLaunchConfig("reentrant-launch-project", "app");
+        var lock = LaunchLifecycleUtils.lockFor("reentrant-launch-project", "app");
+        assertTrue(lock.tryAcquire(0, null).acquired());
+        try
+        {
+            assertNull(new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT));
+            assertTrue(lock.isHeldByCurrentThread());
+            assertTrue(LaunchTool.runLaunchJobBody(config, false,
+                ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor()).isOK());
+            assertTrue(lock.isHeldByCurrentThread());
+        }
+        finally { lock.unlock(); }
+        assertFalse(lock.isHeldByCurrentThread());
+    }
+
+    @Test
+    public void failedDelegateReleasesLaunchLock() throws Exception
+    {
+        ILaunchConfiguration config = lockedLaunchConfig("failed-launch-project", "app");
+        when(config.launch(any(), any())).thenThrow(new CoreException(new Status(IStatus.ERROR, "test", "refused")));
+        assertEquals("refused", new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT));
+        assertFalse(LaunchLifecycleUtils.lockFor("failed-launch-project", "app").isHeldByCurrentThread());
+    }
+
+    @Test
+    public void attachWithoutAnInfobaseIdentityStillConnects() throws Exception
+    {
+        ILaunchConfiguration config = lockedLaunchConfig("attach-launch-project", "");
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(config.getType()).thenReturn(type);
+        assertNull(new LaunchTool().performLaunch(config, false, null));
+        verify(config).launch(eq(ILaunchManager.DEBUG_MODE), any());
+    }
+
     private static final String STANDALONE_SERVER_TYPE_ID =
         "com.e1c.g5.v8.dt.platform.standaloneserver.launchConfigurationType"; //$NON-NLS-1$
 
