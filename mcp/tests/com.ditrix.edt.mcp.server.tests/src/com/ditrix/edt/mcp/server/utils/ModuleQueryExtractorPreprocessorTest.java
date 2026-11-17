@@ -113,6 +113,28 @@ public class ModuleQueryExtractorPreprocessorTest
         assertRefusedAt(lines("Procedure A()", "\tQ = \"SELECT 1\"", "\tB = 2;", "EndProcedure"), 3);
     }
 
+    @Test
+    public void methodLostByEdtIsReportedAtItsSavedSourceLocation()
+    {
+        String source = lines("Procedure Head()", "EndProcedure", "#If Server Then",
+            "Procedure Before()", "EndProcedure", "#Region Overlap",
+            "Procedure Inside()", "EndProcedure", "#EndIf", "Procedure After()", "EndProcedure",
+            "#EndRegion", "Procedure Хвост()", "Q = \"SELECT 1\";", "EndProcedure");
+        try
+        {
+            ModuleQueryExtractor.extract(source, "хВОСТ");
+            fail("Query extraction requires a parsed method");
+        }
+        catch (IllegalArgumentException e)
+        {
+            String message = e.getMessage();
+            assertTrue(message, message.contains("syntax error at line 9"));
+            assertTrue(message, message.contains("Method 'хВОСТ' in the stored BSL module was found in saved source at lines 13-15"));
+            assertTrue(message, message.contains("read_method_source"));
+            assertTrue(message, message.contains("- Хвост"));
+        }
+    }
+
     private static void assertRefusedAt(String source, int line)
     {
         try

@@ -11,13 +11,20 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.StringReader;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.xtext.parser.IParseResult;
+import org.eclipse.xtext.parser.IParser;
+import org.eclipse.xtext.resource.XtextResource;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.bsl.BslStandaloneSetup;
+import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 
 /**
  * Tests for {@link GetModuleStructureTool}.
@@ -30,6 +37,82 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class GetModuleStructureToolTest
 {
+    private static Module parseModule(List<String> lines)
+    {
+        var parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
+        var parse = parser.parse(new StringReader(String.join("\n", lines) + "\n"));
+        Module module = (Module)parse.getRootASTElement();
+        var resource = new XtextResource()
+        {
+            @Override
+            public IParseResult getParseResult()
+            {
+                return parse;
+            }
+        };
+        resource.getContents().add(module);
+        return module;
+    }
+
+    @Test
+    public void reportsRealEdtSyntaxErrorAndRecoversDeclarationsInBothDialects()
+    {
+        List<String> source = List.of(
+            "Procedure Head()", "EndProcedure", "#Если Сервер Тогда", "Процедура П1()", "КонецПроцедуры",
+            "#Область Несовместимый", "Процедура П2()", "КонецПроцедуры", "#КонецЕсли",
+            "Процедура П3()", "КонецПроцедуры", "#КонецОбласти", "#Область Хвост",
+            "Функция Остаток() Экспорт", "Возврат 42;", "КонецФункции", "Procedure Tail()", "EndProcedure",
+            "#КонецОбласти");
+        Module module = parseModule(source);
+        assertTrue(BslMethodRecovery.isParseUnverified(module.eResource()));
+        var diagnostic = BslMethodRecovery.firstSyntaxIssue(module.eResource());
+        assertEquals(9, diagnostic.line());
+        assertTrue(diagnostic.message(), diagnostic.message().contains("#EndRegion"));
+
+        String result = new GetModuleStructureTool().formatStructure("Module.bsl", module, source, false, false, false);
+        assertTrue(result, result.contains("EDT model methods: 4. Saved text declarations: 6."));
+        assertTrue(result, result.contains("First syntax error at line 9: " + diagnostic.message()));
+        assertTrue(result, result.contains("EDT could not reliably parse past"));
+        assertTrue(result, result.contains("| Function | Остаток _(recovered from text)_ | Yes | - | 14-16 | Хвост |"));
+        assertTrue(result, result.contains("| Procedure | Tail _(recovered from text)_ | - | - | 17-18 | Хвост |"));
+        assertTrue(result, result.contains("**Total:** 5 procedures, 1 functions | **Lines:** 19"));
+    }
+
+    @Test
+    public void reportsSyntaxErrorsEvenIfEdtRecoveredEveryDeclaration()
+    {
+        List<String> source = List.of(
+            "#Область Внешняя", "Процедура П1()", "КонецПроцедуры", "#Если Сервер Тогда",
+            "#Область Несовместимый", "Процедура П2()", "КонецПроцедуры", "#КонецЕсли",
+            "#КонецОбласти", "Функция П3() Экспорт", "Возврат 42;", "КонецФункции",
+            "#КонецОбласти", "Procedure Tail()", "EndProcedure");
+        Module module = parseModule(source);
+        assertTrue(BslMethodRecovery.isParseUnverified(module.eResource()));
+
+        String result = new GetModuleStructureTool().formatStructure("Module.bsl", module, source, false, false, false);
+        assertTrue(result, result.contains("EDT model methods: 4. Saved text declarations: 4. First syntax error at line 8:"));
+        assertFalse(result, result.contains("recovered from text"));
+    }
+
+    @Test
+    public void comparesSavedDeclarationsEvenWhenEdtReportsACleanParse()
+    {
+        List<String> prefix = List.of("Procedure Head()", "EndProcedure");
+        Module module = parseModule(prefix);
+        assertFalse(BslMethodRecovery.isParseUnverified(module.eResource()));
+        var tool = new GetModuleStructureTool();
+        String baseline = tool.formatStructure("Module.bsl", module, prefix, false, false, false);
+        assertFalse(baseline, baseline.contains("Incomplete EDT parse"));
+        assertTrue(baseline, baseline.contains("| Procedure | Head | - | - | 1-2 | - |"));
+
+        List<String> saved = List.of("Procedure Head()", "EndProcedure", "Function Added() Export",
+            "Return 7;", "EndFunction");
+        String result = tool.formatStructure("Module.bsl", module, saved, false, false, false);
+        assertTrue(result, result.contains("EDT model methods: 1. Saved text declarations: 2."));
+        assertTrue(result, result.contains("| Function | Added _(recovered from text)_ | Yes | - | 3-5 | - |"));
+        assertFalse(result, result.contains("First syntax error"));
+    }
+
     @Test
     public void testName()
     {

@@ -28,7 +28,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
-import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -308,25 +308,13 @@ public class ReadMethodSourceTool implements IMcpTool
             return null;
         }
 
-        List<Method> found = new ArrayList<>();
-        List<String> missing = new ArrayList<>();
+        List<Method> modelMethods = new ArrayList<>();
+        boolean needsText = false;
         for (String name : names)
         {
             Method method = BslModuleUtils.findMethod(module, name);
-            if (method == null)
-            {
-                missing.add(name);
-            }
-            else
-            {
-                found.add(method);
-            }
-        }
-        if (found.isEmpty())
-        {
-            // None found - list all available methods
-            return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath,
-                BslModuleUtils.methodNames(module))).toJson();
+            modelMethods.add(method);
+            needsText |= method == null;
         }
 
         // Read file to get actual source lines (getText() may include preceding doc-comments)
@@ -345,9 +333,43 @@ public class ReadMethodSourceTool implements IMcpTool
                 return null;
             }
             // Fallback: use getText() from EMF node (may include doc-comment)
-            Method method = found.get(0);
+            Method method = modelMethods.get(0);
+            if (method == null)
+            {
+                return null;
+            }
             return readMethodFromEmfText(method, projectName, modulePath, access.startLine(method),
                 access.endLine(method));
+        }
+
+        BslMethodRecovery.TextScan text = needsText ? BslMethodRecovery.scan(allLines) : null;
+        List<LocatedMethod> located = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (int i = 0; i < names.size(); i++)
+        {
+            Method method = modelMethods.get(i);
+            if (method != null)
+            {
+                located.add(locateFromModel(module, method, allLines));
+            }
+            else
+            {
+                String name = names.get(i);
+                var span = text.find(name);
+                if (span == null)
+                {
+                    missing.add(name);
+                }
+                else
+                {
+                    located.add(locateFromText(text, span, multi ? span.name : name, true));
+                }
+            }
+        }
+        if (located.isEmpty())
+        {
+            return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath,
+                text.availableNames(BslModuleUtils.methodNames(module)))).toJson();
         }
 
         // Whole-MODULE revision token (not just this method) so the caller can round-trip
@@ -356,21 +378,26 @@ public class ReadMethodSourceTool implements IMcpTool
         // Best-effort: a re-read failure just omits the field rather than failing the read.
         String contentHash = access.moduleHash(file);
 
-        List<LocatedMethod> located = new ArrayList<>();
-        for (Method method : found)
-        {
-            int startLine = access.startLine(method);
-            // Include doc-comment block preceding the method keyword; clamp to the file.
-            int from = Math.max(1, BslModuleUtils.findDocCommentStartLine(allLines, startLine));
-            int to = Math.min(allLines.size(), access.endLine(method));
-            // Extension interception: if this is a core method intercepted by an extension
-            // (or an extension method that intercepts a core one), note it below the code.
-            // Best-effort — only the EMF path has the resolved Method model.
-            located.add(new LocatedMethod(method.getName(), method instanceof Function, method.isExport(),
-                from, to, BslModuleUtils.findRegionForLine(allLines, startLine),
-                access.footer(module, method)));
-        }
         return render(projectName, modulePath, contentHash, allLines, located, missing, multi);
+    }
+
+    private LocatedMethod locateFromModel(Module module, Method method, List<String> allLines)
+    {
+        int startLine = access.startLine(method);
+        int from = Math.max(1, BslModuleUtils.findDocCommentStartLine(allLines, startLine));
+        int to = Math.min(allLines.size(), access.endLine(method));
+        return new LocatedMethod(method.getName(), method instanceof Function, method.isExport(),
+            from, to, BslModuleUtils.findRegionForLine(allLines, startLine), access.footer(module, method));
+    }
+
+    private static LocatedMethod locateFromText(BslMethodRecovery.TextScan text, BslModuleUtils.MethodSpan span,
+        String name, boolean recovered)
+    {
+        String region = recovered ? text.region(span)
+            : BslModuleUtils.findRegionForLine(text.lines(), span.startLine + 1);
+        String notice = recovered ? "\n> " + BslMethodRecovery.recoveredSpanNotice(span) + "\n" : null; //$NON-NLS-1$ //$NON-NLS-2$
+        return new LocatedMethod(name, span.isFunction, text.exported(span), span.startLine + 1,
+            span.endLine + 1, region, notice);
     }
 
     /**
@@ -402,15 +429,12 @@ public class ReadMethodSourceTool implements IMcpTool
 
             List<String> allLines = access.readLines(file);
 
-            // Locate every method via ONE pass of the shared text-scan fallback; mask the module
-            // once for the export reads below, however many names are requested.
-            List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(allLines);
-            List<String> masked = BslSyntaxChecker.maskLiteralsAndComments(allLines);
+            BslMethodRecovery.TextScan text = BslMethodRecovery.scan(allLines);
             List<LocatedMethod> located = new ArrayList<>();
             List<String> missing = new ArrayList<>();
             for (String name : names)
             {
-                BslModuleUtils.MethodSpan span = firstSpanNamed(spans, name);
+                BslModuleUtils.MethodSpan span = text.find(name);
                 if (span == null)
                 {
                     missing.add(name);
@@ -418,19 +442,11 @@ public class ReadMethodSourceTool implements IMcpTool
                 }
                 // The single-name answer echoes the requested spelling (historical shape);
                 // the sections name the method as declared.
-                located.add(new LocatedMethod(multi ? span.name : name, span.isFunction,
-                    BslModuleUtils.isExportDeclaration(masked, span.declarationLine, span.endLine),
-                    span.startLine + 1,
-                    span.endLine + 1, BslModuleUtils.findRegionForLine(allLines, span.startLine + 1), null));
+                located.add(locateFromText(text, span, multi ? span.name : name, false));
             }
             if (located.isEmpty())
             {
-                List<String> allMethodNames = new ArrayList<>();
-                for (BslModuleUtils.MethodSpan span : spans)
-                {
-                    allMethodNames.add(span.name);
-                }
-                return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath, allMethodNames)).toJson();
+                return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath, text.names())).toJson();
             }
 
             // Whole-MODULE revision token (see readViaEmf) for the expectedHash
@@ -557,18 +573,6 @@ public class ReadMethodSourceTool implements IMcpTool
 
     // ========== Helper methods ==========
 
-    /** The first scanned method whose name equals {@code name} ignoring case, or {@code null}. */
-    private static BslModuleUtils.MethodSpan firstSpanNamed(List<BslModuleUtils.MethodSpan> spans, String name)
-    {
-        for (BslModuleUtils.MethodSpan span : spans)
-        {
-            if (span.name.equalsIgnoreCase(name))
-            {
-                return span;
-            }
-        }
-        return null;
-    }
 
     /**
      * Computes the WHOLE-module optimistic-lock token for the {@code expectedHash}

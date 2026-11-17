@@ -44,6 +44,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -244,7 +245,7 @@ public class GetOutgoingStructuresTool implements IMcpTool
                 // make the JSON delivery path (JsonParser.parseString) throw and surface a
                 // protocol-level error instead of a clean isError result.
                 return ToolResult.error(
-                    BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodFilter)).toJson();
+                    BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodFilter)).toJson();
             }
             methods.add(one);
         }

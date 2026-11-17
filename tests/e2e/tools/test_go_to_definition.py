@@ -61,6 +61,48 @@ from harness import (
 
 CALC_MODULE_PATH = "CommonModules/Calc/Module.bsl"
 
+@e2e_test(tool="go_to_definition", kind="write-metadata")
+def test_adopted_calc_resolves_a_private_base_method_by_bare_and_qualified_name():
+    from harness import assert_no_diff_rel, read_disk, TESTS_PROJECT_REL
+    from tools.test_get_module_structure import temporary_module_source
+
+    original = read_disk("src/" + CALC_MODULE_PATH).removeprefix("\ufeff")
+    private_source = original.replace("Функция Add(A, B) Экспорт", "Функция Add(A, B)", 1)
+    assert private_source != original, "expected the exported base Calc.Add fixture"
+    extension = {"projectName": PROJECT + ".tests"}
+
+    # The adopted Calc module's tests_Test already calls Add.
+    with temporary_module_source(CALC_MODULE_PATH, original, private_source):
+        local = call("go_to_definition", {**extension, "symbol": "tests_Test", "modulePath": CALC_MODULE_PATH})
+        assert_ok(local, "local extension method still resolves from the extension")
+        assert_contains(local.text, "projectName: " + PROJECT + ".tests\n")
+        assert_contains(local.text, "Результат = Add(1, 2);")
+
+        bare = call("go_to_definition", {**extension, "symbol": "aDd", "modulePath": CALC_MODULE_PATH})
+        assert_ok(bare, "bare reference to non-exported base Calc.Add")
+        for field in ("projectName: " + PROJECT + "\n", "module: " + CALC_MODULE_PATH, "method: Add",
+                      "export: false", "startLine: 1", "endLine: 3", "Declared in the base configuration."):
+            assert_contains(bare.text, field)
+        assert_contains(bare.text, "Функция Add(A, B)\n\tВозврат A + B;\nКонецФункции")
+
+        qualified = call("go_to_definition", {**extension, "symbol": "Calc.Add", "includeSource": False})
+        assert_ok(qualified, "qualified reference to non-exported base Calc.Add")
+        assert_contains(qualified.text, "projectName: " + PROJECT + "\n")
+        assert_contains(qualified.text, "qualifiedName: Calc.Add")
+        assert_contains(qualified.text, "export: false")
+        assert_contains(qualified.text, "Declared in the base configuration.")
+        assert_not_contains(qualified.text, "```bsl")
+
+        missing = call("go_to_definition", {**extension, "symbol": "Calc.Missing960"})
+        message = assert_error(missing, "missing from adopted module and base")
+        assert_error_quality(message, names=["Missing960", CALC_MODULE_PATH], suggests=["Available methods"])
+        assert_contains(message, "- tests_Test")
+        assert_contains(message, "Base configuration")
+        assert_contains(message, "- Add")
+        assert_contains(message, "- Test\n")
+    assert_no_diff("restored base Calc")
+    assert_no_diff_rel(TESTS_PROJECT_REL, "navigation left the extension fixture unchanged")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATHS

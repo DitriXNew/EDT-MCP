@@ -7,7 +7,9 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.TreeMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,6 +42,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -180,11 +183,19 @@ public class GetModuleStructureTool implements IMcpTool
         // it spans to the end of the module) and, when requested, for
         // doc-comment extraction.
         List<String> sourceLines = loadSourceLines(module);
+        return formatStructure(modulePath, module, sourceLines, includeVariables, includeComments, detailed);
+    }
 
+    String formatStructure(String modulePath, Module module, List<String> sourceLines,
+        boolean includeVariables, boolean includeComments, boolean detailed)
+    {
         List<RegionInfo> regions = collectRegions(module, sourceLines);
 
-        // Collect methods
-        List<MethodInfo> methods = collectMethods(module, regions, includeComments, sourceLines);
+        List<Method> modelMethods = module.allMethods();
+        List<MethodInfo> methods = collectMethods(modelMethods, regions, includeComments, sourceLines);
+        BslMethodRecovery.TextScan text = sourceLines == null ? null : BslMethodRecovery.scan(sourceLines);
+        BslMethodRecovery.SyntaxIssue syntax = BslMethodRecovery.firstSyntaxIssue(module.eResource());
+        boolean recovered = text != null && recoverMethods(methods, text);
 
         // Collect variables if requested
         List<VariableInfo> variables = includeVariables ? collectVariables(module, regions) : null;
@@ -215,6 +226,27 @@ public class GetModuleStructureTool implements IMcpTool
         // Format output
         StringBuilder sb = new StringBuilder();
         sb.append("## Module Structure: ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (syntax != null || recovered)
+        {
+            sb.append("> **Incomplete EDT parse.** EDT model methods: ").append(modelMethods.size()) //$NON-NLS-1$
+                .append(". Saved text declarations: ").append(text == null ? "unavailable" : text.spans().size()) //$NON-NLS-1$ //$NON-NLS-2$
+                .append('.');
+            if (syntax != null && syntax.message() != null)
+            {
+                sb.append(" First syntax error at line ").append(syntax.line()).append(": ") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(syntax.message().replace('\n', ' ').replace('\r', ' '))
+                    .append(". EDT could not reliably parse past this error."); //$NON-NLS-1$
+            }
+            else if (syntax != null)
+            {
+                sb.append(" EDT reported syntax errors without a location."); //$NON-NLS-1$
+            }
+            sb.append("\n\n"); //$NON-NLS-1$
+            if (sourceLines != null)
+            {
+                totalLines = sourceLines.size();
+            }
+        }
         sb.append("**Total:** ").append(procCount).append(" procedures, ") //$NON-NLS-1$ //$NON-NLS-2$
           .append(funcCount).append(" functions | **Lines:** ").append(totalLines).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -349,6 +381,10 @@ public class GetModuleStructureTool implements IMcpTool
         sb.append("| ").append(idx); //$NON-NLS-1$
         sb.append(" | ").append(m.isFunction ? "Function" : "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         sb.append(" | ").append(MarkdownUtils.escapeForTable(m.name)); //$NON-NLS-1$
+        if (m.recovered != null)
+        {
+            sb.append(m.recovered);
+        }
         sb.append(" | ").append(m.isExport ? "Yes" : "-"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         sb.append(" | ").append(m.executionContext != null ? MarkdownUtils.escapeForTable(m.executionContext) : "-"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append(" | ").append(m.startLine).append("-").append(m.endLine); //$NON-NLS-1$ //$NON-NLS-2$
@@ -517,12 +553,12 @@ public class GetModuleStructureTool implements IMcpTool
         }
         return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
-    private List<MethodInfo> collectMethods(Module module, List<RegionInfo> regions,
+    private List<MethodInfo> collectMethods(List<Method> modelMethods, List<RegionInfo> regions,
         boolean includeComments, List<String> sourceLines)
     {
         List<MethodInfo> methods = new ArrayList<>();
 
-        for (Method method : module.allMethods())
+        for (Method method : modelMethods)
         {
             try
             {
@@ -559,6 +595,46 @@ public class GetModuleStructureTool implements IMcpTool
         return methods;
     }
 
+    private static boolean recoverMethods(List<MethodInfo> methods, BslMethodRecovery.TextScan text)
+    {
+        Map<String, List<Integer>> modelStarts = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (MethodInfo method : methods)
+        {
+            if (method.name != null)
+            {
+                modelStarts.computeIfAbsent(method.name, name -> new ArrayList<>()).add(method.startLine);
+            }
+        }
+        List<BslModuleUtils.MethodSpan> missing = new ArrayList<>();
+        for (BslModuleUtils.MethodSpan span : text.spans())
+        {
+            List<Integer> starts = modelStarts.getOrDefault(span.name, List.of());
+            if (starts.stream().noneMatch(line -> line >= span.startLine + 1 && line <= span.declarationLine + 1))
+            {
+                missing.add(span);
+            }
+        }
+        if (missing.isEmpty())
+        {
+            return false;
+        }
+        Map<Integer, String> recoveredRegions = text.regions(missing);
+        for (BslModuleUtils.MethodSpan span : missing)
+        {
+            MethodInfo info = new MethodInfo();
+            info.name = span.name;
+            info.isFunction = span.isFunction;
+            info.isExport = text.exported(span);
+            info.startLine = span.declarationLine + 1;
+            info.endLine = span.endLine + 1;
+            info.region = recoveredRegions.get(span.declarationLine);
+            info.recovered = span.complete ? " _(recovered from text)_" //$NON-NLS-1$
+                : " _(recovered from text, missing terminator)_"; //$NON-NLS-1$
+            methods.add(info);
+        }
+        methods.sort(Comparator.comparingInt(method -> method.startLine));
+        return true;
+    }
     private String collectPragmas(Method method)
     {
         try
@@ -599,6 +675,7 @@ public class GetModuleStructureTool implements IMcpTool
         String region;
         String paramsString;
         String docComment;
+        String recovered;
     }
 
     private static class RegionInfo
