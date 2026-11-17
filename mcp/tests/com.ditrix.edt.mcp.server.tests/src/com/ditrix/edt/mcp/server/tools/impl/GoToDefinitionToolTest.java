@@ -34,6 +34,71 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class GoToDefinitionToolTest
 {
+    @Test
+    public void anUnmappedAbsoluteModulePathIsAnActionableError() throws Exception
+    {
+        String path = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+            "Unmapped-" + java.util.UUID.randomUUID() + ".bsl").toAbsolutePath().toString();
+        var resolve = GoToDefinitionTool.class.getDeclaredMethod("resolveMethodInModule",
+            org.eclipse.core.resources.IProject.class, String.class, String.class, String.class,
+            boolean.class, String.class);
+        resolve.setAccessible(true);
+        String result = (String)resolve.invoke(new GoToDefinitionTool((p, module) -> null),
+            null, "P", path, "Missing", false, null);
+        var error = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean());
+        String message = error.get("error").getAsString();
+        assertTrue(message, message.contains(path));
+        assertTrue(message, message.contains("list_modules"));
+    }
+
+    @Test
+    public void missingMethodIsAnErrorWithTheRealHintInBothResolutionPaths() throws Exception
+    {
+        var module = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createModule();
+        var sibling = com._1c.g5.v8.dt.bsl.model.BslFactory.eINSTANCE.createProcedure();
+        sibling.setName("AvailableSibling"); module.getMethods().add(sibling);
+        var project = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        var file = org.mockito.Mockito.mock(org.eclipse.core.resources.IFile.class);
+        org.mockito.Mockito.when(project.getFile(new org.eclipse.core.runtime.Path("src/CommonModules/Calc/Module.bsl")))
+            .thenReturn(file);
+        org.mockito.Mockito.when(file.exists()).thenReturn(true);
+        org.mockito.Mockito.when(file.getContents()).thenAnswer(invocation -> new java.io.ByteArrayInputStream(
+            "Procedure AvailableSibling()\nEndProcedure\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        org.mockito.Mockito.when(file.getCharset()).thenReturn("UTF-8");
+        var resolve = GoToDefinitionTool.class.getDeclaredMethod("resolveMethodInModule",
+            org.eclipse.core.resources.IProject.class, String.class, String.class, String.class,
+            boolean.class, String.class);
+        resolve.setAccessible(true);
+        for (boolean emf : new boolean[] {true, false})
+        {
+            var tool = new GoToDefinitionTool((p, path) -> emf ? module : null);
+            String result = (String)resolve.invoke(tool, project, "P", "CommonModules/Calc/Module.bsl", "Missing", false, null);
+            var error = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(error.get("success").getAsBoolean());
+            String message = error.get("error").getAsString();
+            assertTrue(message, message.contains("Missing"));
+            assertTrue(message, message.contains("Available methods"));
+            assertTrue(message, message.contains("- AvailableSibling"));
+            assertFalse("message must not contain nested error JSON", message.startsWith("{"));
+        }
+    }
+
+    @Test
+    public void unresolvedSymbolIsAnErrorWithTheExistingUsageHint() throws Exception
+    {
+        var scope = com.ditrix.edt.mcp.server.utils.MetadataScope.ofConfiguration(
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration());
+        var build = GoToDefinitionTool.class.getDeclaredMethod("buildNotFoundResponse",
+            com.ditrix.edt.mcp.server.utils.MetadataScope.class, String.class, String.class);
+        build.setAccessible(true);
+        var error = com.google.gson.JsonParser.parseString((String)build.invoke(new GoToDefinitionTool(),
+            scope, "MissingModule", "MissingMethod")).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean());
+        String message = error.get("error").getAsString();
+        assertTrue(message, message.contains("MissingModule.MissingMethod"));
+        assertTrue(message, message.contains("modulePath"));
+    }
     // ==================== Tool metadata ====================
 
     @Test
@@ -121,6 +186,8 @@ public class GoToDefinitionToolTest
         params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new GoToDefinitionTool().execute(params);
         assertTrue(result.contains("symbol is required")); //$NON-NLS-1$
+        assertTrue(result.contains("ModuleName.MethodName"));
+        assertTrue(result.contains("Catalog.Products"));
     }
 
     @Test

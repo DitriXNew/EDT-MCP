@@ -73,6 +73,18 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 {
     public static final String NAME = "get_method_call_hierarchy"; //$NON-NLS-1$
 
+    private final java.util.function.BiFunction<IProject, String, Module> moduleLoader;
+
+    public GetMethodCallHierarchyTool()
+    {
+        this(BslModuleUtils::loadModule);
+    }
+
+    GetMethodCallHierarchyTool(java.util.function.BiFunction<IProject, String, Module> moduleLoader)
+    {
+        this.moduleLoader = moduleLoader;
+    }
+
     /** Input param: name of the procedure/function to analyze. */
     private static final String KEY_METHOD_NAME = "methodName"; //$NON-NLS-1$
 
@@ -455,7 +467,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        Module module = BslModuleUtils.loadModule(project, modulePath);
+        Module module = moduleLoader.apply(project, modulePath);
         if (module == null)
         {
             return moduleLoadFailure(modulePath);
@@ -464,7 +476,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
         }
 
         final URI methodUri = EcoreUtil.getURI(method);
@@ -851,7 +863,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        Module module = BslModuleUtils.loadModule(project, modulePath);
+        Module module = moduleLoader.apply(project, modulePath);
         if (module == null)
         {
             return moduleLoadFailure(modulePath);
@@ -860,7 +872,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
         }
 
         // Traverse AST of this method to find invocations
@@ -1021,7 +1033,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     {
         try
         {
-            Module module = BslModuleUtils.loadModule(project, modulePath);
+            Module module = moduleLoader.apply(project, modulePath);
             if (module == null)
             {
                 out.error = moduleLoadFailure(modulePath);
@@ -1030,7 +1042,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             Method method = BslModuleUtils.findMethod(module, methodName);
             if (method == null)
             {
-                out.error = BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+                out.error = ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
                 return;
             }
             if (method.eResource() == null || method.eResource().getResourceSet() == null)
@@ -1971,7 +1983,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        Module module = BslModuleUtils.loadModule(project, modulePath);
+        Module module = moduleLoader.apply(project, modulePath);
         if (module == null)
         {
             return moduleLoadFailure(modulePath);
@@ -1984,7 +1996,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             Method method = BslModuleUtils.findMethod(module, methodName);
             if (method == null)
             {
-                return BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName);
+                return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
             }
             scope = method;
         }

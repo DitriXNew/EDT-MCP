@@ -16,6 +16,20 @@ public final class IpcHandshake
     private static final Gson JSON = new Gson();
     private IpcHandshake() { }
     public static String hello(EndpointRegistry.Endpoint endpoint) { return JSON.toJson(endpoint); }
+    public static String hello(EndpointRegistry.Endpoint endpoint, Boolean plainTextMode)
+    {
+        var hello = JSON.toJsonTree(endpoint).getAsJsonObject();
+        if (plainTextMode != null) { hello.addProperty("plainTextMode", plainTextMode); }
+        return hello.toString();
+    }
+    public static Boolean plainTextMode(String hello) throws IOException
+    {
+        var value = com.google.gson.JsonParser.parseString(hello).getAsJsonObject().get("plainTextMode");
+        if (value == null) { return null; }
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
+        { throw new IOException("Invalid IPC plainTextMode; use -resultMode plaintext or structured."); }
+        return value.getAsBoolean();
+    }
     public static boolean accepts(String hello, EndpointRegistry.Endpoint expected)
     {
         try
@@ -33,8 +47,12 @@ public final class IpcHandshake
     }
     public static void client(JsonFrames.Socket socket, EndpointRegistry.Endpoint endpoint) throws IOException
     {
+        client(socket, endpoint, null);
+    }
+    public static void client(JsonFrames.Socket socket, EndpointRegistry.Endpoint endpoint, Boolean plainTextMode) throws IOException
+    {
         if (endpoint.ipcVersion() != EndpointRegistry.IPC_VERSION) { throw new IOException("Incompatible EDT IPC version"); }
-        socket.write(hello(endpoint));
+        socket.write(hello(endpoint, plainTextMode));
         if (!"{\"accepted\":true}".equals(socket.read())) { throw new IOException("EDT IPC handshake refused"); }
     }
 }

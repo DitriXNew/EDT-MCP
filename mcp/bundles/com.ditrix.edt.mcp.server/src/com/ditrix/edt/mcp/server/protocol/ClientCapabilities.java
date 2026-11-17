@@ -16,10 +16,8 @@ import com.google.gson.JsonObject;
  * features (elicitation, tasks, resources, etc.) can gate on what the client
  * said it supports.
  * <p>
- * <b>Single-client assumption.</b> This EDT MCP server is effectively a
- * single-client server over localhost (one EDT workbench, one connected MCP
- * client at a time). The handler stores a single instance of this holder rather
- * than tracking capabilities per session; that is acceptable for this transport.
+ * Each transport retains its own instance for the initialized client session.
+ * A transport may attach a delivery override without changing the declaration.
  * </p>
  * <p>
  * <b>No-regression default.</b> The capabilities object is OPTIONAL in the MCP
@@ -41,10 +39,29 @@ public final class ClientCapabilities
      * this class having to model every one of them up front.
      */
     private final JsonObject raw;
+    private final Boolean plainTextMode;
 
     private ClientCapabilities(JsonObject raw)
     {
+        this(raw, null);
+    }
+
+    private ClientCapabilities(JsonObject raw, Boolean plainTextMode)
+    {
         this.raw = raw;
+        this.plainTextMode = plainTextMode;
+    }
+
+    /** Returns a session-local delivery choice; null keeps the preference default. */
+    public ClientCapabilities withPlainTextMode(Boolean mode)
+    {
+        return new ClientCapabilities(raw, mode);
+    }
+
+    /** Resolves delivery without changing any other client or the saved preference. */
+    public boolean plainTextModeOr(boolean defaultMode)
+    {
+        return plainTextMode != null ? plainTextMode : defaultMode;
     }
 
     /**

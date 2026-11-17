@@ -54,6 +54,10 @@ See [installation and preferences](docs/installation.md) for screenshots, update
 
 ## Connecting a client
 
+Use `/mcp/plaintext` on the same HTTP port for clients that need full results in `content[0].text`.
+For stdio, add `"-resultMode", "plaintext"` to the launcher arguments (`"structured"` gives JSON results a short text digest).
+Without an override, `/mcp` and stdio use EDT's **Plain text mode** preference. Clients can share one EDT with different modes.
+
 For local stdio, use **Window > Preferences > MCP Server > General**: clear **Enable MCP over HTTP**,
 then click **Copy stdio .mcp.json** and merge the entry into your client's configuration.
 Apply to stop HTTP as well. The bundled bootstrap uses EDT's Java and explicit install/workspace paths.
@@ -68,7 +72,7 @@ For HTTP, the default endpoint is `http://localhost:8765/mcp`. The minimal confi
 |---|---|---|
 | stdio (including Claude Desktop) | Paste the generated entry; no Node.js needed | [Transport and startup limits](docs/stdio.md) |
 | VS Code / GitHub Copilot | `.vscode/mcp.json`, top-level `servers` | [VS Code](docs/clients.md#vs-code--github-copilot) |
-| Cursor | `.cursor/mcp.json`, top-level `mcpServers`; enable Plain text mode in EDT | [Cursor](docs/clients.md#cursor-ide) |
+| Cursor | `.cursor/mcp.json`, top-level `mcpServers`; use `/mcp/plaintext` | [Cursor](docs/clients.md#cursor-ide) |
 | Claude Code | `.claude.json`, top-level `mcpServers`, `type: "http"` | [Claude Code](docs/clients.md#claude-code) |
 | Claude Desktop over HTTP | Use the `mcp-remote` stdio bridge (requires Node.js) | [Claude Desktop](docs/clients.md#claude-desktop) |
 | Cline | Top-level `mcpServers`, `type: "streamableHttp"` | [Cline](docs/clients.md#cline---extension-for-vscode) |

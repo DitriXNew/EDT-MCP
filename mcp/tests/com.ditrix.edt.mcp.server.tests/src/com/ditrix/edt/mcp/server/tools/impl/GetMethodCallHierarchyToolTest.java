@@ -42,6 +42,57 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 public class GetMethodCallHierarchyToolTest
 {
     @Test
+    public void missingMethodIsAnErrorInEveryDirectionAndTheTransitiveRoot() throws Exception
+    {
+        var project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
+            .getProject("HierarchyMissingMethod-" + java.util.UUID.randomUUID());
+        project.create(null); project.open(null);
+        try
+        {
+            var module = BslFactory.eINSTANCE.createModule();
+            var sibling = BslFactory.eINSTANCE.createProcedure();
+            sibling.setName("AvailableSibling"); module.getMethods().add(sibling);
+            var tool = new GetMethodCallHierarchyTool((p, path) -> module);
+            for (String direction : java.util.List.of("findCallers", "findCallees", "findOutgoing"))
+            {
+                boolean outgoing = direction.equals("findOutgoing");
+                var method = outgoing
+                    ? GetMethodCallHierarchyTool.class.getDeclaredMethod(direction, String.class, String.class,
+                        String.class, String.class, int.class)
+                    : GetMethodCallHierarchyTool.class.getDeclaredMethod(direction, String.class, String.class,
+                        String.class, int.class);
+                method.setAccessible(true);
+                String result = (String)(outgoing
+                    ? method.invoke(tool, project.getName(), "CommonModules/Calc/Module.bsl", "Missing", "API", 10)
+                    : method.invoke(tool, project.getName(), "CommonModules/Calc/Module.bsl", "Missing", 10));
+                assertMissingMethodError(result);
+            }
+            Class<?> rootType = java.util.Arrays.stream(GetMethodCallHierarchyTool.class.getDeclaredClasses())
+                .filter(type -> type.getSimpleName().equals("RootResolution")).findFirst().orElseThrow();
+            var constructor = rootType.getDeclaredConstructor(); constructor.setAccessible(true);
+            Object root = constructor.newInstance();
+            var resolve = GetMethodCallHierarchyTool.class.getDeclaredMethod("resolveRoot",
+                org.eclipse.core.resources.IProject.class, String.class, String.class, rootType);
+            resolve.setAccessible(true);
+            resolve.invoke(tool, project, "CommonModules/Calc/Module.bsl", "Missing", root);
+            var error = rootType.getDeclaredField("error"); error.setAccessible(true);
+            assertMissingMethodError((String)error.get(root));
+        }
+        finally { project.delete(true, true, null); }
+    }
+
+    private static void assertMissingMethodError(String result)
+    {
+        var error = com.google.gson.JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean());
+        String message = error.get("error").getAsString();
+        assertTrue(message, message.contains("Missing"));
+        assertTrue(message, message.contains("CommonModules/Calc/Module.bsl"));
+        assertTrue(message, message.contains("Available methods"));
+        assertTrue(message, message.contains("- AvailableSibling"));
+        assertFalse("message must not contain nested error JSON", message.startsWith("{"));
+    }
+    @Test
     public void testName()
     {
         assertEquals("get_method_call_hierarchy", new GetMethodCallHierarchyTool().getName()); //$NON-NLS-1$

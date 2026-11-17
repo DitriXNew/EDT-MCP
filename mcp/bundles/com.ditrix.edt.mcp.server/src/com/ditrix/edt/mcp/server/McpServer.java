@@ -131,6 +131,8 @@ public class McpServer
         // erased that answer authorizes it.
         server.createContext("/mcp", //$NON-NLS-1$
             new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote));
+        server.createContext("/mcp/plaintext", //$NON-NLS-1$
+            new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote, true));
         // The same snapshot the handler got, kept so the preferences page can tell whether the
         // endpoint it advertises is one this listener would still serve.
         boundRemotely = allowRemote;

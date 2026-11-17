@@ -509,7 +509,8 @@ public class McpProtocolHandler
         if (!HostToolCapabilities.availableOnCurrentHost(tool.getName()))
         {
             String payload = ToolResult.error(HostToolCapabilities.refusal(tool.getName())).toJson();
-            return buildToolCallResponse(tool, payload, null, isPlainTextMode(), requestId, extractToolParams(request), capabilities);
+            return buildToolCallResponse(tool, payload, null, capabilities.plainTextModeOr(isPlainTextMode()),
+                requestId, extractToolParams(request), capabilities);
         }
 
         // Check if tool is enabled. The refusal is flagged isError: nothing ran, so a success
@@ -548,7 +549,7 @@ public class McpProtocolHandler
         }
         
         // Check if plain text mode is enabled (Cursor compatibility).
-        boolean plainTextMode = isPlainTextMode();
+        boolean plainTextMode = capabilities.plainTextModeOr(isPlainTextMode());
 
         // Return response based on tool's declared response type
         return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params, capabilities);

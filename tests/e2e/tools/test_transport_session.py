@@ -44,7 +44,7 @@ class _Headers(dict):
         return self._lower.get(name.lower(), default)
 
 
-def _raw(method, params=None, session=None, origin=None, http_method="POST", request_id=1):
+def _raw(method, params=None, session=None, origin=None, http_method="POST", request_id=1, url=None):
     """One request, returning (status, headers, parsed-body-or-None).
 
     An HTTP error status is a RESULT here, not an exception: the status is the
@@ -66,7 +66,7 @@ def _raw(method, params=None, session=None, origin=None, http_method="POST", req
             "jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {},
         }).encode("utf-8")
 
-    req = urllib.request.Request(MCP_URL, data=data, headers=headers, method=http_method)
+    req = urllib.request.Request(url or MCP_URL, data=data, headers=headers, method=http_method)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, _Headers(resp.headers), _body(resp.read())
@@ -90,19 +90,39 @@ def _body(raw):
         return {"_unparsed": text}
 
 
-def _open_session():
+def _open_session(url=None):
     """A fresh initialize, returning its issued session id."""
     status, headers, body = _raw("initialize", {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {},
         "clientInfo": {"name": "e2e-transport-session", "version": "1.0"},
-    })
+    }, url=url)
     if status != 200:
         _fail("initialize must be answered 200, got %s: %s" % (status, body))
     session = headers.get(SESSION_HEADER)
     if not session:
         _fail("initialize must issue an %s header; got headers %s" % (SESSION_HEADER, sorted(headers)))
     return session
+
+
+@e2e_test(tool="_transport_session", kind="read")
+def test_plaintext_route_delivers_the_entire_json_result():
+    url = MCP_URL + "/plaintext"
+    session = _open_session(url)
+    try:
+        status, _, body = _raw("tools/call", {"name": "get_server_status", "arguments": {}},
+                              session=session, url=url)
+        assert status == 200, body
+        result = body["result"]
+        assert not result.get("isError"), result
+        payload = result["structuredContent"]
+        assert payload["protocolVersion"] == PROTOCOL_VERSION, payload
+        assert payload["transports"]["http"] is True, payload
+        assert json.loads(result["content"][0]["text"]) == payload, result
+    finally:
+        status, _, body = _raw(None, session=session, http_method="DELETE", url=url)
+        assert status == 200, body
+    assert_no_diff("plaintext delivery must not mutate the project")
 
 
 def _error_text(body):
