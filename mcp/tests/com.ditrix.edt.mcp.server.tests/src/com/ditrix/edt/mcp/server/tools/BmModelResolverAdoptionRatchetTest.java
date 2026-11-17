@@ -23,7 +23,6 @@ public class BmModelResolverAdoptionRatchetTest
         expected.put("groups/ui/GroupNavigatorAdapter.java", 1);
         expected.put("pictures/CommonPicturesGalleryRenderer.java", 1);
         expected.put("tags/ui/TagFilterView.java", 1);
-        expected.put("tags/ui/TagTrieStateProvider.java", 1);
         expected.put("tools/impl/ApplyQuickFixTool.java", 1);
         expected.put("tools/impl/BusinessProcessRouteMapTool.java", 1);
         expected.put("tools/impl/ExportCommonPictureTool.java", 1);
