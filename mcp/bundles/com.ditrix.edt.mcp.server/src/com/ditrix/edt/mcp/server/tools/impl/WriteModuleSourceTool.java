@@ -1043,6 +1043,14 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             fm.put("normalizedCharacters", normalizedCharacters); //$NON-NLS-1$
         }
+        // Written as asked (the platform accepts it), but EDT's model will miss what follows.
+        String overlap = BslSyntaxChecker.directiveOverlap(newLines);
+        if (overlap != null)
+        {
+            fm.put("warning", overlap + ". The 1C platform accepts overlapping #Region and #If blocks, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "but EDT cannot parse them: EDT-based tools will not see the methods after this point. " //$NON-NLS-1$
+                + "Nest the blocks inside each other."); //$NON-NLS-1$
+        }
 
         // The same rule: only for the module of an object adopted into an extension (#711) - every
         // other write answers byte for byte as before. The paragraph comes only with a switch, a state

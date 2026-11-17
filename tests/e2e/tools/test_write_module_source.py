@@ -129,6 +129,41 @@ def test_append_lands_on_disk():
     assert_contains(src.text, "// e2e_probe_append", "read-back shows the appended line")
 
 
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_overlapping_region_and_if_is_written_with_a_warning():
+    # The platform accepts the overlap, so the write goes through; EDT's parser does not.
+    overlap = ("#Область А
+#Если Сервер Тогда
+Процедура П1() Экспорт
+КонецПроцедуры
+"
+               "#КонецОбласти
+Процедура П2() Экспорт
+КонецПроцедуры
+#КонецЕсли
+")
+    r = call("write_module_source", {"projectName": PROJECT, "modulePath": MODULE,
+                                     "mode": "replace", "source": overlap, "overwrite": True})
+    assert_ok(r, "an overlap the platform accepts is written")
+    assert_contains(r.text, "#КонецОбласти at line 5", "the warning names the closing directive and its line")
+    assert_contains(r.text, "opened at line 2", "and the still-open block")
+    assert_contains(r.text, "EDT cannot parse", "and what EDT does with it")
+    nested = overlap.replace("#КонецОбласти
+Процедура П2() Экспорт
+КонецПроцедуры
+#КонецЕсли
+",
+                             "#КонецЕсли
+#КонецОбласти
+Процедура П2() Экспорт
+КонецПроцедуры
+")
+    r = call("write_module_source", {"projectName": PROJECT, "modulePath": MODULE,
+                                     "mode": "replace", "source": nested, "overwrite": True})
+    assert_ok(r, "nested directives are written")
+    assert_not_contains(r.text, "EDT cannot parse", "nested blocks carry no warning")
+
+
 @e2e_test(tool="write_module_source", kind="write")
 def test_missing_projectname_errors_clearly_and_no_write():
     r = call("write_module_source", {

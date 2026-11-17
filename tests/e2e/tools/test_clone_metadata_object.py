@@ -223,7 +223,7 @@ def test_clone_exchange_plan_regenerates_this_node_and_other_identities():
     assert clone.findtext("attributes/name") == "QueueField"
     assert not set(_uuids(original)) & set(_uuids(clone)), "exchange plan and member UUIDs must be fresh"
     assert clone.attrib["uuid"] and clone.find("attributes").attrib["uuid"]
-    original_node, cloned_node = original.findtext("thisNode"), clone.findtext("thisNode")
+    original_node, cloned_node = original.attrib.get("thisNode"), clone.attrib.get("thisNode")
     assert original_node and cloned_node and original_node != cloned_node, (original_node, cloned_node)
     type_kinds = {"objectType", "refType", "selectionType", "listType", "managerType"}
     types_before = {node.tag: node for node in original.findall("producedTypes/*")}

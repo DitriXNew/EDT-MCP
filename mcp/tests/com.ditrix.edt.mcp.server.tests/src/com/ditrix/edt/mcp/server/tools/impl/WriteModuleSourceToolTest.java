@@ -2980,4 +2980,12 @@ public class WriteModuleSourceToolTest
         }
     }
 
+    @Test
+    public void testAnOverlappingRegionAndIfIsWrittenWithAWarning()
+    {
+        String response = WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "replace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false, Arrays.asList("#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u0410", "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F1() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F2() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438"), true, 1, null, AdoptedModuleState.Result.notApplicable());
+        assertTrue(response, response.contains("status: success")); //$NON-NLS-1$
+        assertTrue(response, response.contains("warning: ") && response.contains("EDT cannot parse")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

@@ -1408,4 +1408,27 @@ public class BslSyntaxCheckerTest
         assertFalse("the procedure packed after the carriage return must be seen: " //$NON-NLS-1$
             + result.getErrors(), result.isValid());
     }
+
+    @Test
+    public void testNestedRegionAndIfAreNoOverlap()
+    {
+        assertNull(BslSyntaxChecker.directiveOverlap(Arrays.asList("#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u0410", "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F1() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F2()", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B")));
+        assertNull(BslSyntaxChecker.directiveOverlap(Arrays.asList("#Region A", "// #If Server Then", "#EndRegion")));
+    }
+
+    @Test
+    public void testRegionClosedInsideAnIfIsReportedWithBothLines()
+    {
+        String overlap = BslSyntaxChecker.directiveOverlap(Arrays.asList("#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u0410", "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F1() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F2() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438"));
+        assertNotNull(overlap);
+        assertTrue(overlap, overlap.contains("at line 5") && overlap.contains("opened at line 2"));
+    }
+
+    @Test
+    public void testElseInsideARegionOpenedInTheIfIsReported()
+    {
+        String overlap = BslSyntaxChecker.directiveOverlap(Arrays.asList("#If Server Then", "#Region A", "Procedure P1() Export", "EndProcedure", "#Else", "#EndRegion", "#EndIf"));
+        assertNotNull(overlap);
+        assertTrue(overlap, overlap.startsWith("#Else at line 5") && overlap.contains("#Region opened at line 2"));
+    }
 }

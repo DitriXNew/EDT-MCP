@@ -58,15 +58,19 @@ public class GoToDefinitionToolTest
         var parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
         Module localModule = parseModule(parser, "Extension", localPath, localText);
         Module baseModule = parseModule(parser, "Base", basePath, baseText);
+        // EDT's source module may still hold the base before an edit made InternalCheck private.
+        Module staleBase = parseModule(parser, "Base", basePath,
+            baseText.replace("Procedure InternalCheck()", "Procedure InternalCheck() Export"));
         IProject extension = projectWithSource("Extension", localPath, localText);
         IProject base = projectWithSource("Base", basePath, baseText);
         int[] baseReads = {0};
-        var tool = new GoToDefinitionTool((project, path) -> localModule, (project, module, lookup) -> {
-            assertEquals(extension, project);
-            assertEquals(localModule, module);
-            baseReads[0]++;
-            return lookup.apply(base, baseModule);
-        });
+        var tool = new GoToDefinitionTool((project, path) -> project == base ? baseModule : localModule,
+            (project, module, lookup) -> {
+                assertEquals(extension, project);
+                assertEquals(localModule, module);
+                baseReads[0]++;
+                return lookup.apply(base, staleBase);
+            });
 
         String local = tool.resolveMethodInModule(extension, "Extension", localPath, "localonly", true, null);
         assertTrue(local, local.contains("projectName: Extension\n"));

@@ -333,8 +333,10 @@ public class GoToDefinitionTool implements IMcpTool
             String relative = path.substring(baseProject.getName().length() + 2);
             String baseModulePath = relative.startsWith(BslModuleUtils.SOURCE_FOLDER + "/") //$NON-NLS-1$
                 ? BslModuleUtils.extractModulePath(path) : relative;
-            return lookupInModule(baseProject, baseProject.getName(), baseModulePath, source, methodName,
-                includeSource, qualifiedPrefix, true);
+            // EDT's source module can lag behind a base edit; the base project's own load is current.
+            Module current = moduleLoader.apply(baseProject, baseModulePath);
+            return lookupInModule(baseProject, baseProject.getName(), baseModulePath,
+                current != null ? current : source, methodName, includeSource, qualifiedPrefix, true);
         });
         if (base != null && base.definition() != null)
         {
