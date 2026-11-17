@@ -60,7 +60,9 @@ import com.google.gson.JsonObject;
  * collections this builder builds only for a FORM attribute (issue #295) and for a DefinedType's own
  * type (issue #727). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
- * {@code {"kind":"CatalogRef", "ref":"Name"}}. A concrete produced type is
+ * {@code {"kind":"CatalogRef", "ref":"Name"}}; without {@code ref}, {@code {"kind":"DocumentRef"}} (also
+ * {@code ДокументСсылка}, {@code AnyRef}) is the platform's generic reference type set, which the stored
+ * feature's own EDT type editor must offer (issue #966). A concrete produced type is
  * {@code {"kind":"DocumentObject", "ref":"Invoice"}} (a qualified {@code Document.Invoice}
  * ref is accepted too); omitting {@code ref} selects the corresponding abstract produced type. A
  * DefinedType is accepted as
@@ -477,8 +479,10 @@ public final class MetadataTypeBuilder
         {
             return null;
         }
-        if (producedKind != null)
+        if (producedKind != null || isTypedRefKind(kind))
         {
+            // Without ref a <Type>Ref kind names the generic reference type set (issue #966), as an
+            // omitted ref names the abstract produced type; a ref that IS given must still be usable.
             return item.has("ref") ? validateRefItem(item, index) : null; //$NON-NLS-1$
         }
         if (isRefKind(kind) || isCharacteristicKind(kind))
@@ -1310,6 +1314,10 @@ public final class MetadataTypeBuilder
 
         if (isRefKind(kind))
         {
+            if (!item.has("ref") && isTypedRefKind(kind)) //$NON-NLS-1$
+            {
+                return addGenericReferenceType(td, kind, provider, typeTarget);
+            }
             String ref = asString(item.get("ref")); //$NON-NLS-1$
             MdObject target = resolveRefTarget(config, kind, ref);
             if (target == null)
@@ -1321,7 +1329,7 @@ public final class MetadataTypeBuilder
                 return error("Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
                     + ref + "'. Use {kind:'Ref', ref:'Catalog.Name'} (or ref:'CatalogRef.Name') or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "{kind:'CatalogRef', ref:'Name'} and check the object exists." //$NON-NLS-1$
-                    + extensionAdoptHint(isExtensionProject));
+                    + genericReferenceHint(kind, ref) + extensionAdoptHint(isExtensionProject));
             }
             if (isDefinedType(target))
             {
@@ -2029,7 +2037,11 @@ public final class MetadataTypeBuilder
         }
     }
 
-    /** A reference-shaped kind is DefinedType, literal Ref, or an {@code "...Ref"} token. */
+    /**
+     * A reference-shaped kind is DefinedType, literal Ref, or a {@code <Type>Ref} token - with the Ref
+     * suffix in either language ({@code CatalogRef} / {@code СправочникСсылка}), the platform naming
+     * catalogue's own Ref entry rather than a second spelling list.
+     */
     static boolean isRefKind(String kind)
     {
         if (kind == null)
@@ -2037,8 +2049,107 @@ public final class MetadataTypeBuilder
             return false;
         }
         String k = Objects.requireNonNull(kind.trim());
-        return isDefinedTypeKind(k) || k.equalsIgnoreCase("Ref") //$NON-NLS-1$
-            || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
+        return isDefinedTypeKind(k) || k.equalsIgnoreCase("Ref") || isTypedRefKind(k); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether {@code kind} is a {@code <Type>Ref} token: a non-empty prefix followed by the Ref suffix in
+     * either language. With {@code ref} it names one object's reference type ({@code CatalogRef.Goods});
+     * without it, the generic reference type set the platform declares under that name
+     * ({@code CatalogRef}, {@code DocumentRef}, {@code AnyRef}, ...; issue #966).
+     */
+    static boolean isTypedRefKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String k = kind.trim();
+        int suffixLength = matchingSuffixLength(k, refTypeSuffix());
+        return suffixLength > 0 && k.length() > suffixLength && !isDefinedTypeKind(k);
+    }
+
+    /**
+     * Adds the generic reference type set a {@code <Type>Ref} kind names without {@code ref} - the
+     * platform's {@code DocumentRef} / {@code ДокументСсылка} "any document" type (issue #966). It is the
+     * platform type provider's own {@code TypeSet} (the one EDT's type editor lists and a {@code .mdo}
+     * stores as {@code <types>DocumentRef</types>}), never a list kept here: a name the provider does not
+     * index as a type set is refused as unknown. Which FEATURE may hold it is EDT's call too
+     * ({@link GenericReferenceTypeOffer} for a stored feature, the DefinedType category, the form type
+     * picker); a data-composition parameter and an event-subscription source are not built here.
+     */
+    private static Result addGenericReferenceType(TypeDescription td, String kind, IEObjectProvider provider,
+        TypeTarget typeTarget)
+    {
+        if (typeTarget == TypeTarget.DCS_PARAMETER || typeTarget == TypeTarget.EVENT_SOURCE)
+        {
+            return error("Type kind '" + kind + "' without ref is the generic reference type (any object of " //$NON-NLS-1$ //$NON-NLS-2$
+                + "that kind), which this tool does not build for " //$NON-NLS-1$
+                + (typeTarget == TypeTarget.DCS_PARAMETER ? "a data-composition parameter" //$NON-NLS-1$
+                    : "an event subscription's source") //$NON-NLS-1$
+                + ". Name the object: {kind:'" + kind + "', ref:'Name'}."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        TypeProbe probe = probeTypeItem(provider, kind);
+        String canonical = canonicalGenericReferenceName(kind);
+        if (probe.item() == null && probe.crash() == null && canonical != null && !canonical.equals(kind))
+        {
+            probe = probeTypeItem(provider, canonical);
+        }
+        if (probe.crash() != null)
+        {
+            return platformError(PLATFORM_TYPE_NOT_CREATED + " Tried: " + kind + ".", probe.crash()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        TypeItem item = probe.item();
+        if (item == null || item.eClass() == null || !McorePackage.Literals.TYPE_SET.isSuperTypeOf(item.eClass()))
+        {
+            return error("Type kind '" + kind + "' without ref names no generic reference type this platform " //$NON-NLS-1$ //$NON-NLS-2$
+                + "version knows. A generic reference is a reference kind such as {kind:'DocumentRef'} or " //$NON-NLS-1$
+                + "{kind:'CatalogRef'} (also AnyRef, or the Russian spelling); a reference to one object is " //$NON-NLS-1$
+                + "{kind:'" + kind + "', ref:'Name'} or {kind:'Ref', ref:'Type.Name'}."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        td.getTypes().add(item);
+        return null;
+    }
+
+    /**
+     * The English name of the generic reference type a {@code <MetadataType>Ref} kind spells in any
+     * language or case ({@code ДокументСсылка} / {@code documentref} name {@code DocumentRef}); {@code null}
+     * when the prefix is no metadata type token ({@code AnyRef} is then looked up as spelled).
+     */
+    static String canonicalGenericReferenceName(String kind)
+    {
+        if (!isTypedRefKind(kind))
+        {
+            return null;
+        }
+        String k = kind.trim();
+        String english = MetadataTypeUtils.toEnglishSingular(
+            k.substring(0, k.length() - matchingSuffixLength(k, refTypeSuffix())));
+        return english == null || DEFINED_TYPE_KIND.equals(english) ? null : english + refTypeSuffix().english;
+    }
+
+    /**
+     * The pointer appended when a literal {@code Ref} names a metadata TYPE rather than an object
+     * ({@code {kind:'Ref', ref:'Document'}} or {@code ref:'DocumentRef'}): the generic reference to any
+     * object of that kind is its own kind without ref - one grammar, not a second spelling of it (#966).
+     */
+    private static String genericReferenceHint(String kind, String ref)
+    {
+        if (!"Ref".equalsIgnoreCase(kind.trim()) || ref == null || ref.trim().indexOf('.') >= 0) //$NON-NLS-1$
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String token = ref.trim();
+        String generic = canonicalGenericReferenceName(token);
+        if (generic == null)
+        {
+            String english = MetadataTypeUtils.toEnglishSingular(token);
+            generic = english == null || DEFINED_TYPE_KIND.equals(english) ? null
+                : english + refTypeSuffix().english;
+        }
+        return generic == null ? "" //$NON-NLS-1$
+            : " '" + token + "' names a metadata type, not an object: the generic reference to any object " //$NON-NLS-1$ //$NON-NLS-2$
+                + "of that kind is {kind:'" + generic + "'} without ref."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -2121,8 +2232,9 @@ public final class MetadataTypeBuilder
                 MetadataNodeResolver.resolveExisting(config, address != null ? address : ref);
             return node != null ? node.object : null;
         }
-        // kind is '<Type>Ref'; the leading token is the type, ref is the object Name.
-        String type = kind.substring(0, kind.length() - 3);
+        // kind is '<Type>Ref' (either language); the leading token is the type, ref is the object Name.
+        String trimmed = kind.trim();
+        String type = trimmed.substring(0, trimmed.length() - matchingSuffixLength(trimmed, refTypeSuffix()));
         return MetadataTypeUtils.findObject(config, type, ref);
     }
 

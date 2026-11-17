@@ -2255,6 +2255,17 @@ public final class PredefinedWriter
         {
             return "Invalid 'valueType': " + result.error; //$NON-NLS-1$
         }
+        // A generic reference ({kind:'DocumentRef'}) is EDT's type editor's call for this item (#966).
+        GenericReferenceTypeOffer.Problem offer = GenericReferenceTypeOffer.check(cctItem,
+            cctItem.eClass().getEStructuralFeature("type"), result.typeDescription); //$NON-NLS-1$
+        if (offer != null && offer.platformFailure())
+        {
+            throw new IllegalStateException("Cannot build 'valueType': " + offer.message()); //$NON-NLS-1$
+        }
+        if (offer != null)
+        {
+            return "Invalid 'valueType': " + offer.message(); //$NON-NLS-1$
+        }
         cctItem.setType(result.typeDescription);
         return null;
     }

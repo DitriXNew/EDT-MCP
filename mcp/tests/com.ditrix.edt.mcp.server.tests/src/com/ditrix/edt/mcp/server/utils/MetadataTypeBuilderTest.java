@@ -228,10 +228,11 @@ public class MetadataTypeBuilderTest
     @Test
     public void testReferenceTargetMustBeANonEmptyString()
     {
-        // <Type>Ref keeps its OWN grammar, unchanged by the produced-type family: a ref is required,
-        // and an omitted one is the first case in this list. The family covers the Object / Manager /
-        // Record / RecordSet / ... types a Ref cannot name, and deliberately does not include Ref itself.
-        for (String suffix : new String[] { "", ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // <Type>Ref keeps its OWN grammar, unchanged by the produced-type family: a ref that is GIVEN
+        // must be a usable target. An OMITTED ref selects the generic reference type (issue #966,
+        // MetadataTypeBuilderGenericRefTest). The family covers the Object / Manager / Record /
+        // RecordSet / ... types a Ref cannot name, and deliberately does not include Ref itself.
+        for (String suffix : new String[] { ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$
             ",\"ref\":1", ",\"ref\":true", ",\"ref\":{}", ",\"ref\":null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         {
             assertInvalidMember("{\"types\":[{\"kind\":\"CatalogRef\"" + suffix + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
