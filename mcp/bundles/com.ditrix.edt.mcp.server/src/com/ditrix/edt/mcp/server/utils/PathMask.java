@@ -19,30 +19,35 @@ import java.util.regex.Pattern;
  * exactly as before globs were accepted.</li>
  * <li><b>Glob mode</b> - a mask with {@code *} or {@code ?}. {@code *} is any run of characters
  * within one folder or file name, {@code ?} is one such character, {@code **} crosses folders
- * ({@code **}{@code /} is zero or more leading folders). A mask without {@code /} is matched
- * against every single name in the path ({@code *Name*} selects the folder {@code Name} and so
- * every file under it); a mask with {@code /} is matched from the start of the path. A mask that
- * selects a folder selects everything under it, so {@code CommonModules/*} keeps every common
- * module. This is the {@code .gitignore} reading of a pattern.</li>
+ * ({@code **}{@code /} is zero or more leading folders). A mask with a {@code /} at its start or
+ * in its middle is matched from the start of the path; any other mask is matched against every
+ * single name in the path ({@code *Name*} selects the folder {@code Name} and so every file under
+ * it). A trailing {@code /} selects folders only. A mask that selects a folder selects everything
+ * under it, so {@code CommonModules/*} keeps every common module. This is the {@code .gitignore}
+ * reading of a pattern.</li>
  * </ul>
  * Switching on {@code *} and {@code ?} never changes an existing result: neither character can
  * occur in a 1C object name or in a Windows file name, so a substring containing one never
- * matched a path. For the same reason a backslash in the mask is read as the folder separator:
- * the paths are {@code /}-separated, and a mask spelled with {@code \} could never match.
+ * matched a path. A backslash in the mask is read as the folder separator, since the paths are
+ * {@code /}-separated; a substring mask also keeps matching its raw text, so a path whose name
+ * holds a literal {@code \} (legal on Linux) is selected as before.
  */
 public final class PathMask
 {
     /** The mask that selects every path. */
-    private static final PathMask ALL = new PathMask("", null, null); //$NON-NLS-1$
+    private static final PathMask ALL = new PathMask("", null, null, null); //$NON-NLS-1$
 
     private final String text;
     private final String substring;
+    /** The raw lower-cased substring when it differs from {@link #substring} (it held a backslash). */
+    private final String rawSubstring;
     private final Pattern glob;
 
-    private PathMask(String text, String substring, Pattern glob)
+    private PathMask(String text, String substring, String rawSubstring, Pattern glob)
     {
         this.text = text;
         this.substring = substring;
+        this.rawSubstring = rawSubstring;
         this.glob = glob;
     }
 
@@ -61,9 +66,11 @@ public final class PathMask
         String normalized = mask.replace('\\', '/');
         if (normalized.indexOf('*') < 0 && normalized.indexOf('?') < 0)
         {
-            return new PathMask(mask, normalized.toLowerCase(Locale.ROOT), null);
+            String lower = normalized.toLowerCase(Locale.ROOT);
+            String raw = mask.toLowerCase(Locale.ROOT);
+            return new PathMask(mask, lower, raw.equals(lower) ? null : raw, null);
         }
-        return new PathMask(mask, null, compileGlob(normalized));
+        return new PathMask(mask, null, null, compileGlob(normalized));
     }
 
     /** @return whether this mask selects every path (no mask was given) */
@@ -96,15 +103,18 @@ public final class PathMask
         }
         if (substring != null)
         {
-            return path.toLowerCase(Locale.ROOT).contains(substring);
+            String lowerPath = path.toLowerCase(Locale.ROOT);
+            return lowerPath.contains(substring) || rawSubstring != null && lowerPath.contains(rawSubstring);
         }
         return true;
     }
 
     /**
      * Translates a glob into an anchored, case-insensitive regex: the leading part ({@code (.../)?}
-     * for a mask without {@code /}), the body, and an optional {@code /...} tail so a folder match
-     * selects what is under it.
+     * unless a {@code /} at the start or in the middle anchors the mask), the body, and a
+     * {@code /...} tail so a folder match selects what is under it - optional, or required when a
+     * trailing {@code /} limits the mask to folders. Whether the mask is anchored is decided
+     * before its edge slashes are trimmed, as {@code .gitignore} does.
      */
     private static Pattern compileGlob(String mask)
     {
@@ -119,9 +129,11 @@ public final class PathMask
             end--;
         }
         String body = mask.substring(start, end);
+        boolean anchored = start > 0 || body.indexOf('/') >= 0;
+        boolean foldersOnly = end < mask.length();
 
         StringBuilder regex = new StringBuilder();
-        if (body.indexOf('/') < 0)
+        if (!anchored)
         {
             regex.append("(?:.*/)?"); //$NON-NLS-1$
         }
@@ -163,7 +175,7 @@ public final class PathMask
             }
         }
         flushLiteral(regex, literal);
-        regex.append("(?:/.*)?"); //$NON-NLS-1$
+        regex.append(foldersOnly ? "/.*" : "(?:/.*)?"); //$NON-NLS-1$ //$NON-NLS-2$
         return Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     }
 

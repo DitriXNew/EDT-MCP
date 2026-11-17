@@ -156,6 +156,33 @@ public class PathMaskTest
     }
 
     @Test
+    public void testASubstringMaskStillMatchesALiteralBackslashInThePath()
+    {
+        String linuxPath = "Extras/A\\B/Module.bsl"; //$NON-NLS-1$
+        assertTrue("the raw substring, as before globs were accepted", m("A\\B", linuxPath)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and the separator reading still applies", m("a\\b", "Extras/A/B/Module.bsl")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(m("A\\C", linuxPath)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALeadingSlashAnchorsAGlobAtThePathStart()
+    {
+        assertFalse("a nested name is not at the start", m("/Товар*", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(m("/Catal*", MANAGER)); //$NON-NLS-1$
+        assertFalse("a nested file is not at the start", m("/*.bsl", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("without the slash any name matches", m("Товар*", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testATrailingSlashSelectsFoldersOnlyAtAnyLevel()
+    {
+        assertTrue("a folder at any level, as in .gitignore", m("Товар*/", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a file name is not a folder", m("*.bsl/", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("without the slash the file name matches", m("*.bsl", MANAGER)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(m("Forms*/", MANAGER)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRegexCharactersInTheMaskAreLiteral()
     {
         assertFalse("a dot is a dot, not any character", m("*.bsl", "Catalogs/X/Modulexbsl")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
