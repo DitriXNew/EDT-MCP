@@ -786,15 +786,15 @@ def test_extobj_go_to_definition_never_suggests_from_the_base_configuration():
     """
     r = call("go_to_definition",
              {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Catalog.Catalo"})
-    assert_ok(r, "go_to_definition for a configuration type on an external-objects project")
-    assert_contains(r.text, "Symbol not found", "this project holds no catalogs")
-    assert_not_contains(r.text, "Did you mean",
+    message = assert_error(r, "go_to_definition for a configuration type on an external-objects project")
+    assert_contains(message, "Symbol not found", "this project holds no catalogs")
+    assert_not_contains(message, "Did you mean",
                         "a suggestion here could only come from the base configuration")
     # The same tool DOES suggest, from this project's own root, for a type it does hold.
     own = call("go_to_definition",
                {"projectName": EXT_OBJECTS_PROJECT, "symbol": "ExternalDataProcessor.ExtPro"})
-    assert_ok(own, "go_to_definition for a near-miss on the project's own type")
-    assert_contains(own.text, "ExternalDataProcessor.ExtProc",
+    own_message = assert_error(own, "go_to_definition for a near-miss on the project's own type")
+    assert_contains(own_message, "ExternalDataProcessor.ExtProc",
                     "the suggestion must come from the project's own objects")
     assert_no_diff("a read tool must not touch the base project on disk")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")

@@ -47,6 +47,7 @@ the can't-reach-without-a-session AUDIT notes; no project file is read or writte
 
 from harness import (
     call,
+    assert_ok,
     assert_error,
     assert_error_quality,
     assert_contains,
