@@ -19,7 +19,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
@@ -1814,29 +1813,22 @@ public class LaunchTool implements IMcpTool
 
         if (appManager != null)
         {
-            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    timeoutMs);
-            if (!read.concluded())
-            {
-                Activator.logError("Error checking application: " + read.deadlineFailure(), null); //$NON-NLS-1$
-                resolution.error = ToolResult.error("Could not resolve application '" //$NON-NLS-1$
-                    + applicationId + "': " + read.deadlineFailure() //$NON-NLS-1$
-                    + ". Nothing was launched, and this is NOT a not-found - whether that " //$NON-NLS-1$
-                    + "application exists was never established. Retry once EDT is responsive.") //$NON-NLS-1$
-                    .toJson();
-                return resolution;
-            }
             try
             {
-                Optional<IApplication> appOpt = read.valueOrRethrow();
-                if (!appOpt.isPresent())
+                ApplicationSupport.ApplicationResolution resolved = ApplicationSupport.resolveApplication(
+                    appManager, project, applicationId, timeoutMs, failure -> {
+                        Activator.logWarning("Error checking application: " + failure);
+                        return ToolResult.error("Could not resolve application '" + applicationId + "': " + failure
+                            + ". Nothing was launched, and this is NOT a not-found - whether that "
+                            + "application exists was never established. Retry once EDT is responsive.").toJson();
+                    }, ToolResult.error("Application not found: " + applicationId
+                        + ". Use get_applications to get valid application IDs.").toJson());
+                if (resolved.errorJson() != null)
                 {
-                    resolution.error = ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
-                            ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
+                    resolution.error = resolved.errorJson();
                     return resolution;
                 }
-                resolution.application = appOpt.get();
+                resolution.application = resolved.application();
                 resolution.applicationName = resolution.application.getName();
             }
             catch (ApplicationException e)
@@ -2896,34 +2888,12 @@ public class LaunchTool implements IMcpTool
 
     static IStatus appendAccessSettingsDialogFailure(IStatus status, long before, long after)
     {
-        if (status == null || status.isOK())
-        {
-            return status;
-        }
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return status;
-        }
-        String original = status.getMessage();
-        String message = original == null || original.isEmpty() ? note : original + " " + note; //$NON-NLS-1$
-        if (status.isMultiStatus())
-        {
-            return new MultiStatus(status.getPlugin(), status.getCode(), status.getChildren(),
-                message, status.getException());
-        }
-        return new Status(status.getSeverity(), status.getPlugin(), status.getCode(), message,
-            status.getException());
+        return InfobaseAuthDialogSuppressor.appendFailureNote(status, before, after);
     }
 
     private static String appendAccessSettingsDialogFailure(String message, long before, long after)
     {
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return message;
-        }
-        return message == null || message.isEmpty() ? note : message + " " + note; //$NON-NLS-1$
+        return InfobaseAuthDialogSuppressor.appendFailureNote(message, before, after);
     }
 
     /**

@@ -93,6 +93,47 @@ from harness import (
 BOGUS_APP_ID = "no_such_app_e2e_zzz"
 
 
+@e2e_test(tool="update_database", kind="action")
+def test_confirmed_zero_wait_job_can_be_polled_without_mutating():
+    """The bogus target exercises the job lifecycle and finishes before any DB mutation."""
+    r = call("update_database", {
+        "projectName": PROJECT, "applicationId": BOGUS_APP_ID,
+        "confirm": True, "waitSeconds": 0,
+    })
+    # A very fast rejection may already be terminal even at the zero-wait boundary.
+    if not (r.structured or {}).get("jobId"):
+        e = assert_error(r, "inline completion at zero wait")
+        assert_contains(e, BOGUS_APP_ID, "inline rejection preserves the target")
+    else:
+        job_id = r.structured["jobId"]
+        assert_ok(r, "accepted background update")
+        assert_contains(r.text, "get_job_status", "pending reply supplies the polling hint")
+        for _ in range(4):
+            polled = call("get_job_status", {"jobId": job_id, "waitSeconds": 20})
+            assert_ok(polled, "poll accepted update")
+            if polled.text.startswith("# Background job: done"):
+                assert_contains(polled.text, "Application not found", "job retains the final refusal")
+                assert_contains(polled.text, BOGUS_APP_ID, "job retains target details")
+                break
+            assert_contains(polled.text, "# Background job: running", "job remains observable")
+        else:
+            raise AssertionError("the invalid-target update job did not finish")
+    assert_no_diff("a rejected background update must leave project sources unchanged")
+
+
+@e2e_test(tool="update_database", kind="action")
+def test_confirmed_update_finishing_within_wait_returns_inline_result():
+    r = call("update_database", {
+        "projectName": PROJECT, "applicationId": BOGUS_APP_ID,
+        "confirm": True, "waitSeconds": 45,
+    })
+    e = assert_error(r, "completed invalid-target update returns its final JSON inline")
+    assert_contains(e, BOGUS_APP_ID, "inline error preserves the target")
+    assert_contains(e, "get_applications", "inline error preserves next-step guidance")
+    assert not (r.structured or {}).get("jobId"), r.structured
+    assert_no_diff("inline rejection must leave project sources unchanged")
+
+
 @e2e_test(tool="update_database", kind="read")
 def test_timeout_guide_preserves_unknown_outcome_and_server_cancellation():
     """Read the live guide without mutating an infobase; cancellation needs a dedicated stand."""

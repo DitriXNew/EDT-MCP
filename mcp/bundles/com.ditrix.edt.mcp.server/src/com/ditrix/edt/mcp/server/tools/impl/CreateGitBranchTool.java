@@ -559,8 +559,8 @@ public class CreateGitBranchTool implements IMcpTool
         if (appManager == null)
         {
             return ApplicationReferenceResolution.warning(
-                "Could not attach application '" + applicationId + "': IApplicationManager service is not " //$NON-NLS-1$ //$NON-NLS-2$
-                + "available."); //$NON-NLS-1$
+                "Could not attach application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                + ApplicationSupport.MANAGER_UNAVAILABLE + "."); //$NON-NLS-1$
         }
         // Bounded (#622). The branch already exists at this point, so an expired deadline takes the
         // SAME degradation as a raised lookup: a warning on an otherwise successful create.
@@ -569,7 +569,7 @@ public class CreateGitBranchTool implements IMcpTool
                 ApplicationSupport.LOOKUP_TIMEOUT_MS);
         if (!read.concluded())
         {
-            Activator.logError("create_git_branch: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            Activator.logWarning("create_git_branch: " + read.deadlineFailure()); //$NON-NLS-1$
             return ApplicationReferenceResolution.warning(
                 "Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
                 + read.deadlineFailure() + ". The branch was created; the application was not " //$NON-NLS-1$

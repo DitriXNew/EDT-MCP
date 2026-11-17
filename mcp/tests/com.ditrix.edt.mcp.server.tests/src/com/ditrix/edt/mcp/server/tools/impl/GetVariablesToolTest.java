@@ -7,15 +7,27 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.debug.core.model.IStackFrame;
+import org.eclipse.debug.core.model.IVariable;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link GetVariablesTool}.
@@ -25,11 +37,54 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * no suspended session, the in-memory {@code DebugSessionRegistry} returns a
  * null frame/thread via a plain map lookup, so the tool reports the stale
  * reference before any live {@code DebugPlugin} access. The auto-resolution
- * fallback (neither frameRef nor threadId) goes through the live launch manager
- * and, together with actual variable reads, is covered by the E2E suite.
+ * fallback (neither frameRef nor threadId) goes through the live launch manager and
+ * is covered by the E2E suite. Stubbed frames cover pending and settled variable reads.
  */
 public class GetVariablesToolTest
 {
+    @Test
+    public void waitsForPendingEvaluationThenSerializesRealVariables() throws Exception
+    {
+        var frame = mock(IStackFrame.class);
+        var pending = mock(IBslVariable.class);
+        when(pending.isEvaluated()).thenReturn(false);
+        var real = mock(IBslVariable.class);
+        when(real.isEvaluated()).thenReturn(true);
+        when(real.getName()).thenReturn("Answer");
+        when(frame.getVariables()).thenReturn(
+            new IVariable[] {pending},
+            new IVariable[] {real});
+        String result = GetVariablesTool.serializeVariables(
+            DebugSessionRegistry.get(), frame, null, 1_000);
+        var json = JsonParser.parseString(result).getAsJsonObject();
+        assertEquals(1, json.get("count").getAsInt());
+        assertEquals("Answer", json.getAsJsonArray("variables").get(0).getAsJsonObject().get("name").getAsString());
+        assertFalse(json.has("pending"));
+        verify(frame, times(2)).getVariables();
+        verify(pending, never()).getName();
+    }
+
+    @Test
+    public void stillPendingReturnsRetryHintInsteadOfFakeVariableEvenForExpandPath() throws Exception
+    {
+        var frame = mock(IStackFrame.class);
+        var pending = mock(IBslVariable.class);
+        when(pending.isEvaluated()).thenReturn(false);
+        when(frame.getVariables()).thenReturn(new IVariable[] {pending});
+        for (String path : new String[] {null, "Answer.Child"})
+        {
+            String result = GetVariablesTool.serializeVariables(
+                DebugSessionRegistry.get(), frame, path, 30);
+            var json = JsonParser.parseString(result).getAsJsonObject();
+            assertTrue(json.get("pending").getAsBoolean());
+            assertEquals(0, json.getAsJsonArray("variables").size());
+            assertEquals(0, json.get("count").getAsInt());
+            assertTrue(json.get("message").getAsString().contains("Retry get_variables"));
+        }
+        verify(frame, atLeast(2)).getVariables();
+        verify(pending, never()).getName();
+    }
+
     @Test
     public void testName()
     {

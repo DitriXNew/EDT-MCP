@@ -763,20 +763,17 @@ public final class BinaryToXmlConverter
      */
     private static void runDesigner(List<String> command, Path log) throws Exception
     {
-        Process process = new ProcessBuilder(command).redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-        try
+        Process process = new ProcessBuilder(command).start();
+        ExternalProcess.Result result = ExternalProcess.await(process, TimeUnit.MINUTES.toMillis(10),
+            child -> child.getOutputStream().close());
+        if (result.timedOut())
         {
-            int exitCode = process.waitFor();
-            if (exitCode != 0)
-            {
-                throw new IOException("1C:Enterprise exited with code " + exitCode + ": " //$NON-NLS-1$ //$NON-NLS-2$
-                    + readLog(log));
-            }
+            throw new IOException("1C:Enterprise timed out after 10 minutes: " + readLog(log)); //$NON-NLS-1$
         }
-        finally
+        if (result.exitCode() != 0)
         {
-            process.destroyForcibly();
+            throw new IOException("1C:Enterprise exited with code " + result.exitCode() + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                + readLog(log));
         }
     }
 

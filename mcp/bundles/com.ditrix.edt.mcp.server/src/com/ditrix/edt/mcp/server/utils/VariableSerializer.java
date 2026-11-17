@@ -66,6 +66,14 @@ public final class VariableSerializer
         {
             return out;
         }
+        return serializeVariables(vars, registry);
+    }
+
+    /** Serializes a settled variable snapshot without re-reading its frame. */
+    public static List<Map<String, Object>> serializeVariables(IVariable[] vars,
+        DebugSessionRegistry registry) throws Exception
+    {
+        List<Map<String, Object>> out = new ArrayList<>();
         for (IVariable var : vars)
         {
             out.add(serializeVariable(var, registry));
@@ -179,8 +187,14 @@ public final class VariableSerializer
         {
             return null;
         }
+        return resolvePath(frame.getVariables(), expandPath);
+    }
+
+    /** Resolves a path from the same settled snapshot that a caller inspected. */
+    public static IVariable resolvePath(IVariable[] variables, String expandPath) throws Exception
+    {
         String[] parts = expandPath.split("\\."); //$NON-NLS-1$
-        IVariable[] current = frame.getVariables();
+        IVariable[] current = variables == null ? new IVariable[0] : variables;
         IVariable found = null;
         for (String part : parts)
         {

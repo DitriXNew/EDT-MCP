@@ -108,6 +108,7 @@ public final class PreLaunchChangeTracker
 
     /** Guards the one-time listener installation. */
     private static final AtomicBoolean LISTENER_INSTALLED = new AtomicBoolean(false);
+    private static Runnable listenerDisposable;
 
     /**
      * Projects whose resource tree THIS plugin instance has already synced with the
@@ -916,14 +917,19 @@ public final class PreLaunchChangeTracker
      * {@link IResourceChangeEvent#POST_CHANGE} and walks the delta to mark
      * affected open projects dirty.
      */
-    static void ensureListenerInstalled()
+    static synchronized Runnable ensureListenerInstalled()
     {
         if (LISTENER_INSTALLED.compareAndSet(false, true))
         {
             try
             {
-                ResourcesPlugin.getWorkspace().addResourceChangeListener(
-                    new ChangeListener(), IResourceChangeEvent.POST_CHANGE);
+                var workspace = ResourcesPlugin.getWorkspace();
+                IResourceChangeListener listener = new ChangeListener();
+                workspace.addResourceChangeListener(listener, IResourceChangeEvent.POST_CHANGE);
+                listenerDisposable = ListenerDisposables.register(() -> {
+                    workspace.removeResourceChangeListener(listener);
+                    LISTENER_INSTALLED.set(false);
+                });
             }
             catch (IllegalStateException e)
             {
@@ -932,6 +938,7 @@ public final class PreLaunchChangeTracker
                 LISTENER_INSTALLED.set(false);
             }
         }
+        return listenerDisposable;
     }
 
     // =========================================================================

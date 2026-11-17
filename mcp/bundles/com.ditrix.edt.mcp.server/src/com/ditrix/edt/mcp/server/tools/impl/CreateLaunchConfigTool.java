@@ -664,7 +664,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         IApplicationManager appManager = Activator.getDefault().getApplicationManager();
         if (appManager == null)
         {
-            return AppIdResolution.error(ToolResult.error("IApplicationManager service is not available. " //$NON-NLS-1$
+            return AppIdResolution.error(ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE + ". " //$NON-NLS-1$
                 + "EDT may still be starting up — retry in a moment.").toJson()); //$NON-NLS-1$
         }
 

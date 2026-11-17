@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
@@ -23,9 +22,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -56,8 +52,12 @@ public final class InfobaseSessionSupport
     /** Outer bound includes forced process cleanup and output collection. */
     private static final long JOB_TIMEOUT_MS = 15_000L;
 
-    /** Grace for a force-killed process and its stream readers to close. */
-    private static final long PROCESS_CLEANUP_TIMEOUT_MS = 2_000L;
+    /** Recognises the ambiguous Designer kind by both parsed kind flag and raw app-id. */
+    public static boolean isDesignerSession(SessionInfo session)
+    {
+        return session.applicationKindIsDesigner()
+            || "Designer".equalsIgnoreCase(session.applicationKind()); //$NON-NLS-1$
+    }
 
     private InfobaseSessionSupport()
     {
@@ -564,61 +564,14 @@ public final class InfobaseSessionSupport
         // and this best-effort check kills the process as soon as the race is observed.
         if (callEnded(monitor, callerAnswered))
         {
-            process.destroyForcibly();
+            ExternalProcess.destroyTree(process);
             return null;
         }
-        try
-        {
-            Charset fallback = legacyOutputCharset(isWindows());
-            FutureTask<String> stdout = streamReader(process.getInputStream(), fallback);
-            FutureTask<String> stderr = streamReader(process.getErrorStream(), fallback);
-            writeCredentials(process, credentials);
-
-            boolean finished = process.waitFor(COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (!finished)
-            {
-                process.destroyForcibly();
-                waitAfterDestroy(process);
-                return new CommandExecution(-1, readStream(stdout), readStream(stderr), true);
-            }
-            return new CommandExecution(process.exitValue(), readStream(stdout),
-                readStream(stderr), false);
-        }
-        catch (InterruptedException e)
-        {
-            process.destroyForcibly();
-            waitAfterDestroy(process);
-            Thread.currentThread().interrupt();
-            throw e;
-        }
-        catch (Exception e)
-        {
-            if (process.isAlive())
-            {
-                process.destroyForcibly();
-                waitAfterDestroy(process);
-            }
-            throw e;
-        }
-    }
-
-    /** Starts a daemon reader so a verbose session list cannot fill a process pipe and deadlock. */
-    private static FutureTask<String> streamReader(InputStream stream, Charset fallback)
-    {
-        FutureTask<String> task = new FutureTask<>(() -> readAll(stream, fallback));
-        Thread thread = new Thread(task, "EDT-MCP ibcmd output reader"); //$NON-NLS-1$
-        thread.setDaemon(true);
-        thread.start();
-        return task;
-    }
-
-    /** Reads one process stream to EOF and decodes it as {@link #decodeOutput} describes. */
-    private static String readAll(InputStream stream, Charset fallback) throws IOException
-    {
-        try (InputStream input = stream)
-        {
-            return decodeOutput(input.readAllBytes(), fallback);
-        }
+        Charset fallback = legacyOutputCharset(isWindows());
+        ExternalProcess.Result result = ExternalProcess.await(process, COMMAND_TIMEOUT_MS,
+            child -> writeCredentials(child, credentials));
+        return new CommandExecution(result.exitCode(), decodeOutput(result.stdout(), fallback),
+            decodeOutput(result.stderr(), fallback), result.timedOut());
     }
 
     /**
@@ -676,38 +629,6 @@ public final class InfobaseSessionSupport
                 input.write(auth.getBytes(StandardCharsets.UTF_8));
                 input.flush();
             }
-        }
-    }
-
-    /** Waits briefly for a force-killed process without extending the command deadline indefinitely. */
-    private static void waitAfterDestroy(Process process)
-    {
-        try
-        {
-            process.waitFor(PROCESS_CLEANUP_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /** Collects a stream reader's terminal value under a short post-process deadline. */
-    private static String readStream(FutureTask<String> task) throws Exception
-    {
-        try
-        {
-            return task.get(PROCESS_CLEANUP_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        }
-        catch (ExecutionException e)
-        {
-            throwAsException(e.getCause() != null ? e.getCause() : e);
-            return ""; //$NON-NLS-1$ unreachable, required by javac flow analysis
-        }
-        catch (TimeoutException e)
-        {
-            task.cancel(true);
-            throw new IOException("Timed out while collecting ibcmd output", e); //$NON-NLS-1$
         }
     }
 

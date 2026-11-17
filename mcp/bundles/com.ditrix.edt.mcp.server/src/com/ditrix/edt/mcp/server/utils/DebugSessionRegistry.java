@@ -42,6 +42,7 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     private static final DebugSessionRegistry INSTANCE = new DebugSessionRegistry();
 
     private final AtomicBoolean listenerRegistered = new AtomicBoolean(false);
+    private Runnable listenerDisposable;
     private final AtomicLong idGenerator = new AtomicLong(1);
 
     /** applicationId → most recent suspend snapshot. */
@@ -82,19 +83,19 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     /**
      * Lazily installs the global debug event listener. Safe to call from any thread.
      */
-    public void ensureListenerRegistered()
+    public synchronized Runnable ensureListenerRegistered()
     {
         if (!listenerRegistered.compareAndSet(false, true))
         {
-            return;
+            return listenerDisposable;
         }
         DebugPlugin debugPlugin = DebugPlugin.getDefault();
         if (debugPlugin == null)
         {
             listenerRegistered.set(false);
-            return;
+            return listenerDisposable;
         }
-        debugPlugin.addDebugEventListener(new IDebugEventSetListener()
+        IDebugEventSetListener listener = new IDebugEventSetListener()
         {
             @Override
             public void handleDebugEvents(DebugEvent[] events)
@@ -104,8 +105,14 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
                     handleEvent(ev);
                 }
             }
+        };
+        debugPlugin.addDebugEventListener(listener);
+        listenerDisposable = ListenerDisposables.register(() -> {
+            debugPlugin.removeDebugEventListener(listener);
+            listenerRegistered.set(false);
         });
         Activator.logInfo("DebugSessionRegistry: event listener registered"); //$NON-NLS-1$
+        return listenerDisposable;
     }
 
     /** Package-visible for headless unit testing (a {@link DebugEvent} is a plain DTO). */

@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
@@ -28,6 +29,11 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.ApplicationUpdateJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BranchInfobaseBinding;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
@@ -52,10 +58,6 @@ import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-
 /**
  * Tool to update database (infobase) for an application.
  * Supports full and incremental update modes.
@@ -63,6 +65,22 @@ import com.google.gson.JsonParser;
 public class UpdateDatabaseTool implements IMcpTool
 {
     public static final String NAME = "update_database"; //$NON-NLS-1$
+
+    static final int DEFAULT_WAIT_SECONDS = 20;
+    static final int MAX_WAIT_SECONDS = 45;
+    private final BackgroundJobs jobs;
+    private final ApplicationUpdateJobs updates;
+
+    public UpdateDatabaseTool()
+    {
+        this(BackgroundJobs.shared(), ApplicationUpdateJobs.shared());
+    }
+
+    UpdateDatabaseTool(BackgroundJobs jobs, ApplicationUpdateJobs updates)
+    {
+        this.jobs = jobs;
+        this.updates = updates;
+    }
 
     /** Output key: whether a running 1C client was terminated to free the infobase. */
     private static final String KEY_TERMINATED_CLIENT = "terminatedClient"; //$NON-NLS-1$
@@ -103,7 +121,8 @@ public class UpdateDatabaseTool implements IMcpTool
         return "Apply the current EDT configuration to an infobase. Before applying, call " //$NON-NLS-1$
             + "infobase_sessions(action='list'); any non-agent session blocks the update, so " //$NON-NLS-1$
             + "clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT " //$NON-NLS-1$
-            + "confirm to preview, then again with confirm=true to apply. Full parameters and " //$NON-NLS-1$
+            + "confirm to preview, then again with confirm=true to apply. " //$NON-NLS-1$
+            + "Returns a jobId when not finished within waitSeconds; poll get_job_status. Full parameters and " //$NON-NLS-1$
             + "examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
@@ -136,6 +155,9 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty(KEY_IGNORE_BRANCH_BINDING,
                 "true skips the refusal of a target whose infobase is not bound to the project's " //$NON-NLS-1$
                 + "current Git branch (default false).") //$NON-NLS-1$
+            .integerProperty("waitSeconds", //$NON-NLS-1$
+                "Seconds to wait before returning a jobId; defaults to " //$NON-NLS-1$
+                    + DEFAULT_WAIT_SECONDS + ", accepts 0 to " + MAX_WAIT_SECONDS + ".") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -145,6 +167,8 @@ public class UpdateDatabaseTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("error", "Human-readable failure message when success=false.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("jobId", "Background update id; poll get_job_status.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("status", "Background job state when the update is pending.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'updated' (applied).") //$NON-NLS-1$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no infobase change made); absent/false once updated.") //$NON-NLS-1$
@@ -204,13 +228,23 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        return com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS
-            ? com.ditrix.edt.mcp.server.utils.HeadlessInfobaseUpdate.runBounded(() -> executeRequest(params))
-            : executeRequest(params);
+        if (!JsonUtils.extractBooleanArgument(params, "confirm", false) //$NON-NLS-1$
+            && com.ditrix.edt.mcp.server.HostKind.current() == com.ditrix.edt.mcp.server.HostKind.HEADLESS)
+        {
+            return com.ditrix.edt.mcp.server.utils.HeadlessInfobaseUpdate.runBounded(() -> executeRequest(params));
+        }
+        return executeRequest(params);
     }
 
     private String executeRequest(Map<String, String> params)
     {
+        Integer waitSeconds = BackgroundJobPolling.readWaitSeconds(params, "waitSeconds", //$NON-NLS-1$
+            DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
+        if (waitSeconds == null)
+        {
+            return BackgroundJobPolling.waitSecondsError("waitSeconds", params.get("waitSeconds"), //$NON-NLS-1$ //$NON-NLS-2$
+                DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
+        }
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
@@ -317,9 +351,64 @@ public class UpdateDatabaseTool implements IMcpTool
             }
         }
 
-        return updateDatabase(projectName, applicationId, fullUpdate, confirm,
+        if (confirm)
+        {
+            String targetProject = projectName;
+            String targetApplication = applicationId;
+            return startUpdateJob(projectName, applicationId, waitSeconds,
+                () -> updateDatabase(targetProject, targetApplication, fullUpdate, true,
+                    terminateRunningClients, checkInfobaseSessions, ignoreBranchBinding,
+                    externalChanges, portPolicy));
+        }
+        return updateDatabase(projectName, applicationId, fullUpdate, false,
             terminateRunningClients, checkInfobaseSessions, ignoreBranchBinding, externalChanges,
             portPolicy);
+    }
+
+    String startUpdateJob(String projectName, String applicationId, int waitSeconds,
+        java.util.function.Supplier<String> work)
+    {
+        try
+        {
+            ApplicationUpdateJobs.Submission submission = updates.start(projectName, applicationId, work);
+            if (!submission.admitted())
+            {
+                return ToolResult.error("Application '" + applicationId + "' already has a running " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "update_database job '" + submission.job().getId() //$NON-NLS-1$
+                    + "'. Poll get_job_status with that jobId; no second update was started.") //$NON-NLS-1$
+                    .put("jobId", submission.job().getId()).toJson(); //$NON-NLS-1$
+            }
+            JobSnapshot latest = BackgroundJobPolling.await(jobs, submission.job().getId(), waitSeconds);
+            if (latest == null)
+            {
+                return ToolResult.error("The update job expired before it could be polled. Inspect " //$NON-NLS-1$
+                    + "the infobase before retrying update_database.").toJson(); //$NON-NLS-1$
+            }
+            if (latest.getStatus() == BackgroundJobs.Status.DONE)
+            {
+                return String.valueOf(latest.getResult());
+            }
+            if (latest.getStatus() == BackgroundJobs.Status.FAILED)
+            {
+                return ToolResult.error(latest.getErrorMessage()).toJson();
+            }
+            if (latest.getStatus() == BackgroundJobs.Status.CANCELLED)
+            {
+                return ToolResult.error("The database update job was cancelled before it started. " //$NON-NLS-1$
+                    + "No update ran. Submit a new confirmed request if still needed.") //$NON-NLS-1$
+                    .put("jobId", latest.getId()).toJson(); //$NON-NLS-1$
+            }
+            return ToolResult.success().put("jobId", latest.getId()) //$NON-NLS-1$
+                .put("status", latest.getStatus().value()) //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, "Poll get_job_status with this jobId. The update continues " //$NON-NLS-1$
+                    + "independently of this call.\n\n" + BackgroundJobRenderer.render(latest)).toJson(); //$NON-NLS-1$
+        }
+        catch (RejectedExecutionException e)
+        {
+            return ToolResult.error("Could not start update_database because the background-job " //$NON-NLS-1$
+                + "registry is full or stopping: " + PlatformFailures.describe(e) //$NON-NLS-1$
+                + ". Poll existing jobs with get_job_status and retry.").toJson(); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -775,26 +864,15 @@ public class UpdateDatabaseTool implements IMcpTool
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
             
-            // Find application by ID. Bounded (#622): a deadline is NOT a not-found — nothing was
-            // measured and, importantly here, nothing was updated.
-            ApplicationSupport.BoundedRead<Optional<IApplication>> appRead =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
-            if (!appRead.concluded())
-            {
-                return ToolResult.error("Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
-                        + appRead.deadlineFailure()
-                        + ". The database was NOT updated. Retry once EDT is responsive.").toJson(); //$NON-NLS-1$
-            }
-            Optional<IApplication> appOpt = appRead.valueOrRethrow();
-            if (!appOpt.isPresent())
-            {
-                return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
-                        + "." + describeLaunchIdentifierHint(applicationId) //$NON-NLS-1$
-                        + " Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
-            }
-
-            IApplication application = appOpt.get();
+            ApplicationSupport.ApplicationResolution resolved = ApplicationSupport.resolveApplication(
+                appManager, project, applicationId, ApplicationSupport.LOOKUP_TIMEOUT_MS,
+                failure -> ToolResult.error("Could not resolve application '" + applicationId + "': "
+                    + failure + ". The database was NOT updated. Retry once EDT is responsive.").toJson(),
+                ToolResult.error("Application not found: " + applicationId + "."
+                    + describeLaunchIdentifierHint(applicationId)
+                    + " Use get_applications to get valid application IDs.").toJson());
+            if (resolved.errorJson() != null) { return resolved.errorJson(); }
+            IApplication application = resolved.application();
 
             // A standalone-server application stays listed after a branch switch; refuse a target
             // the current branch does not bind (checked again right before the update).
@@ -914,10 +992,10 @@ public class UpdateDatabaseTool implements IMcpTool
                     if (sessions.isReadable())
                     {
                         designerSessionsSeen = sessions.sessions().stream()
-                            .filter(InfobaseSessionsTool::isDesignerSession)
+                            .filter(InfobaseSessionSupport::isDesignerSession)
                             .toList();
                         List<SessionInfo> blockers = sessions.sessions().stream()
-                            .filter(session -> !InfobaseSessionsTool.isDesignerSession(session))
+                            .filter(session -> !InfobaseSessionSupport.isDesignerSession(session))
                             .toList();
                         if (!blockers.isEmpty())
                         {
@@ -1119,32 +1197,8 @@ public class UpdateDatabaseTool implements IMcpTool
 
     static String appendAccessSettingsDialogFailure(String result, long before, long after)
     {
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return result;
-        }
-        try
-        {
-            JsonElement parsed = JsonParser.parseString(result);
-            if (!parsed.isJsonObject())
-            {
-                return result;
-            }
-            JsonObject object = parsed.getAsJsonObject();
-            JsonElement success = object.get("success"); //$NON-NLS-1$
-            JsonElement error = object.get("error"); //$NON-NLS-1$
-            if (success == null || success.getAsBoolean() || error == null || !error.isJsonPrimitive())
-            {
-                return result;
-            }
-            object.addProperty("error", error.getAsString() + " " + note); //$NON-NLS-1$ //$NON-NLS-2$
-            return object.toString();
-        }
-        catch (RuntimeException e)
-        {
-            return result;
-        }
+        return ToolResult.appendErrorNote(result,
+            InfobaseAuthDialogSuppressor.appendFailureNote("", before, after));
     }
 
     /**

@@ -271,7 +271,7 @@ public class InfobaseExtensionsTool implements IMcpTool
             return "Cannot verify infobase sessions: " + sessions.unreachableReason()
                 + ". Inspect infobase_sessions(action='list') and retry after the server is reachable.";
         }
-        var blockers = sessions.sessions().stream().filter(s -> !InfobaseSessionsTool.isDesignerSession(s)).toList();
+        var blockers = sessions.sessions().stream().filter(s -> !InfobaseSessionSupport.isDesignerSession(s)).toList();
         return blockers.isEmpty() ? null : "Infobase has active non-Designer sessions: "
             + InfobaseSessionErrorProjection.fields(blockers)
             + ". Inspect infobase_sessions and obtain separate consent before terminating sessions, then retry.";
