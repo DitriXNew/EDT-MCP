@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -1457,7 +1458,7 @@ public final class SpreadsheetTemplateWriter
         {
             return Boolean.valueOf(primitive.getAsBoolean());
         }
-        String s = primitive.getAsString().trim().toLowerCase();
+        String s = primitive.getAsString().trim().toLowerCase(Locale.ROOT);
         if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             return Boolean.TRUE;

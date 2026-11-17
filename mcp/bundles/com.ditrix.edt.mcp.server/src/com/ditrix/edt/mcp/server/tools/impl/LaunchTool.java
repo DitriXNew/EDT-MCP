@@ -19,7 +19,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
@@ -46,7 +45,10 @@ import com.ditrix.edt.mcp.server.utils.LaunchAbortReason;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
+import com.ditrix.edt.mcp.server.utils.clientwindow.ClientWindowLaunch;
+import com.ditrix.edt.mcp.server.utils.clientwindow.WindowRequest;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchOperation;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
@@ -83,6 +85,8 @@ public class LaunchTool implements IMcpTool
     public static final String NAME = "launch"; //$NON-NLS-1$
 
     /** Input/output key: requested EDT launch mode. */
+    private static final String KEY_WINDOW_MODE = "windowMode";
+    private static final String KEY_SCREEN = "screen";
     private static final String KEY_MODE = "mode"; //$NON-NLS-1$
 
     /** MCP launch-mode token preserving the historical behaviour. */
@@ -167,6 +171,9 @@ public class LaunchTool implements IMcpTool
                 "Launch mode: debug (default) or run. Attach configurations support debug only; " //$NON-NLS-1$
                     + "standalone servers always start in debug mode.", //$NON-NLS-1$
                 MODE_DEBUG, MODE_RUN)
+            .property(KEY_WINDOW_MODE, "Client window; default normal.", Map.of("type", "string",
+                "enum", List.of("normal", "minimized", "otherScreen", "isolated"), "default", "normal"))
+            .integerProperty(KEY_SCREEN, "1-based monitor index for otherScreen; default first non-primary.")
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
@@ -218,6 +225,10 @@ public class LaunchTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_LAUNCH_CONFIGURATION, "Name of the launched/running launch configuration") //$NON-NLS-1$
             .stringProperty(KEY_CONFIGURATION_TYPE, "Launch configuration type id") //$NON-NLS-1$
+            .stringProperty(KEY_WINDOW_MODE, "Requested client window mode")
+            .booleanProperty("windowModeApplied", "Whether the requested window mode was applied")
+            .stringProperty("windowModeReason", "Adjustment failure or platform limitation")
+            .integerProperty("pid", "Client process id")
             .booleanProperty(KEY_ATTACH, "True if this is an Attach (server-side debug) configuration") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "EDT project name associated with the launch") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Application id of the launched configuration") //$NON-NLS-1$
@@ -264,6 +275,16 @@ public class LaunchTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        WindowRequest windowRequest;
+        try
+        {
+            windowRequest = WindowRequest.parse(JsonUtils.extractStringArgument(params, KEY_WINDOW_MODE),
+                JsonUtils.extractStringArgument(params, KEY_SCREEN));
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
         String rawMode = JsonUtils.extractStringArgument(params, KEY_MODE);
         String mode = extractLaunchMode(params);
         if (mode == null)
@@ -316,11 +337,14 @@ public class LaunchTool implements IMcpTool
             return prepared.errorJson;
         }
 
+        String windowPreflight = ClientWindowLaunch.preflight(windowRequest);
+        if (windowPreflight != null) { return ToolResult.error(windowPreflight).toJson(); }
+
         // Target form 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
             return launchByConfigName(configName, updateBeforeLaunch, updateRequested, policyRequested,
-                restartIfRunning, policy, portPolicy, overrides, prepared, mode);
+                restartIfRunning, policy, portPolicy, overrides, prepared, mode, windowRequest);
         }
 
         // Target form 2: project + application (runtime-client only).
@@ -344,7 +368,7 @@ public class LaunchTool implements IMcpTool
         }
 
         return launch(projectName, applicationId, updateBeforeLaunch, restartIfRunning, policy,
-            portPolicy, overrides, prepared, mode);
+            portPolicy, overrides, prepared, mode, windowRequest);
     }
 
     /**
@@ -389,8 +413,9 @@ public class LaunchTool implements IMcpTool
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean updateRequested, boolean policyRequested, boolean restartIfRunning,
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode)
+        LaunchOverrides.Prepared prepared, String mode, WindowRequest windowRequest)
     {
+        LaunchOperation operation = null;
         try
         {
             ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
@@ -415,6 +440,8 @@ public class LaunchTool implements IMcpTool
                 return err.toJson();
             }
 
+            String windowRefusal = ClientWindowLaunch.configurationRefusal(config, windowRequest);
+            if (windowRefusal != null) { return windowRefusal; }
             String typeId = LaunchConfigUtils.getConfigTypeId(config);
             boolean isAttach = LaunchConfigUtils.isAttachConfigTypeId(typeId);
             String configProject = LaunchConfigUtils.readAttribute(config,
@@ -452,6 +479,14 @@ public class LaunchTool implements IMcpTool
             if (attachRefusal != null)
             {
                 return attachRefusal;
+            }
+
+            String lockApplicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, configProject);
+            operation = isAttach && (lockApplicationId == null || configProject == null || configProject.isBlank()) ? null
+                : LaunchLifecycleUtils.tryLaunchOperation(configProject, lockApplicationId);
+            if (operation != null && operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
             }
 
             // Unified existing-session decision. One
@@ -528,23 +563,32 @@ public class LaunchTool implements IMcpTool
             }
 
             boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, isAttach, configProject, effectiveAppId);
-            String launchError = performLaunch(applied.config, updateBeforeLaunch,
-                isAttach ? null : policy, isAttach ? null : portPolicy,
-                eclipseLaunchMode(mode));
+            LaunchOperation dispatchOperation = operation;
+            operation = null;
+            ClientWindowLaunch.Execution windowExecution = startClientWindow(dispatchOperation, () ->
+                ClientWindowLaunch.start(applied.config, windowRequest,
+                eclipseLaunchMode(mode), updateBeforeLaunch, policy, portPolicy, prepared,
+                windowConfig -> performLaunch(windowConfig, updateBeforeLaunch,
+                    isAttach ? null : policy, isAttach ? null : portPolicy, eclipseLaunchMode(mode))));
+            String launchError = windowExecution.error();
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
                     + launchError).toJson();
             }
 
-            return reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach, configProject, effectiveAppId,
-                overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance());
+            return windowExecution.decorate(reportLaunchDialogs(buildLaunchSuccess(applied.config, typeId, isAttach,
+                configProject, effectiveAppId, overrides, prepared, mode), watchDialogs, EdtDialogs.getInstance()));
         }
         catch (Exception e)
         {
             Activator.logError("Unexpected error during launch by name", e); //$NON-NLS-1$
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -668,6 +712,7 @@ public class LaunchTool implements IMcpTool
         String typeId, String projectName, StandaloneServerPortConflictPolicy portPolicy)
     {
         StandalonePreparation preparation = null;
+        LaunchOperation operation = null;
         try
         {
             preparation = prepareStandaloneLaunch(config, configName, projectName, portPolicy,
@@ -676,6 +721,11 @@ public class LaunchTool implements IMcpTool
             if (preparedLaunch.failure != null)
             {
                 return standalonePreconditionError(configName, preparedLaunch.failure);
+            }
+            operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, preparedLaunch.applicationId);
+            if (operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
             }
             StartOutcome start = startStandaloneServerGuarded(configName, preparedLaunch.project,
                 () -> preparedLaunch.applyPreflight(
@@ -700,6 +750,7 @@ public class LaunchTool implements IMcpTool
             {
                 preparation.startClaim.closeIfNotHandedOff();
             }
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -770,72 +821,80 @@ public class LaunchTool implements IMcpTool
                     return;
                 }
 
-                stage.set(StandalonePreparationStage.APPLICATION);
-                StandaloneServerSupport.ApplicationLookup lookup =
-                    StandaloneServerSupport.lookupApplication(manager, context.project(), resolvedId);
-                if (monitor.isCanceled())
+                try (LaunchOperation operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, resolvedId))
                 {
-                    return;
-                }
-                if (lookup.application() == null)
-                {
-                    publish.accept(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
-                        + "' was not found in project " + projectName)); //$NON-NLS-1$
-                    return;
-                }
+                    if (operation.error() != null)
+                    {
+                        publish.accept(StandalonePreparation.failed(operation.error()));
+                        return;
+                    }
+                    stage.set(StandalonePreparationStage.APPLICATION);
+                    StandaloneServerSupport.ApplicationLookup lookup =
+                        StandaloneServerSupport.lookupApplication(manager, context.project(), resolvedId);
+                    if (monitor.isCanceled())
+                    {
+                        return;
+                    }
+                    if (lookup.application() == null)
+                    {
+                        publish.accept(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
+                            + "' was not found in project " + projectName)); //$NON-NLS-1$
+                        return;
+                    }
 
-                stage.set(StandalonePreparationStage.SERVICE);
-                Object service = StandaloneServerSupport.acquireService();
-                if (monitor.isCanceled())
-                {
-                    return;
-                }
-                if (service == null)
-                {
-                    publish.accept(StandalonePreparation.failed(
-                        "the EDT standalone-server service is not available")); //$NON-NLS-1$
-                    return;
-                }
-                if (lookup.server() == null)
-                {
-                    publish.accept(StandalonePreparation.failed(
-                        "the application's standalone server could not be resolved")); //$NON-NLS-1$
-                    return;
-                }
+                    stage.set(StandalonePreparationStage.SERVICE);
+                    Object service = StandaloneServerSupport.acquireService();
+                    if (monitor.isCanceled())
+                    {
+                        return;
+                    }
+                    if (service == null)
+                    {
+                        publish.accept(StandalonePreparation.failed(
+                            "the EDT standalone-server service is not available")); //$NON-NLS-1$
+                        return;
+                    }
+                    if (lookup.server() == null)
+                    {
+                        publish.accept(StandalonePreparation.failed(
+                            "the application's standalone server could not be resolved")); //$NON-NLS-1$
+                        return;
+                    }
 
-                stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
-                StandaloneServerStateRecovery.StartClaim startClaim;
-                try
-                {
-                    StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
-                        lookup.application(), lookup.server(), resolvedId, manager, monitor,
-                        () -> stage.set(StandalonePreparationStage.STALE_STOP),
-                        () -> staleServerStopped.set(true));
-                    stage.set(StandalonePreparationStage.START_CLAIM);
-                    startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
-                        context.project(), resolvedId, lookup.server(), monitor);
+                    stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
+                    StandaloneServerStateRecovery.StartClaim startClaim;
+                    try
+                    {
+                        StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
+                            lookup.application(), lookup.server(), resolvedId, manager, monitor,
+                            () -> stage.set(StandalonePreparationStage.STALE_STOP),
+                            () -> staleServerStopped.set(true));
+                        stage.set(StandalonePreparationStage.START_CLAIM);
+                        startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
+                            context.project(), resolvedId, lookup.server(), monitor);
+                    }
+                    catch (ApplicationException failure)
+                    {
+                        publish.accept(StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                            failure.getMessage(), staleServerStopped.get()));
+                        return;
+                    }
+                    if (startClaim == null)
+                    {
+                        String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$
+                            + "another start may already own it or its ownership could not be confirmed"; //$NON-NLS-1$
+                        publish.accept(staleServerStopped.get()
+                            ? StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                                failure, true)
+                            : StandalonePreparation.failed(failure));
+                        return;
+                    }
+                    StandaloneServerPortConflictPolicy effectivePortPolicy =
+                        DebugServerTargetSupport.isServerApplicationId(resolvedId)
+                            ? requestedPortPolicy : null;
+                    publish.accept(StandalonePreparation.ready(context.project(), resolvedId, lookup,
+                        service, effectivePortPolicy, staleServerStopped.get(), startClaim));
                 }
-                catch (ApplicationException failure)
-                {
-                    publish.accept(StandalonePreparation.preflightFailed(context.project(), resolvedId,
-                        failure.getMessage(), staleServerStopped.get()));
-                    return;
-                }
-                if (startClaim == null)
-                {
-                    String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$
-                        + "another start may already own it or its ownership could not be confirmed"; //$NON-NLS-1$
-                    publish.accept(staleServerStopped.get()
-                        ? StandalonePreparation.preflightFailed(context.project(), resolvedId,
-                            failure, true)
-                        : StandalonePreparation.failed(failure));
-                    return;
-                }
-                StandaloneServerPortConflictPolicy effectivePortPolicy =
-                    DebugServerTargetSupport.isServerApplicationId(resolvedId)
-                        ? requestedPortPolicy : null;
-                publish.accept(StandalonePreparation.ready(context.project(), resolvedId, lookup,
-                    service, effectivePortPolicy, staleServerStopped.get(), startClaim));
             });
         }
         catch (RuntimeException | Error failure)
@@ -1511,8 +1570,9 @@ public class LaunchTool implements IMcpTool
     private String launch(String projectName, String applicationId, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
         StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode)
+        LaunchOverrides.Prepared prepared, String mode, WindowRequest windowRequest)
     {
+        LaunchOperation operation = null;
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
@@ -1528,6 +1588,11 @@ public class LaunchTool implements IMcpTool
             }
 
             IProject project = ctx.project();
+            operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, applicationId);
+            if (operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
+            }
 
             // Verify application exists and get its name
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
@@ -1604,6 +1669,9 @@ public class LaunchTool implements IMcpTool
                 return errorResult.toJson();
             }
 
+            String windowRefusal = ClientWindowLaunch.configurationRefusal(matchingConfig, windowRequest);
+            if (windowRefusal != null) { return windowRefusal; }
+
             // An unbound configuration's launch is tracked under its own id, not the application's.
             String trackedId = LaunchConfigUtils.getApplicationIdFor(matchingConfig);
             boolean unboundMatch = trackedId != null && !trackedId.equals(applicationId);
@@ -1654,9 +1722,13 @@ public class LaunchTool implements IMcpTool
             }
 
             boolean watchDialogs = dialogWatchNeeded(updateBeforeLaunch, false, projectName, applicationId);
-            String launchError =
-                performLaunch(applied.config, updateBeforeLaunch, policy, portPolicy,
-                    eclipseLaunchMode(mode));
+            LaunchOperation dispatchOperation = operation;
+            operation = null;
+            ClientWindowLaunch.Execution windowExecution = startClientWindow(dispatchOperation, () ->
+                ClientWindowLaunch.start(applied.config, windowRequest,
+                eclipseLaunchMode(mode), updateBeforeLaunch, policy, portPolicy, prepared,
+                windowConfig -> performLaunch(windowConfig, updateBeforeLaunch, policy, portPolicy, eclipseLaunchMode(mode))));
+            String launchError = windowExecution.error();
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1670,7 +1742,7 @@ public class LaunchTool implements IMcpTool
                     + "against the project's default application " + applicationId + "; debug tools track " //$NON-NLS-1$ //$NON-NLS-2$
                     + "it as applicationId '" + trackedId + "'. " + message; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            return reportLaunchDialogs(echoOverrides(ToolResult.success()
+            return windowExecution.decorate(reportLaunchDialogs(echoOverrides(ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(McpKeys.APPLICATION_ID, unboundMatch ? trackedId : applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
@@ -1679,13 +1751,17 @@ public class LaunchTool implements IMcpTool
                 .put(KEY_MODE, mode)
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, message)
-                .toJson(), watchDialogs, EdtDialogs.getInstance());
+                .toJson(), watchDialogs, EdtDialogs.getInstance()));
         }
         catch (Exception e)
         {
             Activator.logError("Unexpected error during launch", e); //$NON-NLS-1$
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -1814,29 +1890,22 @@ public class LaunchTool implements IMcpTool
 
         if (appManager != null)
         {
-            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    timeoutMs);
-            if (!read.concluded())
-            {
-                Activator.logError("Error checking application: " + read.deadlineFailure(), null); //$NON-NLS-1$
-                resolution.error = ToolResult.error("Could not resolve application '" //$NON-NLS-1$
-                    + applicationId + "': " + read.deadlineFailure() //$NON-NLS-1$
-                    + ". Nothing was launched, and this is NOT a not-found - whether that " //$NON-NLS-1$
-                    + "application exists was never established. Retry once EDT is responsive.") //$NON-NLS-1$
-                    .toJson();
-                return resolution;
-            }
             try
             {
-                Optional<IApplication> appOpt = read.valueOrRethrow();
-                if (!appOpt.isPresent())
+                ApplicationSupport.ApplicationResolution resolved = ApplicationSupport.resolveApplication(
+                    appManager, project, applicationId, timeoutMs, failure -> {
+                        Activator.logWarning("Error checking application: " + failure);
+                        return ToolResult.error("Could not resolve application '" + applicationId + "': " + failure
+                            + ". Nothing was launched, and this is NOT a not-found - whether that "
+                            + "application exists was never established. Retry once EDT is responsive.").toJson();
+                    }, ToolResult.error("Application not found: " + applicationId
+                        + ". Use get_applications to get valid application IDs.").toJson());
+                if (resolved.errorJson() != null)
                 {
-                    resolution.error = ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
-                            ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
+                    resolution.error = resolved.errorJson();
                     return resolution;
                 }
-                resolution.application = appOpt.get();
+                resolution.application = resolved.application();
                 resolution.applicationName = resolution.application.getName();
             }
             catch (ApplicationException e)
@@ -2616,6 +2685,33 @@ public class LaunchTool implements IMcpTool
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
         String launchMode)
     {
+        try (LaunchOperation operation = configuredLaunchOperation(config))
+        {
+            if (operation != null && operation.error() != null) { return operation.error(); }
+            return performLaunchLocked(config, autoConfirmUpdateDialog, policy, portPolicy, launchMode);
+        }
+    }
+
+    /** Owns the caller's lease through dispatch, then adjusts windows after releasing it. */
+    static ClientWindowLaunch.Execution startClientWindow(LaunchOperation operation,
+        java.util.function.Supplier<ClientWindowLaunch.Started> dispatch)
+    {
+        ClientWindowLaunch.Started started;
+        try (operation)
+        {
+            if (operation != null && operation.error() != null)
+            {
+                return new ClientWindowLaunch.Execution(operation.error(), Map.of());
+            }
+            started = dispatch.get();
+        }
+        return started.finish();
+    }
+
+    private String performLaunchLocked(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
+        ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
+        String launchMode)
+    {
         // Workbench-aware probe: never creates a display. It
         // decides Job-vs-headless ONLY: with a live workbench the launch is
         // dispatched as a background Job; a truly headless runtime takes the
@@ -2738,6 +2834,32 @@ public class LaunchTool implements IMcpTool
      * @param launchMode {@link ILaunchManager#DEBUG_MODE} or {@link ILaunchManager#RUN_MODE}
      */
     static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
+        String launchMode, IProgressMonitor monitor)
+    {
+        try (LaunchOperation operation = configuredLaunchOperation(config))
+        {
+            if (operation != null && operation.error() != null)
+            {
+                recordAsyncFailure(config, operation.error());
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, operation.error());
+            }
+            return runLaunchJobBodyLocked(config, autoConfirmUpdateDialog, policy, portPolicy,
+                launchMode, monitor);
+        }
+    }
+
+    private static LaunchOperation configuredLaunchOperation(ILaunchConfiguration config)
+    {
+        String project = LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, "");
+        // Target-less low-level launches (including Attach) have no infobase to guard.
+        if (project == null || project.isBlank()) { return null; }
+        String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, project);
+        if (applicationId == null && LaunchConfigUtils.isAttachConfig(config)) { return null; }
+        return LaunchLifecycleUtils.tryLaunchOperation(project, applicationId);
+    }
+
+    private static IStatus runLaunchJobBodyLocked(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
         String launchMode, IProgressMonitor monitor)
     {
@@ -2896,34 +3018,12 @@ public class LaunchTool implements IMcpTool
 
     static IStatus appendAccessSettingsDialogFailure(IStatus status, long before, long after)
     {
-        if (status == null || status.isOK())
-        {
-            return status;
-        }
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return status;
-        }
-        String original = status.getMessage();
-        String message = original == null || original.isEmpty() ? note : original + " " + note; //$NON-NLS-1$
-        if (status.isMultiStatus())
-        {
-            return new MultiStatus(status.getPlugin(), status.getCode(), status.getChildren(),
-                message, status.getException());
-        }
-        return new Status(status.getSeverity(), status.getPlugin(), status.getCode(), message,
-            status.getException());
+        return InfobaseAuthDialogSuppressor.appendFailureNote(status, before, after);
     }
 
     private static String appendAccessSettingsDialogFailure(String message, long before, long after)
     {
-        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
-        if (note.isEmpty())
-        {
-            return message;
-        }
-        return message == null || message.isEmpty() ? note : message + " " + note; //$NON-NLS-1$
+        return InfobaseAuthDialogSuppressor.appendFailureNote(message, before, after);
     }
 
     /**

@@ -151,10 +151,12 @@ public class InfobaseExtensionsTool implements IMcpTool
             {
                 return ToolResult.error(validation).toJson();
             }
-            // The protocol layer renders a JSON 300 as "300.0"; accept integral values, refuse 300.5 and junk.
-            Integer timeout = params.containsKey("timeoutSeconds")
-                ? JsonUtils.parseIntegralInt(params.get("timeoutSeconds")) : Integer.valueOf(120);
-            if (timeout == null || timeout < 10 || timeout > 600)
+            int timeout;
+            try
+            {
+                timeout = JsonUtils.extractStrictInt(params, "timeoutSeconds", 120, 10, 600);
+            }
+            catch (IllegalArgumentException e)
             {
                 return ToolResult.error("timeoutSeconds must be an integer from 10 to 600; correct it and retry.").toJson();
             }
@@ -271,7 +273,7 @@ public class InfobaseExtensionsTool implements IMcpTool
             return "Cannot verify infobase sessions: " + sessions.unreachableReason()
                 + ". Inspect infobase_sessions(action='list') and retry after the server is reachable.";
         }
-        var blockers = sessions.sessions().stream().filter(s -> !InfobaseSessionsTool.isDesignerSession(s)).toList();
+        var blockers = sessions.sessions().stream().filter(s -> !InfobaseSessionSupport.isDesignerSession(s)).toList();
         return blockers.isEmpty() ? null : "Infobase has active non-Designer sessions: "
             + InfobaseSessionErrorProjection.fields(blockers)
             + ". Inspect infobase_sessions and obtain separate consent before terminating sessions, then retry.";

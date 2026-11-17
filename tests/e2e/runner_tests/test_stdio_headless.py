@@ -17,6 +17,31 @@ import harness as H
 
 
 class HeadlessDriverTest(unittest.TestCase):
+    def test_quick_fix_waits_for_ready_then_checks_disk_before_another_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            files = []
+            for name in ("Catalog", "HeadlessFixEnglish", "ИсправлениеБезОкна"):
+                path = project / "src/Catalogs" / name / (name + ".mdo")
+                path.parent.mkdir(parents=True)
+                path.write_text("before", encoding="utf-8")
+                files.append(path)
+            calls = []
+            def invoke(tool, arguments):
+                calls.append(tool)
+                if tool == "list_projects":
+                    state = "building" if len(calls) == 1 else "ready"
+                    return H.Result({"result": {"structuredContent": {"projects": [
+                        {"name": "TestConfiguration", "state": state}]}}})
+                self.assertEqual("apply_quick_fix", tool)
+                self.assertEqual(["list_projects", "list_projects", "apply_quick_fix"], calls)
+                files[1].write_text("fixed", encoding="utf-8")
+                return H.Result({"result": {"structuredContent": {"appliedVariant": "new UUID"}}})
+            with patch.object(H.time, "sleep") as wait, patch.object(D, "_registered", return_value=True):
+                D.run_quick_fix(invoke, project)
+            self.assertEqual(1, wait.call_count)
+            self.assertEqual(["list_projects", "list_projects", "apply_quick_fix"], calls)
+
     def test_auxiliary_driver_waits_for_native_effects_and_checks_deleted_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -23,7 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.McpSessionRegistry;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
-import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
+import com.ditrix.edt.mcp.server.utils.EdtVersion;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -105,6 +105,7 @@ public class McpHttpHandler implements HttpHandler
      * describing a different socket than the one the request arrived on.
      */
     private final boolean boundRemotely;
+    private final Boolean plainTextMode;
 
     /**
      * The sessions this listener has issued. Owned by the handler, so they live exactly as long
@@ -117,10 +118,17 @@ public class McpHttpHandler implements HttpHandler
     public McpHttpHandler(McpServer server, McpProtocolHandler protocolHandler,
         InterruptibleToolExecutor interruptibleExecutor, boolean boundRemotely)
     {
+        this(server, protocolHandler, interruptibleExecutor, boundRemotely, null);
+    }
+
+    public McpHttpHandler(McpServer server, McpProtocolHandler protocolHandler,
+        InterruptibleToolExecutor interruptibleExecutor, boolean boundRemotely, Boolean plainTextMode)
+    {
         this.server = server;
         this.protocolHandler = protocolHandler;
         this.interruptibleExecutor = interruptibleExecutor;
         this.boundRemotely = boundRemotely;
+        this.plainTextMode = plainTextMode;
     }
 
     /**
@@ -399,6 +407,7 @@ public class McpHttpHandler implements HttpHandler
             {
                 return;
             }
+            sessionCapabilities = sessionCapabilities.withPlainTextMode(plainTextMode);
         }
 
         String issuedSessionId = null;
@@ -611,7 +620,7 @@ public class McpHttpHandler implements HttpHandler
             String response = JsonUtils.buildServerInfo(
                 McpConstants.SERVER_NAME,
                 McpConstants.PLUGIN_VERSION,
-                GetEdtVersionTool.getEdtVersion(),
+                EdtVersion.getEdtVersion(),
                 McpConstants.PROTOCOL_VERSION);
             exchange.getResponseHeaders().add(CONTENT_TYPE, "application/json"); //$NON-NLS-1$
             HttpTransport.sendResponse(exchange, 200, response);

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -82,7 +83,7 @@ public class GetSubsystemContentTool implements IMcpTool
         String fqn = JsonUtils.extractStringArgument(params, KEY_SUBSYSTEM_FQN);
         if (fqn != null && !fqn.isEmpty())
         {
-            String safe = fqn.replace('.', '-').toLowerCase();
+            String safe = fqn.replace('.', '-').toLowerCase(Locale.ROOT);
             return "subsystem-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "subsystem-content.md"; //$NON-NLS-1$

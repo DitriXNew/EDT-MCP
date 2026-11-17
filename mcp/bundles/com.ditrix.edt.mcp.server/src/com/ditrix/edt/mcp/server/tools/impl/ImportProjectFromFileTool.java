@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_CONFIGURATION;
 import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTENSION;
 import static com.ditrix.edt.mcp.server.utils.ProjectImportValidation.NATURE_EXTERNAL_OBJECTS;
@@ -639,7 +640,7 @@ public class ImportProjectFromFileTool implements IMcpTool
                 observation.baseProject = parent == null ? "none" : parent.getName(); //$NON-NLS-1$
             }
             IBmModelManager bmManager = activator == null ? null : activator.getBmModelManager();
-            IBmModel bmModel = bmManager == null ? null : bmManager.getModel(project);
+            IBmModel bmModel = BmModelResolver.resolve(project, bmManager).getModel();
             if (bmModel != null && v8Project instanceof IConfigurationAware)
             {
                 IConfigurationAware aware = (IConfigurationAware)v8Project;

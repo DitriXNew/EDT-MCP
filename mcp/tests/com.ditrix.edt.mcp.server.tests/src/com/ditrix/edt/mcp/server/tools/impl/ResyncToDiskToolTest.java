@@ -1115,4 +1115,30 @@ public class ResyncToDiskToolTest
         String summary = ResyncToDiskTool.orphanSummaryFrom(json);
         assertTrue(summary, summary.contains("750 RLS field reference(s)")); //$NON-NLS-1$
     }
+    @Test
+    public void testNewlyMappedModuleOwnersDetectMissingAndPresentMdoFiles() throws IOException
+    {
+        File projectRoot = Files.createTempDirectory("resync-module-owners").toFile();
+        try
+        {
+            for (String type : new String[] {"Bot", "IntegrationService", "WebSocketClient"})
+            {
+                String fqn = type + ".Проба";
+                assertEquals(Arrays.asList(fqn),
+                    ResyncToDiskTool.findMissingMdoFiles(projectRoot, Arrays.asList(fqn)));
+                touch(new File(projectRoot, "src/" + type + "s/Проба/Проба.mdo"));
+                assertTrue(ResyncToDiskTool.findMissingMdoFiles(projectRoot, Arrays.asList(fqn)).isEmpty());
+            }
+            String nested = "Subsystem.Parent.Subsystem.Child";
+            assertEquals(Arrays.asList(nested),
+                ResyncToDiskTool.findMissingMdoFiles(projectRoot, Arrays.asList(nested)));
+            touch(new File(projectRoot, "src/Subsystems/Parent/Subsystems/Child/Child.mdo"));
+            assertTrue(ResyncToDiskTool.findMissingMdoFiles(projectRoot, Arrays.asList(nested)).isEmpty());
+        }
+        finally
+        {
+            deleteRecursively(projectRoot);
+        }
+    }
+
 }

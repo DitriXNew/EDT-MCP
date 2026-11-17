@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -508,7 +509,7 @@ public final class MetadataNodeResolver
         {
             return null;
         }
-        return CHILD_FEATURE_BY_TOKEN.get(kindToken.toLowerCase());
+        return CHILD_FEATURE_BY_TOKEN.get(kindToken.toLowerCase(Locale.ROOT));
     }
 
     /**

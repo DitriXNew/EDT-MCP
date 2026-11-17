@@ -271,7 +271,6 @@
   },
   "has_confirm": false,
   "params": [
-   "autoSortTopObjects",
    "baseProjectName",
    "comment",
    "commonChecks",
@@ -291,7 +290,6 @@
    "name"
   ],
   "types": {
-   "autoSortTopObjects": "boolean",
    "baseProjectName": "string",
    "comment": "string",
    "commonChecks": "boolean",

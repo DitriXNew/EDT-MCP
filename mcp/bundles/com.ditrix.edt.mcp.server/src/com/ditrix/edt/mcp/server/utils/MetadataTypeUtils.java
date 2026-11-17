@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -76,10 +77,10 @@ public final class MetadataTypeUtils
         TASK("Task", "Tasks", "tasks", "Tasks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "\u0417\u0430\u0434\u0430\u0447\u0430", "\u0417\u0430\u0434\u0430\u0447\u0438"), // Задача, Задачи //$NON-NLS-1$ //$NON-NLS-2$
 
-        ROLE("Role", "Roles", "roles", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        ROLE("Role", "Roles", "roles", "Roles", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0420\u043E\u043B\u044C", "\u0420\u043E\u043B\u0438"), // Роль, Роли //$NON-NLS-1$ //$NON-NLS-2$
 
-        SUBSYSTEM("Subsystem", "Subsystems", "subsystems", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        SUBSYSTEM("Subsystem", "Subsystems", "subsystems", "Subsystems", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430", "\u041F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u044B"), // Подсистема, Подсистемы //$NON-NLS-1$ //$NON-NLS-2$
 
         COMMON_COMMAND("CommonCommand", "CommonCommands", "commonCommands", "CommonCommands", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -129,71 +130,71 @@ public final class MetadataTypeUtils
         EXTERNAL_DATA_SOURCE("ExternalDataSource", "ExternalDataSources", "externalDataSources", "ExternalDataSources", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "\u0412\u043D\u0435\u0448\u043D\u0438\u0439\u0418\u0441\u0442\u043E\u0447\u043D\u0438\u043A\u0414\u0430\u043D\u043D\u044B\u0445"), // ВнешнийИсточникДанных //$NON-NLS-1$
 
-        COMMON_ATTRIBUTE("CommonAttribute", "CommonAttributes", "commonAttributes", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        COMMON_ATTRIBUTE("CommonAttribute", "CommonAttributes", "commonAttributes", "CommonAttributes", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041E\u0431\u0449\u0438\u0439\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442"), // ОбщийРеквизит //$NON-NLS-1$
 
-        EVENT_SUBSCRIPTION("EventSubscription", "EventSubscriptions", "eventSubscriptions", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EVENT_SUBSCRIPTION("EventSubscription", "EventSubscriptions", "eventSubscriptions", "EventSubscriptions", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041F\u043E\u0434\u043F\u0438\u0441\u043A\u0430\u041D\u0430\u0421\u043E\u0431\u044B\u0442\u0438\u0435"), // ПодпискаНаСобытие //$NON-NLS-1$
 
-        SCHEDULED_JOB("ScheduledJob", "ScheduledJobs", "scheduledJobs", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        SCHEDULED_JOB("ScheduledJob", "ScheduledJobs", "scheduledJobs", "ScheduledJobs", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0420\u0435\u0433\u043B\u0430\u043C\u0435\u043D\u0442\u043D\u043E\u0435\u0417\u0430\u0434\u0430\u043D\u0438\u0435"), // РегламентноеЗадание //$NON-NLS-1$
 
-        SESSION_PARAMETER("SessionParameter", "SessionParameters", "sessionParameters", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        SESSION_PARAMETER("SessionParameter", "SessionParameters", "sessionParameters", "SessionParameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u0421\u0435\u0430\u043D\u0441\u0430"), // ПараметрСеанса //$NON-NLS-1$
 
-        FUNCTIONAL_OPTION("FunctionalOption", "FunctionalOptions", "functionalOptions", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        FUNCTIONAL_OPTION("FunctionalOption", "FunctionalOptions", "functionalOptions", "FunctionalOptions", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0424\u0443\u043D\u043A\u0446\u0438\u043E\u043D\u0430\u043B\u044C\u043D\u0430\u044F\u041E\u043F\u0446\u0438\u044F"), // ФункциональнаяОпция //$NON-NLS-1$
 
         FUNCTIONAL_OPTIONS_PARAMETER("FunctionalOptionsParameter", "FunctionalOptionsParameters", //$NON-NLS-1$ //$NON-NLS-2$
-            "functionalOptionsParameters", null, //$NON-NLS-1$
+            "functionalOptionsParameters", "FunctionalOptionsParameters", //$NON-NLS-1$
             "\u041F\u0430\u0440\u0430\u043C\u0435\u0442\u0440\u0424\u0443\u043D\u043A\u0446\u0438\u043E\u043D\u0430\u043B\u044C\u043D\u044B\u0445\u041E\u043F\u0446\u0438\u0439"), // ПараметрФункциональныхОпций //$NON-NLS-1$
 
-        COMMON_PICTURE("CommonPicture", "CommonPictures", "commonPictures", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        COMMON_PICTURE("CommonPicture", "CommonPictures", "commonPictures", "CommonPictures", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041E\u0431\u0449\u0430\u044F\u041A\u0430\u0440\u0442\u0438\u043D\u043A\u0430"), // ОбщаяКартинка //$NON-NLS-1$
 
-        STYLE_ITEM("StyleItem", "StyleItems", "styleItems", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        STYLE_ITEM("StyleItem", "StyleItems", "styleItems", "StyleItems", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0421\u0442\u0438\u043B\u044F"), // ЭлементСтиля //$NON-NLS-1$
 
         PALETTE_COLOR("PaletteColor", "PaletteColors", "paletteColors", "PaletteColors", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "\u0426\u0432\u0435\u0442\u041F\u0430\u043B\u0438\u0442\u0440\u044B", // ЦветПалитры //$NON-NLS-1$
             "\u0426\u0432\u0435\u0442\u0430\u041F\u0430\u043B\u0438\u0442\u0440\u044B"), // ЦветаПалитры //$NON-NLS-1$
 
-        DEFINED_TYPE("DefinedType", "DefinedTypes", "definedTypes", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DEFINED_TYPE("DefinedType", "DefinedTypes", "definedTypes", "DefinedTypes", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041E\u043F\u0440\u0435\u0434\u0435\u043B\u044F\u0435\u043C\u044B\u0439\u0422\u0438\u043F"), // ОпределяемыйТип //$NON-NLS-1$
 
-        COMMON_TEMPLATE("CommonTemplate", "CommonTemplates", "commonTemplates", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        COMMON_TEMPLATE("CommonTemplate", "CommonTemplates", "commonTemplates", "CommonTemplates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041E\u0431\u0449\u0438\u0439\u041C\u0430\u043A\u0435\u0442"), // ОбщийМакет //$NON-NLS-1$
 
-        COMMAND_GROUP("CommandGroup", "CommandGroups", "commandGroups", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        COMMAND_GROUP("CommandGroup", "CommandGroups", "commandGroups", "CommandGroups", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0413\u0440\u0443\u043F\u043F\u0430\u041A\u043E\u043C\u0430\u043D\u0434"), // ГруппаКоманд //$NON-NLS-1$
 
-        DOCUMENT_NUMERATOR("DocumentNumerator", "DocumentNumerators", "documentNumerators", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DOCUMENT_NUMERATOR("DocumentNumerator", "DocumentNumerators", "documentNumerators", "DocumentNumerators", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041D\u0443\u043C\u0435\u0440\u0430\u0442\u043E\u0440\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u043E\u0432"), // НумераторДокументов //$NON-NLS-1$
 
-        WS_REFERENCE("WSReference", "WSReferences", "wsReferences", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        WS_REFERENCE("WSReference", "WSReferences", "wsReferences", "WSReferences", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "WS\u0421\u0441\u044B\u043B\u043A\u0430"), // WSСсылка //$NON-NLS-1$
 
         // The Configuration collection feature is "xDTOPackages" (capital DTO), not "xdtoPackages" -
         // a casing mismatch made create_metadata fail to resolve the collection (verified live).
-        XDTO_PACKAGE("XDTOPackage", "XDTOPackages", "xDTOPackages", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        XDTO_PACKAGE("XDTOPackage", "XDTOPackages", "xDTOPackages", "XDTOPackages", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u041F\u0430\u043A\u0435\u0442XDTO"), // ПакетXDTO //$NON-NLS-1$
 
         LANGUAGE("Language", "Languages", "languages", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u042F\u0437\u044B\u043A", "\u042F\u0437\u044B\u043A\u0438"), // Язык, Языки //$NON-NLS-1$ //$NON-NLS-2$
 
-        STYLE("Style", "Styles", "styles", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        STYLE("Style", "Styles", "styles", "Styles", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0421\u0442\u0438\u043B\u044C", "\u0421\u0442\u0438\u043B\u0438"), // Стиль, Стили //$NON-NLS-1$ //$NON-NLS-2$
 
-        INTERFACE("Interface", "Interfaces", "interfaces", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        INTERFACE("Interface", "Interfaces", "interfaces", "Interfaces", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0418\u043D\u0442\u0435\u0440\u0444\u0435\u0439\u0441", "\u0418\u043D\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u044B"), // Интерфейс, Интерфейсы //$NON-NLS-1$ //$NON-NLS-2$
 
-        INTEGRATION_SERVICE("IntegrationService", "IntegrationServices", "integrationServices", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        INTEGRATION_SERVICE("IntegrationService", "IntegrationServices", "integrationServices", "IntegrationServices", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0421\u0435\u0440\u0432\u0438\u0441\u0418\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0438\u0438"), // СервисИнтеграции //$NON-NLS-1$
 
-        BOT("Bot", "Bots", "bots", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        BOT("Bot", "Bots", "bots", "Bots", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "\u0411\u043E\u0442", "\u0411\u043E\u0442\u044B"), // Бот, Боты //$NON-NLS-1$ //$NON-NLS-2$
 
-        WEB_SOCKET_CLIENT("WebSocketClient", "WebSocketClients", "webSocketClients", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        WEB_SOCKET_CLIENT("WebSocketClient", "WebSocketClients", "webSocketClients", "WebSocketClients", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "WebSocket\u041A\u043B\u0438\u0435\u043D\u0442"), // WebSocketКлиент //$NON-NLS-1$
 
         // The two STANDALONE types: an external data processor / report is a ROOT object of an
@@ -333,11 +334,11 @@ public final class MetadataTypeUtils
         Set<String> singulars = new LinkedHashSet<>();
         for (MetadataTypeInfo info : MetadataTypeInfo.values())
         {
-            LOOKUP.put(info.englishSingular.toLowerCase(), info);
-            LOOKUP.put(info.englishPlural.toLowerCase(), info);
+            LOOKUP.put(info.englishSingular.toLowerCase(Locale.ROOT), info);
+            LOOKUP.put(info.englishPlural.toLowerCase(Locale.ROOT), info);
             for (String ru : info.russianNames)
             {
-                LOOKUP.put(ru.toLowerCase(), info);
+                LOOKUP.put(ru.toLowerCase(Locale.ROOT), info);
             }
             if (info.directoryName != null)
             {
@@ -543,10 +544,10 @@ public final class MetadataTypeUtils
         String englishPlural, String russianSingular, String russianPlural)
     {
         NestedKindInfo info = new NestedKindInfo(englishSingular, russianSingular);
-        map.put(englishSingular.toLowerCase(), info);
-        map.put(englishPlural.toLowerCase(), info);
-        map.put(russianSingular.toLowerCase(), info);
-        map.put(russianPlural.toLowerCase(), info);
+        map.put(englishSingular.toLowerCase(Locale.ROOT), info);
+        map.put(englishPlural.toLowerCase(Locale.ROOT), info);
+        map.put(russianSingular.toLowerCase(Locale.ROOT), info);
+        map.put(russianPlural.toLowerCase(Locale.ROOT), info);
     }
 
     /**
@@ -620,7 +621,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.englishSingular : null;
     }
 
@@ -637,7 +638,7 @@ public final class MetadataTypeUtils
         {
             return false;
         }
-        return LOOKUP.containsKey(name.toLowerCase());
+        return LOOKUP.containsKey(name.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -654,7 +655,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.directoryName : null;
     }
 
@@ -671,7 +672,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase());
+        MetadataTypeInfo info = LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
         return info != null ? info.configReferenceName : null;
     }
 
@@ -945,8 +946,8 @@ public final class MetadataTypeUtils
         {
             return false;
         }
-        String candidateLower = candidate.toLowerCase();
-        String nameLower = name.toLowerCase();
+        String candidateLower = candidate.toLowerCase(Locale.ROOT);
+        String nameLower = name.toLowerCase(Locale.ROOT);
         return candidateLower.contains(nameLower) || nameLower.contains(candidateLower);
     }
 
@@ -963,7 +964,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        return LOOKUP.get(typeName.toLowerCase());
+        return LOOKUP.get(typeName.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -1016,7 +1017,7 @@ public final class MetadataTypeUtils
         {
             return null;
         }
-        return NESTED_KIND_LOOKUP.get(segment.toLowerCase());
+        return NESTED_KIND_LOOKUP.get(segment.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -1112,7 +1113,7 @@ public final class MetadataTypeUtils
         }
 
         // Always add the original (lowercased)
-        variants.add(fqn.toLowerCase());
+        variants.add(fqn.toLowerCase(Locale.ROOT));
 
         int dotIdx = fqn.indexOf('.');
         if (dotIdx <= 0)
@@ -1123,8 +1124,8 @@ public final class MetadataTypeUtils
         }
 
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
-        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase());
-        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase());
+        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase(Locale.ROOT));
+        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase(Locale.ROOT));
 
         return variants;
     }
@@ -1162,7 +1163,7 @@ public final class MetadataTypeUtils
         {
             return variants;
         }
-        variants.add(fqn.toLowerCase());
+        variants.add(fqn.toLowerCase(Locale.ROOT));
         if (fqn.indexOf('.') < 0)
         {
             // A SINGLE token, i.e. NO separator at all. getAllFqnVariants returns it untranslated on
@@ -1178,8 +1179,8 @@ public final class MetadataTypeUtils
             // in here left it untranslated, which is the very same early-return hole one character
             // further along. It belongs to the parity expansion below, where its empty first segment
             // simply shifts the structural tokens onto the odd indexes.
-            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase());
-            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase());
+            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase(Locale.ROOT));
+            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase(Locale.ROOT));
             return variants;
         }
         // BOTH parities are produced HERE rather than by delegating the even one to
@@ -1192,8 +1193,8 @@ public final class MetadataTypeUtils
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
         for (int structuralOffset = 0; structuralOffset <= 1; structuralOffset++)
         {
-            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase());
-            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase());
+            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase(Locale.ROOT));
+            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase(Locale.ROOT));
         }
         return variants;
     }

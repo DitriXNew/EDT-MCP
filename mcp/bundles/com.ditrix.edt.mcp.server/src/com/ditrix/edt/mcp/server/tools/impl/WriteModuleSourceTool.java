@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -27,7 +28,10 @@ import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
 import org.eclipse.core.runtime.preferences.InstanceScope;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EReference;
 
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -152,7 +156,7 @@ public class WriteModuleSourceTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
-            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             return "write-" + safeName + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "write-module-source.md"; //$NON-NLS-1$
@@ -1266,6 +1270,25 @@ public class WriteModuleSourceTool implements IMcpTool
         // Determine default moduleType based on metadata type
         moduleType = resolveDefaultModuleType(moduleType, englishType);
 
+        EClass ownerClass = (EClass)MdClassPackage.eINSTANCE.getEClassifier(englishType);
+        boolean supported = switch (moduleType)
+        {
+            case "FormModule" -> "CommonForm".equals(englishType) //$NON-NLS-1$ //$NON-NLS-2$
+                || ownerClass.getEStructuralFeature("forms") instanceof EReference; //$NON-NLS-1$
+            case MODULE_TYPE_COMMAND_MODULE -> "CommonCommand".equals(englishType) //$NON-NLS-1$
+                || ownerClass.getEStructuralFeature("commands") instanceof EReference; //$NON-NLS-1$
+            case MODULE_TYPE_MODULE -> "CommonForm".equals(englishType) //$NON-NLS-1$
+                || AdoptedModuleState.moduleFeature(ownerClass, moduleType) != null;
+            case MODULE_TYPE_OBJECT_MODULE, "ManagerModule", "RecordSetModule" -> //$NON-NLS-1$ //$NON-NLS-2$
+                AdoptedModuleState.moduleFeature(ownerClass, moduleType) != null;
+            default -> true;
+        };
+        if (!supported)
+        {
+            return ToolResult.error("metadata type '" + typePart + "' has no " + moduleType //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Use list_modules and pass an existing modulePath.").toJson(); //$NON-NLS-1$
+        }
+
         // Build path based on moduleType
         switch (moduleType)
         {
@@ -1316,7 +1339,7 @@ public class WriteModuleSourceTool implements IMcpTool
      * Returns the supplied {@code moduleType} unchanged when it is non-empty,
      * otherwise derives the default module type from the English metadata type:
      * {@code Module} for module-bearing singletons (CommonModule, CommonForm,
-     * WebService, HTTPService), {@code CommandModule} for CommonCommand, and
+     * WebService, HTTPService, Bot, IntegrationService, WebSocketClient), {@code CommandModule} for CommonCommand, and
      * {@code ObjectModule} for everything else.
      *
      * @param moduleType the requested module type (may be {@code null} or empty)
@@ -1332,7 +1355,10 @@ public class WriteModuleSourceTool implements IMcpTool
         if ("CommonModule".equals(englishType) //$NON-NLS-1$
             || "CommonForm".equals(englishType) //$NON-NLS-1$
             || "WebService".equals(englishType) //$NON-NLS-1$
-            || "HTTPService".equals(englishType)) //$NON-NLS-1$
+            || "HTTPService".equals(englishType) //$NON-NLS-1$
+            || "Bot".equals(englishType) //$NON-NLS-1$
+            || "IntegrationService".equals(englishType) //$NON-NLS-1$
+            || "WebSocketClient".equals(englishType)) //$NON-NLS-1$
         {
             return MODULE_TYPE_MODULE;
         }

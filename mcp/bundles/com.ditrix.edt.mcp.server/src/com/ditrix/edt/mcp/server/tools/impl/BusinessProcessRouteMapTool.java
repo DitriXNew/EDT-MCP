@@ -1,6 +1,7 @@
 /** Copyright (c) 2026 DitriX */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -216,7 +217,7 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
             return ToolResult.error("EDT route-map services are unavailable. "
                 + "Wait for project initialization, then retry.").toJson();
         }
-        IBmModel model = plugin.getBmModelManager().getModel(ctx.project);
+        IBmModel model = BmModelResolver.resolve(ctx.project, plugin.getBmModelManager()).getModel();
         if (model == null)
         {
             return ToolResult.error("BM model unavailable for '" + args.projectName()

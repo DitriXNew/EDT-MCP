@@ -22,9 +22,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.mcore.CommandGroup;
 import com._1c.g5.v8.dt.mcore.Field;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
-import com._1c.g5.v8.dt.mcore.TypeItem;
-import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
@@ -68,37 +67,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      */
     protected String formatType(TypeDescription typeDesc)
     {
-        if (typeDesc == null)
-        {
-            return DASH;
-        }
-        
-        EList<TypeItem> types = typeDesc.getTypes();
-        if (types == null || types.isEmpty())
-        {
-            return DASH;
-        }
-        
-        StringBuilder sb = new StringBuilder();
-        for (TypeItem typeItem : types)
-        {
-            if (sb.length() > 0)
-            {
-                sb.append(", "); //$NON-NLS-1$
-            }
-            String typeName = McoreUtil.getTypeName(typeItem);
-            if (typeName == null || typeName.isEmpty())
-            {
-                typeName = McoreUtil.getTypeNameRu(typeItem);
-            }
-            if (typeName == null || typeName.isEmpty())
-            {
-                typeName = typeItem.getClass().getSimpleName();
-            }
-            sb.append(typeName);
-        }
-        
-        return sb.length() > 0 ? sb.toString() : DASH;
+        return MetadataPropertyIntrospector.formatTypeDescription(typeDesc);
     }
     
     /**
@@ -110,7 +79,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             return DASH;
         }
-        return value.replace("|", "\\|").replace("\r", "").replace("\n", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        return MarkdownUtils.escapeForTable(value);
     }
     
     /**

@@ -95,6 +95,7 @@ public class InterruptibleToolExecutor
 
         // Run tool execution in background thread
         Thread executionThread = new Thread(() -> {
+            server.bindToolCall(activeCall);
             try
             {
                 resultContainer[0] =
@@ -107,6 +108,7 @@ public class InterruptibleToolExecutor
             }
             finally
             {
+                server.unbindToolCall();
                 synchronized (completedFlag)
                 {
                     completedFlag[0] = true;

@@ -1223,10 +1223,6 @@
     "description": "Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project').",
     "inputSchema": {
       "properties": {
-        "autoSortTopObjects": {
-          "description": "Reserved for future use: auto-sort top-level metadata objects. Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).",
-          "type": "boolean"
-        },
         "baseProjectName": {
           "description": "Name of the BASE configuration EDT project (required for extension; optional for externalObjects; REJECTED for configuration). Must be an existing, open V8 configuration project. Use list_projects to find it.",
           "type": "string"
@@ -3900,6 +3896,12 @@
         "count": {
           "type": "integer"
         },
+        "message": {
+          "type": "string"
+        },
+        "pending": {
+          "type": "boolean"
+        },
         "success": {
           "type": "boolean"
         },
@@ -4318,6 +4320,10 @@
           "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
           "type": "boolean"
         },
+        "screen": {
+          "description": "1-based monitor index for otherScreen; default first non-primary.",
+          "type": "integer"
+        },
         "standaloneServerPortConflict": {
           "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
@@ -4328,6 +4334,16 @@
         "updateBeforeLaunch": {
           "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
           "type": "boolean"
+        },
+        "windowMode": {
+          "default": "normal",
+          "enum": [
+            "normal",
+            "minimized",
+            "otherScreen",
+            "isolated"
+          ],
+          "type": "string"
         }
       },
       "required": [],
@@ -4379,6 +4395,9 @@
         "mode": {
           "type": "string"
         },
+        "pid": {
+          "type": "integer"
+        },
         "project": {
           "type": "string"
         },
@@ -4393,6 +4412,15 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "windowMode": {
+          "type": "string"
+        },
+        "windowModeApplied": {
+          "type": "boolean"
+        },
+        "windowModeReason": {
+          "type": "string"
         }
       },
       "required": [
@@ -6689,7 +6717,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT confirm to preview, then again with confirm=true to apply. Full parameters and examples: call get_tool_guide('update_database').",
+    "description": "Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT confirm to preview, then again with confirm=true to apply. Returns a jobId when not finished within waitSeconds; poll get_job_status. Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -6726,6 +6754,9 @@
         "terminateRunningClients": {
           "description": "Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively.",
           "type": "boolean"
+        },
+        "waitSeconds": {
+          "type": "integer"
         }
       },
       "required": [],
@@ -6753,6 +6784,9 @@
           "type": "boolean"
         },
         "error": {
+          "type": "string"
+        },
+        "jobId": {
           "type": "string"
         },
         "message": {
@@ -6783,6 +6817,9 @@
           "type": "string"
         },
         "stateBefore": {
+          "type": "string"
+        },
+        "status": {
           "type": "string"
         },
         "success": {

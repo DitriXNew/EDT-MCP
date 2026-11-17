@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -180,20 +181,21 @@ public class GetContentAssistTool implements IMcpTool
         int column;
         try
         {
-            // Handle both integer ("33") and double ("33.0") formats
-            line = (int) Double.parseDouble(lineStr);
-            column = (int) Double.parseDouble(columnStr);
+            // Preserve the below-one error without truncating fractional coordinates.
+            double rawLine = Double.parseDouble(lineStr);
+            double rawColumn = Double.parseDouble(columnStr);
+            if (rawLine < 1 || rawColumn < 1)
+            {
+                return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
+            }
+            line = JsonUtils.extractStrictInt(params, "line", 0, 1, Integer.MAX_VALUE); //$NON-NLS-1$
+            column = JsonUtils.extractStrictInt(params, KEY_COLUMN, 0, 1, Integer.MAX_VALUE);
         }
-        catch (NumberFormatException | NullPointerException e)
+        catch (IllegalArgumentException | NullPointerException e)
         {
             return ToolResult.error("Invalid line or column number").toJson(); //$NON-NLS-1$
         }
-        
-        if (line < 1 || column < 1)
-        {
-            return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
-        }
-        
+
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, McpKeys.LIMIT, 100);
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
@@ -688,7 +690,7 @@ public class GetContentAssistTool implements IMcpTool
         {
             return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
-        String[] filterParts = containsFilter.toLowerCase().split(","); //$NON-NLS-1$
+        String[] filterParts = containsFilter.toLowerCase(Locale.ROOT).split(","); //$NON-NLS-1$
         for (int i = 0; i < filterParts.length; i++)
         {
             filterParts[i] = filterParts[i].trim();
@@ -706,7 +708,7 @@ public class GetContentAssistTool implements IMcpTool
      */
     private static boolean matchesFilter(String displayString, String[] filterParts)
     {
-        String displayLower = displayString.toLowerCase();
+        String displayLower = displayString.toLowerCase(Locale.ROOT);
         for (String part : filterParts)
         {
             if (!part.isEmpty() && displayLower.contains(part))

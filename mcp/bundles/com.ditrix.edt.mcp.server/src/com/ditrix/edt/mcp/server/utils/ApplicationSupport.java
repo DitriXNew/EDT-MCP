@@ -51,6 +51,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public final class ApplicationSupport
 {
+    public static final String MANAGER_UNAVAILABLE = "IApplicationManager service is not available"; //$NON-NLS-1$
+
     /**
      * Deadline for one application read on a caller that has no larger bounded phase of its own.
      *
@@ -91,7 +93,7 @@ public final class ApplicationSupport
         if (manager == null)
         {
             return new ManagerResult(project, null,
-                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+                ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson()); //$NON-NLS-1$
         }
         return new ManagerResult(project, manager, null);
     }
@@ -142,6 +144,18 @@ public final class ApplicationSupport
                 + " Use get_applications to choose a standalone-server application.").toJson()); //$NON-NLS-1$
         }
         return ApplicationResolution.of(application.get());
+    }
+
+    /** Resolves an explicit id while preserving the caller's deadline and absence refusals. */
+    public static ApplicationResolution resolveApplication(IApplicationManager manager, IProject project,
+        String applicationId, long timeoutMs, java.util.function.Function<String, String> incompleteError,
+        String absentError)
+    {
+        BoundedRead<Optional<IApplication>> read = getApplicationBounded(manager, project, applicationId, timeoutMs);
+        if (!read.concluded()) { return ApplicationResolution.error(incompleteError.apply(read.deadlineFailure())); }
+        Optional<IApplication> application = read.valueOrRethrow();
+        return application.isEmpty() ? ApplicationResolution.error(absentError)
+            : ApplicationResolution.of(application.get());
     }
 
     /**

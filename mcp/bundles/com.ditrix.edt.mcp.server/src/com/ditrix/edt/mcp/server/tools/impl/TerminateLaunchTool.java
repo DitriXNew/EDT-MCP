@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -25,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -154,7 +156,7 @@ public class TerminateLaunchTool implements IMcpTool
         String name = JsonUtils.extractStringArgument(params, KEY_LAUNCH_CONFIGURATION_NAME);
         if (name != null && !name.isEmpty())
         {
-            String safe = name.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+            String safe = name.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             return "terminate-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         boolean all = JsonUtils.extractBooleanArgument(params, "all", false); //$NON-NLS-1$
@@ -163,7 +165,7 @@ public class TerminateLaunchTool implements IMcpTool
             String project = JsonUtils.extractStringArgument(params, KEY_PROJECT_NAME);
             if (project != null && !project.isEmpty())
             {
-                String safe = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+                String safe = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
                 return "terminate-all-" + safe + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
             }
             return "terminate-all.md"; //$NON-NLS-1$
@@ -175,8 +177,8 @@ public class TerminateLaunchTool implements IMcpTool
         String appId = JsonUtils.extractStringArgument(params, KEY_APPLICATION_ID);
         if (project != null && !project.isEmpty() && appId != null && !appId.isEmpty())
         {
-            String safeProject = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
-            String safeAppId = appId.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(); //$NON-NLS-1$
+            String safeProject = project.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
+            String safeAppId = appId.replaceAll(UNSAFE_FILENAME_CHARS, "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$
             // Truncate to keep the path short — agents sometimes pass long UUIDs.
             if (safeAppId.length() > 16)
             {
@@ -1103,10 +1105,10 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("|---|---|---|---|---|\n"); //$NON-NLS-1$
             for (TerminationResult r : matching)
             {
-                sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.debugServerUrl)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.infobaseAlias)) //$NON-NLS-1$
+                sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.debugServerUrl)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.infobaseAlias)) //$NON-NLS-1$
                     .append(" | ").append(r.durationMs).append(" ms |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
@@ -1116,10 +1118,10 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("|---|---|---|---|---|---|\n"); //$NON-NLS-1$
             for (TerminationResult r : matching)
             {
-                sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.applicationId)) //$NON-NLS-1$
-                    .append(" | ").append(escape(r.mode)) //$NON-NLS-1$
+                sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.applicationId)) //$NON-NLS-1$
+                    .append(" | ").append(MarkdownUtils.escapeForTable(r.mode)) //$NON-NLS-1$
                     .append(" | ").append(r.code) //$NON-NLS-1$
                     .append(" | ").append(r.durationMs).append(" ms |\n"); //$NON-NLS-1$ //$NON-NLS-2$
             }
@@ -1146,11 +1148,11 @@ public class TerminateLaunchTool implements IMcpTool
         sb.append("|---|---|---|---|---|\n"); //$NON-NLS-1$
         for (TerminationResult r : matching)
         {
-            sb.append("| ").append(escape(r.configName)) //$NON-NLS-1$
-                .append(" | ").append(escape(r.projectName)) //$NON-NLS-1$
-                .append(" | ").append(escape(r.applicationId)) //$NON-NLS-1$
+            sb.append("| ").append(MarkdownUtils.escapeForTable(r.configName)) //$NON-NLS-1$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.projectName)) //$NON-NLS-1$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.applicationId)) //$NON-NLS-1$
                 .append(" | ").append(r.attach ? "Yes" : "No") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .append(" | ").append(escape(r.note)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" | ").append(MarkdownUtils.escapeForTable(r.note)).append(" |\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -1181,16 +1183,6 @@ public class TerminateLaunchTool implements IMcpTool
             sb.append("applicationId=").append(applicationId); //$NON-NLS-1$
         }
         return sb.length() > 0 ? sb.toString() : "<empty>"; //$NON-NLS-1$
-    }
-
-    private static String escape(String value)
-    {
-        if (value == null || value.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-        // Markdown table cell: escape pipes and collapse newlines.
-        return value.replace("|", "\\|").replace("\n", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     /**

@@ -339,4 +339,20 @@ public class MetadataPathResolverTest
         // The control: a resolvable path in the same test does resolve.
         assertNotNull(MetadataPathResolver.resolveFormModulePath("Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
     }
+    @Test
+    public void testMemberFqnHasNoOwnTopObjectFile()
+    {
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("Catalog.Products.Attribute.Code"));
+        assertNull(MetadataPathResolver.resolveTopObjectMdoPath("Catalog.Products."));
+    }
+
+    @Test
+    public void testNestedSubsystemTopObjectHasItsOwnDirectory()
+    {
+        assertEquals("src/Subsystems/Parent/Subsystems/Child/Child.mdo",
+            MetadataPathResolver.resolveTopObjectMdoPath("Subsystem.Parent.Subsystem.Child"));
+        assertEquals("src/Subsystems/Родитель/Subsystems/Дочь/Дочь.mdo",
+            MetadataPathResolver.resolveTopObjectMdoPath("Подсистема.Родитель.Подсистема.Дочь"));
+    }
+
 }

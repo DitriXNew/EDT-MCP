@@ -75,7 +75,7 @@ Pass `terminateRunningClients=false` to keep the client running; then the old ma
 
 ## Database restructure (auto-confirmed)
 
-On windowed EDT, a confirmed update auto-accepts the native **Restructure data** dialog for that operation. The explicit headless host uses core synchronization callbacks without opening dialogs: `confirm=true` accepts restructuring, and `externalInfobaseChanges` selects override/import/cancel. Unknown runtime questions fail with their condition and a recovery action. A file infobase with active sessions must return an error; close those sessions before retrying. The headless caller waits at most 120 seconds; a timeout reports an unknown outcome because the platform may still be running. Inspect the database before retrying. Structural changes can delete data.
+On windowed EDT, a confirmed update auto-accepts the native **Restructure data** dialog for that operation. The explicit headless host uses core synchronization callbacks without opening dialogs: `confirm=true` accepts restructuring, and `externalInfobaseChanges` selects override/import/cancel. Unknown runtime questions fail with their condition and a recovery action. A file infobase with active sessions must return an error; close those sessions before retrying. Confirmed updates run in a server-owned background job, including in headless mode. Structural changes can delete data.
 
 ## Examples
 
@@ -88,17 +88,15 @@ JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCR
 
 ## Long-running updates and client timeouts
 
-On a large configuration (thousands of objects) `update_database` can run **5–25 minutes**. Many MCP clients apply their own call timeout (e.g. 120 s) well short of that. The MCP transport does not cancel the update's progress monitor or interrupt its execution thread when the client times out or disconnects. This isolates execution from the connection; it does not guarantee that EDT or the platform server will finish successfully. Keep EDT running while the operation is in progress.
+Only `confirm=true` starts a background job; previews remain synchronous. `waitSeconds` defaults to **20**, accepts **0–45**, and limits only this call's wait. Use `0` to return immediately. A load has no operation deadline and can run for a very long time. Keep EDT running.
 
-Treat a client timeout as an **unknown outcome**. Do not retry blindly, launch another client on the same infobase, stop its server, or terminate its Designer agent while the update may still be running. Retrieve the observed outcome afterwards with `get_mcp_history`:
+If finished within the wait, the response is the usual final JSON. Otherwise it contains `jobId`, `status` and a polling hint. Poll `get_job_status(jobId="<id>", waitSeconds=20)` until terminal; its Result contains the same final JSON, including failure notes. A second confirmed update for the same project/application is refused and names the running jobId. `launch` is refused during the update; poll its jobId before launching.
 
-```
-get_mcp_history(tool="update_database", limit=10, includeBodies=true)
-```
+The job runs on its own thread: a client timeout, disconnect or interruption of the caller's wait does not cancel the load. `cancel_job` can cancel queued work before it starts. Once started, cancellation is refused: EDT accepts a progress monitor but provides no verified clean-cancel/rollback guarantee for a configuration load, so the job is left to finish.
 
-Match the call by its request body and time window: the most recent entry may belong to another update. A completed call is recorded with its final `status`, `durationMs`, and response even when response delivery fails. An absent entry does not prove that nothing happened: execution may still be running, recording may be disabled, or the entry may have been evicted. Check the infobase state in EDT and the EDT/platform logs before retrying if no matching completion is available. Prefer raising the client's call timeout for this tool (well above the 5–25 minute range) when possible.
+If the client disconnected before receiving a jobId, treat that as an **unknown outcome**. Retrieve the accepted call's response with `get_mcp_history(tool="update_database", limit=10, includeBodies=true)` and poll the jobId it contains. Match the request body and time window. A missing history entry does not prove that nothing happened: recording may be disabled or the entry evicted. Check the infobase state and EDT/platform logs before retrying if the job cannot be recovered.
 
-`Command execution cancelled (ConfigurationLoadException)` means that the platform server reported cancellation of the configuration load. It does not identify who initiated cancellation, prove that the client timeout caused it, or establish that the XML was invalid. Inspect the infobase state and logs before retrying; a cancelled load does not establish that no database changes were made. `update_database` currently returns no `jobId` for `get_job_status` polling.
+`Command execution cancelled (ConfigurationLoadException)` means that the platform server reported cancellation. It does not identify the initiator, prove that a client timeout caused it, or establish invalid XML or rollback. Inspect the infobase state and logs before retrying.
 
 ## Known EDT limitation: missing InternalInfo node
 

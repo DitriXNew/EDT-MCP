@@ -184,4 +184,22 @@ public class DebugYaxunitTestsToolTest
             return "captured"; //$NON-NLS-1$
         }
     }
+
+    @Test
+    public void aliasSchemaMatchesMergedToolWithoutDebug()
+    {
+        var expected = com.google.gson.JsonParser.parseString(new RunYaxunitTestsTool().getInputSchema())
+            .getAsJsonObject();
+        expected.getAsJsonObject("properties").remove("debug");
+        var actual = com.google.gson.JsonParser.parseString(new DebugYaxunitTestsTool().getInputSchema())
+            .getAsJsonObject();
+        // Descriptions document different debug workflows; compare all validation keywords.
+        expected.getAsJsonObject("properties").entrySet()
+            .forEach(entry -> entry.getValue().getAsJsonObject().remove("description"));
+        actual.getAsJsonObject("properties").entrySet()
+            .forEach(entry -> entry.getValue().getAsJsonObject().remove("description"));
+        assertEquals(expected, actual);
+        assertEquals("2.27.0", DebugYaxunitTestsTool.REMOVAL_RELEASE);
+    }
+
 }

@@ -20,7 +20,6 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.IBreakpointManager;
@@ -151,7 +150,7 @@ public final class BreakpointUtils
             {
                 return null;
             }
-            project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+            project = ProjectContext.of(projectName).project();
             if (project == null || !project.exists())
             {
                 return null;
@@ -214,19 +213,6 @@ public final class BreakpointUtils
         bpManager.addBreakpoint(fallback);
         fallback.registered = true;
         return fallback;
-    }
-
-    /**
-     * Finds the first registered line breakpoint at the exact resource and 1-based line.
-     * Reusing it is important when a caller changes a condition: EDT expects one breakpoint
-     * per source position, and creating another would leave two independently firing markers.
-     *
-     * @return the existing breakpoint, or {@code null} when the position is unused
-     */
-    public static IBreakpoint findLineBreakpoint(IFile file, int lineNumber) throws Exception
-    {
-        List<IBreakpoint> found = findLineBreakpoints(file, lineNumber);
-        return found.isEmpty() ? null : found.get(0);
     }
 
     /**

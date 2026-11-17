@@ -50,14 +50,8 @@ public class McpServer
     /** Request counter - use AtomicLong for thread safety */
     private final AtomicLong requestCount = new AtomicLong(0);
     
-    /** Current executing tool name */
-    private volatile String currentToolName = null;
-    
-    /** Timestamp when current tool execution started (milliseconds) */
-    private volatile long toolExecutionStartTime = 0;
-    
-    /** User signal for current operation (cancel, retry, background, expert) */
-    private final AtomicReference<UserSignal> userSignal = new AtomicReference<>();
+    /** Invocation bound to the tool execution thread, independently of the UI interrupt target. */
+    private final ThreadLocal<ActiveToolCall> executingToolCall = new ThreadLocal<>();
 
     /** Currently active tool call that can be interrupted */
     private final AtomicReference<ActiveToolCall> activeToolCall = new AtomicReference<>();
@@ -137,6 +131,8 @@ public class McpServer
         // erased that answer authorizes it.
         server.createContext("/mcp", //$NON-NLS-1$
             new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote));
+        server.createContext("/mcp/plaintext", //$NON-NLS-1$
+            new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote, true));
         // The same snapshot the handler got, kept so the preferences page can tell whether the
         // endpoint it advertises is one this listener would still serve.
         boundRemotely = allowRemote;
@@ -397,20 +393,17 @@ public class McpServer
     public String getCurrentToolName()
     {
         ActiveToolCall call = activeToolCall.get();
-        return call != null ? call.getToolName() : currentToolName;
+        return call != null ? call.getToolName() : null;
     }
 
-    /**
-     * Sets the currently executing tool name.
-     * Also records the start time when a tool begins execution.
-     * 
-     * @param toolName the tool name or null when execution completes
-     */
-    public void setCurrentToolName(String toolName)
-    {
-        this.currentToolName = toolName;
-        this.toolExecutionStartTime = toolName != null ? System.currentTimeMillis() : 0;
-    }
+    /** Binds the transport's invocation before dispatch on its execution thread. */
+    public void bindToolCall(ActiveToolCall call) { executingToolCall.set(call); }
+
+    /** Removes only this thread's invocation binding. */
+    public void unbindToolCall() { executingToolCall.remove(); }
+
+    /** Returns the invocation being dispatched on this thread. */
+    public ActiveToolCall getExecutingToolCall() { return executingToolCall.get(); }
 
     /**
      * Checks if a tool is currently executing.
@@ -434,34 +427,19 @@ public class McpServer
         {
             return call.getElapsedSeconds();
         }
-        if (toolExecutionStartTime == 0)
-        {
-            return 0;
-        }
-        return (System.currentTimeMillis() - toolExecutionStartTime) / 1000;
+        return 0;
     }
 
     /**
      * Sets a user signal for the current operation.
      * This signal will be included in the tool response.
      * 
+     * @param call the invocation selected by the user
      * @param signal the user signal
      */
-    public void setUserSignal(UserSignal signal)
+    public void setUserSignal(ActiveToolCall call, UserSignal signal)
     {
-        this.userSignal.set(signal);
-    }
-
-    /**
-     * Gets and clears the current user signal.
-     * Returns null if no signal is pending.
-     * 
-     * @return the user signal or null
-     */
-    public UserSignal consumeUserSignal()
-    {
-        // Atomic get-and-clear so a signal is consumed exactly once even under concurrent callers.
-        return this.userSignal.getAndSet(null);
+        if (call != null) { call.setUserSignal(signal); }
     }
 
     /**
@@ -504,15 +482,17 @@ public class McpServer
      */
     public synchronized boolean interruptToolCall(UserSignal signal)
     {
-        ActiveToolCall call = this.activeToolCall.get();
+        return interruptToolCall(this.activeToolCall.get(), signal);
+    }
+
+    /** Interrupts the selected invocation, even if another call has since started. */
+    public synchronized boolean interruptToolCall(ActiveToolCall call, UserSignal signal)
+    {
         if (call != null && !call.hasResponded())
         {
             boolean sent = call.sendSignalResponse(signal);
             if (sent)
             {
-                // Clear tool execution state atomically
-                this.currentToolName = null;
-                this.toolExecutionStartTime = 0;
                 clearActiveToolCall(call);
             }
             return sent;

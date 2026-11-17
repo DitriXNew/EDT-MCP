@@ -14,6 +14,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -168,6 +169,15 @@ public class ProjectStateCheckerPlatformContextTest
     public void theConfigurationResolverAppendsTheActualContextReason() throws Exception
     {
         when(activator.getConfigurationProvider()).thenReturn(mock(IConfigurationProvider.class));
+        var models = mock(com._1c.g5.v8.dt.core.platform.IBmModelManager.class);
+        var model = mock(com._1c.g5.v8.bm.integration.IBmModel.class);
+        when(activator.getBmModelManager()).thenReturn(models);
+        when(models.getModel(project)).thenReturn(model);
+        int[] reads = {0};
+        when(model.executeReadonlyTask(any())).thenAnswer(call -> {
+            reads[0]++;
+            return ((com._1c.g5.v8.bm.integration.IBmTask<?>)call.getArgument(0)).execute(null, null);
+        });
         Constructor<ProjectContext> constructor =
             ProjectContext.class.getDeclaredConstructor(String.class, IProject.class);
         constructor.setAccessible(true);
@@ -176,6 +186,7 @@ public class ProjectStateCheckerPlatformContextTest
         assertTrue(result.errorJson(), result.errorJson().contains("Could not get configuration for project: Demo."));
         assertTrue(result.errorJson(), result.errorJson().contains("context is not started"));
         assertTrue(result.errorJson(), result.errorJson().contains("close and reopen"));
+        assertEquals("Configuration resolution must use one BM read task", 1, reads[0]);
     }
 
     @Test

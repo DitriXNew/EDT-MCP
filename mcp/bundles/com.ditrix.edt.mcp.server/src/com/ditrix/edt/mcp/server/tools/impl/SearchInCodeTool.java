@@ -113,7 +113,7 @@ public class SearchInCodeTool implements IMcpTool
         if (query != null && !query.isEmpty())
         {
             String safeName = query.replaceAll("[^a-zA-Z0-9\\u0400-\\u04FF]", "-") //$NON-NLS-1$ //$NON-NLS-2$
-                .toLowerCase();
+                .toLowerCase(Locale.ROOT);
             if (safeName.length() > 40)
             {
                 safeName = safeName.substring(0, 40);
@@ -246,7 +246,7 @@ public class SearchInCodeTool implements IMcpTool
         {
             return null;
         }
-        switch (metadataType.toLowerCase())
+        switch (metadataType.toLowerCase(Locale.ROOT))
         {
             case "documents": //$NON-NLS-1$
                 return "Documents/"; //$NON-NLS-1$

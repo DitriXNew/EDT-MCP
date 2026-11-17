@@ -829,7 +829,7 @@ public final class VendorSupportGuard
         }
         try
         {
-            return manager.getModel(project);
+            return BmModelResolver.resolve(project, manager).getModel();
         }
         catch (RuntimeException e) // NOSONAR no model: the platform check opens its own read
         {

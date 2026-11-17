@@ -15,6 +15,56 @@ import com.google.gson.*;
 
 public class IpcConnectionTest extends StdioTestSupport
 {
+    @Test public void concurrentBridgesDeliverTheirOwnModes() throws Exception
+    {
+        var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();
+        var preferences = com.ditrix.edt.mcp.server.Activator.getDefault().getPreferenceStore();
+        String key = com.ditrix.edt.mcp.server.preferences.PreferenceConstants.PREF_PLAIN_TEXT_MODE;
+        boolean previous = preferences.getBoolean(key);
+        var entered = new CountDownLatch(2);
+        String payload = "{\"value\":\"" + "complete result ".repeat(100) + "\"}";
+        IMcpTool tool = new IMcpTool() {
+            public String getName() { return "test_delivery"; }
+            public String getDescription() { return "Test delivery"; }
+            public String getInputSchema() { return "{\"type\":\"object\",\"properties\":{}}"; }
+            public ResponseType getResponseType() { return ResponseType.JSON; }
+            public String execute(Map<String, String> arguments) {
+                entered.countDown();
+                try { assertTrue(entered.await(3, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+                return payload;
+            }
+        };
+        try
+        {
+            preferences.setValue(key, true);
+            registry.replaceAll(List.of(tool));
+            List<String> a = new CopyOnWriteArrayList<>(), b = new CopyOnWriteArrayList<>();
+            var server = new com.ditrix.edt.mcp.server.McpServer();
+            var shared = new McpProtocolHandler();
+            try (var plain = new IpcConnection(server, shared, a::add, true);
+                 var structured = new IpcConnection(server, shared, b::add, false))
+            {
+                plain.accept(init(1, false)); structured.accept(init(2, false));
+                plain.accept(initialized()); structured.accept(initialized());
+                plain.accept(call(3, tool.getName())); structured.accept(call(4, tool.getName()));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while ((a.size() < 2 || b.size() < 2) && System.nanoTime() < deadline) { Thread.sleep(5); }
+                assertEquals(2, a.size()); assertEquals(2, b.size());
+                var text = JsonParser.parseString(a.get(1)).getAsJsonObject().getAsJsonObject("result");
+                var json = JsonParser.parseString(b.get(1)).getAsJsonObject().getAsJsonObject("result");
+                var expected = JsonParser.parseString(payload);
+                assertEquals(expected, text.get("structuredContent"));
+                assertEquals(expected, json.get("structuredContent"));
+                String full = text.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+                assertEquals(expected, JsonParser.parseString(full));
+                String digest = json.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+                assertTrue(digest.length() <= 500); assertNotEquals(full, digest);
+            }
+        }
+        finally { registry.replaceAll(saved); preferences.setValue(key, previous); }
+    }
+
     @Test public void perConnectionCapabilitiesIdsAndNotificationSinksAreIsolated() throws Exception
     {
         var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();

@@ -504,4 +504,32 @@ public class JsonUtilsTest
         assertTrue(response.contains("\"status\":\"ok\""));
         assertTrue(response.contains("\"edt_version\":\"2025.2.0\""));
     }
+
+    @Test
+    public void strictIntegerDistinguishesAbsentFromInvalidAndChecksExactBounds()
+    {
+        org.junit.Assert.assertEquals(7, JsonUtils.extractStrictInt(Map.of(), "count", 7, 1, 10));
+        for (String raw : java.util.List.of("1", "1.0", "1e0", "10.0"))
+        {
+            int expected = raw.startsWith("10") ? 10 : 1;
+            org.junit.Assert.assertEquals(expected, JsonUtils.extractStrictInt(Map.of("count", raw), "count", 7, 1, 10));
+        }
+        for (String raw : java.util.List.of("", "1.2", "NaN", "Infinity", "2147483648", "0", "11", "null"))
+        {
+            try
+            {
+                JsonUtils.extractStrictInt(Map.of("count", raw), "count", 7, 1, 10);
+                org.junit.Assert.fail(raw);
+            }
+            catch (IllegalArgumentException e)
+            {
+                org.junit.Assert.assertTrue(e.getMessage(), e.getMessage().contains("count='" + raw + "'"));
+                org.junit.Assert.assertTrue(e.getMessage(), e.getMessage().contains("1..10"));
+            }
+        }
+        Map<String, String> explicitNull = new java.util.HashMap<>();
+        explicitNull.put("count", null);
+        org.junit.Assert.assertThrows(IllegalArgumentException.class,
+            () -> JsonUtils.extractStrictInt(explicitNull, "count", 7, 1, 10));
+    }
 }

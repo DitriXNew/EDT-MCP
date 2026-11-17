@@ -12,6 +12,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 
 import java.util.Collections;
 
@@ -20,6 +22,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
 
 /** Tests the transient null-model state independently of a live EDT service registry. */
 public class BmModelResolverTest
@@ -76,6 +79,26 @@ public class BmModelResolverTest
 
         assertTrue(result.isAvailable());
         assertSame(model, result.getModel());
+    }
+
+    @Test
+    public void testDtProjectResolutionUsesTheOriginalLookupIdentity()
+    {
+        IProject workspace = project("QueryProject");
+        IDtProject project = mock(IDtProject.class);
+        when(project.getWorkspaceProject()).thenReturn(workspace);
+        IBmModelManager manager = mock(IBmModelManager.class);
+        IBmModel model = mock(IBmModel.class);
+        when(manager.getModel(project)).thenReturn(model);
+
+        assertSame(model, BmModelResolver.resolveDtProject(project, manager).getModel());
+        verify(manager, never()).getModel(workspace);
+        when(manager.getModel(project)).thenReturn(null);
+        var unavailable = BmModelResolver.resolveDtProject(project, manager);
+        assertFalse(unavailable.isAvailable());
+        assertEquals("QueryProject", unavailable.getUnavailableProjectName());
+        assertFalse(BmModelResolver.resolveDtProject(null, manager).isAvailable());
+        assertEquals("QueryProject", BmModelResolver.resolveDtProject(project, null).getUnavailableProjectName());
     }
 
     private static IProject project(String name)

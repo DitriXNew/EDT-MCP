@@ -47,6 +47,7 @@ the can't-reach-without-a-session AUDIT notes; no project file is read or writte
 
 from harness import (
     call,
+    assert_ok,
     assert_error,
     assert_error_quality,
     assert_contains,
@@ -88,6 +89,15 @@ def test_no_session_returns_clear_actionable_sentinel():
         "sentinel must state WHY auto-resolution failed (no suspended launch)",
     )
     assert_no_diff("a debug-read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_variables", kind="read")
+def test_guide_explains_pending_evaluation_without_fabricated_variables():
+    r = call("get_tool_guide", {"toolName": "get_variables"})
+    assert_ok(r, "pending-evaluation guide")
+    for text in ("pending", "one second", "empty variables list", "Retry"):
+        assert_contains(r.text, text, "pending variables must remain distinguishable from an empty frame")
+    assert_no_diff("reading the variables guide must leave project sources unchanged")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

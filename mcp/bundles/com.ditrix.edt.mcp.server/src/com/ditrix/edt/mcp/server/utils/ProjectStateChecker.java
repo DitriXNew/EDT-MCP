@@ -752,8 +752,7 @@ public final class ProjectStateChecker
         {
             return null;
         }
-        return checkoutReloadErrorOrNull(org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName));
+        return checkoutReloadErrorOrNull(ProjectContext.of(projectName).project());
     }
 
     /**
@@ -880,8 +879,7 @@ public final class ProjectStateChecker
         {
             return null;
         }
-        return modelBuildingErrorOrNull(org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName));
+        return modelBuildingErrorOrNull(ProjectContext.of(projectName).project());
     }
 
     /** Poll interval of {@link #awaitModelReload(Collection, long)}. */
@@ -1108,8 +1106,7 @@ public final class ProjectStateChecker
             return null; // No specific project, skip check
         }
         
-        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
 
         return checkReadyOrError(project);
     }
@@ -1208,8 +1205,7 @@ public final class ProjectStateChecker
         {
             return null;
         }
-        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
         return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT,
             operationName, stateStatement);
     }
@@ -1752,8 +1748,7 @@ public final class ProjectStateChecker
         IProject project;
         try
         {
-            project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                .getRoot().getProject(projectName);
+            project = ProjectContext.of(projectName).project();
         }
         catch (RuntimeException e)
         {
@@ -1990,8 +1985,7 @@ public final class ProjectStateChecker
     private static List<IProject> getOpenNatureProjects(List<String> natureIds)
     {
         List<IProject> result = new ArrayList<>();
-        for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProjects())
+        for (IProject candidate : ProjectContext.allProjects())
         {
             if (!candidate.exists() || !candidate.isOpen())
             {
@@ -2132,8 +2126,7 @@ public final class ProjectStateChecker
                 {
                     return result;
                 }
-                for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                    .getRoot().getProjects())
+                for (IProject candidate : ProjectContext.allProjects())
                 {
                     if (candidate.exists() && candidate.isOpen()
                         && dtProjectManager.getDtProject(candidate) != null)
@@ -2246,8 +2239,7 @@ public final class ProjectStateChecker
         {
             return null;
         }
-        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
         return buildingErrorOrNull(project);
     }
 }

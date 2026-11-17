@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.pictures;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -147,7 +148,6 @@ public final class CommonPicturesGalleryRenderer
         }
         IProject project = resolved.project();
         Configuration config = resolved.configuration();
-        String configName = config.getName() != null ? config.getName() : projectName;
 
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
@@ -155,7 +155,7 @@ public final class CommonPicturesGalleryRenderer
             Activator.logWarning("Show Common Pictures Overview: IBmModelManager is not available."); //$NON-NLS-1$
             return null;
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             Activator.logWarning("Show Common Pictures Overview: BM model is not available for " //$NON-NLS-1$
@@ -163,15 +163,14 @@ public final class CommonPicturesGalleryRenderer
             return null;
         }
 
-        // The synonym map is keyed by the language CODE; resolve the configuration default once.
-        String lang = language != null ? language : MetadataLanguageUtils.resolveLanguageCode(config, null);
-
-        // Every model read happens ONLY inside the BM read boundary (CLAUDE.md hard rule).
-        GalleryPage galleryPage = BmTransactions.read(bmModel, "ShowCommonPictures", (tx, mon) -> //$NON-NLS-1$
-            buildPage(config, configName, lang, query, page, monitor));
+        GalleryPage galleryPage = BmTransactions.read(bmModel, "ShowCommonPictures", (tx, mon) -> { //$NON-NLS-1$
+            String configName = config.getName() != null ? config.getName() : projectName;
+            String lang = language != null ? language : MetadataLanguageUtils.resolveLanguageCode(config, null);
+            return buildPage(config, configName, lang, query, page, monitor);
+        });
 
         String html = CommonPicturesHtmlGenerator.render(galleryPage);
-        return new RenderedPage(html, titlePrefix + configName);
+        return new RenderedPage(html, titlePrefix + galleryPage.configName);
     }
 
     /**

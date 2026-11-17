@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.groups.ui;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -135,7 +136,7 @@ public class GroupNavigatorAdapter extends WorkbenchAdapter implements IAdaptabl
                 return null;
             }
             
-            IBmModel bmModel = bmModelManager.getModel(project);
+            IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
             if (bmModel == null) {
                 return null;
             }

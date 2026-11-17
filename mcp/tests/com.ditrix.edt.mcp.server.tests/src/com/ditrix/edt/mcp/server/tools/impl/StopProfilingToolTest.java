@@ -18,6 +18,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ProfilingSessionRegistry;
 
 /**
  * Tests for {@link StopProfilingTool}.
@@ -33,13 +34,13 @@ public class StopProfilingToolTest
     @Before
     public void resetState()
     {
-        StartProfilingTool.clearStateForTests();
+        ProfilingSessionRegistry.clearStateForTests();
     }
 
     @After
     public void clearState()
     {
-        StartProfilingTool.clearStateForTests();
+        ProfilingSessionRegistry.clearStateForTests();
     }
 
     @Test

@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -134,7 +136,7 @@ public class ModifyMetadataToolAppearanceTest
     public void testAnRgbColorIsWrittenOntoTheField()
     {
         FormField field = FormFactory.eINSTANCE.createFormField();
-        ModifyMetadataTool.PreparedChange change = prepare(true, "titleTextColor", //$NON-NLS-1$
+        MetadataPropertyApplier.PreparedChange change = prepare(true, "titleTextColor", //$NON-NLS-1$
             "{color:{red:10, green:20, blue:30}}", null, null, field); //$NON-NLS-1$
         change.applyTo(field, null);
         ColorDef def = (ColorDef)field.getTitleTextColor();
@@ -212,7 +214,7 @@ public class ModifyMetadataToolAppearanceTest
         IBmTransaction tx = Mockito.mock(IBmTransaction.class);
         Mockito.doReturn(styleItem("HeaderFont")).when(tx).getObjectById(Mockito.anyLong()); //$NON-NLS-1$
         FormField field = FormFactory.eINSTANCE.createFormField();
-        ModifyMetadataTool.PreparedChange change = prepare(false, "titleFont", //$NON-NLS-1$
+        MetadataPropertyApplier.PreparedChange change = prepare(false, "titleFont", //$NON-NLS-1$
             "{font:{style:'HeaderFont'}}", items(outside), catalogue("v8:/Fonts/Style/v8.3.27"), field); //$NON-NLS-1$ //$NON-NLS-2$
         try
         {
@@ -252,7 +254,7 @@ public class ModifyMetadataToolAppearanceTest
         IBmTransaction tx = Mockito.mock(IBmTransaction.class);
         Mockito.doReturn(inTx).when(tx).getObjectById(42L);
 
-        ModifyMetadataTool.PreparedChange.picture(feature, null, Long.valueOf(42L)).applyTo(button, tx);
+        MetadataPropertyApplier.PreparedChange.picture(feature, null, Long.valueOf(42L)).applyTo(button, tx);
 
         EObject pictureRef = (EObject)button.eGet(feature);
         assertSame(inTx, pictureRef.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, false));
@@ -267,7 +269,7 @@ public class ModifyMetadataToolAppearanceTest
         EObject proxy = MdClassFactory.eINSTANCE.createCommonPicture();
         ((InternalEObject)proxy).eSetProxyURI(URI.createURI("v8:/Pictures/v8.3.27#/StdPicture.Add")); //$NON-NLS-1$
 
-        ModifyMetadataTool.PreparedChange.picture(feature, proxy, null).applyTo(button, null);
+        MetadataPropertyApplier.PreparedChange.picture(feature, proxy, null).applyTo(button, null);
 
         EObject pictureRef = (EObject)button.eGet(feature);
         assertSame(proxy, pictureRef.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, false));
@@ -290,8 +292,8 @@ public class ModifyMetadataToolAppearanceTest
     public void testARefusalNamesThePropertyAndTheValueAndQueuesNothing()
     {
         FormField field = FormFactory.eINSTANCE.createFormField();
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
-        String error = ModifyMetadataTool.prepareAppearanceWith(true, "titleTextColor", //$NON-NLS-1$
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
+        String error = MetadataPropertyApplier.prepareAppearanceWith(true, "titleTextColor", //$NON-NLS-1$
             JsonParser.parseString("{color:'Web.NoSuchColor'}"), null, //$NON-NLS-1$
             catalogue("v8:/Colors/Web/v8.3.27", "Web.AliceBlue"), //$NON-NLS-1$ //$NON-NLS-2$
             field.eClass().getEStructuralFeature("titleTextColor"), out); //$NON-NLS-1$
@@ -304,11 +306,11 @@ public class ModifyMetadataToolAppearanceTest
 
     // ---- fixtures --------------------------------------------------------------------------------
 
-    private static ModifyMetadataTool.PreparedChange prepare(boolean color, String property, String json,
+    private static MetadataPropertyApplier.PreparedChange prepare(boolean color, String property, String json,
         Configuration items, IEObjectProvider catalogue, EObject holder)
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
-        String error = ModifyMetadataTool.prepareAppearanceWith(color, property,
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
+        String error = MetadataPropertyApplier.prepareAppearanceWith(color, property,
             JsonParser.parseString(json), items, catalogue,
             holder.eClass().getEStructuralFeature(property), out);
         assertNull(error, error);

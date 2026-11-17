@@ -24,6 +24,22 @@ import com.google.gson.JsonParser;
  */
 public class ClientCapabilitiesTest
 {
+    @Test
+    public void deliveryOverridesAreImmutableAndKeepTheDeclaration()
+    {
+        var original = ClientCapabilities.from(json("{\"experimental\":{\"structuredContent\":false}}"));
+        var text = original.withPlainTextMode(true);
+        var structured = original.withPlainTextMode(false);
+        assertTrue(text.plainTextModeOr(false));
+        assertFalse(structured.plainTextModeOr(true));
+        assertTrue(original.plainTextModeOr(true));
+        assertFalse(original.plainTextModeOr(false));
+        assertSame(original.getRaw(), text.getRaw());
+        assertFalse(text.allowsStructuredContent());
+        assertFalse(structured.allowsStructuredContent());
+        assertTrue(text.withPlainTextMode(null).plainTextModeOr(true));
+        assertFalse(text.withPlainTextMode(null).plainTextModeOr(false));
+    }
     private static JsonElement json(String text)
     {
         return JsonParser.parseString(text);

@@ -39,6 +39,7 @@ import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumper;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -409,7 +410,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         {
             return EnumerationResult.failure(ToolResult.error("IBmModelManager not available").toJson()); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(resolved.project);
+        IBmModel bmModel = BmModelResolver.resolve(resolved.project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return EnumerationResult.failure(ToolResult.error(
@@ -544,7 +545,8 @@ public class BuildExternalObjectsTool implements IMcpTool
                     // stopped" refusal. Settling the state first turns that race into a short wait.
                     // The pre-flight and every dump run under the default application's infobase
                     // lock, so an explicit standalone_server stop cannot land between them.
-                    StandaloneServerStateRecovery.ensureDefaultApplicationStartableThen(bc.project,
+                    StandaloneServerStateRecovery.ensureDefaultApplicationStartableThen(
+                        ExternalObjectDumpSupport.infobaseProject(bc.project),
                         APPLICATION_LOCK_TIMEOUT_MS, monitor, "Nothing was built.", () -> { //$NON-NLS-1$
                             for (Target target : bc.targets)
                             {

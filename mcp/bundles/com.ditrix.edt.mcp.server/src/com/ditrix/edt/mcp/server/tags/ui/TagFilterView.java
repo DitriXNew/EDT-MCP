@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tags.ui;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -884,7 +885,7 @@ public class TagFilterView extends ViewPart implements ITagChangeListener {
                 return;
             }
             
-            com._1c.g5.v8.bm.integration.IBmModel bmModel = bmModelManager.getModel(project);
+            com._1c.g5.v8.bm.integration.IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
             if (bmModel == null) {
                 Activator.logError("BM model not found for project: " + project.getName(), null);
                 return;

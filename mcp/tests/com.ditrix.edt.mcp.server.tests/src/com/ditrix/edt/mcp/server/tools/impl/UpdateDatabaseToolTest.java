@@ -40,6 +40,9 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool.ApplicationFallback; // same package: explicit for the nested seam type
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.ApplicationUpdateJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -59,7 +62,7 @@ import com.google.gson.JsonParser;
  * <p>
  * Covers tool metadata, the input schema, and the projectName/applicationId
  * required-argument validation in the "no launchConfigurationName" branch, which
- * returns before any live launch-manager access. This is a destructive tool —
+ * returns before any live launch-manager access. This is a destructive tool вЂ”
  * the tests only exercise the argument-validation sentinels (which return before
  * any database update); the actual update is covered by the E2E suite.
  * <p>
@@ -72,9 +75,9 @@ import com.google.gson.JsonParser;
  * failure that is not an {@code ApplicationException}: it must describe the platform failure
  * instead of concatenating a {@code null} message, name the next step for a tool that changed an
  * infobase irreversibly, and keep the port-reassignment note and the {@code terminatedClient}
- * flag it already carried. Its pins are deliberately one literal per {@code @Test} — JUnit stops
+ * flag it already carried. Its pins are deliberately one literal per {@code @Test} вЂ” JUnit stops
  * a method at its first failed assertion, so a method holding several would only ever exercise
- * the first — and they pin the ABSENCE of each optional field on the false side of its condition,
+ * the first вЂ” and they pin the ABSENCE of each optional field on the false side of its condition,
  * because a presence-only pin passes just as happily against an unconditional write.
  * <p>
  * Issue #379 added four package-private seams, all reachable without a live EDT:
@@ -82,7 +85,7 @@ import com.google.gson.JsonParser;
  * decision, against a mocked {@code ILaunchConfiguration}),
  * {@link UpdateDatabaseTool#effectiveApplicationId} (the config-vs-caller merge rule),
  * {@link UpdateDatabaseTool#resolveSoleApplicationId} (the narrowed default-application
- * fallback for a configuration with no application binding — substitute only when the
+ * fallback for a configuration with no application binding вЂ” substitute only when the
  * project has EXACTLY ONE application, refuse otherwise) and
  * {@link UpdateDatabaseTool#describeLaunchIdentifierHint} (the diagnosis for the synthetic
  * {@code launch:}/{@code attach:} identifiers {@code list_configurations} publishes under
@@ -91,12 +94,246 @@ import com.google.gson.JsonParser;
  * <b>What these seams do NOT pin</b>, deliberately: the two lines of {@code execute} that look
  * the configuration up by name ({@code DebugPlugin.getDefault().getLaunchManager()}) and then
  * call the fallback when the merged id came back empty. Both need a live launch manager and an
- * EDT-contributed launch type, which this bundle's unit runtime does not have — the same reason
+ * EDT-contributed launch type, which this bundle's unit runtime does not have вЂ” the same reason
  * the pre-existing tests here stop at argument validation. Everything either side of those two
  * lines is covered above.
  */
 public class UpdateDatabaseToolTest
 {
+    @Test
+    public void executeKeepsPreviewSynchronousAndQueuesOnlyConfirmedUpdate() throws Exception
+    {
+        CountDownLatch occupied = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(8, 1))
+        {
+            jobs.start("occupied", 30_000, "Occupying the worker", progress -> {
+                occupied.countDown();
+                awaitJobRelease(release);
+                return "done";
+            });
+            assertTrue(occupied.await(5, TimeUnit.SECONDS));
+            UpdateDatabaseTool tool = new UpdateDatabaseTool(jobs, new ApplicationUpdateJobs(jobs));
+            Map<String, String> args = new HashMap<>(Map.of("projectName", "NoSuchProject712",
+                "applicationId", "app", "waitSeconds", "0"));
+            String preview = tool.execute(args);
+            assertFalse(JsonParser.parseString(preview).getAsJsonObject().get("success").getAsBoolean());
+            assertTrue(preview, preview.contains("Project not found: NoSuchProject712"));
+            args.put("confirm", "true");
+            String pending = tool.execute(args);
+            String id = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
+            assertEquals(UpdateDatabaseTool.NAME, jobs.get(id).getOwningTool());
+            release.countDown();
+            assertEquals(preview, jobs.await(id, 5_000).getResult());
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void backgroundUpdateReturnsUnchangedInlineResult() throws Exception
+    {
+        try (BackgroundJobs jobs = new BackgroundJobs(8, 2))
+        {
+            UpdateDatabaseTool tool = new UpdateDatabaseTool(jobs, new ApplicationUpdateJobs(jobs));
+            String expected = "{\"success\":true,\"action\":\"updated\",\"stateAfter\":\"UPDATED\"}";
+            assertEquals(expected, tool.startUpdateJob("project", "app", 5, () -> expected));
+        }
+    }
+
+    @Test
+    public void pendingUpdateCompletesWithOriginalFailureNotesAndRejectsDuplicate() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(8, 2))
+        {
+            ApplicationUpdateJobs updates = new ApplicationUpdateJobs(jobs);
+            UpdateDatabaseTool tool = new UpdateDatabaseTool(jobs, updates);
+            String expected = appendAccessSettingsDialogFailureForJobTest();
+            String pending = tool.startUpdateJob("project", "app", 1, () -> {
+                entered.countDown();
+                awaitJobRelease(release);
+                return expected;
+            });
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            String jobId = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
+            assertTrue(pending.contains("get_job_status"));
+            String duplicate = new UpdateDatabaseTool(jobs, updates).startUpdateJob("project", "app", 0, () -> {
+                throw new AssertionError("Duplicate update ran");
+            });
+            assertFalse(JsonParser.parseString(duplicate).getAsJsonObject().get("success").getAsBoolean());
+            assertTrue(duplicate.contains(jobId));
+            assertEquals(BackgroundJobs.CancellationOutcome.ALREADY_COMMITTED,
+                jobs.cancel(jobId).getOutcome());
+            assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(jobId).getStatus());
+            release.countDown();
+            var snapshot = jobs.await(jobId, 5_000);
+            assertEquals(BackgroundJobs.Status.DONE, snapshot.getStatus());
+            assertEquals(expected, snapshot.getResult());
+            assertTrue(BackgroundJobRenderer.render(snapshot).contains(expected));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (jobs.get(jobId).isClaimed() && System.nanoTime() < deadline)
+            {
+                Thread.sleep(5);
+            }
+            assertNull(updates.runningJobId("project", "app"));
+            assertEquals(expected, tool.startUpdateJob("project", "app", 5, () -> expected));
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    private static String appendAccessSettingsDialogFailureForJobTest()
+    {
+        return UpdateDatabaseTool.appendAccessSettingsDialogFailure(
+            "{\"success\":false,\"error\":\"Load failed\",\"applicationId\":\"app\"}", 0, 1);
+    }
+
+    private static void awaitJobRelease(CountDownLatch release)
+    {
+        try
+        {
+            assertTrue("Worker was not released", release.await(10, TimeUnit.SECONDS));
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Update worker was interrupted", e);
+        }
+    }
+
+    @Test
+    public void interruptingClientWaitDoesNotInterruptUpdate() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<String> response = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Thread> worker = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean callerInterrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        try (BackgroundJobs jobs = new BackgroundJobs(8, 1))
+        {
+            ApplicationUpdateJobs updates = new ApplicationUpdateJobs(jobs);
+            UpdateDatabaseTool tool = new UpdateDatabaseTool(jobs, updates);
+            Thread client = new Thread(() -> {
+                response.set(tool.startUpdateJob("project", "app", 45, () -> {
+                    worker.set(Thread.currentThread());
+                    entered.countDown();
+                    awaitJobRelease(release);
+                    return "{\"success\":true,\"stateAfter\":\"UPDATED\"}";
+                }));
+                callerInterrupted.set(Thread.currentThread().isInterrupted());
+            });
+            client.start();
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            assertTrue(worker.get() != client);
+            client.interrupt();
+            client.join(5_000);
+            assertFalse(client.isAlive());
+            assertTrue(callerInterrupted.get());
+            String jobId = JsonParser.parseString(response.get()).getAsJsonObject().get("jobId").getAsString();
+            assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(jobId).getStatus());
+            assertFalse(worker.get().isInterrupted());
+            release.countDown();
+            assertEquals(BackgroundJobs.Status.DONE, jobs.await(jobId, 5_000).getStatus());
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void invalidWaitIsRejectedBeforeTargetResolution()
+    {
+        for (String invalid : List.of("-1", "46", "no", "1.5"))
+        {
+            String result = new UpdateDatabaseTool().execute(Map.of("waitSeconds", invalid));
+            assertTrue(result, result.contains("waitSeconds must be an integer from 0 to 45"));
+        }
+    }
+
+    @Test
+    public void queuedUpdateCanBeCancelledWithoutEnteringThePlatform() throws Exception
+    {
+        CountDownLatch occupied = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(8, 1))
+        {
+            var blocker = jobs.start("occupied", 30_000, "Occupying the worker", progress -> {
+                occupied.countDown();
+                awaitJobRelease(release);
+                return "done";
+            });
+            assertTrue(occupied.await(5, TimeUnit.SECONDS));
+            UpdateDatabaseTool tool = new UpdateDatabaseTool(jobs, new ApplicationUpdateJobs(jobs));
+            String pending = tool.startUpdateJob("project", "app", 0, () -> {
+                throw new AssertionError("Cancelled queued update reached the platform");
+            });
+            String id = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
+            assertEquals(BackgroundJobs.CancellationOutcome.CANCELLED, jobs.cancel(id).getOutcome());
+            release.countDown();
+            assertEquals(BackgroundJobs.Status.DONE, jobs.await(blocker.getId(), 5_000).getStatus());
+            assertEquals(BackgroundJobs.Status.CANCELLED, jobs.get(id).getStatus());
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void launchRefusesRunningUpdateAndPreflightStillChecksPlatformState() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        IProject project = mock(IProject.class);
+        when(project.exists()).thenReturn(true);
+        when(project.isOpen()).thenReturn(true);
+        when(project.getName()).thenReturn("launch-job-project");
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication application = mock(IApplication.class);
+        when(manager.getApplication(project, "app")).thenReturn(Optional.of(application));
+        when(manager.getUpdateState(application)).thenReturn(ApplicationUpdateState.BEING_UPDATED);
+        String jobId = null;
+        try
+        {
+            String pending = new UpdateDatabaseTool().startUpdateJob("launch-job-project", "app", 0, () -> {
+                var lock = com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.lockFor("launch-job-project", "app");
+                assertTrue(lock.tryAcquire(0, null).acquired());
+                try
+                {
+                    entered.countDown();
+                    awaitJobRelease(release);
+                    return "{}";
+                }
+                finally { lock.unlock(); }
+            });
+            jobId = JsonParser.parseString(pending).getAsJsonObject().get("jobId").getAsString();
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            String refusal = com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils
+                .deferredUpdatePreflight(project, "app", manager).orElseThrow();
+            assertTrue(refusal, refusal.contains("being updated right now"));
+            verify(manager).getApplication(project, "app");
+            ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+            when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn("launch-job-project");
+            when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")).thenReturn("app");
+            String launchError = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
+            assertTrue(launchError, launchError.contains("update_database job " + jobId));
+            assertTrue(launchError, launchError.contains("poll get_job_status and launch after it finishes"));
+            verify(config, never()).launch(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            if (jobId != null) { BackgroundJobs.shared().await(jobId, 5_000); }
+        }
+    }
+
     private static final SessionInfo DESIGNER_SESSION = new SessionInfo(
         "11111111-1111-1111-1111-111111111111", 1L, "Designer", //$NON-NLS-1$ //$NON-NLS-2$
         "agent@example.com", "private-host", //$NON-NLS-1$ //$NON-NLS-2$
@@ -123,7 +360,7 @@ public class UpdateDatabaseToolTest
     @Test
     public void testConnectsToInfobaseIsTrue()
     {
-        // #270: update_database opens a live connection to run the update — it must arm
+        // #270: update_database opens a live connection to run the update вЂ” it must arm
         // the auth-dialog suppressor's activity window.
         assertTrue(new UpdateDatabaseTool().connectsToInfobase());
     }
@@ -179,7 +416,7 @@ public class UpdateDatabaseToolTest
             schema.contains("\"checkInfobaseSessions\"")); //$NON-NLS-1$
         // autoRestructure was removed: the EDT update API (IApplicationManager.update /
         // ExecutionContext) has no per-call restructure-confirmation switch, so the parameter
-        // could never influence the update — advertising it misled unattended clients.
+        // could never influence the update вЂ” advertising it misled unattended clients.
         assertFalse("autoRestructure must not reappear without being wired into the EDT call", //$NON-NLS-1$
             schema.contains("\"autoRestructure\"")); //$NON-NLS-1$
     }
@@ -924,7 +1161,7 @@ public class UpdateDatabaseToolTest
     {
         // The real Russian EDT message reported in #258.
         Throwable cause = new RuntimeException(
-            "Отсутствует внутренняя информация (узел InternalInfo) для объекта Configuration"); //$NON-NLS-1$
+            "РћС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РІРЅСѓС‚СЂРµРЅРЅСЏСЏ РёРЅС„РѕСЂРјР°С†РёСЏ (СѓР·РµР» InternalInfo) РґР»СЏ РѕР±СЉРµРєС‚Р° Configuration"); //$NON-NLS-1$
         ApplicationException e = new ApplicationException("Failed to load configuration", cause); //$NON-NLS-1$
 
         String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
@@ -1649,7 +1886,7 @@ public class UpdateDatabaseToolTest
     @Test
     public void testCallersApplicationIdSurvivesAnUnboundConfiguration()
     {
-        // The caller named the target themselves — refusing them (old behaviour) or overwriting
+        // The caller named the target themselves вЂ” refusing them (old behaviour) or overwriting
         // their value with the configuration's EMPTY attribute would both be wrong, and the
         // project-derived fallback must not be consulted at all in this case.
         assertEquals("an explicit id must survive an unbound configuration", //$NON-NLS-1$
@@ -1686,7 +1923,7 @@ public class UpdateDatabaseToolTest
     public void testSoleApplicationSubstitutedWhenNoDefaultIsRecorded() throws ApplicationException
     {
         // A project can have exactly one application and no recorded default; that is not a
-        // disagreement — with one candidate the answer is still unambiguous.
+        // disagreement вЂ” with one candidate the answer is still unambiguous.
         IProject project = mock(IProject.class);
         IApplication only = app("app-only", "The only infobase"); //$NON-NLS-1$ //$NON-NLS-2$
         IApplicationManager mgr = mock(IApplicationManager.class);
@@ -1704,7 +1941,7 @@ public class UpdateDatabaseToolTest
     public void testSeveralApplicationsAreRefusedAndCandidatesNamed() throws ApplicationException
     {
         // THE point of the narrowed fallback: this tool WRITES to a database, so an ambiguous
-        // project must produce a refusal that lets the caller choose — never a silent guess.
+        // project must produce a refusal that lets the caller choose вЂ” never a silent guess.
         IProject project = mock(IProject.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         // Build the applications BEFORE opening the outer stubbing: app() stubs its own mock,
@@ -1896,7 +2133,7 @@ public class UpdateDatabaseToolTest
     public void testServerApplicationIdGetsNoLaunchIdentifierDiagnosis()
     {
         // ServerApplication. is the prefix REAL 1C standalone-server applications carry in
-        // their own IApplication.getId() — LaunchConfigUtils.isSyntheticApplicationId matches it
+        // their own IApplication.getId() вЂ” LaunchConfigUtils.isSyntheticApplicationId matches it
         // too, which is exactly why this diagnosis must not be built on that predicate. A
         // missing/stale server application must NOT be told it is "not an application id".
         assertEquals("", UpdateDatabaseTool.describeLaunchIdentifierHint( //$NON-NLS-1$
@@ -2104,5 +2341,27 @@ public class UpdateDatabaseToolTest
             result.errorJson.contains("delegates are not up")); //$NON-NLS-1$
         assertTrue("the refusal must say nothing was updated", //$NON-NLS-1$
             result.errorJson.contains("Nothing was updated")); //$NON-NLS-1$
+    }
+    /** Codex P1 on #965: a queued update re-asks project readiness on the worker, after the lock. */
+    @Test
+    public void theWorkerReChecksProjectReadinessAfterTheLock() throws Exception
+    {
+        java.io.File dir = new java.io.File(System.getProperty("user.dir")); //$NON-NLS-1$
+        java.io.File source = null;
+        for (int i = 0; i < 12 && dir != null && source == null; i++)
+        {
+            java.io.File candidate = new java.io.File(dir, "mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/" //$NON-NLS-1$
+                + "mcp/server/tools/impl/UpdateDatabaseTool.java"); //$NON-NLS-1$
+            source = candidate.isFile() ? candidate : null;
+            dir = dir.getParentFile();
+        }
+        assertTrue("UpdateDatabaseTool.java not found", source != null); //$NON-NLS-1$
+        String text = java.nio.file.Files.readString(source.toPath(), java.nio.charset.StandardCharsets.UTF_8);
+        int lock = text.indexOf("updateLock.tryAcquire("); //$NON-NLS-1$
+        int recheck = text.indexOf("ProjectStateChecker.strictWriteErrorOrNull(projectName)", lock); //$NON-NLS-1$
+        int sideEffect = text.indexOf("LaunchLifecycleUtils.ensureNoExistingClientSession(", lock); //$NON-NLS-1$
+        assertTrue("lock acquisition present", lock > 0); //$NON-NLS-1$
+        assertTrue("readiness re-checked after the lock", recheck > lock); //$NON-NLS-1$
+        assertTrue("and before the first side effect", sideEffect > recheck); //$NON-NLS-1$
     }
 }

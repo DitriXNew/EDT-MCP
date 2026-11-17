@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.List;
 import java.util.Map;
 
@@ -174,7 +175,7 @@ public class ExportCommonPictureTool implements IMcpTool
         Configuration config = resolved.configuration();
 
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$

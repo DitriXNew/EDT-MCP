@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -108,7 +109,7 @@ public class ListModulesTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         if (projectName != null && !projectName.isEmpty())
         {
-            return "modules-" + projectName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "modules-" + projectName.toLowerCase(Locale.ROOT) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "modules-list.md"; //$NON-NLS-1$
     }
@@ -168,7 +169,7 @@ public class ListModulesTool implements IMcpTool
         IProject project = ctx.project();
 
         List<ModuleInfo> modules = new ArrayList<>();
-        String type = metadataType.toLowerCase();
+        String type = metadataType.toLowerCase(Locale.ROOT);
 
         // For "all" mode, use filesystem scan — covers ALL metadata types
         if ("all".equals(type)) //$NON-NLS-1$
@@ -186,7 +187,7 @@ public class ListModulesTool implements IMcpTool
     {
         IProject project = ctx.project();
         List<ModuleInfo> modules = new ArrayList<>();
-        String type = metadataType.toLowerCase();
+        String type = metadataType.toLowerCase(Locale.ROOT);
         ProjectContext.ConfigurationResult resolved = ctx.resolveConfiguration();
         if (!resolved.ok())
         {
@@ -459,7 +460,7 @@ public class ListModulesTool implements IMcpTool
         }
 
         if (nameFilter != null && !nameFilter.isEmpty()
-            && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
+            && !modulePath.toLowerCase(Locale.ROOT).contains(nameFilter.toLowerCase(Locale.ROOT)))
         {
             return;
         }
@@ -548,7 +549,7 @@ public class ListModulesTool implements IMcpTool
         String modulePath = fullPath.startsWith("src/") ? fullPath.substring(4) : fullPath; //$NON-NLS-1$
 
         if (nameFilter != null && !nameFilter.isEmpty()
-            && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
+            && !modulePath.toLowerCase(Locale.ROOT).contains(nameFilter.toLowerCase(Locale.ROOT)))
         {
             return;
         }
@@ -607,7 +608,7 @@ public class ListModulesTool implements IMcpTool
                               String moduleType, String parentType, String parentName, String nameFilter)
     {
         if (nameFilter != null && !nameFilter.isEmpty()
-            && !modulePath.toLowerCase().contains(nameFilter.toLowerCase()))
+            && !modulePath.toLowerCase(Locale.ROOT).contains(nameFilter.toLowerCase(Locale.ROOT)))
         {
             return;
         }

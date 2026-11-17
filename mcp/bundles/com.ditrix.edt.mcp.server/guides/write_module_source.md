@@ -1,12 +1,12 @@
-Writes BSL source to a single 1C metadata object module (a `.bsl` file under `src/`). Six edit modes, a mandatory BSL syntax check, and lost-update guards.
+Edit one metadata object module (`.bsl` under `src/`) using six modes, syntax validation and lost-update guards.
 
 ## When to use
 
-- Editing existing BSL: prefer `searchReplace` (the default) — surgical and safe.
-- Replacing one complete procedure/function: `replaceMethod`.
-- Adding one complete procedure/function next to an existing anchor: `insertBefore` or `insertAfter`.
-- Rewriting or creating a whole module: `replace` (the only mode that can create a new file).
-- Adding code at the end of a module: `append`.
+- `searchReplace` (default): edit existing BSL.
+- `replaceMethod`: replace one complete procedure/function.
+- `insertBefore` / `insertAfter`: add a complete procedure/function next to an anchor.
+- `replace`: rewrite/create a whole module; only this mode can create a file.
+- `append`: add code at the end.
 
 ## Targeting the module (exclusive OR)
 
@@ -31,6 +31,7 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `formName` | moduleType=FormModule | except CommonForm. |
 | `commandName` | moduleType=CommandModule | except CommonCommand. |
 | `skipSyntaxCheck` | optional | default false. |
+| `normalizeInvalidCharacters` | optional | Normalize forbidden characters in supplied source only; default true. |
 | `expectedSource` | mode=replace | lost-update guard. |
 | `overwrite` | mode=replace | force without expectedSource. |
 | `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes. |

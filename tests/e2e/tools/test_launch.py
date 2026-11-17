@@ -93,6 +93,15 @@ from harness import (
 )
 
 
+@e2e_test(tool="launch", kind="read")
+def test_guide_refuses_launch_during_an_update():
+    r = call("get_tool_guide", {"toolName": "launch"})
+    assert_ok(r, "launch serialization guide")
+    assert "busy infobase refuses launch within one second" in r.text, r.text
+    assert "Poll `get_job_status` and launch after completion" in r.text, r.text
+    assert_no_diff("reading the launch guide must leave project sources unchanged")
+
+
 def _check_effective_testing_settings(stored_mode, stored_port, override_mode=None, override_port=None):
     requires_live_infobase("starts and stops a client to verify effective launch settings")
     name = "e2e_launch_testing_settings"

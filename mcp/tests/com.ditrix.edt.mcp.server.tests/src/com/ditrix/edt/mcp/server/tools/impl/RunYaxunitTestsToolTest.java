@@ -2496,4 +2496,26 @@ public class RunYaxunitTestsToolTest
         assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
             error.contains("did not finish within")); //$NON-NLS-1$
     }
+
+    @Test public void availableConfigurationCellsEscapePipesAndNewlines() throws Exception
+    {
+        var manager = mock(org.eclipse.debug.core.ILaunchManager.class);
+        var type = mock(org.eclipse.debug.core.ILaunchConfigurationType.class);
+        var config = mock(org.eclipse.debug.core.ILaunchConfiguration.class);
+        Mockito.when(manager.getLaunchConfigurations(type)).thenReturn(
+            new org.eclipse.debug.core.ILaunchConfiguration[] {config});
+        Mockito.when(config.getName()).thenReturn("Name|part\nnext");
+        Mockito.when(config.getAttribute(com.ditrix.edt.mcp.server.utils.LaunchConfigUtils.ATTR_PROJECT_NAME, ""))
+            .thenReturn("Project|part\nnext");
+        Mockito.when(config.getAttribute(com.ditrix.edt.mcp.server.utils.LaunchConfigUtils.ATTR_APPLICATION_ID, ""))
+            .thenReturn("App|part\nnext");
+        var method = RunYaxunitTestsTool.class.getDeclaredMethod("buildNoConfigError",
+            org.eclipse.debug.core.ILaunchManager.class, org.eclipse.debug.core.ILaunchConfigurationType.class,
+            String.class, String.class);
+        method.setAccessible(true);
+        String result = (String)method.invoke(new RunYaxunitTestsTool(), manager, type, "P", "A");
+        String message = JsonParser.parseString(result).getAsJsonObject().get("error").getAsString();
+        assertTrue(message, message.contains("| Name\\|part next | Project\\|part next | App\\|part next |"));
+    }
+
 }

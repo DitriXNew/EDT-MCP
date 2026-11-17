@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -2313,7 +2314,7 @@ public final class DcsWriter
             if (child.error != null) return child;
             items.add(child.plan);
         }
-        return DataSetParseResult.ok(new DataSetPlan(name, type.toLowerCase(), query, dataSource,
+        return DataSetParseResult.ok(new DataSetPlan(name, type.toLowerCase(Locale.ROOT), query, dataSource,
             objectName, autoFill, fields, items));
     }
 
@@ -2927,7 +2928,7 @@ public final class DcsWriter
         {
             return Boolean.valueOf(primitive.getAsBoolean());
         }
-        String s = primitive.getAsString().trim().toLowerCase();
+        String s = primitive.getAsString().trim().toLowerCase(Locale.ROOT);
         if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             return Boolean.TRUE;

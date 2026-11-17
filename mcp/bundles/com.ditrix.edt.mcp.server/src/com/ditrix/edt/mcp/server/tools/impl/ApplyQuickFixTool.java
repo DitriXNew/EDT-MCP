@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -37,6 +38,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.MarkerCheckIds;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -353,7 +355,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     /**
      * Streams the project's markers and returns those whose check id EXACTLY matches
      * {@code checkId} (symbolic or short UID, case-insensitive - not a substring; see
-     * {@link GetProjectErrorsTool#checkIdMatchesExact}) and, when given, the {@code modulePath}
+     * {@link MarkerCheckIds#checkIdMatchesExact}) and, when given, the {@code modulePath}
      * and 1-based {@code line}. No BM read transaction is needed: only the marker's own check id
      * and extra-info (module URI + line) are read, never the lazily-resolved object presentation.
      * <p>
@@ -375,8 +377,8 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 return;
             }
             String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-            String symbolic = GetProjectErrorsTool.resolveSymbolicCheckId(marker, shortUid, checkRepository);
-            if (!GetProjectErrorsTool.checkIdMatchesExact(shortUid, symbolic, checkId))
+            String symbolic = MarkerCheckIds.resolveSymbolicCheckId(marker, shortUid, checkRepository);
+            if (!MarkerCheckIds.checkIdMatchesExact(shortUid, symbolic, checkId))
             {
                 return;
             }
@@ -433,7 +435,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             return;
         }
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return;

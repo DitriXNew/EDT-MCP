@@ -271,6 +271,29 @@ public class GetMetadataObjectsToolTest
     }
 
     @Test
+    public void testEnglishAndCyrillicFiltersUnderTurkishDefaultLocale()
+    {
+        java.util.Locale original = java.util.Locale.getDefault();
+        java.util.Locale display = java.util.Locale.getDefault(java.util.Locale.Category.DISPLAY);
+        java.util.Locale format = java.util.Locale.getDefault(java.util.Locale.Category.FORMAT);
+        try
+        {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+            CommonModule object = metadataObject("INVOICE", "Invoice", "ИМЕНА");
+            GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+            assertTrue(tool.matches(object, "invoice", GetMetadataObjectsTool.FilterMode.TEXT, "en"));
+            assertTrue(tool.matches(object, "имена", GetMetadataObjectsTool.FilterMode.TEXT, "ru"));
+            testTextFilterMatchesRussianNameCaseInsensitively();
+        }
+        finally
+        {
+            java.util.Locale.setDefault(original);
+            java.util.Locale.setDefault(java.util.Locale.Category.DISPLAY, display);
+            java.util.Locale.setDefault(java.util.Locale.Category.FORMAT, format);
+        }
+    }
+
+    @Test
     public void testTextFilterMatchesRussianNameCaseInsensitively()
     {
         String russianName = "\u0412\u0437\u0430\u0438\u043C\u043E\u0437\u0430\u0447\u0435\u0442"; //$NON-NLS-1$

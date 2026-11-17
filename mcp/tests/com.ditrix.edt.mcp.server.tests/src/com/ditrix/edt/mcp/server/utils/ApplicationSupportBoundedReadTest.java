@@ -747,4 +747,24 @@ public class ApplicationSupportBoundedReadTest
         assertFalse("the two outcomes must not share one sentence: " + other, //$NON-NLS-1$
             one.equals(other));
     }
+
+    @Test public void explicitResolverRetainsCallerRefusalsAndApplication() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        IApplication application = mock(IApplication.class);
+        when(manager.getApplication(project, APP_ID)).thenReturn(Optional.of(application));
+        var found = ApplicationSupport.resolveApplication(manager, project, APP_ID, GENEROUS_DEADLINE_MS,
+            failure -> "incomplete:" + failure, "absent");
+        assertSame(application, found.application());
+        assertNull(found.errorJson());
+        when(manager.getApplication(project, APP_ID)).thenReturn(Optional.empty());
+        assertEquals("absent", ApplicationSupport.resolveApplication(manager, project, APP_ID,
+            GENEROUS_DEADLINE_MS, failure -> "incomplete:" + failure, "absent").errorJson());
+        var noBudget = ApplicationSupport.resolveApplication(manager, project, APP_ID, 0,
+            failure -> "incomplete:" + failure, "absent");
+        assertTrue(noBudget.errorJson(), noBudget.errorJson().startsWith("incomplete:"));
+        assertNull(noBudget.application());
+    }
+
 }

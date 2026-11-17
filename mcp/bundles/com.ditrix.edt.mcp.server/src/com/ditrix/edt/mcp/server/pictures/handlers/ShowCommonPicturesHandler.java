@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.pictures.editor.StringHtmlEditorInput;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 
 /**
  * Handler for the common-pictures preview command (Russian menu label "Просмотр общих картинок
@@ -118,13 +119,19 @@ public class ShowCommonPicturesHandler extends AbstractHandler
             return null;
         }
         Configuration config = resolved.configuration();
-        String language = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        String language = resolveLanguageCode(project, config);
         String projectName = project.getName();
 
         // Initial open: query="" / page=0. The editor drives subsequent Prev/Next/search navigations.
         CommonPicturesGalleryRenderer.scheduleRender(projectName, EDITOR_TITLE_PREFIX, language, "", 0, //$NON-NLS-1$
             rendered -> openEditorOnUiThread(rendered, projectName, language));
         return null;
+    }
+
+    static String resolveLanguageCode(IProject project, Configuration config)
+    {
+        return ReadToolExecution.readOnHost(project, "Common pictures language", //$NON-NLS-1$
+            () -> MetadataLanguageUtils.resolveLanguageCode(config, null));
     }
 
     /**

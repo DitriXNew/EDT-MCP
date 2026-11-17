@@ -125,7 +125,7 @@ public final class EditorNavigation
             return;
         }
         IBmModelManager manager = Activator.getDefault().getBmModelManager();
-        IBmModel model = manager == null ? null : manager.getModel(context.project());
+        IBmModel model = BmModelResolver.resolve(context.project(), manager).getModel();
         if (model == null)
         {
             throw new IllegalStateException("BM model unavailable for '" + request.projectName()

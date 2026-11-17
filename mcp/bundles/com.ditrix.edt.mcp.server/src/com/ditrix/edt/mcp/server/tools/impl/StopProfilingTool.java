@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
 import com.ditrix.edt.mcp.server.utils.ProfilingFiles;
+import com.ditrix.edt.mcp.server.utils.ProfilingSessionRegistry;
 
 /**
  * Stops 1C performance measurement on the active
@@ -102,7 +103,7 @@ public class StopProfilingTool implements IMcpTool
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         String name = JsonUtils.extractStringArgument(params, "name");
         Object stopped;
-        synchronized (StartProfilingTool.TRANSITIONS)
+        synchronized (ProfilingSessionRegistry.TRANSITIONS)
         {
             stopped = stop(applicationId, name);
         }
@@ -132,11 +133,11 @@ public class StopProfilingTool implements IMcpTool
         {
             if (name != null) { ProfilingFiles.validateName(name); }
             IDebugTarget live = DebugSessionRegistry.findActiveTarget(applicationId);
-            StartProfilingTool.reconcile(applicationId, StartProfilingTool.profiledTarget(applicationId, live));
+            ProfilingSessionRegistry.reconcile(applicationId, ProfilingSessionRegistry.profiledTarget(applicationId, live));
             // Idempotent: nothing to do if profiling was never started (or already
             // stopped) for this id. Return a benign success, NOT an error — toggling
             // here would silently switch profiling ON.
-            if (!StartProfilingTool.isProfilingActive(applicationId))
+            if (!ProfilingSessionRegistry.isProfilingActive(applicationId))
             {
                 return ToolResult.success()
                     .put(KEY_ACTIVE, false)
@@ -146,12 +147,12 @@ public class StopProfilingTool implements IMcpTool
                     .toJson();
             }
 
-            IDebugTarget target = StartProfilingTool.profiledTarget(applicationId, live);
+            IDebugTarget target = ProfilingSessionRegistry.profiledTarget(applicationId, live);
             if (target == null)
             {
                 // The session is gone, so profiling cannot still be running on the
                 // debug server. Clear our state and report it benignly.
-                StartProfilingTool.markInactive(applicationId);
+                ProfilingSessionRegistry.markInactive(applicationId);
                 return ToolResult.success()
                     .put(KEY_ACTIVE, false)
                     .put(KEY_STOPPED, true)
@@ -178,7 +179,7 @@ public class StopProfilingTool implements IMcpTool
                 return ToolResult.error(toggleError).toJson();
             }
 
-            StartProfilingTool.markInactive(applicationId);
+            ProfilingSessionRegistry.markInactive(applicationId);
 
             Activator.logInfo("Profiling stopped via IProfilingService for applicationId=" + applicationId); //$NON-NLS-1$
 

@@ -189,4 +189,53 @@ public class ProfilingSupportTest
         queued.get().run();
         assertEquals("Timed-out queued work must never write later", 0, writes.get());
     }
+
+    @Test public void unreadableProfilingStateIsUnknownRatherThanDisabled()
+    {
+        IDebugTarget target = mock(IDebugTarget.class, withSettings().extraInterfaces(IProfileTarget.class));
+        assertNull(ProfilingSupport.enabled(mock(IProfilingService.class), target));
+    }
+
+    public abstract static class ServiceWithStates implements IProfilingService
+    {
+        final Map<IProfileTarget, String> states = new ConcurrentHashMap<>();
+    }
+
+    @Test public void readableProfilingStateDistinguishesEnabledAndDisabled()
+    {
+        IDebugTarget target = mock(IDebugTarget.class, withSettings().extraInterfaces(IProfileTarget.class));
+        ServiceWithStates service = mock(ServiceWithStates.class, withSettings().useConstructor());
+        assertEquals(Boolean.FALSE, ProfilingSupport.enabled(service, target));
+        service.states.put((IProfileTarget)target, "ENABLED");
+        assertEquals(Boolean.TRUE, ProfilingSupport.enabled(service, target));
+    }
+
+
+    @Test public void unreadableStateLogsItsMemberOnlyOnce() throws Exception
+    {
+        var field = ProfilingSupport.class.getDeclaredField("STATE_WARNING");
+        field.setAccessible(true);
+        var warning = (java.util.concurrent.atomic.AtomicBoolean)field.get(null);
+        boolean previous = warning.getAndSet(false);
+        var messages = new java.util.ArrayList<org.eclipse.core.runtime.IStatus>();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getMessage().startsWith("ProfilingService.states is unreadable:")) { messages.add(status); }
+        };
+        org.eclipse.core.runtime.Platform.addLogListener(listener);
+        try
+        {
+            IDebugTarget target = mock(IDebugTarget.class, withSettings().extraInterfaces(IProfileTarget.class));
+            IProfilingService service = mock(IProfilingService.class);
+            assertNull(ProfilingSupport.enabled(service, target));
+            assertNull(ProfilingSupport.enabled(service, target));
+            assertEquals(1, messages.size());
+            assertEquals(org.eclipse.core.runtime.IStatus.WARNING, messages.get(0).getSeverity());
+        }
+        finally
+        {
+            org.eclipse.core.runtime.Platform.removeLogListener(listener);
+            warning.set(previous);
+        }
+    }
+
 }

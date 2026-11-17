@@ -16,6 +16,52 @@ import com.google.gson.*;
 
 public class StdioRelayTest extends StdioTestSupport
 {
+    @Test public void bootstrapModeReachesTheAuthenticatedSession() throws Exception
+    {
+        var tools = McpToolRegistry.getInstance(); var saved = tools.getAllTools();
+        String payload = "{\"value\":\"" + "full result ".repeat(100) + "\"}";
+        IMcpTool tool = new IMcpTool() {
+            public String getName() { return "read"; }
+            public String getDescription() { return "Test read"; }
+            public String getInputSchema() { return "{\"type\":\"object\",\"properties\":{}}"; }
+            public ResponseType getResponseType() { return ResponseType.JSON; }
+            public String execute(Map<String, String> arguments) { return payload; }
+        };
+        var registry = registry();
+        try
+        {
+            tools.replaceAll(List.of(tool));
+            try (var listener = new IpcListener(registry, "test"))
+            {
+                for (boolean mode : new boolean[] {true, false})
+                {
+                    var output = new ByteArrayOutputStream();
+                    try (var bootstrap = new StdioBootstrap(() -> registry,
+                        () -> { fail("A warm host must not start EDT"); return null; }, output, catalog(), false, mode))
+                    {
+                        bootstrap.accept(init(1, false)); bootstrap.accept(initialized());
+                        bootstrap.accept(call(2, "read"));
+                        awaitOutput(output, "structuredContent");
+                        var input = new ByteArrayInputStream(output.toByteArray());
+                        JsonObject result = null; String frame;
+                        while ((frame = JsonFrames.read(input)) != null)
+                        {
+                            var response = JsonParser.parseString(frame).getAsJsonObject();
+                            if (response.has("id") && response.get("id").getAsInt() == 2)
+                            { result = response.getAsJsonObject("result"); }
+                        }
+                        assertNotNull(result);
+                        assertEquals(JsonParser.parseString(payload), result.get("structuredContent"));
+                        String text = result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
+                        if (mode) { assertEquals(JsonParser.parseString(payload), JsonParser.parseString(text)); }
+                        else { assertTrue(text.length() <= 500); assertNotEquals(payload, text); }
+                    }
+                }
+            }
+        }
+        finally { tools.replaceAll(saved); }
+    }
+
     @Test public void bootstrapRelaysAndNeverReplaysADroppedWrite() throws Exception
     {
         var tools = McpToolRegistry.getInstance(); var saved = tools.getAllTools();

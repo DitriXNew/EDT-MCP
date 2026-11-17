@@ -82,6 +82,7 @@ public class ModulePathCaseRoundTwoTest
     private Tree tree;
     private final List<Runnable> restores = new ArrayList<>();
     private final List<IStatus> statuses = new ArrayList<>();
+    private int reads;
 
     @Before
     public void setUp() throws Exception
@@ -121,6 +122,14 @@ public class ModulePathCaseRoundTwoTest
         config.setName("CaseFixture");
         when(provider.getConfiguration(tree.project)).thenReturn(config);
         when(activator.getConfigurationProvider()).thenReturn(provider);
+        var models = mock(com._1c.g5.v8.dt.core.platform.IBmModelManager.class);
+        var model = mock(com._1c.g5.v8.bm.integration.IBmModel.class);
+        when(activator.getBmModelManager()).thenReturn(models);
+        when(models.getModel(tree.project)).thenReturn(model);
+        when(model.executeReadonlyTask(any())).thenAnswer(call -> {
+            reads++;
+            return ((com._1c.g5.v8.bm.integration.IBmTask<?>)call.getArgument(0)).execute(null, null);
+        });
         replace(null, Activator.class.getDeclaredField("plugin"), activator);
         IModelEditingSupport support = mock(IModelEditingSupport.class);
         when(support.canEdit(any(), any())).thenReturn(true);
@@ -167,11 +176,14 @@ public class ModulePathCaseRoundTwoTest
         Method fallback = SymbolInfoService.class.getDeclaredMethod("getSymbolInfoViaEmf",
             IProject.class, String.class, int.class, int.class);
         fallback.setAccessible(true);
-        String result = (String)fallback.invoke(new SymbolInfoService(), tree.project, REQUEST, 1, 1);
+        SymbolInfoService.Outcome result = (SymbolInfoService.Outcome)
+            fallback.invoke(new SymbolInfoService(), tree.project, REQUEST, 1, 1);
         assertNotNull("the fallback must preserve the refusal", result);
-        assertTrue(result, result.startsWith("Error: Ambiguous modulePath"));
-        assertTrue(result, result.contains(REQUEST));
-        assertTrue(result, result.contains("list_modules"));
+        assertNull(result.text());
+        assertFalse("A resolution refusal must stop fallback", result.canFallback());
+        assertTrue(result.error(), result.error().startsWith("Ambiguous modulePath"));
+        assertTrue(result.error(), result.error().contains(REQUEST));
+        assertTrue(result.error(), result.error().contains("list_modules"));
     }
 
     @Test
@@ -198,6 +210,7 @@ public class ModulePathCaseRoundTwoTest
         ambiguousTree();
         assertResolutionError(new GoToDefinitionTool(), Map.of("symbol", "DoWork"));
         assertInfoRefusal();
+        assertEquals("Module resolution must run inside a BM read task", 1, reads);
     }
 
     @Test

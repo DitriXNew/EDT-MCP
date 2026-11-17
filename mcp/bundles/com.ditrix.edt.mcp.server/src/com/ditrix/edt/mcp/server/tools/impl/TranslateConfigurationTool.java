@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
@@ -224,7 +225,7 @@ public class TranslateConfigurationTool implements IMcpTool
         }
         Activator activator = project == null ? null : Activator.getDefault();
         IBmModelManager manager = activator == null ? null : activator.getBmModelManager();
-        IBmModel model = manager == null ? null : manager.getModel(project);
+        IBmModel model = BmModelResolver.resolve(project, manager).getModel();
         if (model == null)
         {
             return declaredIn(configuration, targetLanguages);

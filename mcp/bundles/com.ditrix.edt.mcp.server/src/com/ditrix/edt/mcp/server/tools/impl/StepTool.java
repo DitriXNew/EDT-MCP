@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.debug.core.DebugException;
@@ -240,7 +241,7 @@ public class StepTool implements IMcpTool
      */
     private static String performStep(IStep stepper, String kind) throws DebugException
     {
-        switch (kind.toLowerCase())
+        switch (kind.toLowerCase(Locale.ROOT))
         {
             case "over": //$NON-NLS-1$
                 if (!stepper.canStepOver())

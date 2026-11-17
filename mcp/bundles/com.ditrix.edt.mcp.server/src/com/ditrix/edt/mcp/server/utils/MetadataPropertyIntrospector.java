@@ -218,12 +218,8 @@ public final class MetadataPropertyIntrospector
          * therefore called two different targets equal. This field carries the target qualified by
          * its metadata type, so a comparison sees the difference the display legitimately hides.
          * <p>
-         * A 1C type is the second such kind, and it hides more than a name. A
-         * {@link ValueKind#TYPE_DESCRIPTION} renders as its type names alone - {@code String},
-         * {@code Number} - while the value ALSO carries the qualifiers that say how long that
-         * string is and how many digits that number has. A {@code String} bounded at 10
-         * characters and an unbounded {@code String} are one word on the page and two different
-         * columns in the database, so this field spells the qualifiers out; see
+         * A type description also includes a comparison identity independent of its compact
+         * display. Defaulted qualifier groups compare like absent groups; see
          * {@link MetadataPropertyIntrospector#renderTypeDescription}.
          * <p>
          * A LOCALIZED STRING is the third, and it hides the STRUCTURE rather than a detail of the
@@ -1762,32 +1758,7 @@ public final class MetadataPropertyIntrospector
             : "{" + nsUri + "}" + name; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /**
-     * Renders a {@code TypeDescription} for a reader, and beside it - in the same walk - the form
-     * that says WHICH {@code TypeDescription} it is.
-     *
-     * <p>The two are not the same string, and the gap is not cosmetic. A {@code TypeDescription}
-     * is a set of type names PLUS the qualifiers that bound them: {@code String} carries a length
-     * and a fixed flag, {@code Number} a precision, a scale and a sign, {@code Date} which of the
-     * date and the time it stores, and a binary type its own length and fixed flag. The cell shows
-     * the names only, because that is what a type column is for - and it means a {@code String}
-     * bounded at 10 characters and a {@code String} bounded at 100 print the same six letters.
-     * Comparing those cells answered SAME for two attributes EDT stores as different columns.
-     * Both spellings occur side by side in an ordinary configuration: an attribute typed
-     * {@code String} with an empty {@code <stringQualifiers/>} and another with
-     * {@code <length>10</length>} sit in one {@code .mdo} file.</p>
-     *
-     * <p>A qualifier group whose every field still holds the model default is left OUT of the
-     * identity, and that is deliberate rather than an optimisation. EDT writes the empty element
-     * {@code <stringQualifiers/>} for an unbounded string, so one side can hold a defaulted
-     * qualifier object where the other holds none at all while both mean the same unbounded type.
-     * Spelling the group out unconditionally would turn that into a reported difference - the
-     * opposite error to the one this method exists to stop, and the more annoying of the two,
-     * because it would fire on ordinary configurations rather than on a specific pair of values.</p>
-     *
-     * @param typeDesc the value to render, never {@code null}
-     * @return the rendering, or {@link Rendered#ABSENT} when the description names no type
-     */
+    /** Keeps the comparison identity stable while displaying qualified type alternatives. */
     private static Rendered renderTypeDescription(TypeDescription typeDesc)
     {
         EList<TypeItem> types = typeDesc.getTypes();
@@ -1809,7 +1780,59 @@ public final class MetadataPropertyIntrospector
         String qualifiers = renderQualifiers(typeDesc);
         // The separator is one no 1C type name can carry, so a type list and a qualifier list
         // cannot be read as each other however either of them is spelled.
-        return Rendered.of(text, qualifiers.isEmpty() ? text : text + " | " + qualifiers); //$NON-NLS-1$
+        return Rendered.of(formatTypeDescription(typeDesc),
+            qualifiers.isEmpty() ? text : text + " | " + qualifiers); //$NON-NLS-1$
+    }
+
+    /** Formats the English type alternatives with their stored primitive qualifiers. */
+    public static String formatTypeDescription(TypeDescription description)
+    {
+        if (description == null || description.getTypes() == null || description.getTypes().isEmpty())
+        {
+            return "-"; //$NON-NLS-1$
+        }
+        List<String> parts = new ArrayList<>();
+        for (TypeItem item : description.getTypes())
+        {
+            String name = McoreUtil.getTypeName(item);
+            if (name == null || name.isEmpty())
+            {
+                name = McoreUtil.getTypeNameRu(item);
+            }
+            if (name == null || name.isEmpty())
+            {
+                name = item.getClass().getSimpleName();
+            }
+            String suffix = ""; //$NON-NLS-1$
+            if ("String".equals(name)) //$NON-NLS-1$
+            {
+                StringQualifiers q = description.getStringQualifiers();
+                int length = q == null ? 0 : q.getLength();
+                boolean fixed = q != null && q.isFixed();
+                suffix = "(" + (length == 0 ? "unlimited" : Integer.toString(length)) //$NON-NLS-1$ //$NON-NLS-2$
+                    + (fixed ? ", Fixed" : length == 0 ? "" : ", Variable") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            }
+            else if ("Number".equals(name) && description.getNumberQualifiers() != null) //$NON-NLS-1$
+            {
+                NumberQualifiers q = description.getNumberQualifiers();
+                suffix = "(" + q.getPrecision() + ", " + q.getScale() //$NON-NLS-1$ //$NON-NLS-2$
+                    + (q.isNonNegative() ? ", Nonnegative" : ", Signed") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            else if ("Date".equals(name)) //$NON-NLS-1$
+            {
+                DateQualifiers q = description.getDateQualifiers();
+                DateFractions fractions = q == null ? DateFractions.DATE_TIME : q.getDateFractions();
+                suffix = "(" + fractions.getLiteral() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            else if ("BinaryData".equals(name) && description.getBinaryQualifiers() != null) //$NON-NLS-1$
+            {
+                BinaryQualifiers q = description.getBinaryQualifiers();
+                suffix = "(" + (q.getLength() == 0 ? "unlimited" : Integer.toString(q.getLength())) //$NON-NLS-1$ //$NON-NLS-2$
+                    + (q.isFixed() ? ", Fixed" : ", Variable") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            parts.add(name + suffix);
+        }
+        return String.join(", ", parts); //$NON-NLS-1$
     }
 
     /**

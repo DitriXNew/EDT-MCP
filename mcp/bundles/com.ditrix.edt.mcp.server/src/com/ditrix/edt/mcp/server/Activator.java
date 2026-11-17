@@ -199,6 +199,8 @@ public class Activator extends AbstractUIPlugin
         // writer thread + file handle). No-op when the file log is off.
         McpCallHistoryFileLog.shutdown();
 
+        com.ditrix.edt.mcp.server.utils.ListenerDisposables.disposeAll();
+
         // Close service trackers
         services.dispose();
 

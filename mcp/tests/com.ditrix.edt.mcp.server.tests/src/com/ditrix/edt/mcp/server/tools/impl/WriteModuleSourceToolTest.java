@@ -2935,4 +2935,49 @@ public class WriteModuleSourceToolTest
         int to = guide.indexOf('\n', at);
         return guide.substring(guide.lastIndexOf('\n', at) + 1, to < 0 ? guide.length() : to);
     }
+    @Test
+    public void testNewlyMappedModuleOwnersUseTheirModuleFile() throws Exception
+    {
+        var resolver = WriteModuleSourceTool.class.getDeclaredMethod("resolveModulePath",
+            String.class, String.class, String.class, String.class);
+        resolver.setAccessible(true);
+        var tool = new WriteModuleSourceTool();
+        for (String type : new String[] {"Bot", "IntegrationService", "WebSocketClient"})
+        {
+            assertEquals(type + "s/Проба/Module.bsl",
+                resolver.invoke(tool, type + ".Проба", null, null, null));
+            assertEquals(type + ".Проба", com.ditrix.edt.mcp.server.utils.VendorSupportGuard
+                .moduleOwnerFqn("src/" + type + "s/Проба/Module.bsl", true));
+        }
+    }
+
+    @Test
+    public void testNonModuleTypesCannotCreateAFabricatedDefaultObjectModule()
+    {
+        for (String type : new String[] {"StyleItem", "CommonAttribute", "EventSubscription", "ScheduledJob",
+            "SessionParameter", "FunctionalOption", "FunctionalOptionsParameter", "CommonPicture", "DefinedType",
+            "CommonTemplate", "CommandGroup", "DocumentNumerator", "WSReference", "XDTOPackage", "Style",
+            "Interface", "Role", "Subsystem"})
+        {
+            String result = new WriteModuleSourceTool().execute(Map.of("projectName", "MissingModuleWriteProject",
+                "objectName", type + ".Проба", "mode", "replace", "source", "x = 1;"));
+            assertTrue(type + ": " + result, result.contains("has no ObjectModule"));
+            assertTrue(result, result.contains(type));
+            assertTrue(result, result.contains("list_modules"));
+        }
+    }
+
+    @Test
+    public void testExplicitModuleKindsMustBelongToTheMetadataType()
+    {
+        for (String[] target : new String[][] {{"Bot", "ObjectModule"}, {"CommonPicture", "FormModule"},
+            {"CommonAttribute", "CommandModule"}, {"Enum", "ObjectModule"}})
+        {
+            String result = new WriteModuleSourceTool().execute(Map.of("projectName", "MissingModuleWriteProject",
+                "objectName", target[0] + ".Проба", "moduleType", target[1], "mode", "replace", "source", "x = 1;"));
+            assertTrue(result, result.contains("has no " + target[1]));
+            assertTrue(result, result.contains(target[0]));
+        }
+    }
+
 }

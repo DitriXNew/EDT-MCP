@@ -13,6 +13,7 @@ import org.eclipse.core.resources.IProject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDependentProject;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -59,6 +60,18 @@ public final class BmModelResolver
         }
         IBmModel model = modelManager.getModel(project);
         return model == null ? Resolution.unavailable(project.getName()) : Resolution.available(model);
+    }
+
+    /** Resolves a DT project using the manager's DT-project lookup, preserving that project's identity. */
+    public static Resolution resolveDtProject(IDtProject project, IBmModelManager modelManager)
+    {
+        if (project == null || modelManager == null)
+        {
+            return Resolution.unavailable(projectName(project == null ? null : project.getWorkspaceProject()));
+        }
+        IBmModel model = modelManager.getModel(project);
+        return model == null ? Resolution.unavailable(projectName(project.getWorkspaceProject()))
+            : Resolution.available(model);
     }
 
     /**

@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -316,7 +317,7 @@ public class GetProblemSummaryTool implements IMcpTool
         for (Map.Entry<IProject, List<Marker>> entry : markersByProject.entrySet())
         {
             List<Marker> projectMarkers = entry.getValue();
-            IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(entry.getKey()) : null;
+            IBmModel bmModel = bmModelManager != null ? BmModelResolver.resolve(entry.getKey(), bmModelManager).getModel() : null;
             if (bmModel != null)
             {
                 BmTransactions.<Void> read(bmModel, "SummarizeProjectProblems", (tx, pm) -> { //$NON-NLS-1$

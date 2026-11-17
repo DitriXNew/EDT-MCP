@@ -24,6 +24,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -310,7 +311,7 @@ public class RevalidateObjectsTool implements IMcpTool
         }
 
         // Get BM model
-        IBmModel bmModel = bmModelManager.getModel(dtProject);
+        IBmModel bmModel = BmModelResolver.resolve(project, bmModelManager).getModel();
         if (bmModel == null)
         {
             services.error = ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$

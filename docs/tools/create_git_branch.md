@@ -13,7 +13,7 @@ Start isolated work on a new Git branch for an EDT project. Parameters and examp
 | setDefault | — | boolean | Only with applicationId: also make it the DEFAULT infobase for the new branch's context. Default false. |
 
 ## Guide
-Create a new local git branch - the non-UI sibling of EDT's own "New Branch" command - optionally check it out immediately, and optionally attach an EXISTING infobase to the new branch's context in the same call.
+Create a local Git branch for `projectName`, optionally check it out and attach an EXISTING infobase to its new branch context.
 
 ## Parameters
 - `branch` is the new branch's SHORT name; it must NOT already exist (checked via `Repository.findRef` before anything else runs - a name that resolves to an existing local branch, remote-tracking branch, or tag is rejected, naming the ref it collided with).

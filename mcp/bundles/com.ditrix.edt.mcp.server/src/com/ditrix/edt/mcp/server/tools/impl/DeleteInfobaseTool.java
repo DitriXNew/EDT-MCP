@@ -720,7 +720,7 @@ public class DeleteInfobaseTool implements IMcpTool
         if (appManager == null)
         {
             return DeleteContext.failed(
-                ToolResult.error("IApplicationManager service is not available").toJson()); //$NON-NLS-1$
+                ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson()); //$NON-NLS-1$
         }
 
         IInfobaseAssociationManager assocManager =
@@ -763,23 +763,14 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         if (applicationId != null && !applicationId.isEmpty())
         {
-            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    timeoutMs);
-            if (!read.concluded())
-            {
-                return TargetApplication.failed(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
-                    + applicationId + "' for project '" + projectName + "': " //$NON-NLS-1$ //$NON-NLS-2$
-                    + read.deadlineFailure() + ". Nothing was deleted.").toJson()); //$NON-NLS-1$
-            }
-            Optional<IApplication> found = read.valueOrRethrow();
-            if (!found.isPresent())
-            {
-                return TargetApplication.failed(ToolResult.error("Application not found: '" //$NON-NLS-1$
-                    + applicationId + "' for project '" + projectName //$NON-NLS-1$
-                    + "'. Use get_applications to list available application IDs.").toJson()); //$NON-NLS-1$
-            }
-            return TargetApplication.of(found.get());
+            ApplicationSupport.ApplicationResolution resolved = ApplicationSupport.resolveApplication(
+                appManager, project, applicationId, timeoutMs,
+                failure -> ToolResult.error("Could not resolve application '" + applicationId
+                    + "' for project '" + projectName + "': " + failure + ". Nothing was deleted.").toJson(),
+                ToolResult.error("Application not found: '" + applicationId + "' for project '"
+                    + projectName + "'. Use get_applications to list available application IDs.").toJson());
+            return resolved.errorJson() == null ? TargetApplication.of(resolved.application())
+                : TargetApplication.failed(resolved.errorJson());
         }
 
         // Find by display name among the project's infobase-type OR standalone-server applications.

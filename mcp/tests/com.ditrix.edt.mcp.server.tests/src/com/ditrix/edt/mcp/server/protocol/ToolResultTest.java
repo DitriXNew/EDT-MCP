@@ -188,4 +188,26 @@ public class ToolResultTest
         assertNotNull(json);
         assertTrue(json.startsWith("["));
     }
+
+    @org.junit.Test
+    public void notesPreserveErrorFieldsAndIgnoreOtherPayloads()
+    {
+        String json = ToolResult.errorAfterMutation("Primary").put("id", "abc")
+            .withNote("Detail").toJson();
+        com.google.gson.JsonObject value = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        org.junit.Assert.assertEquals("Primary Detail", value.get("error").getAsString());
+        org.junit.Assert.assertTrue(value.get("mutationCommitted").getAsBoolean());
+        org.junit.Assert.assertEquals("abc", value.get("id").getAsString());
+        org.junit.Assert.assertEquals("Primary Detail More", com.google.gson.JsonParser.parseString(
+            ToolResult.appendErrorNote(json, "More")).getAsJsonObject().get("error").getAsString());
+        String nullable = "{\"success\":false,\"error\":\"Primary\",\"details\":null}";
+        org.junit.Assert.assertEquals(nullable.replace("Primary", "Primary Detail"),
+            ToolResult.appendErrorNote(nullable, "Detail"));
+        for (String other : new String[] {"Markdown", "{broken", "null", "{\"success\":false}", "{\"success\":true}",
+            "{\"success\":\"false\",\"error\":\"text\"}"})
+        {
+            org.junit.Assert.assertEquals(other, ToolResult.appendErrorNote(other, "Detail"));
+        }
+    }
+
 }

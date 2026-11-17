@@ -227,20 +227,7 @@ public final class ComparisonFailures
         return ToolResult.error(message.toString());
     }
 
-    /**
-     * The comparison failed. This is reachable ONLY through
-     * {@code CompareMergeProcessBatch.getFailureCause()}: the process status has no failure
-     * literal, so a caller that trusts the status alone sees a dead comparison as a running one.
-     *
-     * @param cause the failure the batch carried
-     * @return the refusal
-     */
-    public static ToolResult comparisonFailed(Throwable cause)
-    {
-        return ToolResult.error("The comparison failed: " + describe(cause) //$NON-NLS-1$
-            + ". Nothing was written. Check that both revisions exist and that the project is " //$NON-NLS-1$
-            + "fully loaded (list_projects reports readiness), then start it again."); //$NON-NLS-1$
-    }
+
 
     /**
      * A comparison was registered here but EDT no longer holds it — it was cancelled elsewhere, or

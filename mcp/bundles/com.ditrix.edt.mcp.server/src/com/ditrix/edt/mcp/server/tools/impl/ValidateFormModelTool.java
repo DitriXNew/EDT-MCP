@@ -152,10 +152,7 @@ public class ValidateFormModelTool implements IMcpTool
     /** The project's platform version, or {@code null} when it cannot be resolved. */
     private static Version platformVersionOf(ProjectContext.ConfigurationResult ctx)
     {
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project =
-            v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project()) : null;
-        return v8Project != null ? v8Project.getVersion() : null;
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(ctx.project());
     }
 
     /** The findings, plus the two counts a caller branches on before reading any of them. */

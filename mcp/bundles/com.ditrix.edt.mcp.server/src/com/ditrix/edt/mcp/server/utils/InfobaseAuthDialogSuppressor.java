@@ -192,6 +192,30 @@ public final class InfobaseAuthDialogSuppressor
 
     private static Display filterDisplay;
     private static Listener filter;
+    private static Runnable filterDisposable;
+
+    /** Adds the observed access-dialog refusal without changing the primary diagnosis. */
+    public static String appendFailureNote(String message, long before, long after)
+    {
+        String note = accessSettingsDialogFailureNote(before, after);
+        if (note.isEmpty()) { return message; }
+        return message == null || message.isEmpty() ? note : message + " " + note;
+    }
+
+    public static org.eclipse.core.runtime.IStatus appendFailureNote(
+        org.eclipse.core.runtime.IStatus status, long before, long after)
+    {
+        if (status == null || status.isOK()) { return status; }
+        String message = appendFailureNote(status.getMessage(), before, after);
+        if (java.util.Objects.equals(message, status.getMessage())) { return status; }
+        if (status.isMultiStatus())
+        {
+            return new org.eclipse.core.runtime.MultiStatus(status.getPlugin(), status.getCode(),
+                status.getChildren(), message, status.getException());
+        }
+        return new org.eclipse.core.runtime.Status(status.getSeverity(), status.getPlugin(),
+            status.getCode(), message, status.getException());
+    }
 
     private InfobaseAuthDialogSuppressor()
     {
@@ -392,7 +416,7 @@ public final class InfobaseAuthDialogSuppressor
         }
     }
 
-    private static void installOnUiThread(Display display)
+    private static Runnable installOnUiThread(Display display)
     {
         Listener toInstall;
         synchronized (LOCK)
@@ -400,7 +424,7 @@ public final class InfobaseAuthDialogSuppressor
             if (filter != null && filterDisplay == display && !display.isDisposed())
             {
                 installed = true;
-                return; // already installed on this display
+                return filterDisposable; // already installed on this display
             }
             toInstall = createFilterListener();
             filter = toInstall;
@@ -409,6 +433,20 @@ public final class InfobaseAuthDialogSuppressor
         display.addFilter(SWT.Activate, toInstall);
         display.addFilter(SWT.Show, toInstall);
         installed = true;
+        filterDisposable = ListenerDisposables.register(() -> EdtDialogs.removeFilters(display, () -> {
+            display.removeFilter(SWT.Activate, toInstall);
+            display.removeFilter(SWT.Show, toInstall);
+            synchronized (LOCK)
+            {
+                if (filter == toInstall)
+                {
+                    filter = null;
+                    filterDisplay = null;
+                    installed = false;
+                }
+            }
+        }));
+        return filterDisposable;
     }
 
     private static Listener createFilterListener()

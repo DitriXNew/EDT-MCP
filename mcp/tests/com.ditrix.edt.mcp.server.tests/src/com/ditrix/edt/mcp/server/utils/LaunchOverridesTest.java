@@ -309,4 +309,38 @@ public class LaunchOverridesTest
     {
         return JsonParser.parseString(errorJson).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
     }
+    @Test
+    public void storedClassDisambiguatesSameNamedExternalObjectsInBothLanguages() throws Exception
+    {
+        for (String name : java.util.List.of("Runner", "\u0422\u0435\u0441\u0442"))
+        {
+            var processor = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createExternalDataProcessor();
+            var report = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createExternalReport();
+            processor.setName(name);
+            report.setName(name);
+            var project = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IExternalObjectProject.class);
+            org.mockito.Mockito.when(project.getExternalObjects()).thenReturn(java.util.List.of(processor, report));
+            var scope = MetadataScope.ofExternalObjectProject(null, null, project);
+            var overrides = LaunchOverrides.of(null, "ExternalObjects", name);
+            var resolve = LaunchOverrides.class.getDeclaredMethod("matchByName", MetadataScope.class, String.class);
+            resolve.setAccessible(true);
+            var selected = resolve.invoke(overrides, scope, report.getClass().getName());
+            var field = selected.getClass().getDeclaredField("object");
+            field.setAccessible(true);
+            org.junit.Assert.assertSame(report, field.get(selected));
+            selected = resolve.invoke(overrides, scope, processor.getClass().getName());
+            org.junit.Assert.assertSame(processor, field.get(selected));
+            selected = resolve.invoke(overrides, scope, (String)null);
+            org.junit.Assert.assertNull(field.get(selected));
+            report.getSynonym().put("en", "Visible label");
+            report.getSynonym().put("ru", "\u0412\u0438\u0434\u0438\u043c\u043e\u0435 \u0438\u043c\u044f");
+            for (String synonym : report.getSynonym().values())
+            {
+                var bySynonym = LaunchOverrides.of(null, "ExternalObjects", synonym);
+                selected = resolve.invoke(bySynonym, scope, report.getClass().getName());
+                org.junit.Assert.assertNull("A synonym is not a programmatic Name", field.get(selected));
+            }
+        }
+    }
+
 }

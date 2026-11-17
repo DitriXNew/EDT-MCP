@@ -780,4 +780,18 @@ public class EditorScreenshotHelperTest
 
         assertEquals(java.util.List.of("A", "B", "C"), EditorScreenshotHelper.pageNames(form)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
+
+    @Test public void modelFqnUsesTheTypedBmIdentity() throws Exception
+    {
+        var model = org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmObject.class);
+        org.mockito.Mockito.when(model.bmGetEngine()).thenReturn(org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmEngine.class));
+        org.mockito.Mockito.when(model.bmIsTop()).thenReturn(true);
+        org.mockito.Mockito.when(model.bmGetFqn()).thenReturn("Catalog.Products.Form.Item");
+        var method = EditorScreenshotHelper.class.getDeclaredMethod("bmGetFqn", Object.class);
+        method.setAccessible(true);
+        assertEquals("Catalog.Products.Form.Item", method.invoke(null, model));
+        org.mockito.Mockito.verify(model).bmGetFqn();
+        org.junit.Assert.assertNull(method.invoke(null, new Object()));
+        org.junit.Assert.assertNull(method.invoke(null, com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCommonForm()));
+    }
 }

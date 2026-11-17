@@ -239,4 +239,25 @@ public class BmTransactionsTest
         assertTrue("no services headless, so no submission - and no exception either", //$NON-NLS-1$
             !BmTransactions.forceExportToDisk(project, "Catalog.Products")); //$NON-NLS-1$
     }
+
+    @Test public void nestedReadBorrowsTheCurrentEngineTransaction()
+    {
+        IBmModel model = mock(IBmModel.class);
+        var engine = mock(com._1c.g5.v8.bm.core.IBmEngine.class);
+        var transaction = mock(IBmTransaction.class);
+        when(model.getEngine()).thenReturn(engine);
+        when(engine.getCurrentTransaction()).thenReturn(transaction);
+        assertEquals("nested", BmTransactions.read(model, "nested", (tx, monitor) -> {
+            assertSame(transaction, tx);
+            return "nested";
+        }));
+        verify(model, never()).executeReadonlyTask(any());
+        verify(model, never()).execute(any());
+        var failure = new IllegalStateException("inner failure");
+        assertSame(failure, org.junit.Assert.assertThrows(IllegalStateException.class, () ->
+            BmTransactions.read(model, "nested failure", (tx, monitor) -> { throw failure; })));
+        verify(transaction, never()).commit();
+        verify(transaction, never()).rollback();
+    }
+
 }

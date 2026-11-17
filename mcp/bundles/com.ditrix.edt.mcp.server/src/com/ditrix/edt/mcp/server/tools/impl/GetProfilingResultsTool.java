@@ -21,6 +21,7 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProfilingReport;
 import com.ditrix.edt.mcp.server.utils.ProfilingSupport;
+import com.ditrix.edt.mcp.server.utils.ProfilingSessionRegistry;
 
 /** Select, summarize, page and compare persisted EDT measurements. */
 public class GetProfilingResultsTool implements IMcpTool
@@ -81,7 +82,7 @@ public class GetProfilingResultsTool implements IMcpTool
             IProfilingService service = profilingService();
             List<IProfilingResult> results = ProfilingSupport.newest(service.getResults());
             String state = "profilingActive: " + (applicationId == null || applicationId.isBlank()
-                ? StartProfilingTool.isAnyProfilingActive() : StartProfilingTool.isProfilingActive(applicationId)) + ".\n\n";
+                ? ProfilingSessionRegistry.isAnyProfilingActive() : ProfilingSessionRegistry.isProfilingActive(applicationId)) + ".\n\n";
             if (mode.equals("list"))
             {
                 if (measurementId != null) { ProfilingSupport.select(results, measurementId); }

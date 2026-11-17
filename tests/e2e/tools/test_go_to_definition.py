@@ -36,21 +36,7 @@ unqualified form go_to_definition("Add", modulePath=".../Calc/Module.bsl")
 resolves the same Add. Metadata-FQN fixture: Catalog.Catalog (a Catalog with NO
 .bsl modules, only a form).
 
-THE KEY CONTRACT GOTCHA (drives several negatives below)
---------------------------------------------------------
-The wire `isError` flag is set ONLY when the tool returns a canonical
-ToolResult.error JSON payload ({"success":false,...}) — see
-McpProtocolHandler.isJsonErrorPayload (success==false boolean only). Two
-"failure-shaped" outcomes are NOT JSON error payloads and therefore arrive as
-SUCCESS (is_error == false) with a plain-markdown body:
-  (a) method not found in a REAL module ->
-        BslModuleUtils.buildMethodNotFoundResponse returns the plain string
-        "Error: Method '<name>' not found in <modulePath>\n\n**Available methods**…"
-  (b) a two-part symbol that is neither a CommonModule method nor a metadata
-        object -> buildNotFoundResponse returns "## Symbol not found: <a>.<b>…"
-Both literally read like errors but are delivered as is_error:false. assert_error
-would FAIL on them, so they are tested as assert_ok + content assertions and the
-machine-undetectability is flagged with `# AUDIT` (a fix-card, not fudged).
+Missing methods and unresolved symbols return isError with actionable hints.
 
 Outcomes that ARE real ToolResult.error (is_error == true):
   - missing required projectName / symbol      -> "<name> is required"
@@ -251,10 +237,7 @@ def test_missing_symbol_errors_actionably():
     Machine-detectable error that names the missing param."""
     r = call("go_to_definition", {"projectName": PROJECT})
     e = assert_error(r, "missing symbol")
-    # AUDIT: names the missing param but gives no example of the accepted symbol
-    # forms ('ModuleName.MethodName' / 'Catalog.Products') — not fully actionable.
-    # suggests=[] is intentional -> fix-card, not a weakened assertion.
-    assert_error_quality(e, names=["symbol"], suggests=[],
+    assert_error_quality(e, names=["symbol"], suggests=["ModuleName.MethodName", "Catalog.Products"],
                          ctx="missing symbol names the required param")
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -267,9 +250,7 @@ def test_missing_projectname_errors_clearly():
     fires the projectName guard.)"""
     r = call("go_to_definition", {"symbol": "Calc.Add"})
     e = assert_error(r, "missing projectName")
-    # AUDIT: names the param but offers no list_projects hint to discover a valid
-    # project. suggests=[] -> fix-card.
-    assert_error_quality(e, names=["projectName"], suggests=[],
+    assert_error_quality(e, names=["projectName"], suggests=["list_projects"],
                          ctx="missing projectName names the required param")
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -311,8 +292,7 @@ def test_unqualified_method_with_bad_modulepath_errors():
     """Unqualified method + a non-existent modulePath: EMF loadModule returns null,
     so resolution falls to the text fallback, whose file.exists() check fails ->
     ToolResult.error "Module not found: src/<modulePath>". This is a real
-    machine-detectable error (distinct from the success-shaped method-not-found in a
-    REAL module, tested separately below)."""
+    machine-detectable error; a missing method in a real module also returns isError."""
     bad_path = "CommonModules/NoSuchModule_e2e/Module.bsl"
     r = call("go_to_definition", {
         "projectName": PROJECT,
@@ -327,75 +307,46 @@ def test_unqualified_method_with_bad_modulepath_errors():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# NEGATIVE MATRIX — "failure-shaped" but delivered as SUCCESS (is_error == false).
-# These are the documented contract gotchas: the body reads like an error but is
-# NOT a JSON error payload, so the wire isError stays false. We assert the REAL
-# contract (success + the diagnostic body + the helpful list) and AUDIT the fact
-# that a programmatic caller cannot detect the failure via isError.
+# NEGATIVE MATRIX — missing methods retain the available-method hint.
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="go_to_definition", kind="read")
-def test_method_not_found_in_real_module_is_success_with_diagnostic():
-    """A qualified symbol whose MODULE exists but METHOD does not
-    ("Calc.NoSuchMethod_e2e"): buildMethodNotFoundResponse returns a plain markdown
-    body "Error: Method 'NoSuchMethod_e2e' not found in <modulePath>" + the list of
-    available methods (Add, Test). This is NOT a JSON error payload, so the wire
-    isError is FALSE. We assert the body names the missing method AND lists the real
-    siblings — a broken resolver that silently returned the first method, or dropped
-    the available-methods list, would FAIL.
-
-    # AUDIT: method-not-found is delivered as is_error:false (success). A
-    # programmatic MCP client cannot detect this failure via the isError flag — it
-    # must string-match "not found". This should be a ToolResult.error (machine
-    # detectable). Fix-card: route buildMethodNotFoundResponse through ToolResult.error."""
+def test_method_not_found_in_real_module_is_error_with_hint():
+    """A missing method must be machine-detectable and list real sibling methods."""
     r = call("go_to_definition", {
         "projectName": PROJECT,
         "symbol": "Calc.NoSuchMethod_e2e",
     })
-    # REAL contract: success (NOT is_error) — assert_error would wrongly fail here.
-    assert_ok(r, "method-not-found is delivered as success-with-diagnostic")
-    assert r.is_error is False, \
-        "method-not-found in a real module is delivered as is_error:false (AUDIT)"
+    message = assert_error(r, "missing method in a real module")
     # The diagnostic names the missing method and the module it searched.
-    assert_contains(r.text, "NoSuchMethod_e2e",
+    assert_contains(message, "NoSuchMethod_e2e",
                     "diagnostic must name the missing method")
-    assert_contains(r.text, "not found in",
+    assert_contains(message, "not found in",
                     "diagnostic must say the method was not found")
-    assert_contains(r.text, CALC_MODULE_PATH,
+    assert_contains(message, CALC_MODULE_PATH,
                     "diagnostic must name the module it searched")
     # Actionable list of the REAL siblings present in the module.
-    assert_contains(r.text, "Available methods",
+    assert_contains(message, "Available methods",
                     "diagnostic must list the available methods")
-    assert_contains(r.text, "- Add",
+    assert_contains(message, "- Add",
                     "the available-methods list must include the real method Add")
-    assert_contains(r.text, "- Test",
+    assert_contains(message, "- Test",
                     "the available-methods list must include the real method Test")
     assert_no_diff("a failed lookup must not touch the project on disk")
 
 
 @e2e_test(tool="go_to_definition", kind="read")
-def test_unknown_two_part_symbol_is_success_with_not_found_body():
-    """A two-part symbol that is NEITHER a CommonModule method NOR a metadata object
-    ("NoSuchModule_e2e.Foo"): resolveTwoPartSymbol falls through to
-    buildNotFoundResponse, a plain markdown body "## Symbol not found:
-    NoSuchModule_e2e.Foo" followed by supported metadata types and a usage tip. NOT
-    a JSON error payload -> wire isError is FALSE.
-
-    # AUDIT: an unresolvable symbol is delivered as is_error:false (success) — a
-    # programmatic client cannot detect the failure via isError; it must string-match
-    # "Symbol not found". Fix-card: make the not-found branch a ToolResult.error."""
+def test_unknown_two_part_symbol_is_error_with_not_found_hint():
+    """An unresolved symbol is an error retaining its usage hint."""
     bad = "NoSuchModule_e2e.Foo"
     r = call("go_to_definition", {"projectName": PROJECT, "symbol": bad})
-    # REAL contract: success-with-empty (NOT is_error).
-    assert_ok(r, "unresolvable two-part symbol is delivered as success")
-    assert r.is_error is False, \
-        "unresolvable symbol is delivered as is_error:false (AUDIT)"
+    message = assert_error(r, "unresolved two-part symbol")
     # Names the unresolved symbol so a human knows exactly what failed.
-    assert_contains(r.text, "Symbol not found",
+    assert_contains(message, "Symbol not found",
                     "body must state the symbol was not found")
-    assert_contains(r.text, bad,
+    assert_contains(message, bad,
                     "body must name the unresolved symbol")
     # The body is at least actionable for a human: it lists supported metadata types
     # and a modulePath usage tip (the resolver's helpful fallback).
-    assert_contains(r.text, "modulePath",
+    assert_contains(message, "modulePath",
                     "the not-found body must include the actionable modulePath tip")
     assert_no_diff("a failed lookup must not touch the project on disk")

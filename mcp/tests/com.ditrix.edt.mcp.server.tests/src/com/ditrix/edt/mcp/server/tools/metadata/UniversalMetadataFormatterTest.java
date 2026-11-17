@@ -112,10 +112,10 @@ public class UniversalMetadataFormatterTest
     // ==================== format() null / header guards ====================
 
     @Test
-    public void testFormatNullReturnsErrorString()
+    public void testFormatNullReturnsTypedFailure()
     {
-        // The null guard must return a stable error sentinel, never NPE.
-        assertEquals("Error: MdObject is null", f.format(null, false, EN)); //$NON-NLS-1$
+        assertEquals("MdObject is null", f.formatOutcome(null, false, EN).error());
+        org.junit.Assert.assertThrows(IllegalArgumentException.class, () -> f.format(null, false, EN)); //$NON-NLS-1$
     }
 
     @Test
@@ -154,7 +154,7 @@ public class UniversalMetadataFormatterTest
             md.contains("| Name | Synonym | Type |")); //$NON-NLS-1$
         assertTrue("compact table has a 3-col separator", md.contains("|---|---|---|\n")); //$NON-NLS-1$
         assertTrue("the Price row shows its type name", md.contains("| Price | Price | Number |")); //$NON-NLS-1$
-        assertTrue("the Note row shows its type name", md.contains("| Note | Note | String |")); //$NON-NLS-1$
+        assertTrue("the Note row shows its type name", md.contains("| Note | Note | String(unlimited) |")); //$NON-NLS-1$
         // No extended columns in compact mode.
         assertFalse("compact mode must not emit the Indexing column", md.contains("Indexing")); //$NON-NLS-1$
     }
@@ -403,7 +403,7 @@ public class UniversalMetadataFormatterTest
         TypeDescription composite = McoreFactory.eINSTANCE.createTypeDescription();
         composite.getTypes().add(newType("String")); //$NON-NLS-1$
         composite.getTypes().add(newType("Number")); //$NON-NLS-1$
-        assertEquals("String, Number", f.formatType(composite)); //$NON-NLS-1$
+        assertEquals("String(unlimited), Number", f.formatType(composite)); //$NON-NLS-1$
 
         assertEquals("-", f.formatType(McoreFactory.eINSTANCE.createTypeDescription())); //$NON-NLS-1$
         assertEquals("-", f.formatType(null)); //$NON-NLS-1$
@@ -523,6 +523,24 @@ public class UniversalMetadataFormatterTest
             assertTrue(md, md.contains("PaletteColor: Accent"));
             assertTrue(md, md.contains("| Color | RGB(12, 34, 56) |"));
         }
+    }
+
+
+    @Test public void typedFlagsAndTabularSectionValuesAreRendered() throws Exception
+    {
+        var catalog = MdClassFactory.eINSTANCE.createCatalog(); catalog.setName("Test");
+        var attribute = MdClassFactory.eINSTANCE.createCatalogAttribute(); attribute.setName("Text");
+        attribute.setPasswordMode(true); attribute.setMultiLine(true);
+        catalog.getAttributes().add(attribute);
+        var flags = new StringBuilder();
+        var method = UniversalMetadataFormatter.class.getDeclaredMethod("formatAttributesExtended",
+            StringBuilder.class, java.util.Collection.class, boolean.class, String.class);
+        method.setAccessible(true);
+        method.invoke(f, flags, catalog.getAttributes(), false, EN);
+        assertTrue(flags.toString(), flags.toString().contains("| Yes | Yes |"));
+        var section = MdClassFactory.eINSTANCE.createCatalogTabularSection(); section.setName("Lines");
+        section.setLineNumberLength(7); catalog.getTabularSections().add(section);
+        assertTrue(f.format(catalog, false, EN).contains("| Line Number Length | 7 |"));
     }
 
 }

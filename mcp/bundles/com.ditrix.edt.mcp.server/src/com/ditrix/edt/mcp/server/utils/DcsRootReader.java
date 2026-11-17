@@ -56,18 +56,7 @@ public final class DcsRootReader
         return readSchema(transaction, target);
     }
 
-    /** Write-side read that represents an allowed plain-attribute conversion as a null root. */
-    public static Result readForWrite(IBmTransaction transaction, Target target)
-    {
-        if (transaction == null || target == null)
-        {
-            return Result.failure("The resolved DCS target is unavailable. Re-run dcs action='get'."); //$NON-NLS-1$
-        }
-        return target.kind() == TargetKind.DYNAMIC_LIST
-            ? readDynamicList(transaction, target, true)
-            : target.kind() == TargetKind.FORM
-                ? readFormConditionalAppearance(transaction, target) : readSchema(transaction, target);
-    }
+
 
     private static Result readSchema(IBmTransaction transaction, Target target)
     {

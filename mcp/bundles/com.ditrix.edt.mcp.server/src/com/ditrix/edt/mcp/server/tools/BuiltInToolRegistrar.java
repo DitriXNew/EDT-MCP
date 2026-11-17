@@ -234,7 +234,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new ResumeTool());
         catalogue.add(new DebugPauseTool());
         catalogue.add(new EvaluateExpressionTool());
-        catalogue.add(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
+        catalogue.add(new DebugYaxunitTestsTool()); // NOSONAR compatibility alias retained until release 2.27.0
         catalogue.add(new DebugStatusTool());
         catalogue.add(new StartProfilingTool());
         catalogue.add(new StopProfilingTool());

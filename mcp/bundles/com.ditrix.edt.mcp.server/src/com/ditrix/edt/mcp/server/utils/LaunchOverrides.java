@@ -109,6 +109,18 @@ public final class LaunchOverrides
             automatedTestingMode, automatedTestingPort);
     }
 
+    /** Resolves EDT's saved object with its native class discriminator. */
+    public static Prepared prepareStoredExternalObject(ILaunchConfiguration config) throws CoreException
+    {
+        LaunchOverrides stored = of(null,
+            config.getAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_PROJECT_NAME, (String)null),
+            config.getAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_NAME, (String)null));
+        if (isBlank(stored.externalObjectProjectName) || isBlank(stored.externalObjectName)) { return stored.prepare(); }
+        Resolution resolution = stored.resolveExternalObject(
+            config.getAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_TYPE, (String)null));
+        return new Prepared(stored, resolution.object, resolution.errorJson);
+    }
+
     /** @return the normalized native testing mode, or null when absent. */
     public String automatedTestingMode()
     {
@@ -336,6 +348,11 @@ public final class LaunchOverrides
      */
     private Resolution resolveExternalObject()
     {
+        return resolveExternalObject(null);
+    }
+
+    private Resolution resolveExternalObject(String storedClass)
+    {
         // Asked BEFORE the root collection is read. A project mid-import answers with whatever
         // it holds right now, so a just-added object reads as missing and a just-renamed one
         // resolves under its old name - and the launch would then be stamped from stale data
@@ -360,7 +377,7 @@ public final class LaunchOverrides
                 + "external objects; the configuration being debugged stays in projectName.").toJson()); //$NON-NLS-1$
         }
 
-        Resolution named = matchByName(scope);
+        Resolution named = matchByName(scope, storedClass);
         if (named.errorJson != null)
         {
             return named;
@@ -419,7 +436,7 @@ public final class LaunchOverrides
      * @param scope the external-objects project's scope
      * @return the matched object, or the refusal explaining which way it failed
      */
-    private Resolution matchByName(MetadataScope scope)
+    private Resolution matchByName(MetadataScope scope, String storedClass)
     {
         int dot = externalObjectName.indexOf('.');
         if (dot > 0)
@@ -457,7 +474,8 @@ public final class LaunchOverrides
             // form goes through. Comparing exactly here made the two spellings of one address
             // accept different sets of names, and the canonical name is stamped afterwards
             // regardless, so the casing a caller typed never reaches EDT.
-            if (name.equalsIgnoreCase(externalObjectName))
+            if (name.equalsIgnoreCase(externalObjectName)
+                && (storedClass == null || storedClass.equals(object.getClass().getName())))
             {
                 matches.add(object);
             }
@@ -660,6 +678,24 @@ public final class LaunchOverrides
         public String resolvedExternalObjectName()
         {
             return externalObject == null ? null : externalObject.getName();
+        }
+
+        /** Builds the same EDT dump for a client started outside its launch delegate. */
+        public java.nio.file.Path buildExternalObjectDump() throws Exception
+        {
+            if (externalObject == null) { return null; }
+            var support = ExternalObjectDumpSupport.resolveDumpSupport();
+            var project = ProjectContext.of(overrides.externalObjectProjectName).project();
+            if (support == null || project == null || !support.isEnabled(project))
+            {
+                throw new IllegalStateException("Enable external object dump generation in the external-objects project and retry.");
+            }
+            var dump = support.getDump(project, externalObject, true, new org.eclipse.core.runtime.NullProgressMonitor());
+            if (dump == null)
+            {
+                throw new IllegalStateException("EDT did not produce the external object dump; run build_external_objects and retry.");
+            }
+            return dump;
         }
 
         /**

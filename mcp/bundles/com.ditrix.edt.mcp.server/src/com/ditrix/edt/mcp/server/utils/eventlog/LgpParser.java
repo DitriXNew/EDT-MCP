@@ -253,27 +253,7 @@ public final class LgpParser
         }
     }
 
-    /** Maps a raw one-letter transaction-status code to its canonical English name. */
-    public static String decodeTxStatus(String code)
-    {
-        if (code == null)
-        {
-            return null;
-        }
-        switch (code)
-        {
-            case "N":
-                return "NotTransactional";
-            case "C":
-                return "Committed";
-            case "U":
-                return "Unfinished";
-            case "R":
-                return "RolledBack";
-            default:
-                return code;
-        }
-    }
+
 
     /** Decodes {@code YYYYMMDDhhmmss} into ISO {@code YYYY-MM-DDThh:mm:ss}. */
     public static String toIso(long ts)

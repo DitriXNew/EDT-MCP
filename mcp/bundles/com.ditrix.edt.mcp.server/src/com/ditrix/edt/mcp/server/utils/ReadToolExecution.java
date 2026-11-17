@@ -70,7 +70,7 @@ public final class ReadToolExecution
         else { windowed.accept(work); }
     }
 
-    /** Worker reads retain a BM boundary; windowed dispatch keeps the existing transaction path. */
+    /** Dispatches reads inside a BM boundary on either host. */
     public static void dispatchRead(String projectName, String taskName, Runnable work)
     {
         dispatch(() -> readOnHost(projectName, taskName, () -> { work.run(); return null; }));
@@ -78,17 +78,14 @@ public final class ReadToolExecution
 
     public static <T> T readOnHost(String projectName, String taskName, Supplier<T> work)
     {
-        if (HostKind.current() == HostKind.HEADLESS)
-        {
-            ProjectContext context = ProjectContext.of(projectName);
-            if (context.exists()) return readModel(context.project(), taskName, work);
-        }
+        ProjectContext context = ProjectContext.of(projectName);
+        if (context.exists()) return readModel(context.project(), taskName, work);
         return work.get();
     }
 
     public static <T> T readOnHost(IProject project, String taskName, Supplier<T> work)
     {
-        return HostKind.current() == HostKind.HEADLESS && project != null && project.exists()
+        return project != null && project.exists()
             ? readModel(project, taskName, work) : work.get();
     }
 
@@ -111,19 +108,17 @@ public final class ReadToolExecution
 
     public static <T> T readModel(IProject project, String taskName, Function<IBmModel, T> work)
     {
-        boolean headless = HostKind.current() == HostKind.HEADLESS;
-        Map<IProject, IBmModel> active = headless ? READ_SCOPES.get() : null;
+        Map<IProject, IBmModel> active = READ_SCOPES.get();
         IBmModel captured = active == null ? null : active.get(project);
         if (captured != null) return work.apply(captured);
         var manager = Activator.getDefault().getBmModelManager();
-        var model = manager == null ? null : manager.getModel(project);
+        var model = BmModelResolver.resolve(project, manager).getModel();
         if (model == null)
         {
             throw Refusals.state("BM model is unavailable for project '" + project.getName()
                 + "'. Check list_projects, wait for project loading and retry.");
         }
         return BmTransactions.read(model, taskName, (tx, monitor) -> {
-            if (!headless) return work.apply(model);
             Map<IProject, IBmModel> scope = READ_SCOPES.get();
             if (scope == null)
             {

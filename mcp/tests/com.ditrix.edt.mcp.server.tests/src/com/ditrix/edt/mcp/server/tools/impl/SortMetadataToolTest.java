@@ -64,6 +64,7 @@ public class SortMetadataToolTest
         }
         verify(model, times(2)).executeReadonlyTask(any());
         verify(model, never()).execute(any());
+        verify(model, times(2)).getEngine();
         verifyNoMoreInteractions(model);
     }
 

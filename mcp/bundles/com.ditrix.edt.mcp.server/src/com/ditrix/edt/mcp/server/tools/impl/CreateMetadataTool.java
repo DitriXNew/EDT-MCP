@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import com.ditrix.edt.mcp.server.HostKind;
 
 import com.ditrix.edt.mcp.server.utils.MetadataRegistration;
@@ -67,6 +70,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.MetadataWriteServices;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataOrdering;
 import com.ditrix.edt.mcp.server.utils.MetadataAutoSort;
@@ -573,6 +577,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // The owned-form branch above already consumed setAsDefault; here it means "make the new report
         // template the main data composition schema" (issue #919) and stays ignored for other kinds.
         props.setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
+        props.templateTarget = isTemplateFqn(normFqn);
         // A subsystem - top-level or nested, either language - takes modify_metadata's properties at
         // creation (issue #930); every other kind refuses them by name.
         String propErr = parseProperties(properties, props, normReport,
@@ -931,7 +936,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return () -> ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
             }
-            IBmModel bmModel = bmModelManager.getModel(ctx.project);
+            IBmModel bmModel = BmModelResolver.resolve(ctx.project, bmModelManager).getModel();
             if (bmModel == null)
             {
                 return () -> ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
@@ -1456,7 +1461,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     factory.fillDefaultReferences(newObject);
                     // A subsystem's properties beyond synonym / comment, by modify_metadata's own writer,
                     // after the factory defaults they replace (issue #930); empty for every other kind.
-                    ModifyMetadataTool.applyChanges(newObject, req.props.writerChanges, tx, req.normFqn);
+                    MetadataPropertyApplier.applyChanges(newObject, req.props.writerChanges, tx, req.normFqn);
                     if (newObject instanceof BasicTemplate)
                     {
                         templateContentFqnHolder[0] = templates.initialize((BasicTemplate)newObject,
@@ -1700,7 +1705,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     factory.fillDefaultReferences(newObject);
                     // The properties beyond synonym / comment, by modify_metadata's own writer, after the
                     // factory defaults they replace (issue #930).
-                    ModifyMetadataTool.applyChanges(newObject, props.writerChanges, tx, childFqn);
+                    MetadataPropertyApplier.applyChanges(newObject, props.writerChanges, tx, childFqn);
                     parentFqnHolder[0] = ownerFqn;
                     createdFqnHolder[0] = childFqn;
                     return null;
@@ -2883,7 +2888,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "{types:[...]} vocabulary an attribute takes), 'keyParameter' or 'comment' " //$NON-NLS-1$
                     + "with modify_metadata. A parameter has no title and no parent.").toJson(); //$NON-NLS-1$
             }
-            switch (pName.toLowerCase())
+            switch (pName.toLowerCase(Locale.ROOT))
             {
                 case "title": //$NON-NLS-1$
                     out.titleVal = normReport.apply("title", asString(prop.get(KEY_VALUE))); //$NON-NLS-1$
@@ -3137,12 +3142,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static FormObjectServices resolveFormObjectServices(IProject project, String projectName)
     {
         FormObjectServices svc = new FormObjectServices();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        svc.mdFactory = Activator.getDefault().getModelObjectFactory();
+        MetadataWriteServices shared = MetadataWriteServices.resolve(project);
         svc.formFactory = Activator.getDefault().getFormModelObjectFactory();
         svc.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || svc.mdFactory == null || bmModelManager == null)
+        if (shared.failure == MetadataWriteServices.Failure.SERVICES_UNAVAILABLE)
         {
             svc.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
             return svc;
@@ -3152,20 +3155,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             svc.error = ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
             return svc;
         }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
+        if (shared.error != null)
         {
-            svc.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
+            svc.error = ToolResult.error((shared.failure == MetadataWriteServices.Failure.PROJECT_UNAVAILABLE
+                ? ERR_NO_V8_PROJECT : ERR_NO_BM_MODEL) + projectName).toJson();
             return svc;
         }
-        svc.version = v8Project.getVersion();
-        svc.v8Project = v8Project;
-        svc.bmModel = bmModelManager.getModel(project);
-        if (svc.bmModel == null)
-        {
-            svc.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-            return svc;
-        }
+        svc.mdFactory = shared.factory;
+        svc.version = shared.version;
+        svc.v8Project = shared.v8Project;
+        svc.bmModel = shared.model;
         return svc;
     }
 
@@ -3407,7 +3406,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
-            switch (pName.toLowerCase())
+            switch (pName.toLowerCase(Locale.ROOT))
             {
                 case "procedure": //$NON-NLS-1$
                 case "handler": //$NON-NLS-1$
@@ -3675,28 +3674,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static BmContext resolveBmContext(IProject project, String projectName)
     {
         BmContext ctx = new BmContext();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        ctx.factory = Activator.getDefault().getModelObjectFactory();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (v8ProjectManager == null || ctx.factory == null || bmModelManager == null)
+        MetadataWriteServices shared = MetadataWriteServices.resolve(project);
+        if (shared.error != null)
         {
-            ctx.error = ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+            ctx.error = ToolResult.error(switch (shared.failure)
+            {
+                case SERVICES_UNAVAILABLE -> ERR_SERVICES_UNAVAILABLE;
+                case PROJECT_UNAVAILABLE -> ERR_NO_V8_PROJECT + projectName;
+                case MODEL_UNAVAILABLE -> ERR_NO_BM_MODEL + projectName;
+            }).toJson();
             return ctx;
         }
-        IV8Project v8Project = v8ProjectManager.getProject(project);
-        if (v8Project == null)
-        {
-            ctx.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
-            return ctx;
-        }
-        ctx.v8Project = v8Project;
-        ctx.version = v8Project.getVersion();
-        ctx.bmModel = bmModelManager.getModel(project);
-        if (ctx.bmModel == null)
-        {
-            ctx.error = ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
-            return ctx;
-        }
+        ctx.factory = shared.factory;
+        ctx.version = shared.version;
+        ctx.v8Project = shared.v8Project;
+        ctx.bmModel = shared.model;
         return ctx;
     }
 
@@ -3710,13 +3702,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Integer insertPosition;
         /** A new Report / ExternalReport template becomes the report's main data composition schema. */
         boolean setAsDefault;
+        /** The create targets a template, so a refused 'type' points at 'templateType'. */
+        boolean templateTarget;
         /**
          * The properties of a SUBSYSTEM create beyond synonym / comment, set by modify_metadata's own rules
          * at creation (issue #930); empty for every other kind, which refuses them by name.
          */
         final List<JsonObject> writerProperties = new ArrayList<>();
         /** {@link #writerProperties} as modify_metadata prepared them, applied in the creating transaction. */
-        final List<ModifyMetadataTool.PreparedChange> writerChanges = new ArrayList<>();
+        final List<MetadataPropertyApplier.PreparedChange> writerChanges = new ArrayList<>();
     }
 
     /**
@@ -3784,7 +3778,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
         }
         MdObject prototype = (MdObject)MdClassFactory.eINSTANCE.create(eClass);
-        String error = ModifyMetadataTool.prepareForCreate(project, scope, config, version, prototype,
+        String error = MetadataPropertyApplier.prepareForCreate(project, scope, config, version, prototype,
             props.writerProperties, props.writerChanges, normReport, isExtensionProject);
         if (error != null)
         {
@@ -3837,9 +3831,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** The project's platform version best-effort, or {@code null} when EDT cannot tell yet. */
     private static Version projectVersion(IProject project)
     {
-        IV8ProjectManager manager = Activator.getDefault() == null ? null : Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = manager == null ? null : manager.getProject(project);
-        return v8Project == null ? null : v8Project.getVersion();
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(project);
     }
 
     /**
@@ -3869,7 +3861,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
             }
             String value = asString(prop.get(KEY_VALUE));
-            String lower = name.toLowerCase();
+            String lower = name.toLowerCase(Locale.ROOT);
             if ((KEY_SYNONYM.equals(lower) || "comment".equals(lower)) && value == null) //$NON-NLS-1$
             {
                 // An absent, null, object or array value reads as no text at all, and the object was created
@@ -3903,7 +3895,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     }
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
                         + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
-                        + "properties (including type) via modify_metadata." + templateTypeHint(name)).toJson(); //$NON-NLS-1$
+                        + "properties (including type) via modify_metadata." //$NON-NLS-1$
+                        + (out.templateTarget ? templateTypeHint(name) : "")).toJson(); //$NON-NLS-1$
             }
         }
         return null;
@@ -3913,6 +3906,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * For a refused 'type': a TEMPLATE's content type is not set afterwards but at creation, through
      * 'templateType' (issue #919: following "set type via modify_metadata" cost a second call).
      */
+    static boolean isTemplateFqn(String fqn)
+    {
+        String canonical = MetadataTypeUtils.toCanonicalEnglishFqn(fqn);
+        if (canonical == null)
+        {
+            return false;
+        }
+        String[] parts = canonical.split("\\."); //$NON-NLS-1$
+        return parts.length >= 2 && ("CommonTemplate".equals(parts[0]) //$NON-NLS-1$
+            || "Template".equals(parts[parts.length - 2])); //$NON-NLS-1$
+    }
+
     static String templateTypeHint(String refusedName)
     {
         return "type".equalsIgnoreCase(refusedName) //$NON-NLS-1$
@@ -4072,7 +4077,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     static String writerNote(Props props)
     {
         List<String> names = new ArrayList<>();
-        for (ModifyMetadataTool.PreparedChange change : props.writerChanges)
+        for (MetadataPropertyApplier.PreparedChange change : props.writerChanges)
         {
             String name = change.feature().getName();
             if (!names.contains(name))

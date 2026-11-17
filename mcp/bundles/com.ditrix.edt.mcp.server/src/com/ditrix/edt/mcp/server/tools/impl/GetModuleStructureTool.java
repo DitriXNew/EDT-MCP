@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
@@ -99,7 +98,7 @@ public class GetModuleStructureTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
-            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            String safeName = modulePath.replace("/", "-").replace("\\", "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             return "structure-" + safeName + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "module-structure.md"; //$NON-NLS-1$
@@ -504,7 +503,7 @@ public class GetModuleStructureTool implements IMcpTool
                 if (uri.isPlatformResource())
                 {
                     String platformString = uri.toPlatformString(true);
-                    IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(new Path(platformString));
+                    IFile file = ProjectContext.workspaceFile(new Path(platformString));
                     if (file != null && file.exists())
                     {
                         return BslModuleUtils.readFileLines(file);

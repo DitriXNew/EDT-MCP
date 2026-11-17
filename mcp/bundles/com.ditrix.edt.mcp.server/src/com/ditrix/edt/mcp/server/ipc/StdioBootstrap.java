@@ -43,6 +43,7 @@ public final class StdioBootstrap implements AutoCloseable
     private final JsonFrames.Writer output;
     private final JsonObject catalog;
     private final boolean headless;
+    private final Boolean plainTextMode;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "edt-mcp-attach"); t.setDaemon(true); return t;
     });
@@ -68,17 +69,40 @@ public final class StdioBootstrap implements AutoCloseable
 
     public StdioBootstrap(RegistryProvider registries, StartupCoordinator.Starter starter, OutputStream output,
         JsonObject catalog, boolean headless)
+    { this(registries, starter, output, catalog, headless, null); }
+
+    public StdioBootstrap(RegistryProvider registries, StartupCoordinator.Starter starter, OutputStream output,
+        JsonObject catalog, boolean headless, Boolean plainTextMode)
     {
         this.registries = registries; this.starter = starter; this.output = new JsonFrames.Writer(output);
-        this.catalog = catalog; this.headless = headless;
+        this.catalog = catalog; this.headless = headless; this.plainTextMode = plainTextMode;
     }
 
     public static boolean headlessRequested(String[] args) { return java.util.Arrays.asList(args).contains("-headless"); }
+
+    /** An omitted override follows the host preference; an explicit value belongs to this bridge. */
+    public static Boolean plainTextMode(String[] args) throws IOException
+    {
+        for (int i = 0; i < args.length; i++)
+        {
+            if ("-resultMode".equals(args[i]))
+            {
+                if (i + 1 < args.length)
+                {
+                    if ("plaintext".equals(args[i + 1])) { return true; }
+                    if ("structured".equals(args[i + 1])) { return false; }
+                }
+                throw new IOException("Set -resultMode to plaintext or structured in the stdio launcher arguments.");
+            }
+        }
+        return null;
+    }
 
     public static void main(String[] args)
     {
         try
         {
+            Boolean deliveryMode = plainTextMode(args);
             Path install = explicitPath(args, "-install");
             String installFix = "Set -install to the EDT installation directory in .mcp.json.";
             try { install = install.toRealPath(); }
@@ -107,7 +131,7 @@ public final class StdioBootstrap implements AutoCloseable
                 return new EndpointRegistry(EndpointRegistry.privateDirectory(EndpointRegistry.userDirectory().resolve("ipc")), workspace);
             };
             try (var bootstrap = new StdioBootstrap(registries, new WindowsEdtStarter(install, workspace, configuration, headlessRequested(args)),
-                System.out, catalog, headlessRequested(args)))
+                System.out, catalog, headlessRequested(args), deliveryMode))
             {
                 var input = new BufferedInputStream(System.in);
                 String frame;
@@ -331,7 +355,7 @@ public final class StdioBootstrap implements AutoCloseable
     }
 
     private void connect(JsonFrames.Socket socket, EndpointRegistry.Endpoint endpoint) throws IOException
-    { socket.connect(UnixDomainSocketAddress.of(endpoint.socket())); IpcHandshake.client(socket, endpoint); }
+    { socket.connect(UnixDomainSocketAddress.of(endpoint.socket())); IpcHandshake.client(socket, endpoint, plainTextMode); }
 
     private void receive(JsonFrames.Socket socket)
     {

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -97,7 +98,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         String typeName = JsonUtils.extractStringArgument(params, KEY_TYPE_NAME);
         if (typeName != null && !typeName.isEmpty())
         {
-            return "doc-" + typeName.toLowerCase() + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "doc-" + typeName.toLowerCase(Locale.ROOT) + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "platform-documentation.md"; //$NON-NLS-1$
     }
@@ -133,7 +134,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         {
             memberType = MEMBER_ALL;
         }
-        else if (!MEMBER_TYPE_VALUES.contains(memberType.toLowerCase()))
+        else if (!MEMBER_TYPE_VALUES.contains(memberType.toLowerCase(Locale.ROOT)))
         {
             // Reject an out-of-set memberType instead of silently matching no members.
             // Echo the rejected value so the caller sees WHAT it sent that was wrong.
@@ -156,7 +157,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
         // Execute based on category. The data gathering / model reads are identical for
         // both formats; only the rendered markdown is condensed afterwards for 'concise'.
         String result;
-        switch (category.toLowerCase())
+        switch (category.toLowerCase(Locale.ROOT))
         {
             case CATEGORY_TYPE:
                 result = service.getTypeDocumentation(typeName, memberName, memberType, projectName,

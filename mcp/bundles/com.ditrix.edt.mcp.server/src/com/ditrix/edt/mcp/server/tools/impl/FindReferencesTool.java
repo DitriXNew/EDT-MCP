@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -142,7 +143,7 @@ public class FindReferencesTool implements IMcpTool
         String objectFqn = JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN);
         if (objectFqn != null && !objectFqn.isEmpty())
         {
-            String safeName = objectFqn.replace(".", "-").toLowerCase(); //$NON-NLS-1$ //$NON-NLS-2$
+            String safeName = objectFqn.replace(".", "-").toLowerCase(Locale.ROOT); //$NON-NLS-1$ //$NON-NLS-2$
             return "references-" + safeName + ".md"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return "references.md"; //$NON-NLS-1$

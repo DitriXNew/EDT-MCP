@@ -1947,4 +1947,24 @@ public class McpProtocolHandlerTest
             // output comparison.
         }
     }
+
+    @Test
+    public void unknownArgumentsReachTheToolWithoutSchemaRejection()
+    {
+        var received = new java.util.concurrent.atomic.AtomicReference<Map<String, String>>();
+        registry.register(new IMcpTool() {
+            @Override public String getName() { return "argument_probe"; }
+            @Override public String getDescription() { return "Argument compatibility probe"; }
+            @Override public String getInputSchema() { return JsonSchemaBuilder.object().build(); }
+            @Override public String execute(Map<String, String> params) {
+                received.set(params); return "accepted";
+            }
+        });
+        String response = handler.processRequest(buildToolCallRequest(1, "argument_probe",
+            "{\"autoSortTopObjects\":false,\"unknownFutureArgument\":1}"));
+        assertNotNull(response, received.get());
+        assertEquals("false", received.get().get("autoSortTopObjects"));
+        assertTrue(response, response.contains("accepted"));
+        assertFalse(response, parseResponse(response).has("error"));
+    }
 }

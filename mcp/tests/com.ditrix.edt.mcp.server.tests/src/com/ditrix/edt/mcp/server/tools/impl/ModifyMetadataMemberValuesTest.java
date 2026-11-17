@@ -1,6 +1,8 @@
 /** Copyright (c) 2026 DitriX. Licensed under AGPL-3.0-or-later. */
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.*;
 
 import java.util.ArrayList;
@@ -150,9 +152,9 @@ public class ModifyMetadataMemberValuesTest
     @Test public void writesWithoutFillValueDoNotReadTheMemberType()
     {
         CatalogAttribute target = org.mockito.Mockito.mock(CatalogAttribute.class);
-        var list = ModifyMetadataTool.PreparedChange.memberValues(MdClassPackage.Literals.BASIC_FEATURE__CHOICE_PARAMETERS,
+        var list = MetadataPropertyApplier.PreparedChange.memberValues(MdClassPackage.Literals.BASIC_FEATURE__CHOICE_PARAMETERS,
             new MetadataMemberValues.Plan("choiceParameters", null, List.of()));
-        assertNull(ModifyMetadataTool.memberValueTypeError(target, List.of(list)));
+        assertNull(MetadataPropertyApplier.memberValueTypeError(target, List.of(list)));
         org.mockito.Mockito.verifyZeroInteractions(target);
     }
 
@@ -175,19 +177,19 @@ public class ModifyMetadataMemberValuesTest
 
     @Test public void toolPreparationActuallyDispatchesTheNewPropertiesAndReturnsActionableErrors() throws Exception
     {
-        var method = ModifyMetadataTool.class.getDeclaredMethod("validateAndPrepare", org.eclipse.core.resources.IProject.class,
+        var method = MetadataPropertyApplier.class.getDeclaredMethod("validateAndPrepare", org.eclipse.core.resources.IProject.class,
             MetadataScope.class, Configuration.class, com._1c.g5.v8.dt.platform.version.Version.class,
             MdObject.class, List.class, List.class, MdNameNormalizer.Report.class, boolean.class);
         method.setAccessible(true);
         CatalogAttribute attribute = member(catalog(), "Атрибут");
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
         Object error = method.invoke(new ModifyMetadataTool(), null, null, null, null, attribute,
             List.of(json("{name:'fillValue',value:{kind:'string',value:'X'}}").getAsJsonObject(),
                 json("{name:'choiceParameters',value:[]}").getAsJsonObject(),
                 json("{name:'choiceParameterLinks',value:[]}").getAsJsonObject()),
             changes, new MdNameNormalizer.Report(true), false);
         assertNull(error); assertEquals(3, changes.size());
-        ModifyMetadataTool.applyChanges(attribute, changes, null, "Catalog.Товары.Attribute.Атрибут");
+        MetadataPropertyApplier.applyChanges(attribute, changes, null, "Catalog.Товары.Attribute.Атрибут");
         assertEquals("X", ((StringValue)attribute.getFillValue()).getValue());
         error = method.invoke(new ModifyMetadataTool(), null, null, null, null, attribute,
             List.of(json("{name:'fillValue',value:{kind:'fixedArray',values:[]}}").getAsJsonObject()),
@@ -201,17 +203,17 @@ public class ModifyMetadataMemberValuesTest
         CatalogAttribute member = member(catalog(), "A");
         TypeDescription string = McoreFactory.eINSTANCE.createTypeDescription();
         Type s = McoreFactory.eINSTANCE.createType(); s.setName("String"); string.getTypes().add(s); member.setType(string);
-        var fill = ModifyMetadataTool.PreparedChange.memberValues(member.eClass().getEStructuralFeature("fillValue"),
+        var fill = MetadataPropertyApplier.PreparedChange.memberValues(member.eClass().getEStructuralFeature("fillValue"),
             MetadataMemberValues.prepare(null, member, "fillValue", json("{kind:'number',value:8}")));
-        assertTrue(ModifyMetadataTool.memberValueTypeError(member, List.of(fill)).contains("does not match"));
+        assertTrue(MetadataPropertyApplier.memberValueTypeError(member, List.of(fill)).contains("does not match"));
         TypeDescription number = McoreFactory.eINSTANCE.createTypeDescription();
         Type n = McoreFactory.eINSTANCE.createType(); n.setName("Number"); number.getTypes().add(n);
-        var type = ModifyMetadataTool.PreparedChange.typeDescription(member.eClass().getEStructuralFeature("type"), number);
-        assertNull(ModifyMetadataTool.memberValueTypeError(member, List.of(fill, type)));
-        assertNull(ModifyMetadataTool.memberValueTypeError(member, List.of(type, fill)));
+        var type = MetadataPropertyApplier.PreparedChange.typeDescription(member.eClass().getEStructuralFeature("type"), number);
+        assertNull(MetadataPropertyApplier.memberValueTypeError(member, List.of(fill, type)));
+        assertNull(MetadataPropertyApplier.memberValueTypeError(member, List.of(type, fill)));
         // The unchanged type uses the plain-set branch, allowing the actual apply pipeline headlessly.
         member.setType(number);
-        ModifyMetadataTool.applyChanges(member, List.of(fill, type), null, "Catalog.Товары.Attribute.A");
+        MetadataPropertyApplier.applyChanges(member, List.of(fill, type), null, "Catalog.Товары.Attribute.A");
         assertEquals(8, ((NumberValue)member.getFillValue()).getValue().intValueExact());
     }
 }

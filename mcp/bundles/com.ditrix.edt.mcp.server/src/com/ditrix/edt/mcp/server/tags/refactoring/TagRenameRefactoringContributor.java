@@ -26,7 +26,13 @@ public class TagRenameRefactoringContributor extends AbstractObjectRenameRefacto
 
     @Override
     protected boolean hasAssociation(IProject project, String fqn) {
-        TagService tagService = TagService.getInstance();
+        if (project == null) {
+            return false;
+        }
+        TagService tagService = TagService.getInstanceIfAvailable();
+        if (tagService == null) {
+            return false;
+        }
         TagStorage storage = tagService.getTagStorage(project);
 
         // Check if this object has any tags assigned
@@ -36,7 +42,11 @@ public class TagRenameRefactoringContributor extends AbstractObjectRenameRefacto
 
     @Override
     protected boolean performRename(IProject project, String oldFqn, String newFqn) {
-        return TagService.getInstance().renameObject(project, oldFqn, newFqn);
+        if (project == null) {
+            return false;
+        }
+        TagService service = TagService.getInstanceIfAvailable();
+        return service != null && service.renameObject(project, oldFqn, newFqn);
     }
 
     @Override

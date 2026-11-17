@@ -26,6 +26,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import com.ditrix.edt.mcp.server.bridge.BridgeActivity;
+import com.ditrix.edt.mcp.server.Activator;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
@@ -53,6 +54,8 @@ import org.osgi.framework.FrameworkUtil;
  */
 public class WorkmateGateway
 {
+    private static final java.util.Set<Class<?>> CLOSED_SESSION_WARNED =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
      * The id Workmate generated for the session published under {@link #CHAT_SESSION_ID},
      * remembered so that key can be kept warm too. Volatile: written by whichever thread
@@ -2101,28 +2104,24 @@ public class WorkmateGateway
         }
     }
 
-    /**
-     * Reports whether a Workmate JShell session has already been closed.
-     * <p>
-     * Tolerant on purpose: when the field cannot be read the session is treated as ALIVE,
-     * because the alternative - recreating on every pass - would churn Workmate's session
-     * cache instead of merely leaving the chat without a bridge.
-     *
-     * @param session the session object to inspect
-     * @return {@code true} only when the session is provably closed
-     */
-    private static boolean isClosedSession(Object session)
+    /** Reports the session state, refusing an unreadable state before reuse or publication. */
+    private static boolean isClosedSession(Object session) throws GatewayException
     {
         try
         {
-            Field closedField = session.getClass().getDeclaredField("isClosed"); //$NON-NLS-1$
+            Field closedField = session.getClass().getDeclaredField("isClosed");
             closedField.setAccessible(true);
             Object closed = closedField.get(session);
-            return closed instanceof AtomicBoolean && ((AtomicBoolean)closed).get();
+            if (closed instanceof AtomicBoolean flag) return flag.get();
+            throw new IllegalStateException("isClosed is not an AtomicBoolean");
         }
         catch (ReflectiveOperationException | RuntimeException e)
         {
-            return false;
+            if (CLOSED_SESSION_WARNED.add(session == null ? Void.class : session.getClass()))
+            {
+                Activator.logWarning("Cannot read Workmate session member isClosed; state is unknown: " + e);
+            }
+            throw GatewayException.incompatible("cannot read session member isClosed; its state is unknown");
         }
     }
 

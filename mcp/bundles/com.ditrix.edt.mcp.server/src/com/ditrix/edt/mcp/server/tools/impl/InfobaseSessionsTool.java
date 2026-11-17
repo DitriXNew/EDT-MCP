@@ -364,7 +364,7 @@ public class InfobaseSessionsTool implements IMcpTool
             targets.add(displayId(session));
         }
         boolean designerSelected = selection.sessions.stream()
-            .anyMatch(InfobaseSessionsTool::isDesignerSession);
+            .anyMatch(InfobaseSessionSupport::isDesignerSession);
         ConsentPreview preview = new ConsentPreview("Terminate infobase sessions", //$NON-NLS-1$
             "This terminates " + (designerSelected
                 ? "the exact Designer/configurator session" //$NON-NLS-1$
@@ -561,7 +561,7 @@ public class InfobaseSessionsTool implements IMcpTool
                 .flatMap(Optional::stream)
                 .toList();
             boolean onlyDesignerSessions = stillPresent.stream()
-                .allMatch(InfobaseSessionsTool::isDesignerSession);
+                .allMatch(InfobaseSessionSupport::isDesignerSession);
             String message = "ibcmd accepted every termination, but " + stillPresent.size() //$NON-NLS-1$
                 + " of " + attempted.size() //$NON-NLS-1$
                 + (onlyDesignerSessions ? " Designer session(s)" : " session(s)") //$NON-NLS-1$ //$NON-NLS-2$
@@ -595,7 +595,7 @@ public class InfobaseSessionsTool implements IMcpTool
             .put(KEY_SESSIONS, sessionMaps(gone))
             .put("terminatedCount", gone.size()) //$NON-NLS-1$
             .put(KEY_VERIFICATION, VERIFICATION_VERIFIED);
-        if (gone.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
+        if (gone.stream().anyMatch(InfobaseSessionSupport::isDesignerSession))
         {
             return result.put(McpKeys.MESSAGE, "A session that reported app-id: " //$NON-NLS-1$
                 + "Designer is gone after the terminate command. It may have been " //$NON-NLS-1$
@@ -715,7 +715,7 @@ public class InfobaseSessionsTool implements IMcpTool
         List<SessionInfo> selectable = new ArrayList<>();
         for (SessionInfo session : sessions)
         {
-            if (!isDesignerSession(session))
+            if (!InfobaseSessionSupport.isDesignerSession(session))
             {
                 selectable.add(session);
             }
@@ -781,7 +781,7 @@ public class InfobaseSessionsTool implements IMcpTool
             if (session.sessionNumber() != null
                 && requestedSessionId.equals(session.sessionNumber().toString()))
             {
-                if (isDesignerSession(session))
+                if (InfobaseSessionSupport.isDesignerSession(session))
                 {
                     return Selection.failed("A Designer/configurator session may be terminated only " //$NON-NLS-1$
                         + "by its exact full UUID, not its numeric session-id."); //$NON-NLS-1$
@@ -802,7 +802,7 @@ public class InfobaseSessionsTool implements IMcpTool
     /** Describes an empty bulk selection from what the readable list actually contained. */
     static String emptySelectionMessage(List<SessionInfo> sessions)
     {
-        if (sessions.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
+        if (sessions.stream().anyMatch(InfobaseSessionSupport::isDesignerSession))
         {
             return "A session reporting app-id: Designer was skipped because bulk termination " //$NON-NLS-1$
                 + "never selects that kind."; //$NON-NLS-1$
@@ -825,7 +825,7 @@ public class InfobaseSessionsTool implements IMcpTool
             item.put("host", session.host()); //$NON-NLS-1$
             item.put("startedAt", session.startedAt()); //$NON-NLS-1$
             item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
-            item.put("applicationKindIsDesigner", isDesignerSession(session)); //$NON-NLS-1$
+            item.put("applicationKindIsDesigner", InfobaseSessionSupport.isDesignerSession(session)); //$NON-NLS-1$
             result.add(item);
         }
         return result;
@@ -841,13 +841,6 @@ public class InfobaseSessionsTool implements IMcpTool
     {
         return session.sessionNumber() == null ? session.sessionId()
             : session.sessionId() + " (session-id " + session.sessionNumber() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /** Recognises the ambiguous Designer kind by both parsed kind flag and raw app-id. */
-    static boolean isDesignerSession(SessionInfo session)
-    {
-        return session.applicationKindIsDesigner()
-            || "Designer".equalsIgnoreCase(session.applicationKind()); //$NON-NLS-1$
     }
 
     private static ToolResult baseResult(String action, String projectName, IApplication application)

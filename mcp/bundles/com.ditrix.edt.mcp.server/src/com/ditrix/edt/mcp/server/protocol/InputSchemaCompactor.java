@@ -224,9 +224,10 @@ public final class InputSchemaCompactor
         // external work. A launch that looks routine silently overwrites someone's changes.
         // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
         // whose destructiveHint is false - nothing else in the always-loaded contract says so.
+        // screen carries the 1-based monitor index and the default non-primary selection.
         keep.put("launch", //$NON-NLS-1$
             asSet("mode", "updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT, //$NON-NLS-1$
-                "restartIfRunning")); //$NON-NLS-1$
+                "restartIfRunning", "screen")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
         // ignoreBranchBinding=true writes an infobase the current branch does not bind; the default
@@ -287,7 +288,7 @@ public final class InputSchemaCompactor
         keep.put("set_breakpoint", asSet(McpKeys.PROJECT_NAME)); //$NON-NLS-1$
         // scriptVariant is REJECTED outright for an extension - it is always inherited
         // from the base configuration - and the enum alone cannot say "except for this
-        // project kind". Merged with autoSortTopObjects: one put() per tool, or the
+        // project kind". One put() per tool, or the
         // second call silently wins (the trap caught in rounds 16 and 18).
         // version joins scriptVariant: BOTH are rejected outright for an extension, which
         // inherits them from the base configuration. Same shape, same tool, one entry -
@@ -300,7 +301,7 @@ public final class InputSchemaCompactor
         // the Type.Name shape or that omission deliberately creates an empty import target.
         // normalizeYo has the same silent-rewrite default as create_metadata below: without its
         // prose a caller cannot know that a requested root Name may be stored differently.
-        keep.put("create_project", asSet("autoSortTopObjects", "scriptVariant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        keep.put("create_project", asSet("scriptVariant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "version", "baseProjectName", "externalObject", "normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // baseProjectName is REQUIRED for a .cfe, optional for .epf/.erf and refused for a .cf - a
         // requirement conditional on the file extension, which the schema cannot state.

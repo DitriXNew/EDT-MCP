@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Locale;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -2185,7 +2186,7 @@ public final class MetadataTypeBuilder
         {
             return null;
         }
-        switch (kind.trim().toLowerCase())
+        switch (kind.trim().toLowerCase(Locale.ROOT))
         {
             case "string": //$NON-NLS-1$
                 return "String"; //$NON-NLS-1$
@@ -2222,7 +2223,7 @@ public final class MetadataTypeBuilder
         {
             return new String[0];
         }
-        switch (kind.trim().toLowerCase())
+        switch (kind.trim().toLowerCase(Locale.ROOT))
         {
             case "valuestorage": //$NON-NLS-1$
             case "хранилищезначения": //$NON-NLS-1$
@@ -2276,7 +2277,7 @@ public final class MetadataTypeBuilder
         {
             return false;
         }
-        switch (kind.trim().toLowerCase())
+        switch (kind.trim().toLowerCase(Locale.ROOT))
         {
             case "fixedarray": //$NON-NLS-1$
             case "фиксированныймассив": //$NON-NLS-1$
@@ -2364,7 +2365,7 @@ public final class MetadataTypeBuilder
         {
             return DateFractions.DATE_TIME;
         }
-        switch (fractions.trim().toLowerCase())
+        switch (fractions.trim().toLowerCase(Locale.ROOT))
         {
             case "date": //$NON-NLS-1$
                 return DateFractions.DATE;

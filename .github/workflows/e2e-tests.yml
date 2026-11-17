@@ -382,6 +382,7 @@ jobs:
           mcpToolPrefsMigration=15
           EOF
           echo "edt_log=$LOG" >> "$GITHUB_ENV"
+          export EDT_MCP_GUIDED_WORKFLOWS=true
           export EDT_MCP_AUTO_START=true
           export EDT_MCP_PORT="$MCP_PORT"
           # This WINDOWED workbench under Xvfb retains its explicit consent override for CI.

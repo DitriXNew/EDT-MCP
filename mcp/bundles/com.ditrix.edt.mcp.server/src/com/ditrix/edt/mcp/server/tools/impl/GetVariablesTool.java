@@ -8,10 +8,12 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IVariable;
 
+import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -34,6 +36,7 @@ import com.ditrix.edt.mcp.server.utils.VariableSerializer;
 public class GetVariablesTool implements IMcpTool
 {
     public static final String NAME = "get_variables"; //$NON-NLS-1$
+    private static final long EVALUATION_WAIT_MS = 1_000L;
 
     @Override
     public String getName()
@@ -66,6 +69,8 @@ public class GetVariablesTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("variables", "Variables in the frame or expanded node, with name/value/type") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("count", "Number of variables returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("pending", "True while EDT is still evaluating frame variables") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Retry guidance while evaluation is pending") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
 
@@ -114,13 +119,42 @@ public class GetVariablesTool implements IMcpTool
      * non-empty) or the whole frame, returning the success JSON — or the exact
      * "expandPath not found" error the inline branch produced.
      */
-    private static String serializeVariables(DebugSessionRegistry registry, IStackFrame frame, String expandPath)
+    static String serializeVariables(DebugSessionRegistry registry, IStackFrame frame, String expandPath)
         throws Exception
     {
+        return serializeVariables(registry, frame, expandPath, EVALUATION_WAIT_MS);
+    }
+
+    static String serializeVariables(DebugSessionRegistry registry, IStackFrame frame, String expandPath,
+        long waitMs) throws Exception
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMs);
+        IVariable[] variables = frame.getVariables();
+        while (evaluationPending(variables))
+        {
+            long left = deadline - System.nanoTime();
+            if (left <= 0)
+            {
+                return ToolResult.success().put("variables", List.of()).put("count", 0) //$NON-NLS-1$ //$NON-NLS-2$
+                    .put("pending", true).put("message", //$NON-NLS-1$ //$NON-NLS-2$
+                        "EDT is still evaluating local variables. Retry get_variables with the same " //$NON-NLS-1$
+                            + "frameRef or threadId while the thread remains suspended.").toJson(); //$NON-NLS-1$
+            }
+            try
+            {
+                TimeUnit.NANOSECONDS.sleep(Math.min(left, TimeUnit.MILLISECONDS.toNanos(25)));
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+            variables = frame.getVariables();
+        }
         List<Map<String, Object>> vars;
         if (expandPath != null && !expandPath.isEmpty())
         {
-            IVariable resolved = VariableSerializer.resolvePath(frame, expandPath);
+            IVariable resolved = VariableSerializer.resolvePath(variables, expandPath);
             if (resolved == null)
             {
                 return ToolResult.error("expandPath not found: " + expandPath).toJson(); //$NON-NLS-1$
@@ -129,12 +163,28 @@ public class GetVariablesTool implements IMcpTool
         }
         else
         {
-            vars = VariableSerializer.serializeFrame(frame, registry);
+            vars = variables == null ? List.of() : VariableSerializer.serializeVariables(variables, registry);
         }
         return ToolResult.success()
             .put("variables", vars) //$NON-NLS-1$
             .put("count", vars.size()) //$NON-NLS-1$
             .toJson();
+    }
+
+    private static boolean evaluationPending(IVariable[] variables)
+    {
+        if (variables != null)
+        {
+            for (IVariable variable : variables)
+            {
+                // EDT's BslPlaceholderVariable implements this public pending-evaluation contract.
+                if (variable instanceof IBslVariable bsl && !bsl.isEvaluated())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
 }

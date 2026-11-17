@@ -746,7 +746,8 @@ def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
     rows = [split_markdown_row(line) for line in details.text.splitlines()]
     row = next((cells for cells in rows if len(cells) >= 3 and cells[0] == attr), None)
     assert row is not None, "the attributes table must list %s:\n%s" % (attr, details.text[:1500])
-    assert row[2] == "String", "MODEL read-back: the new attribute's Type cell must be String, got %r" % (row,)
+    assert row[2] == "String(10, Variable)", \
+        "MODEL read-back: the new attribute's Type cell must be String(10, Variable), got %r" % (row,)
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
