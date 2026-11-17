@@ -80,13 +80,13 @@ def _round_trip(mode, launch_mode="run"):
                 assert "windowListingAvailable" in matches[0], matches[0]
                 assert "asynchronously" not in result.get("message", ""), result
             if launch_mode == "debug":
-                # The client registers its threads with the debug server it was pointed at.
+                # The isolated thin client registers live client-typed threads with the debug server.
                 deadline = time.time() + 60
                 threads = 0
                 while time.time() < deadline and threads == 0:
                     status = call("debug_status", {"applicationId": result["applicationId"]})
                     assert_ok(status, "inspect the isolated debug session")
-                    threads = max([launch.get("threadCount", 0) for launch in status.structured.get("launches", [])
+                    threads = max([launch.get("clientThreadCount", 0) for launch in status.structured.get("launches", [])
                                    if launch.get("launchConfiguration") == name] or [0])
                     if threads == 0:
                         time.sleep(2)

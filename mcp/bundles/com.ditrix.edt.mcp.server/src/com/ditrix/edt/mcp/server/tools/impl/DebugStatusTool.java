@@ -240,6 +240,7 @@ public class DebugStatusTool implements IMcpTool
             scanTargetThreads(t, state);
         }
         entry.put("threadCount", state.threadCount); //$NON-NLS-1$
+        entry.put("clientThreadCount", state.clientThreadCount); //$NON-NLS-1$
         entry.put("suspended", state.anySuspended); //$NON-NLS-1$
         if (state.suspendedAt != null)
         {
@@ -261,8 +262,14 @@ public class DebugStatusTool implements IMcpTool
     {
         try
         {
+            // The shared discriminator: a standalone-server launch has no client threads of its own.
+            boolean clientCapable = DebugServerTargetSupport.findFirstLiveClientThread(target) != null;
             for (IThread th : target.getThreads())
             {
+                if (clientCapable && th != null && !th.isTerminated() && DebugServerTargetSupport.isClientThread(th))
+                {
+                    state.clientThreadCount++;
+                }
                 foldThread(th, state);
             }
         }
@@ -305,6 +312,8 @@ public class DebugStatusTool implements IMcpTool
     private static final class SuspendState
     {
         int threadCount;
+        /** Live client-side threads: a thin client attached, unlike a server debuggee's threads. */
+        int clientThreadCount;
         boolean anySuspended;
         String suspendedAt;
     }
