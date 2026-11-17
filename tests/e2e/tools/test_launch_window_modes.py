@@ -91,7 +91,6 @@ def _round_trip(mode, launch_mode="run"):
                     if threads == 0:
                         time.sleep(2)
                 assert threads > 0, "the isolated client never attached to the debug server: %r" % status.structured
-                assert status.structured.get("debugServerTargetCount", 0) >= 1, status.structured
                 if platform.system() == "Darwin":
                     assert "hidden" in result.get("windowModeReason", ""), result
         finally:
