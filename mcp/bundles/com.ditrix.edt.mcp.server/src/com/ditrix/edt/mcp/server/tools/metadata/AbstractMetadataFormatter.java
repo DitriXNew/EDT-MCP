@@ -13,6 +13,7 @@ import java.util.List;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -21,8 +22,10 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.mcore.CommandGroup;
 import com._1c.g5.v8.dt.mcore.Field;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.AdoptedTypeCell;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -198,6 +201,61 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         {
             addPropertyRow(sb, "Comment", comment); //$NON-NLS-1$
         }
+        // The object's own type-valued properties (a constant's Type, an event subscription's Source ...):
+        // for these objects it is what the object IS, so the default view carries it too (issue #955).
+        EClass eClass = mdObject.eClass();
+        if (eClass == null)
+        {
+            return;
+        }
+        for (EStructuralFeature feature : eClass.getEAllStructuralFeatures())
+        {
+            if (isTypeDescriptionFeature(feature))
+            {
+                addPropertyRow(sb, formatFeatureName(feature.getName()), typeFeatureCell(mdObject, feature));
+            }
+        }
+    }
+
+    /**
+     * Whether {@code feature} is a stored, single-valued, CONTAINED type description of its object - an
+     * event subscription's {@code source}, a constant's / defined type's / session parameter's / common
+     * attribute's / filter criterion's / chart of characteristic types' {@code type}, a command's
+     * {@code commandParameterType}. Every containment reference is otherwise left to the collection
+     * formatters, which render only MANY-valued ones, so before issue #955 none of these was shown by
+     * either view.
+     *
+     * @param feature the feature to test
+     * @return {@code true} for a type-valued property to render as a Property / Value row
+     */
+    protected static boolean isTypeDescriptionFeature(EStructuralFeature feature)
+    {
+        if (!(feature instanceof EReference))
+        {
+            return false;
+        }
+        EReference ref = (EReference)feature;
+        if (!ref.isContainment() || ref.isMany() || ref.isDerived() || ref.isTransient() || ref.isVolatile())
+        {
+            return false;
+        }
+        return McorePackage.Literals.TYPE_DESCRIPTION.isSuperTypeOf(ref.getEReferenceType());
+    }
+
+    /**
+     * The value cell of a type-valued property: its types the way attribute tables print them (one shared
+     * rendering, {@link #formatType}), {@link #DASH} when it holds none; for an object an extension adopted,
+     * what the extension stores about it ({@link AdoptedTypeCell}).
+     *
+     * @param owner the object
+     * @param feature a feature {@link #isTypeDescriptionFeature} accepts
+     * @return the cell text, never {@code null}
+     */
+    protected String typeFeatureCell(EObject owner, EStructuralFeature feature)
+    {
+        Object value = owner.eGet(feature);
+        String text = value instanceof TypeDescription ? formatType((TypeDescription)value) : DASH;
+        return AdoptedTypeCell.render(owner, feature, text);
     }
     
     /**
@@ -284,11 +342,15 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
                 continue;
             }
 
+            // A type-valued property is shown even when it holds no type: an empty source or type is
+            // an answer too, and the adopted-object cell explains a value the extension does not store.
+            boolean typeFeature = isTypeDescriptionFeature(feature);
             Object value = eObject.eGet(feature);
-            String valueStr = formatDynamicValue(value, language, true);
+            String valueStr = typeFeature ? typeFeatureCell(eObject, feature)
+                : formatDynamicValue(value, language, true);
 
             // Show all properties, even empty ones - use empty string for null/empty values
-            if (valueStr == null || valueStr.equals(DASH))
+            if (!typeFeature && (valueStr == null || valueStr.equals(DASH)))
             {
                 // Check if it's an empty collection/list
                 if (value instanceof Collection && ((Collection<?>) value).isEmpty())
@@ -318,7 +380,9 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
     /**
      * Decides whether a structural feature is excluded from the dynamic property
      * dump: derived/transient/volatile features (computed, not stored) and
-     * containment references (handled separately as collections) are skipped.
+     * containment references (handled separately as collections) are skipped - except a
+     * single contained type description ({@link #isTypeDescriptionFeature}), which no
+     * collection formatter renders (issue #955).
      *
      * @param feature the structural feature to test
      * @return {@code true} if the feature should be skipped
@@ -332,7 +396,8 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         }
 
         // Skip containment references (handled separately as collections)
-        return feature instanceof EReference && ((EReference) feature).isContainment();
+        return feature instanceof EReference && ((EReference) feature).isContainment()
+            && !isTypeDescriptionFeature(feature);
     }
 
     /**
