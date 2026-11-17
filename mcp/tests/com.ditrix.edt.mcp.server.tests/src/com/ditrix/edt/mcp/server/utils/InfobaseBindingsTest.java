@@ -248,6 +248,20 @@ public class InfobaseBindingsTest
             "project", false, false);
         assertFalse(parse(result).get("success").getAsBoolean());
         assertTrue(result.contains("not started"));
+        assertTrue(result, result.contains("referenced by the default application of project 'project'"));
+    }
+
+    @Test
+    public void aStaleLaunchConfigurationIsNamedInTheRefusal() throws Exception
+    {
+        var state = new State();
+        state.defaultId.set(null);
+        when(state.manager.getApplication(state.project, "prior")).thenReturn(Optional.empty());
+        String result = state.snapshot().run(() -> { fail("mutation must not start"); return null; },
+            "project", false, false);
+        assertFalse(parse(result).get("success").getAsBoolean());
+        assertTrue(result, result.contains("launch configuration 'Thin client'"));
+        assertTrue(result, result.contains("delete_launch_config"));
     }
 
     @Test

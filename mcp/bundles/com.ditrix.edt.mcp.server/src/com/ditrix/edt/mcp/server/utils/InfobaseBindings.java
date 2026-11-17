@@ -122,18 +122,21 @@ public final class InfobaseBindings
             {
                 if (entry.getValue() != null)
                 {
-                    rememberApplication(entry.getKey(), entry.getValue());
+                    rememberApplication(entry.getKey(), entry.getValue(), "the default application of project '" //$NON-NLS-1$
+                        + entry.getKey().getName() + "' (choose an existing one in the project's properties in EDT)"); //$NON-NLS-1$
                 }
             }
-            for (var before : launches.values())
+            for (var launch : launches.entrySet())
             {
+                LaunchBinding before = launch.getValue();
                 if (before.applicationId() != null)
                 {
                     for (IProject project : defaults.keySet())
                     {
                         if (Objects.equals(before.project(), project.getName()))
                         {
-                            rememberApplication(project, before.applicationId());
+                            rememberApplication(project, before.applicationId(), "launch configuration '" //$NON-NLS-1$
+                                + launch.getKey().getName() + "' (rebind it or remove it with delete_launch_config)"); //$NON-NLS-1$
                         }
                     }
                 }
@@ -464,12 +467,22 @@ public final class InfobaseBindings
             .findFirst().orElseThrow(() -> new IllegalStateException("Binding project is unavailable: " + name)); //$NON-NLS-1$
     }
 
-    private void rememberApplication(IProject project, String id)
+    /** {@code holder} names the binding and its fix, so a stale reference is actionable. */
+    private void rememberApplication(IProject project, String id, String holder)
     {
         var key = new ApplicationKey(project.getName(), id);
         if (!registrations.containsKey(key))
         {
-            var application = application(project, id);
+            IApplication application;
+            try
+            {
+                application = application(project, id);
+            }
+            catch (IllegalStateException unresolved)
+            {
+                throw new IllegalStateException(unresolved.getMessage() + "; it is referenced by " + holder, //$NON-NLS-1$
+                    unresolved);
+            }
             var reference = application instanceof IInfobaseApplication infobase ? infobase.getInfobase() : null;
             registrations.put(key, reference == null ? null : reference.getUuid());
         }
