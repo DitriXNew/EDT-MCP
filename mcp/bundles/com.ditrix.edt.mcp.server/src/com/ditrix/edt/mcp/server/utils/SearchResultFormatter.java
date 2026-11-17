@@ -26,6 +26,9 @@ import java.util.function.Function;
  * {@code "No matches found."} sentinel is replaced by a line that says the scan is incomplete,
  * so an absence is never claimed on files that were never read.</li>
  * </ul>
+ * Every rendering, {@code search_in_code} included, adds a warning line when the {@code fileMask}
+ * rejected every file ({@link ResourceTextSearch#fileMaskMatchedNoFile()}): then nothing was
+ * searched, and a bare zero would read as "the text is absent".
  */
 public final class SearchResultFormatter
 {
@@ -125,6 +128,7 @@ public final class SearchResultFormatter
         sb.append("**Total matches:** ").append(search.getTotalMatches()); //$NON-NLS-1$
         sb.append(" in **").append(search.getTotalMatchedFiles()).append("** files\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
+        appendFileMaskWarning(sb, search, "\n"); //$NON-NLS-1$
         if (search.getSkippedFiles() > 0)
         {
             sb.append(WARNING_PREFIX).append(search.getSkippedFiles())
@@ -144,6 +148,7 @@ public final class SearchResultFormatter
         sb.append("**Total matches:** ").append(search.getTotalMatches()); //$NON-NLS-1$
         sb.append(" in **").append(search.getTotalMatchedFiles()).append("** files\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
+        appendFileMaskWarning(sb, search, "\n\n"); //$NON-NLS-1$
         if (search.getSkippedFiles() > 0)
         {
             sb.append(WARNING_PREFIX).append(search.getSkippedFiles())
@@ -272,6 +277,7 @@ public final class SearchResultFormatter
         sb.append(Pagination.truncationNotice(search.getShownMatches(), totalMatches));
         sb.append("\n"); //$NON-NLS-1$
 
+        appendFileMaskWarning(sb, search, "\n"); //$NON-NLS-1$
         if (search.getSkippedFiles() > 0)
         {
             sb.append(WARNING_PREFIX).append(search.getSkippedFiles())
@@ -282,6 +288,23 @@ public final class SearchResultFormatter
             sb.append(INTERRUPTED_WARNING).append('\n');
         }
         sb.append("\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * The warning that the {@code fileMask} rejected every file, so nothing was searched; names one
+     * real path so the caller sees the shape the mask is matched against. Nothing when the mask
+     * selected a file or none was given.
+     */
+    private static void appendFileMaskWarning(StringBuilder sb, ResourceTextSearch search, String terminator)
+    {
+        if (!search.fileMaskMatchedNoFile())
+        {
+            return;
+        }
+        sb.append(WARNING_PREFIX).append("fileMask ").append(MarkdownUtils.inlineCode(search.getFileMask())) //$NON-NLS-1$
+            .append(" matched none of the ").append(search.getFilesOfExtension()) //$NON-NLS-1$
+            .append(" file paths, so nothing was searched (paths look like ") //$NON-NLS-1$
+            .append(MarkdownUtils.inlineCode(search.getFirstPathOfExtension())).append(')').append(terminator);
     }
 
     /**

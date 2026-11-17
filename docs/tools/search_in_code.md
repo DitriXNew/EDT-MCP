@@ -12,7 +12,7 @@ Literal/regex full-text search across BSL modules. Matching is textual and NOT r
 | limit | — | integer | Max matches returned with context. Default: 100, max: 500 |
 | maxResults | — | integer | Deprecated alias for 'limit'. Default: 100, max: 500 |
 | contextLines | — | integer | Lines of context before/after each match. Default: 2, max: 5 |
-| fileMask | — | string | Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder') |
+| fileMask | — | string | Filter by module path substring, or a glob with * ? ** (e.g. 'Documents/SalesOrder', '*SalesOrder*') |
 | metadataType | — | string | Filter by metadata type (e.g. 'documents', 'catalogs', 'commonModules'); more precise than fileMask. See guide for the full list. |
 | outputMode | — | string (one of: full, lines, count, files) | Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' row per match, no context), 'count', or 'files' |
 
@@ -35,7 +35,7 @@ Matching is **purely textual and NOT dialect-aware**. A query in one BSL languag
 - `limit` - max matches returned (`full` blocks or `lines` rows); default 100, max 500. Totals are always exact regardless of `limit`.
 - `maxResults` - deprecated alias for `limit` (used only when `limit` is absent).
 - `contextLines` - lines before/after each match; default 2, max 5 (`full` mode only).
-- `fileMask` - case-insensitive substring of the module path (e.g. `CommonModules`, `Documents/SalesOrder`).
+- `fileMask` - case-insensitive filter on the module path without `src/` (e.g. `CommonModules/Name/Module.bsl`). Without `*`/`?` it is a substring (`CommonModules`, `Documents/SalesOrder`). A `\` in the mask reads as `/` in both modes; a substring mask also matches its text as typed. With them it is a glob: `*` and `?` stay within one folder or file name, `**` crosses folders; a glob without `/` is matched against each name in the path (`*SalesOrder*`), one with `/` at its start or in the middle from the start of the path (`**/SalesOrder/ManagerModule.bsl`, `CommonModules/*`); a trailing `/` selects folders only; a matched folder selects everything under it. When the mask matches no module, the result says so instead of a bare zero.
 - `metadataType` - restrict to one family by folder prefix; more precise than `fileMask`. Allowed: documents, catalogs, commonModules, informationRegisters, accumulationRegisters, reports, dataProcessors, exchangePlans, businessProcesses, tasks, constants, commonCommands, commonForms, webServices, httpServices, enums, chartsOfCharacteristicTypes, chartsOfAccounts, chartsOfCalculationTypes. An unknown value returns an error.
 
 ## Output modes (`outputMode`)
