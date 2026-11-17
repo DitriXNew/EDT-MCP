@@ -5,12 +5,16 @@ package com.ditrix.edt.mcp.server.utils.clientwindow;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
 
+import com._1c.g5.v8.dt.common.HttpUtil;
 import com._1c.g5.v8.dt.debug.core.launchconfigurations.LaunchRuntimeInstallationProvider;
 import com._1c.g5.v8.dt.debug.core.model.IRuntimeDebugClientTarget;
 import com._1c.g5.v8.dt.debug.core.model.IRuntimeDebugClientTargetManager;
@@ -41,6 +45,8 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.e1c.g5.dt.applications.ExecutionContext;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationAttributeRepository;
 
 /** Resolves EDT's runtime, access, dump, update and attach services without launching its client. */
 final class EdtClientPreparation
@@ -121,7 +127,7 @@ final class EdtClientPreparation
         if (ILaunchManager.DEBUG_MODE.equals(launch.getLaunchMode()))
         {
             Object preparedUrl = context.getProperty("debugUrl").orElse(null);
-            attach(config, launch, resolvable, infobase, components, arguments,
+            attach(config, launch, application, resolvable, infobase, components, arguments,
                 preparedUrl instanceof URL url ? url : null);
         }
         var encoding = PlatformServicesSupport.resolve(IProcessEncodingProvider.class);
@@ -134,8 +140,49 @@ final class EdtClientPreparation
         return DebugServerTargetSupport.isServerApplicationId(applicationId) ? requested : null;
     }
 
-    private static void attach(ILaunchConfiguration config, ILaunch launch, IResolvableRuntimeInstallation resolvable,
-        InfobaseReference infobase, IRuntimeComponentManager components,
+    /**
+     * EDT's own order: the configuration's port, else the application's stored "port" attribute, else a free
+     * port. EDT's local target manager refuses -1, so a concrete port is always passed.
+     */
+    static int localDebugPort(int configured, Supplier<Optional<String>> applicationPort, IntSupplier freePort)
+    {
+        if (configured > 0)
+        {
+            return configured;
+        }
+        Optional<String> stored = applicationPort.get();
+        if (stored != null && stored.isPresent())
+        {
+            try
+            {
+                int port = Integer.parseInt(stored.get().trim());
+                if (port > 0)
+                {
+                    return port;
+                }
+            }
+            catch (NumberFormatException ignored)
+            {
+                // EDT logs and ignores an unparseable stored port too.
+            }
+        }
+        return freePort.getAsInt();
+    }
+
+    private static Optional<String> storedApplicationPort(IApplication application)
+    {
+        try
+        {
+            return PlatformServicesSupport.resolve(IApplicationAttributeRepository.class).getAttribute(application, "port"); //$NON-NLS-1$
+        }
+        catch (Exception unavailable)
+        {
+            return Optional.empty();
+        }
+    }
+
+    private static void attach(ILaunchConfiguration config, ILaunch launch, IApplication application,
+        IResolvableRuntimeInstallation resolvable, InfobaseReference infobase, IRuntimeComponentManager components,
         RuntimeExecutionArguments arguments, URL preparedUrl) throws Exception
     {
         Object service = Activator.getDefault().getRuntimeDebugClientTargetManager();
@@ -151,7 +198,8 @@ final class EdtClientPreparation
         {
             RuntimeInstallation debugInstallation = resolvable.resolve(List.of(IRuntimeComponentTypes.DEBUG_SERVER), infobase.getAppArch());
             target = targets.getOrCreateLocal(debugInstallation, infobase,
-                config.getAttribute(DEBUG + "DEBUG_SERVER_PORT", -1), launch);
+                localDebugPort(config.getAttribute(DEBUG + "DEBUG_SERVER_PORT", -1),
+                    () -> storedApplicationPort(application), HttpUtil::findFreePort), launch);
         }
         else
         {

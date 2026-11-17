@@ -13,6 +13,7 @@ import java.util.function.Function;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IProcess;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -192,7 +193,9 @@ public final class ClientWindowLaunch
             ClientWindowRegistry.owned(launch, request, owner, process);
             DebugPlugin.newProcess(launch, process, "1C client (isolated)", Map.of(IProcess.ATTR_PROCESS_ID, "" + owner.pid()));
             Map<String, Object> fields = fields(request, new WindowAdjustment.Outcome(true, owner.limitation()), owner.pid());
-            fields.put("status", process.isAlive() ? "running" : "terminated");
+            boolean alive = process.isAlive();
+            fields.put("status", alive ? "running" : "terminated");
+            fields.put("message", isolatedMessage(alive, owner.pid(), ILaunchManager.DEBUG_MODE.equals(mode)));
             return new Execution(null, fields);
         }
         catch (Exception | LinkageError e)
@@ -216,6 +219,20 @@ public final class ClientWindowLaunch
             catch (RuntimeException cleanup) { reason += ". Launch cleanup failed: " + message(cleanup); }
             return error(reason);
         }
+    }
+
+    /** The isolated client is already started when the call returns, unlike EDT's asynchronous launch. */
+    static String isolatedMessage(boolean alive, long pid, boolean debug)
+    {
+        if (!alive)
+        {
+            return "The isolated 1C client (pid " + pid + ") exited right after it started. Check get_event_log " //$NON-NLS-1$ //$NON-NLS-2$
+                + "and the launch configuration, then launch again."; //$NON-NLS-1$
+        }
+        return "The 1C client (pid " + pid + ") was started on an isolated desktop after the infobase was " //$NON-NLS-1$ //$NON-NLS-2$
+            + "prepared. debug_status lists its windows, so a blocking dialog is visible there; terminate_launch " //$NON-NLS-1$
+            + "ends it with its process tree." //$NON-NLS-1$
+            + (debug ? " It attaches to EDT's debug server; use wait_for_break." : ""); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     static ILaunch ownedLaunch(ILaunchConfiguration config, String mode, IDebugMonitoringManager monitoring)
