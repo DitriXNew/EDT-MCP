@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Locale;
-import java.util.regex.Pattern;
 
 /**
  * The {@code fileMask} filter of the full-text search tools ({@code search_in_code},
@@ -41,9 +40,9 @@ public final class PathMask
     private final String substring;
     /** The raw lower-cased substring when it differs from {@link #substring} (it held a backslash). */
     private final String rawSubstring;
-    private final Pattern glob;
+    private final Glob glob;
 
-    private PathMask(String text, String substring, String rawSubstring, Pattern glob)
+    private PathMask(String text, String substring, String rawSubstring, Glob glob)
     {
         this.text = text;
         this.substring = substring;
@@ -70,7 +69,7 @@ public final class PathMask
             String raw = mask.toLowerCase(Locale.ROOT);
             return new PathMask(mask, lower, raw.equals(lower) ? null : raw, null);
         }
-        return new PathMask(mask, null, null, compileGlob(normalized));
+        return new PathMask(mask, null, null, Glob.compile(normalized));
     }
 
     /** @return whether this mask selects every path (no mask was given) */
@@ -99,7 +98,7 @@ public final class PathMask
     {
         if (glob != null)
         {
-            return glob.matcher(path).matches();
+            return glob.matches(path);
         }
         if (substring != null)
         {
@@ -110,81 +109,151 @@ public final class PathMask
     }
 
     /**
-     * Translates a glob into an anchored, case-insensitive regex: the leading part ({@code (.../)?}
-     * unless a {@code /} at the start or in the middle anchors the mask), the body, and a
-     * {@code /...} tail so a folder match selects what is under it - optional, or required when a
-     * trailing {@code /} limits the mask to folders. Whether the mask is anchored is decided
-     * before its edge slashes are trimmed, as {@code .gitignore} does.
+     * A compiled glob, matched by a dynamic programme over (token, path position) in
+     * O(tokens x path length) - never by a backtracking regex, which a mask of repeated {@code **}{@code /}
+     * drives exponential (review of #969). Tokens: a literal character (case-folded), {@code ?} (one
+     * character but {@code /}), {@code *} (a run without {@code /}), {@code **} inside a name (any run),
+     * and {@code **}{@code /} at a folder boundary (zero or more whole folders - empty, or any run that
+     * ends with {@code /}); an unanchored mask starts with that last token. After the tokens, a
+     * {@code /...} tail selects what is under a matched folder: optional, or required when a trailing
+     * {@code /} limits the mask to folders.
      */
-    private static Pattern compileGlob(String mask)
+    private static final class Glob
     {
-        int start = 0;
-        int end = mask.length();
-        while (start < end && mask.charAt(start) == '/')
-        {
-            start++;
-        }
-        while (end > start && mask.charAt(end - 1) == '/')
-        {
-            end--;
-        }
-        String body = mask.substring(start, end);
-        boolean anchored = start > 0 || body.indexOf('/') >= 0;
-        boolean foldersOnly = end < mask.length();
+        private static final byte LITERAL = 0;
+        private static final byte ONE = 1;
+        private static final byte NAME_RUN = 2;
+        private static final byte ANY_RUN = 3;
+        private static final byte FOLDERS = 4;
 
-        StringBuilder regex = new StringBuilder();
-        if (!anchored)
-        {
-            regex.append("(?:.*/)?"); //$NON-NLS-1$
-        }
-        StringBuilder literal = new StringBuilder();
-        int i = 0;
-        while (i < body.length())
-        {
-            char c = body.charAt(i);
-            if (c != '*' && c != '?')
-            {
-                literal.append(c);
-                i++;
-                continue;
-            }
-            flushLiteral(regex, literal);
-            if (c == '?')
-            {
-                regex.append("[^/]"); //$NON-NLS-1$
-                i++;
-                continue;
-            }
-            int stars = i;
-            while (i < body.length() && body.charAt(i) == '*')
-            {
-                i++;
-            }
-            if (i - stars == 1)
-            {
-                regex.append("[^/]*"); //$NON-NLS-1$
-            }
-            else if (i < body.length() && body.charAt(i) == '/' && (stars == 0 || body.charAt(stars - 1) == '/'))
-            {
-                regex.append("(?:.*/)?"); //$NON-NLS-1$
-                i++;
-            }
-            else
-            {
-                regex.append(".*"); //$NON-NLS-1$
-            }
-        }
-        flushLiteral(regex, literal);
-        regex.append(foldersOnly ? "/.*" : "(?:/.*)?"); //$NON-NLS-1$ //$NON-NLS-2$
-        return Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    }
+        private final byte[] kinds;
+        private final char[] literals;
+        private final boolean foldersOnly;
 
-    private static void flushLiteral(StringBuilder regex, StringBuilder literal)
-    {
-        if (literal.length() > 0)
+        private Glob(byte[] kinds, char[] literals, boolean foldersOnly)
         {
-            regex.append(Pattern.quote(literal.toString()));
-            literal.setLength(0);
+            this.kinds = kinds;
+            this.literals = literals;
+            this.foldersOnly = foldersOnly;
+        }
+
+        /**
+         * Compiles a {@code /}-separated glob. Whether it is anchored is decided before its edge slashes
+         * are trimmed, as {@code .gitignore} does: a {@code /} at its start or in its middle anchors it.
+         */
+        static Glob compile(String mask)
+        {
+            int start = 0;
+            int end = mask.length();
+            while (start < end && mask.charAt(start) == '/')
+            {
+                start++;
+            }
+            while (end > start && mask.charAt(end - 1) == '/')
+            {
+                end--;
+            }
+            String body = mask.substring(start, end);
+            boolean anchored = start > 0 || body.indexOf('/') >= 0;
+
+            byte[] kinds = new byte[body.length() + 1];
+            char[] literals = new char[body.length() + 1];
+            int n = 0;
+            if (!anchored)
+            {
+                kinds[n++] = FOLDERS;
+            }
+            int i = 0;
+            while (i < body.length())
+            {
+                char c = body.charAt(i);
+                if (c == '?')
+                {
+                    kinds[n++] = ONE;
+                    i++;
+                    continue;
+                }
+                if (c != '*')
+                {
+                    kinds[n] = LITERAL;
+                    literals[n++] = fold(c);
+                    i++;
+                    continue;
+                }
+                int stars = i;
+                while (i < body.length() && body.charAt(i) == '*')
+                {
+                    i++;
+                }
+                if (i - stars == 1)
+                {
+                    kinds[n++] = NAME_RUN;
+                }
+                else if (i < body.length() && body.charAt(i) == '/' && (stars == 0 || body.charAt(stars - 1) == '/'))
+                {
+                    kinds[n++] = FOLDERS;
+                    i++;
+                }
+                else
+                {
+                    kinds[n++] = ANY_RUN;
+                }
+            }
+            return new Glob(java.util.Arrays.copyOf(kinds, n), java.util.Arrays.copyOf(literals, n),
+                end < mask.length());
+        }
+
+        boolean matches(String path)
+        {
+            int len = path.length();
+            // next[i]: the tokens after the current one match path[i..]; it starts as the tail.
+            boolean[] next = new boolean[len + 1];
+            for (int i = 0; i <= len; i++)
+            {
+                boolean slash = i < len && path.charAt(i) == '/';
+                next[i] = foldersOnly ? slash : i == len || slash;
+            }
+            boolean[] current = new boolean[len + 1];
+            for (int t = kinds.length - 1; t >= 0; t--)
+            {
+                byte kind = kinds[t];
+                boolean endsHere = false;
+                for (int i = len; i >= 0; i--)
+                {
+                    boolean more = i < len;
+                    char c = more ? path.charAt(i) : 0;
+                    switch (kind)
+                    {
+                        case LITERAL:
+                            current[i] = more && fold(c) == literals[t] && next[i + 1];
+                            break;
+                        case ONE:
+                            current[i] = more && c != '/' && next[i + 1];
+                            break;
+                        case NAME_RUN:
+                            current[i] = next[i] || more && c != '/' && current[i + 1];
+                            break;
+                        case ANY_RUN:
+                            current[i] = next[i] || more && current[i + 1];
+                            break;
+                        default:
+                            // FOLDERS: empty, or a run ending with '/' and the rest matching after it.
+                            endsHere = endsHere || more && c == '/' && next[i + 1];
+                            current[i] = next[i] || endsHere;
+                            break;
+                    }
+                }
+                boolean[] swap = next;
+                next = current;
+                current = swap;
+            }
+            return next[0];
+        }
+
+        /** The case fold of one character, as a case-insensitive Unicode regex compares it. */
+        private static char fold(char c)
+        {
+            return Character.toLowerCase(Character.toUpperCase(c));
         }
     }
 }

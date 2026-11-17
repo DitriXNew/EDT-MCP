@@ -15,7 +15,7 @@ Literal or regex full-text search inside the data composition schemas (DCS) of a
 - `isRegex` - treat `query` as a Java regular expression; default `false`. An invalid pattern returns an error; pass `isRegex=false` to search the text literally.
 - `limit` - max matches returned (`full` blocks or `lines` rows); default 100, max 500. Counts in every mode are always exact regardless of `limit`.
 - `contextLines` - lines before/after each match; default 2, max 5 (`full` mode only).
-- `fileMask` - case-insensitive filter on the file path WITHOUT the leading `src/`. Without `*`/`?` it is a substring, e.g. `Reports/Stock` or `CommonTemplates`. With them it is a glob, read as in `search_in_code`: `*`/`?` within one name, `**` across folders, no `/` = any one name (`*Stock*`), a leading or inner `/` = from the path start (`Reports/*/Templates/**`), a trailing `/` = folders only. When the mask matches no file, the result says so.
+- `fileMask` - case-insensitive filter on the file path WITHOUT the leading `src/`. Without `*`/`?` it is a substring, e.g. `Reports/Stock` or `CommonTemplates`. A `\` reads as `/` in both modes; a substring mask also matches its text as typed. With them it is a glob, read as in `search_in_code`: `*`/`?` within one name, `**` across folders, no `/` = any one name (`*Stock*`), a leading or inner `/` = from the path start (`Reports/*/Templates/**`), a trailing `/` = folders only. When the mask matches no file, the result says so.
 
 ## Paths and template FQNs
 Paths are shown without `src/`: `Reports/Stock/Templates/MainSchema/Template.dcs`. The template FQN is read off that layout:

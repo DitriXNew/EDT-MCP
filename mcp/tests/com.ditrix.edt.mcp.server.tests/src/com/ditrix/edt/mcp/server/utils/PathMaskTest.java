@@ -182,6 +182,32 @@ public class PathMaskTest
         assertFalse(m("Forms*/", MANAGER)); //$NON-NLS-1$
     }
 
+    @Test(timeout = 5000)
+    public void testRepeatedDoubleStarsDoNotBacktrackExponentially()
+    {
+        // Review of #969: 14 '**/' and a missing last name took ~1.8 s per path on a backtracking regex.
+        StringBuilder mask = new StringBuilder();
+        StringBuilder path = new StringBuilder();
+        for (int i = 0; i < 40; i++)
+        {
+            mask.append("**/"); //$NON-NLS-1$
+            path.append("Folder").append(i).append('/'); //$NON-NLS-1$
+        }
+        String deepPath = path + "Module.bsl"; //$NON-NLS-1$
+        PathMask missing = PathMask.of(mask + "Z"); //$NON-NLS-1$
+        PathMask stars = PathMask.of("*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b"); //$NON-NLS-1$
+        PathMask runs = PathMask.of("**a**a**a**a**a**a**a**a**a**a**a**a**b"); //$NON-NLS-1$
+        String as = "a".repeat(200) + "/" + "a".repeat(200); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 200; i++)
+        {
+            assertFalse(missing.matches(deepPath));
+            assertFalse(stars.matches(as));
+            assertFalse(runs.matches(as));
+        }
+        assertTrue(PathMask.of(mask + "Module.bsl").matches(deepPath)); //$NON-NLS-1$
+        assertTrue(PathMask.of(mask + "Folder39").matches(deepPath)); //$NON-NLS-1$
+    }
+
     @Test
     public void testRegexCharactersInTheMaskAreLiteral()
     {
