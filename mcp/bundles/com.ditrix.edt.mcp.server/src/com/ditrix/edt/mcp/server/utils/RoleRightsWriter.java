@@ -1668,7 +1668,7 @@ public final class RoleRightsWriter
                 return new IBmModelManagerHolder(null,
                     ToolResult.error("IBmModelManager not available").toJson()); //$NON-NLS-1$
             }
-            IBmModel model = manager.getModel(project);
+            IBmModel model = BmModelResolver.resolve(project, manager).getModel();
             if (model == null)
             {
                 return new IBmModelManagerHolder(null,

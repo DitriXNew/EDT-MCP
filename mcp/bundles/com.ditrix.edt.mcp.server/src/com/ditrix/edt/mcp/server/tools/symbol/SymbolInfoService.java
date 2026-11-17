@@ -47,7 +47,6 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
@@ -85,19 +84,26 @@ public class SymbolInfoService
      * Gets symbol info at the specified position.
      * Must run on UI thread to access editors.
      */
-    public String getSymbolInfo(String projectName, String filePath, int line, int column)
+    public record Outcome(String text, String error, boolean canFallback)
+    {
+        static Outcome value(String text) { return new Outcome(meaningfulOrNull(text), null, false); }
+        static Outcome failure(String message) { return new Outcome(null, message == null ? "Unknown error" : message, false); }
+        static Outcome unavailable(String message) { return new Outcome(null, message, true); }
+    }
+
+    public Outcome getSymbolInfo(String projectName, String filePath, int line, int column)
     {
         // Find the project
         ProjectContext ctx = ProjectContext.of(projectName);
 
         if (!ctx.exists())
         {
-            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+            return Outcome.failure(ProjectContext.notFoundMessage(projectName));
         }
 
         if (!ctx.isOpen())
         {
-            return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
+            return Outcome.failure("Project is closed: " + projectName); //$NON-NLS-1$
         }
 
         IProject project = ctx.project();
@@ -111,64 +117,47 @@ public class SymbolInfoService
         catch (RuntimeException e)
         {
             Refusals.log("Failed to resolve module", e); //$NON-NLS-1$
-            return ToolResult.error(e.getMessage()).toJson();
+            return Outcome.failure(e.getMessage());
         }
 
         if (!file.exists())
         {
-            return ToolResult.error("File not found: " + file.getProjectRelativePath().toString() + //$NON-NLS-1$
-                   " in project " + projectName).toJson(); //$NON-NLS-1$
+            return Outcome.failure("File not found: " + file.getProjectRelativePath().toString() + //$NON-NLS-1$
+                   " in project " + projectName); //$NON-NLS-1$
         }
 
         final IFile targetFile = file;
         final int targetLine = line;
         final int targetColumn = column;
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
+        AtomicReference<Outcome> resultRef = new AtomicReference<>();
 
         // Execute on UI thread
         ReadToolExecution.dispatch(() -> {
             try
             {
-                String result = executeOnUiThread(targetFile, targetLine, targetColumn);
+                Outcome result = executeOnUiThread(targetFile, targetLine, targetColumn);
                 resultRef.set(result);
             }
             catch (Exception e)
             {
                 Activator.logError("Error getting symbol info", e); //$NON-NLS-1$
-                resultRef.set("Error: " + e.getMessage()); //$NON-NLS-1$
+                resultRef.set(Outcome.failure(String.valueOf(e.getMessage()).trim())); //$NON-NLS-1$
             }
         });
 
-        String result = meaningfulOrNull(resultRef.get());
-
-        // If editor-based approach failed, try EMF fallback
-        if (result == null || result.startsWith("Error: No active workbench") //$NON-NLS-1$
-            || result.startsWith("Error: Could not open editor")) //$NON-NLS-1$
+        Outcome result = resultRef.get();
+        if (result == null || result.canFallback() || result.error() == null && result.text() == null)
         {
-            String emfResult = meaningfulOrNull(ReadToolExecution.read(project, "get_symbol_info",
-                () -> getSymbolInfoViaEmf(project, filePath, targetLine, targetColumn)));
-            if (emfResult != null)
-            {
-                result = emfResult;
-            }
+            Outcome emfResult = ReadToolExecution.readModel(project, "get_symbol_info",
+                () -> getSymbolInfoViaEmf(project, filePath, targetLine, targetColumn));
+            if (emfResult != null && (emfResult.text() != null || emfResult.error() != null)) result = emfResult;
         }
-
-        if (result == null)
+        if (result == null || result.error() == null && result.text() == null)
         {
-            return ToolResult.error("Could not get symbol info").toJson(); //$NON-NLS-1$
+            return Outcome.failure("Could not get symbol info");
         }
-
-        // Wrap result with frontmatter (skip for error messages). The
-        // workbench/editor/document failures bubble up here as internal "Error:"
-        // sentinel strings (set by executeOnUiThread and the syncExec catch block,
-        // and used above to trigger the EMF fallback); convert them to the
-        // structured ToolResult.error contract at this single boundary so the
-        // protocol's isJsonErrorPayload diversion delivers them as isError JSON.
-        if (result.startsWith("Error:")) //$NON-NLS-1$
-        {
-            return ToolResult.error(result.substring("Error:".length()).trim()).toJson(); //$NON-NLS-1$
-        }
+        if (result.error() != null) return result;
 
         FrontMatter fm = FrontMatter.create()
             .put("projectName", projectName) //$NON-NLS-1$
@@ -176,25 +165,25 @@ public class SymbolInfoService
             .put("line", line) //$NON-NLS-1$
             .put("column", column); //$NON-NLS-1$
 
-        return fm.wrapContent(result);
+        return Outcome.value(fm.wrapContent(result.text()));
     }
 
     /**
      * Executes symbol info retrieval on UI thread.
      */
-    private String executeOnUiThread(IFile file, int line, int column) throws Exception // NOSONAR reflective per-kind dispatch; further decomposition deferred
+    private Outcome executeOnUiThread(IFile file, int line, int column) throws Exception // NOSONAR reflective per-kind dispatch; further decomposition deferred
     {
-        if (!PlatformUI.isWorkbenchRunning()) { return "Error: No active workbench window"; }
+        if (!PlatformUI.isWorkbenchRunning()) { return Outcome.unavailable("No active workbench window"); }
         IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
         if (window == null)
         {
-            return "Error: No active workbench window"; //$NON-NLS-1$
+            return Outcome.unavailable("No active workbench window"); //$NON-NLS-1$
         }
 
         IWorkbenchPage page = window.getActivePage();
         if (page == null)
         {
-            return "Error: No active workbench page"; //$NON-NLS-1$
+            return Outcome.unavailable("No active workbench page"); //$NON-NLS-1$
         }
 
         // Check if the editor is already open to avoid leaving extra tabs
@@ -205,7 +194,7 @@ public class SymbolInfoService
         IEditorPart editorPart = IDE.openEditor(page, file, true);
         if (editorPart == null)
         {
-            return "Error: Could not open editor for file"; //$NON-NLS-1$
+            return Outcome.unavailable("Could not open editor for file"); //$NON-NLS-1$
         }
 
         try
@@ -214,19 +203,19 @@ public class SymbolInfoService
             XtextEditor xtextEditor = editorPart.getAdapter(XtextEditor.class);
             if (xtextEditor == null)
             {
-                return "Error: File is not a BSL module (not an Xtext editor)"; //$NON-NLS-1$
+                return Outcome.failure("File is not a BSL module (not an Xtext editor)"); //$NON-NLS-1$
             }
 
             ISourceViewer sourceViewer = xtextEditor.getInternalSourceViewer();
             if (sourceViewer == null)
             {
-                return "Error: Could not get source viewer"; //$NON-NLS-1$
+                return Outcome.failure("Could not get source viewer"); //$NON-NLS-1$
             }
 
             IDocument document = sourceViewer.getDocument();
             if (document == null)
             {
-                return "Error: Could not get document"; //$NON-NLS-1$
+                return Outcome.failure("Could not get document"); //$NON-NLS-1$
             }
 
             // Calculate offset from line and column (1-based to 0-based)
@@ -239,12 +228,12 @@ public class SymbolInfoService
                 // Validate offset is within document
                 if (offset < 0 || offset > document.getLength())
                 {
-                    return "Error: Position is outside document bounds"; //$NON-NLS-1$
+                    return Outcome.failure("Position is outside document bounds"); //$NON-NLS-1$
                 }
             }
             catch (BadLocationException e)
             {
-                return "Error: Invalid line number: " + line; //$NON-NLS-1$
+                return Outcome.failure("Invalid line number: " + line); //$NON-NLS-1$
             }
 
             // Pre-check: verify there is a meaningful token at the position
@@ -252,25 +241,25 @@ public class SymbolInfoService
             // (spaces, tabs, end of line, comment markers) which confuses AI agents
             if (!hasTokenAtPosition(document, offset, line))
             {
-                return "No symbol at this position."; //$NON-NLS-1$
+                return Outcome.value("No symbol at this position."); //$NON-NLS-1$
             }
 
             // === Level 1: Try hover ===
             String hoverResult = tryGetHoverInfo(sourceViewer, offset);
             if (hoverResult != null && !hoverResult.isEmpty())
             {
-                return hoverResult;
+                return Outcome.value(hoverResult);
             }
 
             // === Level 2: EObject analysis ===
             String eobjectResult = resolveEObjectInfoFromDocument(xtextEditor.getDocument(), offset);
             if (eobjectResult != null && !eobjectResult.isEmpty())
             {
-                return eobjectResult;
+                return Outcome.value(eobjectResult);
             }
 
             // Nothing found at this position
-            return "No symbol found at this position.\n"; //$NON-NLS-1$
+            return Outcome.value("No symbol found at this position.\n"); //$NON-NLS-1$
         }
         finally
         {
@@ -917,7 +906,7 @@ public class SymbolInfoService
     /**
      * Fallback: gets symbol info via EMF model without opening editor.
      */
-    private String getSymbolInfoViaEmf(IProject project, String filePath, int line, int column)
+    private Outcome getSymbolInfoViaEmf(IProject project, String filePath, int line, int column)
     {
         try
         {
@@ -966,13 +955,13 @@ public class SymbolInfoService
 
             if (semanticElement != null)
             {
-                return buildEObjectInfo(semanticElement);
+                return Outcome.value(buildEObjectInfo(semanticElement));
             }
 
             StringBuilder sb = new StringBuilder();
             sb.append(MarkdownUtils.tableHeader(PROPERTY, VALUE));
             sb.append(codeCell("Token", leafNode.getText())); //$NON-NLS-1$
-            return sb.toString();
+            return Outcome.value(sb.toString());
         }
         catch (Exception e)
         {
@@ -980,8 +969,7 @@ public class SymbolInfoService
             if (refusal != null)
             {
                 Refusals.log("EMF fallback refused", e); //$NON-NLS-1$
-                // The public boundary converts internal Error sentinels to ToolResult.error.
-                return "Error: " + refusal; //$NON-NLS-1$
+                return Outcome.failure(refusal.trim()); //$NON-NLS-1$
             }
             Activator.logWarning("EMF fallback failed: " + e.getMessage()); //$NON-NLS-1$
             return null;

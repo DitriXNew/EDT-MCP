@@ -14,7 +14,6 @@ import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.SWT;
@@ -39,6 +38,7 @@ import com._1c.g5.v8.dt.form.model.FormItem;
 import com._1c.g5.v8.dt.form.model.ManagedFormGroupType;
 import com._1c.g5.v8.dt.ui.util.ContentUtil;
 
+import com._1c.g5.v8.bm.core.IBmObject;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class EditorScreenshotHelper
 {
+    private static final java.util.Set<Class<?>> BM_FQN_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final String FORM_EDITOR_CLASS = "com._1c.g5.v8.dt.form.ui.editor.FormEditor"; //$NON-NLS-1$
     private static final String FORM_EDITOR_ID = "com._1c.g5.v8.dt.form.ui.formEditor"; //$NON-NLS-1$
     private static final String FORM_MAIN_PAGE_ID = "editors.form.pages.main"; //$NON-NLS-1$
@@ -199,7 +200,7 @@ public final class EditorScreenshotHelper
                 "or 'CommonForm.FormName'."); //$NON-NLS-1$
         }
 
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
         if (project == null || !project.exists())
         {
             return OpenFormResult.error(ProjectContext.notFoundMessage(projectName));
@@ -487,32 +488,20 @@ public final class EditorScreenshotHelper
         }
     }
 
-    /**
-     * Reads {@code IBmObject.bmGetFqn()} from a model object via reflection (the BM interface is not
-     * imported by name here). Returns {@code null} when unavailable.
-     *
-     * @param model the metadata model object
-     * @return the FQN string, or {@code null}
-     */
-    private static String bmGetFqn(Object model)
+    /** Reads a top object's typed identity; detached and contained models have no direct FQN. */
+    public static String bmGetFqn(Object model)
     {
-        if (model == null)
-        {
-            return null;
-        }
+        if (!(model instanceof IBmObject object)) return null;
         try
         {
-            Method method = ReflectionUtils.findMethod(model.getClass(), "bmGetFqn"); //$NON-NLS-1$
-            if (method == null)
-            {
-                return null;
-            }
-            method.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-            Object fqn = method.invoke(model);
-            return fqn != null ? fqn.toString() : null;
+            return object.bmGetEngine() != null && object.bmIsTop() ? object.bmGetFqn() : null;
         }
-        catch (Exception e)
+        catch (RuntimeException e)
         {
+            if (BM_FQN_WARNED.add(model.getClass()))
+            {
+                Activator.logWarning("Cannot read model member bmGetFqn; identity is unknown: " + e);
+            }
             return null;
         }
     }

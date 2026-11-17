@@ -2179,9 +2179,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** The project's platform version, or {@code null} when it cannot be resolved. */
     private static Version platformVersionOf(ProjectContext ctx)
     {
-        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
-        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
-        return project != null ? project.getVersion() : null;
+        return com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(ctx.project);
     }
 
     /** Preflights the supported batch and authorizes its single form write through the existing gate. */

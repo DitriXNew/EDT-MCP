@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -64,10 +66,10 @@ public class ModifyMetadataToolDefinedTypeTest
         assertSame(McorePackage.Literals.TYPE_DESCRIPTION, type.getEType());
 
         assertSame(MetadataTypeBuilder.TypeTarget.DEFINED_TYPE,
-            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, type));
+            MetadataPropertyApplier.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, type));
         assertSame("a form member's context keeps its own target", //$NON-NLS-1$
             MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
-            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, type));
+            MetadataPropertyApplier.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, type));
     }
 
     @Test
@@ -90,7 +92,7 @@ public class ModifyMetadataToolDefinedTypeTest
                     continue;
                 }
                 assertSame(classifier.getName() + "." + feature.getName(), expectedRoute(feature), //$NON-NLS-1$
-                    ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, feature));
+                    MetadataPropertyApplier.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, feature));
                 checked++;
             }
         }
@@ -155,7 +157,7 @@ public class ModifyMetadataToolDefinedTypeTest
         property.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
         property.add("value", spec); //$NON-NLS-1$
 
-        Method prepare = ModifyMetadataTool.class.getDeclaredMethod("validateAndPrepare", IProject.class, //$NON-NLS-1$
+        Method prepare = MetadataPropertyApplier.class.getDeclaredMethod("validateAndPrepare", IProject.class, //$NON-NLS-1$
             MetadataScope.class, Configuration.class, Version.class, MdObject.class, List.class, List.class,
             MdNameNormalizer.Report.class, boolean.class);
         prepare.setAccessible(true);

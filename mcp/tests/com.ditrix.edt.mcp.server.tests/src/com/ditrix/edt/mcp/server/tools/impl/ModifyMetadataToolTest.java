@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -138,7 +140,7 @@ public class ModifyMetadataToolTest
         EStructuralFeature source = MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE;
         assertSame(McorePackage.Literals.TYPE_DESCRIPTION, source.getEType());
         assertSame(MetadataTypeBuilder.TypeTarget.EVENT_SOURCE,
-            ModifyMetadataTool.typeTargetForFeature(
+            MetadataPropertyApplier.typeTargetForFeature(
                 MetadataTypeBuilder.TypeTarget.METADATA, source));
 
         CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
@@ -146,10 +148,10 @@ public class ModifyMetadataToolTest
         assertNotNull(attributeType);
         assertSame(McorePackage.Literals.TYPE_DESCRIPTION, attributeType.getEType());
         assertSame(MetadataTypeBuilder.TypeTarget.METADATA,
-            ModifyMetadataTool.typeTargetForFeature(
+            MetadataPropertyApplier.typeTargetForFeature(
                 MetadataTypeBuilder.TypeTarget.METADATA, attributeType));
         assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
-            ModifyMetadataTool.typeTargetForFeature(
+            MetadataPropertyApplier.typeTargetForFeature(
                 MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, source));
     }
 
@@ -161,9 +163,9 @@ public class ModifyMetadataToolTest
         assertSame("modify_metadata resolves 'type' to this literal", //$NON-NLS-1$
             MdClassPackage.Literals.SESSION_PARAMETER__TYPE, type);
         assertSame(MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER,
-            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, type));
+            MetadataPropertyApplier.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, type));
         assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
-            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, type));
+            MetadataPropertyApplier.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, type));
     }
 
     @Test
@@ -373,7 +375,7 @@ public class ModifyMetadataToolTest
     @Test
     public void testMalformedPictureRefusalHasExactActionableWording()
     {
-        ModifyMetadataTool.PicturePreparation prepared = ModifyMetadataTool.buildPictureValue(
+        MetadataPropertyApplier.PicturePreparation prepared = MetadataPropertyApplier.buildPictureValue(
             "headerPicture", new JsonPrimitive("Change"), //$NON-NLS-1$ //$NON-NLS-2$
             MetadataScope.ofConfiguration(null), null);
 
@@ -387,7 +389,7 @@ public class ModifyMetadataToolTest
     @Test
     public void testUnresolvableStandardPictureRefusalHasExactActionableWording()
     {
-        ModifyMetadataTool.PicturePreparation prepared = ModifyMetadataTool.buildPictureValue(
+        MetadataPropertyApplier.PicturePreparation prepared = MetadataPropertyApplier.buildPictureValue(
             "headerPicture", new JsonPrimitive("StdPicture.Nope"), //$NON-NLS-1$ //$NON-NLS-2$
             MetadataScope.ofConfiguration(null), null);
 
@@ -405,8 +407,8 @@ public class ModifyMetadataToolTest
             Mockito.withSettings().extraInterfaces(CommonPicture.class));
         Mockito.when(liveCommonPicture.bmGetId()).thenReturn(497L);
 
-        ModifyMetadataTool.PicturePreparation prepared =
-            ModifyMetadataTool.prepareResolvedPicture((EObject)liveCommonPicture);
+        MetadataPropertyApplier.PicturePreparation prepared =
+            MetadataPropertyApplier.prepareResolvedPicture((EObject)liveCommonPicture);
 
         assertNull(prepared.error);
         assertNull("a live CommonPicture must not cross the prepare/write boundary", //$NON-NLS-1$
@@ -420,8 +422,8 @@ public class ModifyMetadataToolTest
     {
         JsonObject raw = new JsonObject();
         raw.addProperty("name", "string"); //$NON-NLS-1$ //$NON-NLS-2$
-        ModifyMetadataTool.ContainedValuePreparation prepared =
-            ModifyMetadataTool.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
+        MetadataPropertyApplier.ContainedValuePreparation prepared =
+            MetadataPropertyApplier.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
 
         assertEquals("Invalid QName value for property 'xdtoValueType': {\"name\":\"string\"}; the " //$NON-NLS-1$
             + "object form requires exactly the 'name' and 'nsUri' members. Use either " //$NON-NLS-1$
@@ -432,7 +434,7 @@ public class ModifyMetadataToolTest
     @Test
     public void testBadCompactQNameRefusalHasExactActionableWording()
     {
-        ModifyMetadataTool.ContainedValuePreparation prepared = ModifyMetadataTool.buildQNameValue(
+        MetadataPropertyApplier.ContainedValuePreparation prepared = MetadataPropertyApplier.buildQNameValue(
             "xdtoReturningValueType", //$NON-NLS-1$
             new JsonPrimitive("{http://www.w3.org/2001/XMLSchema}")); //$NON-NLS-1$
 
@@ -450,8 +452,8 @@ public class ModifyMetadataToolTest
         raw.addProperty("name", "string"); //$NON-NLS-1$ //$NON-NLS-2$
         raw.addProperty("nsUri", "http://www.w3.org/2001/XMLSchema"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        ModifyMetadataTool.ContainedValuePreparation prepared =
-            ModifyMetadataTool.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
+        MetadataPropertyApplier.ContainedValuePreparation prepared =
+            MetadataPropertyApplier.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
 
         assertNull(prepared.error);
         QName qname = (QName)prepared.value;
@@ -462,7 +464,7 @@ public class ModifyMetadataToolTest
     @Test
     public void testCompactQNameBuildsBothRequiredMembers()
     {
-        ModifyMetadataTool.ContainedValuePreparation prepared = ModifyMetadataTool.buildQNameValue(
+        MetadataPropertyApplier.ContainedValuePreparation prepared = MetadataPropertyApplier.buildQNameValue(
             "xdtoReturningValueType", //$NON-NLS-1$
             new JsonPrimitive("{http://www.w3.org/2001/XMLSchema}string")); //$NON-NLS-1$
 
@@ -475,8 +477,8 @@ public class ModifyMetadataToolTest
     @Test
     public void testInvalidMcoreValueListRefusalHasExactActionableWording()
     {
-        ModifyMetadataTool.McoreValueListPreparation prepared =
-            ModifyMetadataTool.buildMcoreValueListValue("xdtoPackages", //$NON-NLS-1$
+        MetadataPropertyApplier.McoreValueListPreparation prepared =
+            MetadataPropertyApplier.buildMcoreValueListValue("xdtoPackages", //$NON-NLS-1$
                 JsonParser.parseString("[\"XDTOPackege.Nope\"]"), //$NON-NLS-1$
                 MetadataScope.ofConfiguration(null));
 
@@ -497,8 +499,8 @@ public class ModifyMetadataToolTest
             McoreValueListBuilder.Item.reference((XDTOPackage)livePackage),
             McoreValueListBuilder.Item.namespace("urn:e2e:platform")); //$NON-NLS-1$
 
-        ModifyMetadataTool.McoreValueListPreparation prepared =
-            ModifyMetadataTool.prepareResolvedMcoreValueList(items);
+        MetadataPropertyApplier.McoreValueListPreparation prepared =
+            MetadataPropertyApplier.prepareResolvedMcoreValueList(items);
 
         assertNull(prepared.error);
         assertEquals(2, prepared.values.size());
@@ -823,7 +825,7 @@ public class ModifyMetadataToolTest
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
         String uri = "http://v8.1c.ru/packages/pak\u0451t"; //$NON-NLS-1$
         assertSame("namespace-like value must be returned verbatim", uri, //$NON-NLS-1$ //$NON-NLS-2$
-            ModifyMetadataTool.normalizeStringPropertyValue("namespace", uri, report)); //$NON-NLS-1$
+            MetadataPropertyApplier.normalizeStringPropertyValue("namespace", uri, report)); //$NON-NLS-1$
         assertFalse("a verbatim value must not be reported as normalized", report.hasChanges()); //$NON-NLS-1$
     }
 
@@ -833,7 +835,7 @@ public class ModifyMetadataToolTest
         // 'comment' IS presentation text checked by std474: its yo (U+0451) is normalized
         // to ye (U+0435) and the rewrite is reported under the property name.
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(true);
-        String result = ModifyMetadataTool.normalizeStringPropertyValue("comment", //$NON-NLS-1$
+        String result = MetadataPropertyApplier.normalizeStringPropertyValue("comment", //$NON-NLS-1$
             "ozhidani\u0451", report); //$NON-NLS-1$
         assertEquals("ozhidani\u0435", result); //$NON-NLS-1$
         assertTrue("the comment normalization must be reported", report.hasChanges()); //$NON-NLS-1$
@@ -846,7 +848,7 @@ public class ModifyMetadataToolTest
         // normalizeYo=false: even the comment keeps the caller's text verbatim.
         MdNameNormalizer.Report report = new MdNameNormalizer.Report(false);
         String raw = "comment with \u0451"; //$NON-NLS-1$
-        assertSame(raw, ModifyMetadataTool.normalizeStringPropertyValue("comment", raw, report)); //$NON-NLS-1$
+        assertSame(raw, MetadataPropertyApplier.normalizeStringPropertyValue("comment", raw, report)); //$NON-NLS-1$
         assertFalse(report.hasChanges());
     }
 
@@ -1098,7 +1100,7 @@ public class ModifyMetadataToolTest
         config.getDataProcessors().add(dp);
         DataProcessorForm form = addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
 
-        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, dp,
+        MdObject resolved = MetadataPropertyApplier.resolveReferenceTarget(config, dp,
             "DataProcessor.MyProcessor.Form.MyForm"); //$NON-NLS-1$
         assertSame("the full Type.Name.Form.FormName path must resolve the owned form", form, resolved); //$NON-NLS-1$
     }
@@ -1114,7 +1116,7 @@ public class ModifyMetadataToolTest
         config.getDataProcessors().add(dp);
         DataProcessorForm form = addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
 
-        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, dp, "MyForm"); //$NON-NLS-1$
+        MdObject resolved = MetadataPropertyApplier.resolveReferenceTarget(config, dp, "MyForm"); //$NON-NLS-1$
         assertSame("a short form Name must resolve against the supplied owner", form, resolved); //$NON-NLS-1$
     }
 
@@ -1129,7 +1131,7 @@ public class ModifyMetadataToolTest
         config.getDataProcessors().add(dp);
         addOwnedForm(dp, "MyForm"); //$NON-NLS-1$
 
-        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, null, "MyForm")); //$NON-NLS-1$
+        assertNull(MetadataPropertyApplier.resolveReferenceTarget(config, null, "MyForm")); //$NON-NLS-1$
     }
 
     @Test
@@ -1140,9 +1142,9 @@ public class ModifyMetadataToolTest
         dp.setName("MyProcessor"); //$NON-NLS-1$
         config.getDataProcessors().add(dp);
 
-        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, dp,
+        assertNull(MetadataPropertyApplier.resolveReferenceTarget(config, dp,
             "DataProcessor.MyProcessor.Form.NoSuchForm")); //$NON-NLS-1$
-        assertNull(ModifyMetadataTool.resolveReferenceTarget(config, dp, "NoSuchForm")); //$NON-NLS-1$
+        assertNull(MetadataPropertyApplier.resolveReferenceTarget(config, dp, "NoSuchForm")); //$NON-NLS-1$
     }
 
     @Test
@@ -1155,7 +1157,7 @@ public class ModifyMetadataToolTest
         group.setName("MyGroup"); //$NON-NLS-1$
         config.getCommandGroups().add(group);
 
-        MdObject resolved = ModifyMetadataTool.resolveReferenceTarget(config, null, "CommandGroup.MyGroup"); //$NON-NLS-1$
+        MdObject resolved = MetadataPropertyApplier.resolveReferenceTarget(config, null, "CommandGroup.MyGroup"); //$NON-NLS-1$
         assertSame(group, resolved);
     }
 
@@ -1170,7 +1172,7 @@ public class ModifyMetadataToolTest
         // merged refusal naming BOTH addressable forms - the 'CommandGroup.<Name>' FQN of a
         // configuration group, and the bare name of a platform STANDARD group - plus the catalogue
         // of standard names in both identifiers, so the caller can copy one out (issue #508).
-        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+        String err = MetadataPropertyApplier.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
             null, "NotAGroupAtAll", commandGroupCatalogue()); //$NON-NLS-1$
         assertNotNull(err);
         assertTrue(err, err.contains("NotAGroupAtAll")); //$NON-NLS-1$
@@ -1191,7 +1193,7 @@ public class ModifyMetadataToolTest
         // both forms rather than losing the standard-group half altogether. It must not degrade back
         // into the retired "...are not supported here", which also named the FQN form and also carried
         // the words "STANDARD command group" - which is why the affirmative clause is what is pinned.
-        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+        String err = MetadataPropertyApplier.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
             null, "CommandGroup.Bogus", null); //$NON-NLS-1$
         assertNotNull(err);
         assertTrue(err, err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
@@ -1204,7 +1206,7 @@ public class ModifyMetadataToolTest
     {
         // The overload every OTHER caller uses (a MANY_REFERENCE never carries a catalogue) must not
         // be left behind on the retired wording.
-        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+        String err = MetadataPropertyApplier.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
             null, "CommandGroup.Bogus"); //$NON-NLS-1$
         assertNotNull(err);
         assertTrue(err, err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
@@ -1227,9 +1229,9 @@ public class ModifyMetadataToolTest
         EObject command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
         PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
         assertNotNull("precondition: 'group' must be an addressable property", info); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
-        String err = ModifyMetadataTool.prepareReferenceWith(commandGroupCatalogue(),
+        String err = MetadataPropertyApplier.prepareReferenceWith(commandGroupCatalogue(),
             MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()), command,
             "group", "ActionsPanelTools", info, out); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -1244,9 +1246,9 @@ public class ModifyMetadataToolTest
     {
         EObject command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
         PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
-        String err = ModifyMetadataTool.prepareReferenceWith(commandGroupCatalogue(),
+        String err = MetadataPropertyApplier.prepareReferenceWith(commandGroupCatalogue(),
             MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()), command,
             "group", "NotAGroupAtAll", info, out); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -1260,14 +1262,14 @@ public class ModifyMetadataToolTest
     @Test
     public void testAStandardCommandGroupNameQueuesAScalarProxySet()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertTrue("a bare standard-group name must be queued by the standard-group branch", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+            MetadataPropertyApplier.queueStandardCommandGroup(commandGroupFeature(),
                 "ActionsPanelTools", commandGroupCatalogue(), out)); //$NON-NLS-1$
 
         assertEquals(1, out.size());
-        ModifyMetadataTool.PreparedChange change = out.get(0);
+        MetadataPropertyApplier.PreparedChange change = out.get(0);
         assertEquals("group", change.featureName()); //$NON-NLS-1$
         Object value = change.value();
         assertTrue("a standard group travels as a value, not as a BM id: " + value, //$NON-NLS-1$
@@ -1279,10 +1281,10 @@ public class ModifyMetadataToolTest
     @Test
     public void testTheRussianStandardCommandGroupIdentifierQueuesTheSameSet()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertTrue("the Russian nameRu identifier addresses the same group", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+            MetadataPropertyApplier.queueStandardCommandGroup(commandGroupFeature(),
                 ACTIONS_PANEL_TOOLS_RU, commandGroupCatalogue(), out));
 
         assertEquals(1, out.size());
@@ -1292,10 +1294,10 @@ public class ModifyMetadataToolTest
     @Test
     public void testAnUnknownBareNameFallsThroughToTheSharedRefusal()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertFalse("an unknown token must not be queued", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+            MetadataPropertyApplier.queueStandardCommandGroup(commandGroupFeature(),
                 "NotAGroupAtAll", commandGroupCatalogue(), out)); //$NON-NLS-1$
         assertTrue("nothing may be queued when nothing resolved", out.isEmpty()); //$NON-NLS-1$
     }
@@ -1307,10 +1309,10 @@ public class ModifyMetadataToolTest
         // do) so the "no dot" gate is OBSERVABLE: without it an FQN-shaped value would be answered
         // from the standard-group catalogue instead of going to FQN resolution.
         IEObjectProvider trap = catalogueOf("CommandGroup.MyGroup"); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertFalse("a dotted value belongs to the FQN address space", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+            MetadataPropertyApplier.queueStandardCommandGroup(commandGroupFeature(),
                 "CommandGroup.MyGroup", trap, out)); //$NON-NLS-1$
         assertTrue(out.isEmpty());
     }
@@ -1321,10 +1323,10 @@ public class ModifyMetadataToolTest
         EStructuralFeature parentFeature = MdClassFactory.eINSTANCE.createSubsystem()
             .eClass().getEStructuralFeature("parentSubsystem"); //$NON-NLS-1$
         assertNotNull("precondition: Subsystem must declare 'parentSubsystem'", parentFeature); //$NON-NLS-1$
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertFalse("a dotless value on a NON-command-group reference keeps the FQN path", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(parentFeature, "ActionsPanelTools", //$NON-NLS-1$
+            MetadataPropertyApplier.queueStandardCommandGroup(parentFeature, "ActionsPanelTools", //$NON-NLS-1$
                 commandGroupCatalogue(), out));
         assertTrue(out.isEmpty());
     }
@@ -1332,10 +1334,10 @@ public class ModifyMetadataToolTest
     @Test
     public void testWithoutTheCatalogueAStandardGroupNameIsRefusedRatherThanGuessed()
     {
-        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+        List<MetadataPropertyApplier.PreparedChange> out = new ArrayList<>();
 
         assertFalse("no catalogue means no value to write - never a fabricated one", //$NON-NLS-1$
-            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+            MetadataPropertyApplier.queueStandardCommandGroup(commandGroupFeature(),
                 "ActionsPanelTools", null, out)); //$NON-NLS-1$
         assertTrue(out.isEmpty());
     }
@@ -1391,7 +1393,7 @@ public class ModifyMetadataToolTest
         EStructuralFeature parentFeature = MdClassFactory.eINSTANCE.createSubsystem()
             .eClass().getEStructuralFeature("parentSubsystem"); //$NON-NLS-1$
         assertNotNull("precondition: Subsystem must declare 'parentSubsystem'", parentFeature); //$NON-NLS-1$
-        String err = ModifyMetadataTool.validateReferenceTarget("parentSubsystem", parentFeature, null, //$NON-NLS-1$
+        String err = MetadataPropertyApplier.validateReferenceTarget("parentSubsystem", parentFeature, null, //$NON-NLS-1$
             "Subsystem.Bogus"); //$NON-NLS-1$
         assertNotNull(err);
         assertFalse("a non-group reference must NOT get the CommandGroup-specific hint", //$NON-NLS-1$
@@ -1409,7 +1411,7 @@ public class ModifyMetadataToolTest
 
         assertNotNull("precondition: Report must declare mainDataCompositionSchema", feature); //$NON-NLS-1$
         assertNull("a BasicTemplate member has a BM id and is re-fetchable inside the write tx", //$NON-NLS-1$
-            ModifyMetadataTool.validateReferenceTarget("mainDataCompositionSchema", feature, //$NON-NLS-1$
+            MetadataPropertyApplier.validateReferenceTarget("mainDataCompositionSchema", feature, //$NON-NLS-1$
                 template, "Report.Sales.Template.MainDCS")); //$NON-NLS-1$
     }
 
@@ -1895,7 +1897,7 @@ public class ModifyMetadataToolTest
     public void testMethodReferenceGuardTriggersOnScheduledJobMethodName()
     {
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
-        String err = ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = MetadataPropertyApplier.validateMethodReference(null, null, job, "methodName", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a methodName value with no dot must be rejected", err); //$NON-NLS-1$
         assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1905,7 +1907,7 @@ public class ModifyMetadataToolTest
     public void testMethodReferenceGuardTriggersOnEventSubscriptionHandler()
     {
         EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
-        String err = ModifyMetadataTool.validateMethodReference(null, null, sub, "handler", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        String err = MetadataPropertyApplier.validateMethodReference(null, null, sub, "handler", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a handler value with no dot must be rejected", err); //$NON-NLS-1$
         assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -1917,7 +1919,7 @@ public class ModifyMetadataToolTest
         // -ScheduledJob target: the guard is scoped by TYPE first.
         DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
         assertNull("the guard must not fire on a non-ScheduledJob/EventSubscription target", //$NON-NLS-1$
-            ModifyMetadataTool.validateMethodReference(null, null, dp, "methodName", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.validateMethodReference(null, null, dp, "methodName", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1926,7 +1928,7 @@ public class ModifyMetadataToolTest
         // A ScheduledJob's 'comment' (or any property other than methodName) is not the guarded one.
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
         assertNull("the guard must only fire on 'methodName', not any other property", //$NON-NLS-1$
-            ModifyMetadataTool.validateMethodReference(null, null, job, "comment", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.validateMethodReference(null, null, job, "comment", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1937,9 +1939,9 @@ public class ModifyMetadataToolTest
         // property; modify_metadata never clears a property on an empty value).
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
         assertNull("an empty methodName value must not be validated by this guard", //$NON-NLS-1$
-            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "")); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.validateMethodReference(null, null, job, "methodName", "")); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull("a null methodName value must not be validated by this guard", //$NON-NLS-1$
-            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", null)); //$NON-NLS-1$
+            MetadataPropertyApplier.validateMethodReference(null, null, job, "methodName", null)); //$NON-NLS-1$
     }
 
     @Test
@@ -1951,7 +1953,7 @@ public class ModifyMetadataToolTest
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
         String err =
-            ModifyMetadataTool.validateMethodReference(null, config, job, "methodName", "NoSuchModule.Foo"); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.validateMethodReference(null, config, job, "methodName", "NoSuchModule.Foo"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a reference to a non-existent module must be rejected", err); //$NON-NLS-1$
         assertTrue("the refusal must name the missing module", err.contains("NoSuchModule")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -1966,12 +1968,12 @@ public class ModifyMetadataToolTest
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
         assertEquals("a validated methodName must serialize with the English CommonModule prefix", //$NON-NLS-1$
             "CommonModule.Calc.Add", //$NON-NLS-1$
-            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
         EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
         assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
-            "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "CommonModule.Calc.Add", MetadataPropertyApplier.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Unguarded combo: value passes through unchanged.
-        assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("x.y", MetadataPropertyApplier.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
@@ -1985,7 +1987,7 @@ public class ModifyMetadataToolTest
 
         assertEquals("a short ScheduledJob methodName must be stored with the CommonModule prefix", //$NON-NLS-1$
             "CommonModule.Calc.Add", //$NON-NLS-1$
-            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyApplier.canonicalMethodReference(config, job, "methodName", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ===== XDTO package member payload dispatch guards (issue #183 stream 1) =========================
@@ -2793,7 +2795,7 @@ public class ModifyMetadataToolTest
         // Scope, stated because the comment here claimed more: this pins the VERDICT. That
         // configureDynamicListQuery hands this verdict to gateFormRetype as its pre-check is one
         // production line that a headless test cannot reach (it needs a resolved FormEditContext).
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, null, formSupportingLists(),
+        String verdict = MetadataPropertyApplier.dynamicListRetypeVerdict(null, null, formSupportingLists(),
             collectionAttribute(), null);
 
         assertNotNull("an unbuildable DynamicList type must be refused before the prompt", verdict); //$NON-NLS-1$
@@ -2808,7 +2810,7 @@ public class ModifyMetadataToolTest
     {
         // The main table used to be resolved only inside the write callback, so a nonexistent one
         // raised the conversion prompt FIRST and answered the resolution failure only after ALLOW.
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST,
+        String verdict = MetadataPropertyApplier.dynamicListRetypeVerdict(null, Version.LATEST,
             formSupportingLists(), collectionAttribute(), "Catalog.NoSuchObject"); //$NON-NLS-1$
 
         assertNotNull("an unresolvable main table must be refused before the prompt", verdict); //$NON-NLS-1$
@@ -2822,7 +2824,7 @@ public class ModifyMetadataToolTest
     {
         // The last deterministic refusal that still lived below the gate: a form metamodel with no
         // DynamicListExtInfo classifier cannot be converted whatever the user answers.
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST, formWithoutLists(),
+        String verdict = MetadataPropertyApplier.dynamicListRetypeVerdict(null, Version.LATEST, formWithoutLists(),
             collectionAttribute(), null);
 
         assertNotNull("a form that cannot hold a list must be refused before the prompt", verdict); //$NON-NLS-1$
@@ -2834,7 +2836,7 @@ public class ModifyMetadataToolTest
     public void testAnAbsentAttributeIsNotPromptedForAConversion()
     {
         assertEquals("an absent attribute must not prompt", "", //$NON-NLS-1$ //$NON-NLS-2$
-            ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST, formSupportingLists(),
+            MetadataPropertyApplier.dynamicListRetypeVerdict(null, Version.LATEST, formSupportingLists(),
                 null, null));
         // The "reach the gate" case cannot be produced headlessly: the LAST pre-check builds the
         // DynamicList value type, and a unit test has no platform type provider (the limit
@@ -3226,10 +3228,10 @@ public class ModifyMetadataToolTest
         valueTypeFeature.setName("valueType"); //$NON-NLS-1$
         List<ModifyMetadataTool.HolderChange> prepared = List.of(
             new ModifyMetadataTool.HolderChange(false,
-                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                MetadataPropertyApplier.PreparedChange.typeDescription(valueTypeFeature,
                     singleType("CatalogObject.Goods"))), //$NON-NLS-1$
             new ModifyMetadataTool.HolderChange(false,
-                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                MetadataPropertyApplier.PreparedChange.typeDescription(valueTypeFeature,
                     singleType("String")))); //$NON-NLS-1$
 
         assertEquals("the LAST write is what the model ends up with", //$NON-NLS-1$
@@ -3302,7 +3304,7 @@ public class ModifyMetadataToolTest
         valueTypeFeature.setName("valueType"); //$NON-NLS-1$
         List<ModifyMetadataTool.HolderChange> onExtInfo = List.of(
             new ModifyMetadataTool.HolderChange(true,
-                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                MetadataPropertyApplier.PreparedChange.typeDescription(valueTypeFeature,
                     singleType("CatalogObject.Goods")))); //$NON-NLS-1$
 
         assertTrue("no type write on the member itself - so the verdict is 'ask'", //$NON-NLS-1$
@@ -3348,7 +3350,7 @@ public class ModifyMetadataToolTest
         for (TypeDescription description : written)
         {
             prepared.add(new ModifyMetadataTool.HolderChange(false,
-                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, description)));
+                MetadataPropertyApplier.PreparedChange.typeDescription(valueTypeFeature, description)));
         }
         return prepared;
     }
@@ -3392,8 +3394,8 @@ public class ModifyMetadataToolTest
             MetadataPropertyIntrospector.find(item, "appearanceItem"));
         assertNull("A palette color has no StyleItem value wrapper",
             MetadataPropertyIntrospector.find(item, "value"));
-        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
-        assertNull(ModifyMetadataTool.prepareAppearanceWith(true, "color",
+        List<MetadataPropertyApplier.PreparedChange> changes = new ArrayList<>();
+        assertNull(MetadataPropertyApplier.prepareAppearanceWith(true, "color",
             JsonParser.parseString("{color:{red:12,green:34,blue:56}}"),
             MdClassFactory.eINSTANCE.createConfiguration(), null, info.feature, changes));
         assertEquals(1, changes.size());
@@ -3404,7 +3406,7 @@ public class ModifyMetadataToolTest
         assertEquals(56, color.getBlue());
         assertNull(item.getAppearanceItem());
         changes.clear();
-        String refusal = ModifyMetadataTool.prepareAppearanceWith(true, "color",
+        String refusal = MetadataPropertyApplier.prepareAppearanceWith(true, "color",
             JsonParser.parseString("{color:{red:256,green:0,blue:0}}"),
             MdClassFactory.eINSTANCE.createConfiguration(), null, info.feature, changes);
         assertNotNull(refusal);

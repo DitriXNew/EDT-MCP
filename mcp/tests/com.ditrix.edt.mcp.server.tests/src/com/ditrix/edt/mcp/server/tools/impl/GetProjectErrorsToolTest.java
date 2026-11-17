@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MarkerCheckIds;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -96,32 +98,32 @@ public class GetProjectErrorsToolTest
     @Test
     public void testCheckIdMatchesByShortUid()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatches("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MarkerCheckIds.checkIdMatches("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testCheckIdMatchesBySymbolicId()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatches("SU23", "ql-temp-table-index", "temp")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(MarkerCheckIds.checkIdMatches("SU23", "ql-temp-table-index", "temp")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testCheckIdMatchesCaseInsensitive()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatches("Su23", null, "SU23")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(GetProjectErrorsTool.checkIdMatches(null, "QL-Temp-Table", "ql-temp")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MarkerCheckIds.checkIdMatches("Su23", null, "SU23")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MarkerCheckIds.checkIdMatches(null, "QL-Temp-Table", "ql-temp")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testCheckIdMatchesNoMatch()
     {
-        assertFalse(GetProjectErrorsTool.checkIdMatches("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(MarkerCheckIds.checkIdMatches("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testCheckIdMatchesBothNull()
     {
-        assertFalse(GetProjectErrorsTool.checkIdMatches(null, null, "anything")); //$NON-NLS-1$
+        assertFalse(MarkerCheckIds.checkIdMatches(null, null, "anything")); //$NON-NLS-1$
     }
 
     // ========== checkIdMatchesExact (pure) ==========
@@ -131,20 +133,20 @@ public class GetProjectErrorsToolTest
     @Test
     public void testCheckIdMatchesExactBySymbolicId()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "ql-temp-table-index")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(MarkerCheckIds.checkIdMatchesExact("SU23", "ql-temp-table-index", "ql-temp-table-index")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testCheckIdMatchesExactByShortUid()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "SU23")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(MarkerCheckIds.checkIdMatchesExact("SU23", "ql-temp-table-index", "SU23")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testCheckIdMatchesExactCaseInsensitive()
     {
-        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("Su23", null, "su23")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(GetProjectErrorsTool.checkIdMatchesExact(null, "QL-Temp-Table", "ql-temp-table")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MarkerCheckIds.checkIdMatchesExact("Su23", null, "su23")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MarkerCheckIds.checkIdMatchesExact(null, "QL-Temp-Table", "ql-temp-table")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -152,20 +154,20 @@ public class GetProjectErrorsToolTest
     {
         // The exact bug this guards: "doc" must NOT match "doc-comment-parameter-section" here,
         // even though the loose checkIdMatches used by get_project_errors would allow it.
-        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU1", "doc-comment-parameter-section", "doc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(MarkerCheckIds.checkIdMatchesExact("SU1", "doc-comment-parameter-section", "doc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(MarkerCheckIds.checkIdMatchesExact("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testCheckIdMatchesExactNoMatch()
     {
-        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(MarkerCheckIds.checkIdMatchesExact("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testCheckIdMatchesExactBothNull()
     {
-        assertFalse(GetProjectErrorsTool.checkIdMatchesExact(null, null, "anything")); //$NON-NLS-1$
+        assertFalse(MarkerCheckIds.checkIdMatchesExact(null, null, "anything")); //$NON-NLS-1$
     }
 
     // ========== unresolvedPlaceholder ==========
@@ -193,7 +195,7 @@ public class GetProjectErrorsToolTest
     public void testResolveSymbolicCheckIdNullRepository()
     {
         Marker marker = mock(Marker.class);
-        assertNull(GetProjectErrorsTool.resolveSymbolicCheckId(marker, "SU23", null)); //$NON-NLS-1$
+        assertNull(MarkerCheckIds.resolveSymbolicCheckId(marker, "SU23", null)); //$NON-NLS-1$
     }
 
     @Test
@@ -201,7 +203,7 @@ public class GetProjectErrorsToolTest
     {
         Marker marker = mock(Marker.class);
         ICheckRepository repo = mock(ICheckRepository.class);
-        assertNull(GetProjectErrorsTool.resolveSymbolicCheckId(marker, "", repo)); //$NON-NLS-1$
+        assertNull(MarkerCheckIds.resolveSymbolicCheckId(marker, "", repo)); //$NON-NLS-1$
     }
 
     @Test
@@ -210,7 +212,7 @@ public class GetProjectErrorsToolTest
         Marker marker = mock(Marker.class);
         when(marker.getProject()).thenReturn(null);
         ICheckRepository repo = mock(ICheckRepository.class);
-        assertNull(GetProjectErrorsTool.resolveSymbolicCheckId(marker, "SU23", repo)); //$NON-NLS-1$
+        assertNull(MarkerCheckIds.resolveSymbolicCheckId(marker, "SU23", repo)); //$NON-NLS-1$
     }
 
     @Test
@@ -224,7 +226,7 @@ public class GetProjectErrorsToolTest
         when(repo.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
 
         assertEquals("ql-temp-table-index", //$NON-NLS-1$
-            GetProjectErrorsTool.resolveSymbolicCheckId(marker, "SU23", repo)); //$NON-NLS-1$
+            MarkerCheckIds.resolveSymbolicCheckId(marker, "SU23", repo)); //$NON-NLS-1$
     }
 
     // ========== buildIfMatches: review point 1 counters ==========

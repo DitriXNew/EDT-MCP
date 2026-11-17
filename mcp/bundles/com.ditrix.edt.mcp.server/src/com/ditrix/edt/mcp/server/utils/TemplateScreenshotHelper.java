@@ -4,7 +4,6 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
@@ -190,12 +189,12 @@ public final class TemplateScreenshotHelper
         {
             return null;
         }
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
         if (project == null || !project.exists())
         {
             return null;
         }
-        return manager.getModel(project);
+        return BmModelResolver.resolve(project, manager).getModel();
     }
 
     /**

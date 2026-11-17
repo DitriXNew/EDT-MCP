@@ -35,6 +35,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -477,7 +478,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        IBmModel bmModel = BmModelResolver.resolve(ctx.project, bmModelManager).getModel();
         if (bmModel == null)
         {
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$

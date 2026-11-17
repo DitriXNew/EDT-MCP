@@ -78,17 +78,7 @@ public final class ReferenceSearchBound
         this.nanoClock = nanoClock;
     }
 
-    /**
-     * A bound whose time budget starts now.
-     *
-     * @param limit the number of references the search reports; at least 1
-     * @param budgetMillis the wall-clock budget, counted from this call
-     * @return the bound
-     */
-    public static ReferenceSearchBound startingNow(int limit, long budgetMillis)
-    {
-        return of(limit, budgetMillis, System::nanoTime);
-    }
+
 
     /**
      * A bound whose time budget starts now on the given clock.

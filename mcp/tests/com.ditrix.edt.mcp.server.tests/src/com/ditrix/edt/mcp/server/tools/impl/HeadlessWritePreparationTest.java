@@ -2,6 +2,8 @@
 // Copyright (C) 2026 DitriX
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyApplier;
+
 import static org.junit.Assert.*;
 import java.util.Map;
 import org.junit.Test;
@@ -26,7 +28,7 @@ public class HeadlessWritePreparationTest
                 "Prepare reference type", () -> {
                     var description = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createTypeDescription();
                     description.getTypes().add(oldType);
-                    return ModifyMetadataTool.PreparedChange.typeDescription(feature, description);
+                    return MetadataPropertyApplier.PreparedChange.typeDescription(feature, description);
                 });
             var value = (com._1c.g5.v8.dt.mcore.TypeDescription)change.value();
             com.ditrix.edt.mcp.server.utils.ReadBoundaryAssertions.assertNoLiveBmValue(value.getTypes());
@@ -59,7 +61,7 @@ public class HeadlessWritePreparationTest
                         return org.mockito.Mockito.RETURNS_DEFAULTS.answer(call);
                     }));
             var edit = com.ditrix.edt.mcp.server.utils.ReadToolExecution.readOnHost(fixture.project(),
-                "Prepare role flag", () -> new ModifyMetadataTool.AdjustableBooleanEdit(true, Map.of(role, true)));
+                "Prepare role flag", () -> new MetadataPropertyApplier.AdjustableBooleanEdit(true, Map.of(role, true)));
             var tx = org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmTransaction.class);
             var current = org.mockito.Mockito.mock(com._1c.g5.v8.dt.metadata.mdclass.Role.class,
                 org.mockito.Mockito.withSettings().extraInterfaces(com._1c.g5.v8.bm.core.IBmObject.class));

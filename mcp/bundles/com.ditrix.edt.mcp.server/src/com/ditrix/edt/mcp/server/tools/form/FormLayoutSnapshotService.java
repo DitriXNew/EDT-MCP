@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
  */
 public class FormLayoutSnapshotService
 {
+    private final java.util.Set<String> reflectiveFailures = new java.util.LinkedHashSet<>();
     private static final String HIPPO_LAY_FORM_FIELD = "hippoLayForm"; //$NON-NLS-1$
     private static final String HIPPO_SESSION_FIELD = "hippoSession"; //$NON-NLS-1$
     private static final String MODEL_PROJECTION_FIELD = "modelProjection"; //$NON-NLS-1$
@@ -84,6 +85,7 @@ public class FormLayoutSnapshotService
     public String captureLayoutSnapshot(String projectName, String formPath, boolean refresh, String mode,
         String showElement)
     {
+        reflectiveFailures.clear();
         boolean showRequested = showElement != null && !showElement.isEmpty();
         List<String> warnings = new ArrayList<>();
         boolean fullMode = MODE_FULL.equals(mode);
@@ -170,6 +172,11 @@ public class FormLayoutSnapshotService
             if (shownElement != null)
             {
                 result.put("shownElement", shownElementEntry(shownElement)); //$NON-NLS-1$
+            }
+            if (!reflectiveFailures.isEmpty())
+            {
+                warnings.add("Some layout values are unknown because EDT members could not be read: "
+                    + String.join(", ", reflectiveFailures));
             }
             result.put("warnings", warnings); //$NON-NLS-1$
             result.put("elements", elements); //$NON-NLS-1$
@@ -708,7 +715,7 @@ public class FormLayoutSnapshotService
 
         for (String getterName : INSPECTABLE_VALUE_GETTERS)
         {
-            Object getterValue = invokeNoArg(value, getterName);
+            Object getterValue = invokeNoArg(value, getterName, true);
             Object converted = convertInspectableNestedValue(getterValue, 0);
             if (converted != null)
             {
@@ -868,7 +875,7 @@ public class FormLayoutSnapshotService
         {
             description.put("name", name); //$NON-NLS-1$
         }
-        Object fqn = invokeNoArg(object, "bmGetFqn"); //$NON-NLS-1$
+        Object fqn = EditorScreenshotHelper.bmGetFqn(object); //$NON-NLS-1$
         if (fqn != null)
         {
             description.put("fqn", String.valueOf(fqn)); //$NON-NLS-1$
@@ -899,7 +906,7 @@ public class FormLayoutSnapshotService
 
     private String getStringValue(Object value, String methodName)
     {
-        Object result = invokeNoArg(value, methodName);
+        Object result = invokeNoArg(value, methodName, true);
         return result != null ? String.valueOf(result) : null;
     }
 
@@ -917,6 +924,11 @@ public class FormLayoutSnapshotService
 
     private Object invokeNoArg(Object target, String methodName)
     {
+        return invokeNoArg(target, methodName, false);
+    }
+
+    private Object invokeNoArg(Object target, String methodName, boolean optional)
+    {
         if (target == null)
         {
             return null;
@@ -928,6 +940,12 @@ public class FormLayoutSnapshotService
         }
         catch (Exception e)
         {
+            if (optional && e instanceof NoSuchMethodException) return null;
+            String memberName = target.getClass().getName() + "." + methodName;
+            if (reflectiveFailures.add(memberName))
+            {
+                Activator.logWarning("Cannot read form layout member " + memberName + "; value is unknown: " + e);
+            }
             return null;
         }
     }
@@ -950,6 +968,11 @@ public class FormLayoutSnapshotService
         }
         catch (Exception e)
         {
+            String memberName = target.getClass().getName() + "." + methodName;
+            if (reflectiveFailures.add(memberName))
+            {
+                Activator.logWarning("Cannot read form layout member " + memberName + "; value is unknown: " + e);
+            }
             return null;
         }
     }
