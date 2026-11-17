@@ -8,7 +8,6 @@ package com.ditrix.edt.mcp.server.utils.yaml;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -185,14 +184,20 @@ public abstract class AbstractProjectYamlStore<S> {
         if (!file.exists()) {
             return emptyStorage();
         }
-        try (Reader reader = new InputStreamReader(file.getContents(), StandardCharsets.UTF_8)) {
-            return readYaml(reader);
-        } catch (YAMLException e) {
-            Activator.logError("Failed to parse associations from " + file.getFullPath(), e);
-            return emptyStorage();
+        // Read fully before parsing: SnakeYAML wraps a read failure into YAMLException, which would
+        // make an unreadable file look like an empty one.
+        String text;
+        try (var input = file.getContents()) {
+            text = new String(input.readAllBytes(), StandardCharsets.UTF_8);
         } catch (CoreException | IOException e) {
             Activator.logError("Failed to read associations from " + file.getFullPath(), e);
             return null;
+        }
+        try {
+            return readYaml(new java.io.StringReader(text));
+        } catch (YAMLException e) {
+            Activator.logError("Failed to parse associations from " + file.getFullPath(), e);
+            return emptyStorage();
         }
     }
 

@@ -396,6 +396,22 @@ public class ProjectYamlStoreTest {
         assertTrue(tags.snapshot(project).getTags().isEmpty());
     }
 
+    /** A read that fails mid-stream (Linux opens a directory and fails on read) is not a parse error. */
+    @Test
+    public void failingReadIsNotMistakenForAnEmptyFile() throws Exception {
+        IProject broken = mock(IProject.class);
+        when(broken.getName()).thenReturn("broken-read");
+        IFile file = mock(IFile.class);
+        when(file.exists()).thenReturn(true);
+        when(file.getContents()).thenAnswer(invocation -> new java.io.InputStream() {
+            @Override public int read() throws java.io.IOException { throw new java.io.IOException("Is a directory"); }
+        });
+        when(broken.getFile(any(IPath.class))).thenReturn(file);
+        assertFalse(tags.update(broken, storage -> storage.addTag(new Tag("Lost")), Boolean.TRUE::equals));
+        verify(file, never()).setContents(any(java.io.InputStream.class), anyBoolean(), anyBoolean(), any());
+        verify(file, never()).getLocation();
+    }
+
     @Test
     public void refusedResultIsFalseForAFlagAndNullOtherwise() {
         assertEquals(Boolean.FALSE, AbstractProjectYamlStore.refused(Boolean.TRUE));
