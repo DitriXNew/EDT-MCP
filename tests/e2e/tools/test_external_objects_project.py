@@ -687,11 +687,11 @@ def test_extobj_type_asked_of_a_configuration_says_where_it_lives():
     """
     r = call("go_to_definition",
              {"projectName": PROJECT, "symbol": "ExternalDataProcessor.ExtProc"})
-    assert_ok(r, "a standalone type asked of the configuration project")
-    assert_contains(r.text, "Symbol not found", "it cannot resolve here")
-    assert_contains(r.text, "EXTERNAL-OBJECTS type",
+    message = assert_error(r, "a standalone type asked of the configuration project")
+    assert_contains(message, "Symbol not found", "it cannot resolve here")
+    assert_contains(message, "EXTERNAL-OBJECTS type",
                     "the answer must say the type lives in another project KIND")
-    assert_contains(r.text, "list_projects", "and how to find that project")
+    assert_contains(message, "list_projects", "and how to find that project")
     assert_no_diff("a read tool must not touch the base project on disk")
 
 
@@ -765,12 +765,12 @@ def test_extobj_go_to_definition_never_reaches_the_base_common_modules():
     """
     r = call("go_to_definition",
              {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Calc.Add"})
-    assert_ok(r, "a base common module name asked of an external-objects project")
-    assert_not_contains(r.text, "CommonModules/Calc/Module.bsl",
+    message = assert_error(r, "a base common module name asked of an external-objects project")
+    assert_not_contains(message, "CommonModules/Calc/Module.bsl",
                         "the answer must not blame a path in the project the caller named")
-    assert_contains(r.text, "Symbol not found", "the symbol is not in this project")
+    assert_contains(message, "Symbol not found", "the symbol is not in this project")
     # A dead end would be truthful but useless: the refusal names where common modules live.
-    assert_contains(r.text, PROJECT,
+    assert_contains(message, PROJECT,
                     "the refusal must name the base project that does hold common modules")
     assert_no_diff("a read tool must not touch the base project on disk")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
