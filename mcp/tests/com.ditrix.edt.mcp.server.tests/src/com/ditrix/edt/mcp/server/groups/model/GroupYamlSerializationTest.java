@@ -9,20 +9,11 @@ package com.ditrix.edt.mcp.server.groups.model;
 import static org.junit.Assert.*;
 
 import java.io.StringReader;
-import java.io.StringWriter;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 
 import org.junit.Test;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.constructor.Constructor;
-import org.yaml.snakeyaml.introspector.Property;
-import org.yaml.snakeyaml.nodes.MappingNode;
-import org.yaml.snakeyaml.nodes.Tag;
-import org.yaml.snakeyaml.representer.Representer;
+import com.ditrix.edt.mcp.server.groups.repository.YamlGroupRepository;
 
 /**
  * Pure, workspace-free tests for the YAML serialization surface of
@@ -37,68 +28,14 @@ import org.yaml.snakeyaml.representer.Representer;
  */
 public class GroupYamlSerializationTest
 {
-    // ==================== SnakeYAML config mirrored from YamlGroupRepository ====================
-
-    /**
-     * Serializes a {@link GroupStorage} to a YAML String using the same
-     * representer/tag configuration as the production repository's save path.
-     */
     private static String dump(GroupStorage storage)
     {
-        DumperOptions options = new DumperOptions();
-        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        options.setPrettyFlow(true);
-        options.setIndent(2);
-        options.setWidth(120);
-        options.setSplitLines(false);
-
-        Representer representer = new SortedKeysRepresenter(options);
-        representer.getPropertyUtils().setSkipMissingProperties(true);
-        representer.addClassTag(GroupStorage.class, Tag.MAP);
-        representer.addClassTag(Group.class, Tag.MAP);
-
-        Yaml yaml = new Yaml(representer, options);
-        StringWriter writer = new StringWriter();
-        yaml.dump(storage, writer);
-        return writer.toString();
+        return new YamlGroupRepository().dump(storage);
     }
 
-    /**
-     * Deserializes a {@link GroupStorage} from a YAML String using the same
-     * constructor configuration as the production repository's load path.
-     */
     private static GroupStorage load(String text)
     {
-        LoaderOptions loaderOptions = new LoaderOptions();
-        loaderOptions.setTagInspector(tag -> true);
-        Constructor constructor = new Constructor(GroupStorage.class, loaderOptions);
-        // The dump emits every readable JavaBean property, including derived,
-        // setter-less getters (Group#getFullPath / #isEmpty, GroupStorage#
-        // getGroupCount / #isEmpty). Tolerate those extra keys on load so the
-        // round-trip never trips over a property that has no setter.
-        constructor.getPropertyUtils().setSkipMissingProperties(true);
-        Yaml yaml = new Yaml(constructor);
-        return yaml.load(new StringReader(text));
-    }
-
-    /**
-     * Custom representer matching the production one: outputs bean keys in
-     * sorted order for Git-friendly diffs.
-     */
-    private static class SortedKeysRepresenter extends Representer
-    {
-        SortedKeysRepresenter(DumperOptions options)
-        {
-            super(options);
-        }
-
-        @Override
-        protected MappingNode representJavaBean(java.util.Set<Property> properties, Object javaBean)
-        {
-            List<Property> sorted = new java.util.ArrayList<>(properties);
-            sorted.sort(Comparator.comparing(Property::getName));
-            return super.representJavaBean(new java.util.LinkedHashSet<>(sorted), javaBean);
-        }
+        return new YamlGroupRepository().readYaml(new StringReader(text));
     }
 
     // ==================== Round-trip: empty / minimal ====================
@@ -337,12 +274,9 @@ public class GroupYamlSerializationTest
     }
 
     @Test
-    public void testLoadEmptyDocumentReturnsNull()
+    public void testLoadEmptyDocumentReturnsEmptyStorage()
     {
-        // SnakeYAML returns null for an empty/blank document; the repository
-        // guards this by substituting an empty GroupStorage. Here we just
-        // pin the raw loader behaviour our model must tolerate.
-        assertNull(load("")); //$NON-NLS-1$
+        assertTrue(load("").isEmpty()); //$NON-NLS-1$
     }
 
     // ==================== Queries survive the round-trip ====================

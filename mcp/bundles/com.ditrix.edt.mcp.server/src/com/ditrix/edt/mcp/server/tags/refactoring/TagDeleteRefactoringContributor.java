@@ -27,7 +27,13 @@ public class TagDeleteRefactoringContributor extends AbstractObjectDeleteRefacto
 
     @Override
     protected boolean hasAssociation(IProject project, String fqn) {
-        TagService tagService = TagService.getInstance();
+        if (project == null) {
+            return false;
+        }
+        TagService tagService = TagService.getInstanceIfAvailable();
+        if (tagService == null) {
+            return false;
+        }
         TagStorage storage = tagService.getTagStorage(project);
 
         // Check if this object has any tags assigned
@@ -37,7 +43,11 @@ public class TagDeleteRefactoringContributor extends AbstractObjectDeleteRefacto
 
     @Override
     protected boolean performRemove(IProject project, String fqn) {
-        return TagService.getInstance().removeObject(project, fqn);
+        if (project == null) {
+            return false;
+        }
+        TagService service = TagService.getInstanceIfAvailable();
+        return service != null && service.removeObject(project, fqn);
     }
 
     @Override

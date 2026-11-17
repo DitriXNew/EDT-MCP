@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -22,8 +22,6 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -39,15 +37,15 @@ import com.ditrix.edt.mcp.server.groups.IGroupChangeListener;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.groups.model.GroupStorage;
-import com.ditrix.edt.mcp.server.groups.repository.IGroupRepository;
 import com.ditrix.edt.mcp.server.groups.repository.YamlGroupRepository;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * OSGi DS implementation of the group service.
- * 
- * <p>Thread Safety: This class is thread-safe. It uses a ReadWriteLock
- * to protect the storage cache and CopyOnWriteArrayList for listeners.</p>
- * 
+ *
+ * <p>Thread Safety: This class is thread-safe. It uses a per-project lock
+ * to protect storage mutations and snapshot reads and CopyOnWriteArrayList for listeners.</p>
+ *
  * <p>Improvements over previous implementation:</p>
  * <ul>
  *   <li>Proper resource cleanup on deactivation</li>
@@ -55,33 +53,22 @@ import com.ditrix.edt.mcp.server.groups.repository.YamlGroupRepository;
  *   <li>Delegated YAML handling to repository</li>
  *   <li>Thread interrupt handling in file watcher</li>
  * </ul>
- * 
+ *
  * <p>This component is configured via OSGI-INF XML descriptor.</p>
  */
 public class GroupServiceImpl implements IGroupService, IResourceChangeListener {
-    
+
     /**
      * Repository for loading/saving group data.
      */
-    private final IGroupRepository repository = new YamlGroupRepository();
-    
-    /**
-     * Cache of group storage per project.
-     * Protected by cacheLock.
-     */
-    private final Map<String, GroupStorage> projectStorageCache = new HashMap<>();
-    
-    /**
-     * Lock for thread-safe cache access.
-     */
-    private final ReadWriteLock cacheLock = new ReentrantReadWriteLock();
-    
+    private final YamlGroupRepository repository = new YamlGroupRepository();
+
     /**
      * Listeners for group changes.
      * CopyOnWriteArrayList provides thread-safe iteration.
      */
     private final List<IGroupChangeListener> listeners = new CopyOnWriteArrayList<>();
-    
+
     /**
      * File system watcher for external changes. AtomicReference (not a bare volatile field) so the
      * mutable resource is published thread-safely between the start/stop path and the watcher thread.
@@ -93,73 +80,68 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
      * reason as {@link #watchService}.
      */
     private final AtomicReference<Thread> watchThread = new AtomicReference<>();
-    
+
     /**
      * Map from watch key to project path for file watcher.
      */
     private final Map<WatchKey, java.nio.file.Path> watchKeyToPath = new HashMap<>();
-    
+
     /**
      * Set of projects being watched.
      */
     private final Set<String> watchedProjects = new HashSet<>();
-    
+
     /**
      * Shutdown flag for graceful thread termination.
      */
     private final AtomicBoolean shutdown = new AtomicBoolean(false);
-    
+
     /**
      * Lock for file watcher resources.
      */
     private final Object watcherLock = new Object();
-    
+
     /**
      * Activates the service. Called by OSGi DS framework.
      */
     public void activate() {
-        ResourcesPlugin.getWorkspace().addResourceChangeListener(this, 
+        ResourcesPlugin.getWorkspace().addResourceChangeListener(this,
             IResourceChangeEvent.POST_CHANGE);
         startFileWatcher();
         Activator.logInfo("GroupService activated");
     }
-    
+
     /**
      * Deactivates the service. Called by OSGi DS framework.
      */
     public void deactivate() {
         shutdown.set(true);
-        
+
         // Remove resource listener first
         try {
             ResourcesPlugin.getWorkspace().removeResourceChangeListener(this);
         } catch (Exception e) {
             // Ignore - workspace might be shutting down
         }
-        
+
         // Stop file watcher
         stopFileWatcher();
-        
+
         // Clear cache
-        cacheLock.writeLock().lock();
-        try {
-            projectStorageCache.clear();
-        } finally {
-            cacheLock.writeLock().unlock();
-        }
-        
+        repository.clear();
+
         // Clear listeners
         listeners.clear();
-        
+
         // Clear watcher data
         synchronized (watcherLock) {
             watchedProjects.clear();
             watchKeyToPath.clear();
         }
-        
+
         Activator.logInfo("GroupService deactivated");
     }
-    
+
     /**
      * Starts the file system watcher thread.
      */
@@ -176,7 +158,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     /**
      * Stops the file system watcher thread with proper cleanup.
      */
@@ -194,7 +176,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 }
                 watchThread.set(null);
             }
-            
+
             // Cancel all watch keys (use copy to avoid concurrent modification)
             for (WatchKey key : new ArrayList<>(watchKeyToPath.keySet())) {
                 try {
@@ -204,7 +186,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 }
             }
             watchKeyToPath.clear();
-            
+
             // Close watch service
             WatchService service = watchService.get();
             if (service != null) {
@@ -217,7 +199,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     /**
      * Runs the file watcher loop in a background thread.
      */
@@ -293,7 +275,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     /**
      * Refreshes group file from disk and updates Navigator.
      */
@@ -301,8 +283,8 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
         if (shutdown.get()) {
             return;
         }
-        
-        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+
+        IProject project = ProjectContext.of(projectName).project();
         if (project != null && project.isOpen()) {
             try {
                 IFile groupsFile = project.getFile(
@@ -317,7 +299,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     /**
      * Registers a project for file watching.
      */
@@ -326,24 +308,24 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
         if (service == null) {
             return;
         }
-        
+
         String projectName = project.getName();
-        
+
         synchronized (watcherLock) {
             if (watchedProjects.contains(projectName)) {
                 return;
             }
-            
-            java.nio.file.Path projectLocation = project.getLocation() != null 
-                ? project.getLocation().toFile().toPath() 
+
+            java.nio.file.Path projectLocation = project.getLocation() != null
+                ? project.getLocation().toFile().toPath()
                 : null;
-            
+
             if (projectLocation == null) {
                 return;
             }
-            
+
             java.nio.file.Path settingsPath = projectLocation.resolve(GroupConstants.SETTINGS_FOLDER);
-            
+
             // Create .settings folder if it doesn't exist
             if (!Files.exists(settingsPath)) {
                 try {
@@ -352,9 +334,9 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                     return;
                 }
             }
-            
+
             try {
-                WatchKey key = settingsPath.register(service, 
+                WatchKey key = settingsPath.register(service,
                     StandardWatchEventKinds.ENTRY_MODIFY,
                     StandardWatchEventKinds.ENTRY_CREATE);
                 watchKeyToPath.put(key, settingsPath);
@@ -364,193 +346,159 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     @Override
     public void addGroupChangeListener(IGroupChangeListener listener) {
         if (listener != null && !listeners.contains(listener)) {
             listeners.add(listener);
         }
     }
-    
+
     @Override
     public void removeGroupChangeListener(IGroupChangeListener listener) {
         listeners.remove(listener);
     }
-    
+
     @Override
     public GroupStorage getGroupStorage(IProject project) {
-        String projectName = project.getName();
-        
         ensureProjectWatched(project);
-        
-        // Try read lock first (fast path)
-        cacheLock.readLock().lock();
-        try {
-            GroupStorage storage = projectStorageCache.get(projectName);
-            if (storage != null) {
-                return storage;
-            }
-        } finally {
-            cacheLock.readLock().unlock();
-        }
-        
-        // Need to load - acquire write lock
-        cacheLock.writeLock().lock();
-        try {
-            // Double-check after acquiring write lock
-            GroupStorage storage = projectStorageCache.get(projectName);
-            if (storage == null) {
-                storage = repository.load(project);
-                projectStorageCache.put(projectName, storage);
-            }
-            return storage;
-        } finally {
-            cacheLock.writeLock().unlock();
-        }
+        return repository.snapshot(project);
     }
-    
+
     @Override
     public List<Group> getGroupsAtPath(IProject project, String path) {
         return getGroupStorage(project).getGroupsAtPath(path);
     }
-    
+
     @Override
     public List<Group> getAllGroups(IProject project) {
         return getGroupStorage(project).getGroups();
     }
-    
+
     @Override
     public Group createGroup(IProject project, String name, String path, String description) {
-        GroupStorage storage = getGroupStorage(project);
-        Group group = new Group(name, path);
-        group.setDescription(description);
-        
-        // Set order to be last among siblings
-        List<Group> siblings = storage.getGroupsAtPath(path);
-        if (!siblings.isEmpty()) {
-            int maxOrder = siblings.stream()
-                .mapToInt(Group::getOrder)
-                .max()
-                .orElse(0);
-            group.setOrder(maxOrder + 1);
+        ensureProjectWatched(project);
+        Group result = repository.update(project, storage -> {
+            Group group = new Group(name, path);
+            group.setDescription(description);
+
+            // Set order to be last among siblings
+            List<Group> siblings = storage.getGroupsAtPath(path);
+            if (!siblings.isEmpty()) {
+                int maxOrder = siblings.stream()
+                    .mapToInt(Group::getOrder)
+                    .max()
+                    .orElse(0);
+                group.setOrder(maxOrder + 1);
+            }
+
+            if (storage.addGroup(group)) {
+                return group;
+            }
+            return null;
+        }, changed -> changed != null);
+        if (result != null) {
+            fireGroupsChanged(project);
         }
-        
-        if (storage.addGroup(group)) {
-            saveAndNotify(project, storage);
-            return group;
-        }
-        return null;
+        return result;
     }
-    
+
     @Override
     public boolean renameGroup(IProject project, String oldFullPath, String newName) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.renameGroup(oldFullPath, newName)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.renameGroup(oldFullPath, newName), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public boolean updateGroup(IProject project, String oldFullPath, String newName, String description) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.updateGroup(oldFullPath, newName, description)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.updateGroup(oldFullPath, newName, description), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public boolean deleteGroup(IProject project, String fullPath) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.removeGroup(fullPath)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.removeGroup(fullPath), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public boolean addObjectToGroup(IProject project, String objectFqn, String groupFullPath) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.moveObjectToGroup(objectFqn, groupFullPath)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.moveObjectToGroup(objectFqn, groupFullPath), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public boolean removeObjectFromGroup(IProject project, String objectFqn) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.removeObjectFromAllGroups(objectFqn)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.removeObjectFromAllGroups(objectFqn), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public Group findGroupForObject(IProject project, String objectFqn) {
         return getGroupStorage(project).findGroupForObject(objectFqn);
     }
-    
+
     @Override
     public Set<String> getGroupedObjectsAtPath(IProject project, String path) {
         return getGroupStorage(project).getGroupedObjectsAtPath(path);
     }
-    
+
     @Override
     public boolean hasGroupsAtPath(IProject project, String path) {
         return getGroupStorage(project).hasGroupsAtPath(path);
     }
-    
+
     @Override
     public void refresh(IProject project) {
-        cacheLock.writeLock().lock();
-        try {
-            projectStorageCache.remove(project.getName());
-        } finally {
-            cacheLock.writeLock().unlock();
-        }
+        repository.invalidate(project);
         fireGroupsChanged(project);
     }
-    
+
     @Override
     public boolean renameObject(IProject project, String oldFqn, String newFqn) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.renameObject(oldFqn, newFqn)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.renameObject(oldFqn, newFqn), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
+
     @Override
     public boolean removeObject(IProject project, String objectFqn) {
-        GroupStorage storage = getGroupStorage(project);
-        if (storage.removeObjectFromAllGroups(objectFqn)) {
-            saveAndNotify(project, storage);
-            return true;
+        ensureProjectWatched(project);
+        boolean result = repository.update(project, storage -> storage.removeObjectFromAllGroups(objectFqn), Boolean.TRUE::equals);
+        if (result) {
+            fireGroupsChanged(project);
         }
-        return false;
+        return result;
     }
-    
-    /**
-     * Saves storage and notifies listeners.
-     */
-    private void saveAndNotify(IProject project, GroupStorage storage) {
-        repository.save(project, storage);
-        fireGroupsChanged(project);
-    }
-    
+
     private void fireGroupsChanged(IProject project) {
         if (shutdown.get()) {
             return;
         }
-        
+
         for (IGroupChangeListener listener : listeners) {
             try {
                 listener.onGroupsChanged(project);
@@ -559,25 +507,20 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
             }
         }
     }
-    
+
     @Override
     public void resourceChanged(IResourceChangeEvent event) {
         if (shutdown.get() || event.getDelta() == null) {
             return;
         }
-        
+
         try {
             event.getDelta().accept(delta -> {
                 if (delta.getResource() instanceof IFile file) {
-                    if (GroupConstants.GROUPS_FILE.equals(file.getName()) 
+                    if (GroupConstants.GROUPS_FILE.equals(file.getName())
                             && GroupConstants.SETTINGS_FOLDER.equals(file.getParent().getName())) {
                         IProject project = file.getProject();
-                        cacheLock.writeLock().lock();
-                        try {
-                            projectStorageCache.remove(project.getName());
-                        } finally {
-                            cacheLock.writeLock().unlock();
-                        }
+                        repository.invalidate(project);
                         fireGroupsChanged(project);
                     }
                 }

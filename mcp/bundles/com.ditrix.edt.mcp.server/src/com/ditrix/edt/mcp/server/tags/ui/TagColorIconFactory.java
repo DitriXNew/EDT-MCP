@@ -85,17 +85,6 @@ public final class TagColorIconFactory {
     }
     
     /**
-     * Gets a circular color icon descriptor of the specified size.
-     * 
-     * @param hexColor the color in hex format (e.g., "#FF0000")
-     * @param size the icon size in pixels
-     * @return the image descriptor
-     */
-    public static ImageDescriptor getCircularColorIcon(String hexColor, int size) {
-        return new ColorIconDescriptor(hexColor, size, true);
-    }
-    
-    /**
      * Gets a circular color icon descriptor with a checkmark overlay.
      * Used for checked tag items in menus.
      * 
