@@ -129,6 +129,38 @@ public class MetadataTypeBuilderGenericRefTest
     }
 
     @Test
+    public void testADeclaredGenericNameTheProviderFailsOnIsItsFailureEvenWhenItsLookupIsEmpty()
+    {
+        // Review of #970: an incomplete index may throw on createProxy AND answer null to the lookup; a
+        // generic reference the metamodel declares (Document has a Ref type) is then the platform's failure.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doThrow(new IllegalStateException("index not ready")).when(provider).createProxy(Mockito.anyString()); //$NON-NLS-1$
+        for (String spelling : new String[] { "DocumentRef", "documentref", RU_DOCUMENT + RU_REF }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            MetadataTypeBuilder.Result result = build(provider, MetadataTypeBuilder.TypeTarget.METADATA, kind(spelling));
+            assertNull(spelling, result.typeDescription);
+            assertTrue(spelling + ": " + result.error, result.platformFailure); //$NON-NLS-1$
+            assertNotNull(spelling, result.cause);
+        }
+        // A metadata type whose objects have no Ref type stays an unknown name, not a platform failure.
+        MetadataTypeBuilder.Result register = build(provider, MetadataTypeBuilder.TypeTarget.METADATA,
+            kind("InformationRegisterRef")); //$NON-NLS-1$
+        assertFalse(register.error, register.platformFailure);
+    }
+
+    @Test
+    public void testWhichRefNamesTheMetamodelDeclares()
+    {
+        assertTrue(MetadataTypeBuilder.hasRefType("DocumentRef")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasRefType("CatalogRef")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasRefType("ChartOfCharacteristicTypesRef")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasRefType("InformationRegisterRef")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasRefType("AnyRef")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasRefType("Document")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasRefType(null));
+    }
+
+    @Test
     public void testAKnownGenericNameTheProviderFailsToBuildIsThePlatformsFailure()
     {
         IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);

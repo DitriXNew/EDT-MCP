@@ -140,6 +140,18 @@ public class GenericReferenceTypeOfferTest
         assertPlatformFailure(GenericReferenceTypeOffer.check(dimension(), typeFeature(), types(typeSet("DocumentRef")))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testATypeSetWhoseNameCannotBeReadFailsClosed()
+    {
+        // Review of #970: an unreadable type set may be a generic reference, so it is never let through.
+        GenericReferenceTypeOffer.typeInfoSource = (owner, feature) -> {
+            throw new AssertionError("the verdict is reached before the editor is asked"); //$NON-NLS-1$
+        };
+        assertPlatformFailure(GenericReferenceTypeOffer.check(dimension(), typeFeature(),
+            types(plain("String"), McoreFactory.eINSTANCE.createTypeSet()))); //$NON-NLS-1$
+        assertPlatformFailure(GenericReferenceTypeOffer.check(dimension(), typeFeature(), types(typeSet(" ")))); //$NON-NLS-1$
+    }
+
     // ---- the preparation path asks the editor --------------------------------------------------------
 
     @Test

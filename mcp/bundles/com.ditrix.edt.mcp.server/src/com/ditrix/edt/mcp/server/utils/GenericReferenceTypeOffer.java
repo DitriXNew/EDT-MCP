@@ -72,8 +72,18 @@ final class GenericReferenceTypeOffer
         Map<TypeItem, String> generic = new LinkedHashMap<>();
         for (TypeItem item : built.getTypes())
         {
-            String name = genericName(item);
-            if (name != null)
+            if (!isTypeSet(item))
+            {
+                continue;
+            }
+            String name = typeSetName(item);
+            if (name == null)
+            {
+                // A type set whose name cannot be read may be a generic reference: it is not let through
+                // unchecked (review of #970).
+                return unavailable(owner);
+            }
+            if (name.indexOf('.') < 0)
             {
                 generic.put(item, name);
             }
@@ -119,21 +129,23 @@ final class GenericReferenceTypeOffer
         return null;
     }
 
-    /**
-     * The name of a generic platform type set ({@code DocumentRef}, {@code AnyRef}, ...), or {@code null}
-     * for anything else: a plain type, and a type set that names ONE object ({@code DefinedType.Money},
-     * {@code Characteristic.Kinds}), which keeps its own rules.
-     */
-    private static String genericName(TypeItem item)
+    /** Whether {@code item} is a platform type set (a generic reference, or one object's type set). */
+    private static boolean isTypeSet(TypeItem item)
     {
-        if (item == null || item.eClass() == null || !McorePackage.Literals.TYPE_SET.isSuperTypeOf(item.eClass()))
-        {
-            return null;
-        }
+        return item != null && item.eClass() != null && McorePackage.Literals.TYPE_SET.isSuperTypeOf(item.eClass());
+    }
+
+    /**
+     * The name of a type set: a generic reference ({@code DocumentRef}, {@code AnyRef}, ...) has no dot, a
+     * type set that names ONE object ({@code DefinedType.Money}, {@code Characteristic.Kinds}) keeps its own
+     * rules. {@code null} when the name cannot be read (blank or a throw) - which the caller fails closed on.
+     */
+    private static String typeSetName(TypeItem item)
+    {
         try
         {
             String name = McoreUtil.getTypeName(item);
-            return name == null || name.isBlank() || name.indexOf('.') >= 0 ? null : name;
+            return name == null || name.isBlank() ? null : name;
         }
         catch (RuntimeException e)
         {

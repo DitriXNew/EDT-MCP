@@ -17,6 +17,9 @@ import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
@@ -1974,6 +1977,16 @@ public final class MetadataTypeBuilder
      */
     static TypeProbe probeTypeItem(IEObjectProvider provider, String name)
     {
+        return probeTypeItem(provider, name, false);
+    }
+
+    /**
+     * {@link #probeTypeItem(IEObjectProvider, String)}, where {@code known} says the caller already knows
+     * the platform declares {@code name}: its throw is then kept as the provider's failure whatever the
+     * provider's own lookup answers.
+     */
+    static TypeProbe probeTypeItem(IEObjectProvider provider, String name, boolean known)
+    {
         if (provider == null)
         {
             return new TypeProbe(null, null);
@@ -1985,8 +1998,31 @@ public final class MetadataTypeBuilder
         }
         catch (RuntimeException e)
         {
-            return new TypeProbe(null, knowsName(provider, name, e) ? e : null);
+            return new TypeProbe(null, known || knowsName(provider, name, e) ? e : null);
         }
+    }
+
+    /**
+     * Whether {@code <EnglishType>Ref} names a metadata type whose objects have a Ref type, read off the
+     * metamodel ({@code <Type>.producedTypes.refType}), never a list kept here: {@code DocumentRef} yes,
+     * {@code InformationRegisterRef} no.
+     */
+    static boolean hasRefType(String canonicalRefName)
+    {
+        String suffix = refTypeSuffix().english;
+        if (canonicalRefName == null || !canonicalRefName.endsWith(suffix))
+        {
+            return false;
+        }
+        EClassifier type = MdClassPackage.eINSTANCE
+            .getEClassifier(canonicalRefName.substring(0, canonicalRefName.length() - suffix.length()));
+        if (!(type instanceof EClass))
+        {
+            return false;
+        }
+        EStructuralFeature produced = ((EClass)type).getEStructuralFeature("producedTypes"); //$NON-NLS-1$
+        return produced instanceof EReference
+            && ((EReference)produced).getEReferenceType().getEStructuralFeature("refType") != null; //$NON-NLS-1$
     }
 
     /** Whether the provider indexes {@code name}; a lookup that itself fails counts as known. */
@@ -2089,11 +2125,14 @@ public final class MetadataTypeBuilder
                     : "an event subscription's source") //$NON-NLS-1$
                 + ". Name the object: {kind:'" + kind + "', ref:'Name'}."); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        TypeProbe probe = probeTypeItem(provider, kind);
         String canonical = canonicalGenericReferenceName(kind);
+        // A kind over a metadata type whose objects HAVE a Ref type names a generic reference the platform
+        // declares, so the provider's throw on it is its own failure even when its lookup is empty (#970).
+        boolean declared = canonical != null && hasRefType(canonical);
+        TypeProbe probe = probeTypeItem(provider, kind, declared && canonical.equals(kind.trim()));
         if (probe.item() == null && probe.crash() == null && canonical != null && !canonical.equals(kind))
         {
-            probe = probeTypeItem(provider, canonical);
+            probe = probeTypeItem(provider, canonical, declared);
         }
         if (probe.crash() != null)
         {
