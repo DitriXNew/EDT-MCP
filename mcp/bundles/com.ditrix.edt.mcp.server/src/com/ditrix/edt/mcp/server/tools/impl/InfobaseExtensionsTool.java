@@ -151,10 +151,12 @@ public class InfobaseExtensionsTool implements IMcpTool
             {
                 return ToolResult.error(validation).toJson();
             }
-            // The protocol layer renders a JSON 300 as "300.0"; accept integral values, refuse 300.5 and junk.
-            Integer timeout = params.containsKey("timeoutSeconds")
-                ? JsonUtils.parseIntegralInt(params.get("timeoutSeconds")) : Integer.valueOf(120);
-            if (timeout == null || timeout < 10 || timeout > 600)
+            int timeout;
+            try
+            {
+                timeout = JsonUtils.extractStrictInt(params, "timeoutSeconds", 120, 10, 600);
+            }
+            catch (IllegalArgumentException e)
             {
                 return ToolResult.error("timeoutSeconds must be an integer from 10 to 600; correct it and retry.").toJson();
             }

@@ -123,4 +123,29 @@ public class DeleteLaunchConfigToolTest
         // The required-arg guard must steer to list_configurations.
         assertTrue("error must suggest list_configurations", result.contains("list_configurations")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    @Test
+    public void runningGuardMatchesOnlyLiveEdtLaunchesWithTheRequestedName() throws Exception
+    {
+        var manager = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunchManager.class);
+        var config = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunchConfiguration.class);
+        var type = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunchConfigurationType.class);
+        var launch = org.mockito.Mockito.mock(org.eclipse.debug.core.ILaunch.class);
+        org.mockito.Mockito.when(config.getType()).thenReturn(type);
+        org.mockito.Mockito.when(config.getName()).thenReturn("Client");
+        org.mockito.Mockito.when(launch.getLaunchConfiguration()).thenReturn(config);
+        org.mockito.Mockito.when(manager.getLaunches()).thenReturn(new org.eclipse.debug.core.ILaunch[] { launch });
+        var guard = DeleteLaunchConfigTool.class.getDeclaredMethod("isRunning",
+            org.eclipse.debug.core.ILaunchManager.class, String.class);
+        guard.setAccessible(true);
+        org.mockito.Mockito.when(type.getIdentifier()).thenReturn("com._1c.g5.v8.dt.launching.core.RuntimeClient");
+        assertEquals(true, guard.invoke(null, manager, "Client"));
+        assertEquals(false, guard.invoke(null, manager, "Other"));
+        org.mockito.Mockito.when(launch.isTerminated()).thenReturn(true);
+        assertEquals(false, guard.invoke(null, manager, "Client"));
+        org.mockito.Mockito.when(launch.isTerminated()).thenReturn(false);
+        org.mockito.Mockito.when(type.getIdentifier()).thenReturn("org.eclipse.jdt.launching.localJavaApplication");
+        assertEquals(false, guard.invoke(null, manager, "Client"));
+        org.mockito.Mockito.verify(config, org.mockito.Mockito.never()).delete();
+    }
 }

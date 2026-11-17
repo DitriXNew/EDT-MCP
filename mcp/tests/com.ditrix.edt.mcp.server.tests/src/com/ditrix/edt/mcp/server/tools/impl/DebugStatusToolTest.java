@@ -14,15 +14,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
-/**
- * Tests for {@link DebugStatusTool}.
- * <p>
- * This tool performs no argument validation: the single optional
- * {@code applicationId} param is treated as "no filter" when absent, and the
- * first action in {@code execute()} is a live {@code DebugPlugin} lookup. So
- * the headless surface is limited to the static contract; the status payload is
- * covered by the E2E suite.
- */
+/** Tool contracts and suspend-summary behavior without starting a live debug session. */
 public class DebugStatusToolTest
 {
     @Test
@@ -57,5 +49,31 @@ public class DebugStatusToolTest
         String schema = new DebugStatusTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void suspendSummaryIgnoresTerminatedTargetsAndReportsFirstSuspendedFrame() throws Exception
+    {
+        var stopped = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        org.mockito.Mockito.when(stopped.isTerminated()).thenReturn(true);
+        var running = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IDebugTarget.class);
+        var activeThread = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IThread.class);
+        var suspendedThread = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IThread.class);
+        var frame = org.mockito.Mockito.mock(org.eclipse.debug.core.model.IStackFrame.class);
+        org.mockito.Mockito.when(suspendedThread.isSuspended()).thenReturn(true);
+        org.mockito.Mockito.when(suspendedThread.getTopStackFrame()).thenReturn(frame);
+        org.mockito.Mockito.when(frame.getName()).thenReturn("Calc.Add");
+        org.mockito.Mockito.when(frame.getLineNumber()).thenReturn(12);
+        org.mockito.Mockito.when(running.getThreads()).thenReturn(new org.eclipse.debug.core.model.IThread[] {
+            activeThread, suspendedThread });
+        var method = DebugStatusTool.class.getDeclaredMethod("appendSuspendState", java.util.Map.class,
+            org.eclipse.debug.core.model.IDebugTarget[].class);
+        method.setAccessible(true);
+        java.util.Map<String, Object> entry = new java.util.LinkedHashMap<>();
+        method.invoke(null, entry, new org.eclipse.debug.core.model.IDebugTarget[] { null, stopped, running });
+        assertEquals(2, entry.get("threadCount"));
+        assertEquals(true, entry.get("suspended"));
+        assertEquals("Calc.Add @ 12", entry.get("suspendedAt"));
+        org.mockito.Mockito.verify(stopped, org.mockito.Mockito.never()).getThreads();
     }
 }

@@ -72,8 +72,8 @@ public class ManageTechLogTool implements IMcpTool
             String infobase = str(JsonUtils.extractStringArgument(params, "infobase"), "");
             boolean plans = JsonUtils.extractBooleanArgument(params, "plans", false);
             boolean dbmsLocks = JsonUtils.extractBooleanArgument(params, "dbmsLocks", false);
-            int history = integer(JsonUtils.extractStringArgument(params, "historyHours"), "historyHours", 1);
-            int rotation = integer(JsonUtils.extractStringArgument(params, "rotationMb"), "rotationMb", 100);
+            int history = JsonUtils.extractStrictInt(params, "historyHours", 1, 1, 24);
+            int rotation = JsonUtils.extractStrictInt(params, "rotationMb", 100, 1, 1024);
             String path = JsonUtils.extractStringArgument(params, "path");
             String output = JsonUtils.extractStringArgument(params, "outputPath");
             String exportKind = str(JsonUtils.extractStringArgument(params, "exportKind"), "events");
@@ -90,7 +90,7 @@ public class ManageTechLogTool implements IMcpTool
                 case "export" -> result = export(path, output, exportKind, from, to);
                 case "preview", "start" -> {
                     int ms = threshold == null ? TechLogKnowledge.entry("profiles", profile).get("thresholdMs").getAsInt()
-                        : exact("thresholdMs", threshold);
+                        : JsonUtils.extractStrictInt(params, "thresholdMs", 0, 0, Integer.MAX_VALUE);
                     var options = new TechLogCapture.Options(profile, location == null ? TechLogCapture.defaultLocation()
                         : Path.of(location), ms, extra.isBlank() ? List.of() : Arrays.stream(extra.split(",")).map(String::trim).toList(),
                         infobase, plans, dbmsLocks, history, rotation);
@@ -180,12 +180,4 @@ public class ManageTechLogTool implements IMcpTool
     }
     private static String str(String value, String fallback)
     { return value == null ? fallback : value; }
-    private static int integer(String raw, String key, int fallback)
-    { return raw == null ? fallback : exact(key, raw); }
-    private static int exact(String key, String raw)
-    {
-        Integer value = JsonUtils.parseIntegralInt(raw);
-        if (value == null) throw new IllegalArgumentException(key + "='" + raw + "' must be an integer; preview with a valid value");
-        return value;
-    }
 }

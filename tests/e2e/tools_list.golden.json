@@ -1223,10 +1223,6 @@
     "description": "Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project').",
     "inputSchema": {
       "properties": {
-        "autoSortTopObjects": {
-          "description": "Reserved for future use: auto-sort top-level metadata objects. Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).",
-          "type": "boolean"
-        },
         "baseProjectName": {
           "description": "Name of the BASE configuration EDT project (required for extension; optional for externalObjects; REJECTED for configuration). Must be an existing, open V8 configuration project. Use list_projects to find it.",
           "type": "string"

@@ -685,6 +685,24 @@ public final class JsonUtils
         }
     }
 
+    /** Reads an optional exact integer; invalid supplied values never use the default. */
+    public static int extractStrictInt(Map<String, String> params, String name,
+        int defaultValue, int min, int max)
+    {
+        if (params == null || !params.containsKey(name))
+        {
+            return defaultValue;
+        }
+        String raw = params.get(name);
+        Integer value = parseIntegralInt(raw);
+        if (value == null || value < min || value > max)
+        {
+            throw new IllegalArgumentException(name + "='" + raw + "' must be an integer in "
+                + min + ".." + max + "; retry with a valid value");
+        }
+        return value;
+    }
+
     /**
      * Extracts an integer argument from params map.
      * 

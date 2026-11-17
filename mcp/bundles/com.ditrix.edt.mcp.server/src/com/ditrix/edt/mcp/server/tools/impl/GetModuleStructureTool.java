@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
@@ -504,7 +503,7 @@ public class GetModuleStructureTool implements IMcpTool
                 if (uri.isPlatformResource())
                 {
                     String platformString = uri.toPlatformString(true);
-                    IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(new Path(platformString));
+                    IFile file = ProjectContext.workspaceFile(new Path(platformString));
                     if (file != null && file.exists())
                     {
                         return BslModuleUtils.readFileLines(file);

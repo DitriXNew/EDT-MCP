@@ -20,8 +20,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -31,6 +29,7 @@ import com._1c.g5.v8.dt.core.lifecycle.ProjectStartType;
 import com._1c.g5.v8.dt.core.lifecycle.WorkspaceProjectStartRequest;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -248,7 +247,6 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         }
         platformVersion = platformVersion != null ? platformVersion : xmlVersion;
 
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
         boolean importApiEntered = false;
         boolean importApiReturned = false;
         boolean claimed = false;
@@ -366,13 +364,13 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             runner.runImport(api, importPath, projectName, runtimeVersion, baseProjectName);
             importApiReturned = true;
 
-            return reportImportedProject(workspace, projectName, importPath, outsideWorkspace,
+            return reportImportedProject(projectName, importPath, outsideWorkspace,
                 effectiveLifecycle, startBudgetMs);
         }
         catch (Exception e)
         {
             String error = CliReflectionErrors.toErrorJson(e, "Import", "CLI"); //$NON-NLS-1$ //$NON-NLS-2$
-            IProject created = workspace.getRoot().getProject(projectName);
+            IProject created = ProjectContext.of(projectName).project();
             // Derived from the workspace after the failure: the reflective import may have
             // succeeded and only the post-import lifecycle step failed.
             if (importApiReturned || created != null && created.exists())
@@ -550,7 +548,6 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     /**
      * Starts the freshly imported project and renders the answer that states what was observed.
      *
-     * @param workspace the workspace the import wrote into
      * @param projectName the imported project name
      * @param importPath the normalized source directory
      * @param outsideWorkspace whether {@code importPath} lies outside the EDT workspace
@@ -558,10 +555,10 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * @param startBudgetMs how long to wait for the project start, in milliseconds
      * @return the MARKDOWN answer, or an error JSON marked as "after mutation"
      */
-    private static String reportImportedProject(IWorkspace workspace, String projectName,
+    private static String reportImportedProject(String projectName,
         Path importPath, boolean outsideWorkspace, IImportLifecycle lifecycle, long startBudgetMs)
     {
-        IProject project = workspace.getRoot().getProject(projectName);
+        IProject project = ProjectContext.of(projectName).project();
         if (!lifecycle.projectExists(project))
         {
             // The API returned normally, so something WAS done; there is simply no project to

@@ -6,14 +6,14 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -104,9 +104,8 @@ public class ListProjectsTool implements IMcpTool
     {
         try
         {
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
             List<Map<String, Object>> rows = new ArrayList<>();
-            for (IProject project : workspace.getRoot().getProjects())
+            for (IProject project : ProjectContext.allProjects())
             {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("name", project.getName()); //$NON-NLS-1$
@@ -137,7 +136,7 @@ public class ListProjectsTool implements IMcpTool
                 rows.add(row);
             }
             return ToolResult.success().put("projects", rows) //$NON-NLS-1$
-                .put("workspacePath", workspace.getRoot().getLocation().toOSString()).toJson(); //$NON-NLS-1$
+                .put("workspacePath", ProjectContext.workspaceLocation().toOSString()).toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {
@@ -157,8 +156,7 @@ public class ListProjectsTool implements IMcpTool
         
         try
         {
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject[] projects = workspace.getRoot().getProjects();
+            IProject[] projects = ProjectContext.allProjects();
             
             md.append("## Workspace Projects\n\n"); //$NON-NLS-1$
             md.append("**Total:** ").append(projects.length).append(" projects\n\n"); //$NON-NLS-1$ //$NON-NLS-2$

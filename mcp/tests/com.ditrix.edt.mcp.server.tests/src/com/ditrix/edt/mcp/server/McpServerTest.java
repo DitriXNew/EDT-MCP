@@ -31,14 +31,14 @@ public class McpServerTest
     private static final int PORT = 8765;
 
     @Test
-    public void activeCallKeepsStatusBarInterruptEnabledAfterOlderNameIsCleared()
+    public void activeCallKeepsStatusBarInterruptEnabledAfterOlderCallIsCleared()
     {
         McpServer server = new McpServer();
         ActiveToolCall active = mock(ActiveToolCall.class);
         when(active.getToolName()).thenReturn("newer_call");
         when(active.getElapsedSeconds()).thenReturn(7L);
         server.setActiveToolCall(active);
-        server.setCurrentToolName(null);
+        server.clearActiveToolCall(mock(ActiveToolCall.class));
         assertTrue("The status-bar menu must still offer interruption", server.isToolExecuting());
         assertEquals("newer_call", server.getCurrentToolName());
         assertEquals(7L, server.getToolExecutionSeconds());
@@ -216,5 +216,54 @@ public class McpServerTest
         {
             calls.append("start ");
         }
+    }
+
+    @Test
+    public void overlappingCallsKeepSignalsAndStatusWithTheirInvocation() throws Exception
+    {
+        McpServer server = new McpServer();
+        ActiveToolCall first = new ActiveToolCall(response -> {}, "first", 1, null);
+        ActiveToolCall second = new ActiveToolCall(response -> {}, "second", 2, null);
+        UserSignal firstSignal = new UserSignal(UserSignal.SignalType.CANCEL, "first only");
+        UserSignal secondSignal = new UserSignal(UserSignal.SignalType.BACKGROUND, "second only");
+        java.util.concurrent.CountDownLatch firstBound = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch secondBound = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService workers = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try
+        {
+            server.setActiveToolCall(first);
+            var older = workers.submit(() -> {
+                server.bindToolCall(first);
+                try
+                {
+                    firstBound.countDown();
+                    assertTrue(secondBound.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                    assertSame(first, server.getExecutingToolCall());
+                    server.clearActiveToolCall(first);
+                    assertEquals("second", server.getCurrentToolName());
+                    assertSame(firstSignal, first.consumeUserSignal());
+                    assertNull(first.consumeUserSignal());
+                }
+                finally { server.unbindToolCall(); }
+                return null;
+            });
+            assertTrue(firstBound.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            server.setUserSignal(first, firstSignal);
+            server.setActiveToolCall(second);
+            server.setUserSignal(second, secondSignal);
+            var newer = workers.submit(() -> {
+                server.bindToolCall(second);
+                try { assertSame(second, server.getExecutingToolCall()); secondBound.countDown(); }
+                finally { server.unbindToolCall(); }
+            });
+            newer.get(3, java.util.concurrent.TimeUnit.SECONDS);
+            older.get(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertSame(secondSignal, second.consumeUserSignal());
+            assertNull(second.consumeUserSignal());
+            server.clearActiveToolCall(second);
+            assertNull(server.getCurrentToolName());
+            assertNull(server.getExecutingToolCall());
+        }
+        finally { workers.shutdownNow(); }
     }
 }

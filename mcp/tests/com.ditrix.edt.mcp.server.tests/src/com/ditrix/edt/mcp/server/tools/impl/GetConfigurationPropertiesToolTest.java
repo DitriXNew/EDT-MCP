@@ -15,17 +15,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
-/**
- * Tests for {@link GetConfigurationPropertiesTool}.
- * <p>
- * {@code projectName} is optional (when absent the tool falls back to the first
- * configuration project), so there is no argument-validation branch that returns
- * before live access — {@code execute()} goes STRAIGHT to {@code Display.getDefault()}
- * (the SWT UI thread) and the DT project manager, so it is NOT unit-testable here.
- * The headless surface is therefore the static contract (name, response type, the
- * YAML result-file agreement, schema, guide); the properties payload is covered by
- * the E2E suite.
- */
+/** Tool contracts and detached configuration/extension rendering, including localized language codes. */
 public class GetConfigurationPropertiesToolTest
 {
     @Test
@@ -116,5 +106,45 @@ public class GetConfigurationPropertiesToolTest
         String guide = new GetConfigurationPropertiesTool().getGuide();
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
+    }
+
+    @Test
+    public void renderedConfigurationUsesLanguageCodesAndPreservesLocalizedSynonyms() throws Exception
+    {
+        var config = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration();
+        var english = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createLanguage();
+        english.setName("English"); english.setLanguageCode("en");
+        var russian = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createLanguage();
+        russian.setName("Russian"); russian.setLanguageCode("ru");
+        config.getLanguages().add(english); config.getLanguages().add(russian);
+        config.setDefaultLanguage(russian);
+        config.setName("Sample");
+        config.getSynonym().put("en", "Sample configuration");
+        config.getSynonym().put("ru", "Тестовая конфигурация");
+        var render = GetConfigurationPropertiesTool.class.getDeclaredMethod("appendConfigurationProperties",
+            StringBuilder.class, com._1c.g5.v8.dt.metadata.mdclass.Configuration.class);
+        render.setAccessible(true);
+        StringBuilder yaml = new StringBuilder();
+        render.invoke(null, yaml, config);
+        String body = yaml.toString();
+        assertTrue(body, body.contains("defaultLanguage: ru\n"));
+        assertTrue(body, body.contains("defaultLanguageName: Russian\n"));
+        assertTrue(body, body.contains("en: Sample configuration"));
+        assertTrue(body, body.contains("ru: Тестовая конфигурация"));
+        assertFalse(body, body.contains("Russian: Тестовая"));
+    }
+
+    @Test
+    public void extensionRenderingReportsItsKindAndPrefix() throws Exception
+    {
+        var config = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createConfiguration();
+        config.setNamePrefix("Ext_");
+        var render = GetConfigurationPropertiesTool.class.getDeclaredMethod("appendExtensionProperties",
+            StringBuilder.class, com._1c.g5.v8.dt.metadata.mdclass.Configuration.class);
+        render.setAccessible(true);
+        StringBuilder yaml = new StringBuilder();
+        render.invoke(null, yaml, config);
+        assertTrue(yaml.toString(), yaml.toString().contains("projectKind: Extension\n"));
+        assertTrue(yaml.toString(), yaml.toString().contains("namePrefix: Ext_\n"));
     }
 }

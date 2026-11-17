@@ -325,8 +325,8 @@ public class ReadMethodSourceTool implements IMcpTool
         if (found.isEmpty())
         {
             // None found - list all available methods
-            return BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath,
-                BslModuleUtils.methodNames(module));
+            return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath,
+                BslModuleUtils.methodNames(module))).toJson();
         }
 
         // Read file to get actual source lines (getText() may include preceding doc-comments)
@@ -430,7 +430,7 @@ public class ReadMethodSourceTool implements IMcpTool
                 {
                     allMethodNames.add(span.name);
                 }
-                return BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath, allMethodNames);
+                return ToolResult.error(BslModuleUtils.buildMethodsNotFoundResponse(names, modulePath, allMethodNames)).toJson();
             }
 
             // Whole-MODULE revision token (see readViaEmf) for the expectedHash

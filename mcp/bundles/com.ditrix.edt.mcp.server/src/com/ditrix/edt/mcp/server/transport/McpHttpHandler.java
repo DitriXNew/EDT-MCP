@@ -23,7 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.McpSessionRegistry;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
-import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
+import com.ditrix.edt.mcp.server.utils.EdtVersion;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -611,7 +611,7 @@ public class McpHttpHandler implements HttpHandler
             String response = JsonUtils.buildServerInfo(
                 McpConstants.SERVER_NAME,
                 McpConstants.PLUGIN_VERSION,
-                GetEdtVersionTool.getEdtVersion(),
+                EdtVersion.getEdtVersion(),
                 McpConstants.PROTOCOL_VERSION);
             exchange.getResponseHeaders().add(CONTENT_TYPE, "application/json"); //$NON-NLS-1$
             HttpTransport.sendResponse(exchange, 200, response);

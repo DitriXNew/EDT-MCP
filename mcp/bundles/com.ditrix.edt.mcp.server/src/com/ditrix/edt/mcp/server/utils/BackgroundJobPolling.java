@@ -37,8 +37,14 @@ public final class BackgroundJobPolling
         {
             return Integer.valueOf(defaultSeconds);
         }
-        int value = JsonUtils.extractIntArgument(params, key, Integer.MIN_VALUE);
-        return value >= 0 && value <= maxSeconds ? Integer.valueOf(value) : null;
+        try
+        {
+            return JsonUtils.extractStrictInt(params, key, defaultSeconds, 0, maxSeconds);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
     }
 
     /**

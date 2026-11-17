@@ -8,7 +8,7 @@ Inspect available Git branches and their EDT infobase bindings. Parameters and e
 | projectName | yes | string | EDT project to list git branches for (required). |
 
 ## Guide
-List a project's git branches (local and remote-tracking), flag the current one (and detached HEAD), and show the 1C application/infobase binding each branch **context** carries, when EDT tracks one.
+List local and remote-tracking Git branches for `projectName`, mark the current branch/detached HEAD, and show each branch context's application/infobase bindings when EDT tracks them.
 
 ## When to use
 - Before `switch_git_branch`, to see which branches exist and confirm the exact name to pass.

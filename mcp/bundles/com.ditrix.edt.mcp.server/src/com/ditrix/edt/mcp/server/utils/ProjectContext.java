@@ -28,7 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * Resolves an MCP {@code projectName} argument to a workspace {@link IProject}
  * and exposes the existence/open predicates that the project tools previously
  * inlined as
- * {@code ResourcesPlugin.getWorkspace().getRoot().getProject(name)} followed by
+ * {@code workspaceRoot().getProject(name)} followed by
  * {@code exists()} / {@code isOpen()} checks.
  * <p>
  * Besides resolution, this class owns the <b>standard "project not found"
@@ -74,7 +74,7 @@ public final class ProjectContext
     {
         IProject resolved = (projectName == null || projectName.isEmpty())
             ? null
-            : ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+            : workspaceRoot().getProject(projectName);
         return new ProjectContext(projectName, resolved);
     }
 
@@ -107,10 +107,27 @@ public final class ProjectContext
         }
     }
 
+    private static org.eclipse.core.resources.IWorkspaceRoot workspaceRoot()
+    {
+        return ResourcesPlugin.getWorkspace().getRoot();
+    }
+
+    /** Returns the workspace's local location, when one is available. */
+    public static IPath workspaceLocation()
+    {
+        return workspaceRoot().getLocation();
+    }
+
+    /** Resolves a workspace-absolute file path without checking its existence. */
+    public static org.eclipse.core.resources.IFile workspaceFile(IPath path)
+    {
+        return workspaceRoot().getFile(path);
+    }
+
     /**
      * Returns a handle to every project in the workspace (open or closed). This is
      * the shared replacement for an inlined
-     * {@code ResourcesPlugin.getWorkspace().getRoot().getProjects()} used by tools
+     * {@code workspaceRoot().getProjects()} used by tools
      * that scan across all projects (e.g. a workspace-wide marker scan) rather than
      * one named project. The caller applies its own {@link IProject#isOpen()} /
      * existence filtering, exactly as the inlined form required.
@@ -123,7 +140,7 @@ public final class ProjectContext
      */
     public static IProject[] allProjects()
     {
-        return ResourcesPlugin.getWorkspace().getRoot().getProjects();
+        return workspaceRoot().getProjects();
     }
 
     /**

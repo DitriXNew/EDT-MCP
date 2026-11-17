@@ -33,9 +33,6 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
   applied when `com.e1c.v8codestyle` is installed; otherwise ignored.
 - **commonChecks** (optional, default `true`): enable common project-level BSL checks.
   Same condition as `standardChecks`.
-- **autoSortTopObjects** (optional): accepted for API stability but **not yet applied** in
-  this release. The response carries `codestyle.autoSortNote` to explain this.
-
 ### configuration kind
 
 - **version** (optional): platform version string, e.g. `'8.3.27'`. Default: `Version.LATEST`.
@@ -254,7 +251,7 @@ On success the response includes:
   project's derived data: `list_projects` may still report it `building` for a while.
 - `message` — for an extension: how its root was built, what was not confirmed (its root
   file, its command interface files), and the wizard's default role this tool does not create.
-- `codestyle` — `{applied: bool, note: string, autoSortNote: string}` reporting the
+- `codestyle` — `{applied: bool, note: string}` reporting the
   v8codestyle preference write result.
 - `synonymNote` — present only when the synonym (configuration/extension) could not be
   applied (no resolvable language code).
@@ -300,7 +297,6 @@ On success the response includes:
   have the command interface files, remove the project with `delete_project` and
   `deleteContent=true` (without it the project's directory stays on disk and
   `create_project` refuses it) and run `create_project` again.
-- **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
 - **Client-side timeouts.** A create normally answers within seconds, but on a busy
   workspace the create operation alone may take up to its 120 s limit. If your MCP client
   times out first, the creation usually still completes server-side — re-check with

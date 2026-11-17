@@ -111,10 +111,6 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  *       no compile dependency).</li>
  * </ol>
  *
- * <p>{@code autoSortTopObjects} is accepted in the schema for API stability but is NOT applied
- * in this release because the exact enable-key in {@code com.e1c.v8codestyle.autosort.prefs}
- * could not be confirmed without running against a live wizard-created project; see the
- * {@code codestyle.autoSortNote} field in the response.
  */
 public class CreateProjectTool implements IMcpTool
 {
@@ -337,9 +333,6 @@ public class CreateProjectTool implements IMcpTool
             .booleanProperty(PREF_COMMON_CHECKS,
                 "Enable common (project-level) BSL checks for the new project (default true). " //$NON-NLS-1$
                     + "Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise.") //$NON-NLS-1$
-            .booleanProperty("autoSortTopObjects", //$NON-NLS-1$
-                "Reserved for future use: auto-sort top-level metadata objects. " //$NON-NLS-1$
-                    + "Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).") //$NON-NLS-1$
             .build();
     }
 
@@ -377,7 +370,7 @@ public class CreateProjectTool implements IMcpTool
                     + "on disk), 'created' otherwise, or " //$NON-NLS-1$
                     + "'rootConfirmed'/'rootUnconfirmed' when a slow seeded create requires verification") //$NON-NLS-1$
             .objectProperty(KEY_CODESTYLE,
-                "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
+                "v8codestyle preference application result: {applied: bool, note: string}") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM_NOTE,
                 "Present only when the synonym could not be applied (no resolvable language code).") //$NON-NLS-1$
             .stringProperty(KEY_SCRIPT_VARIANT_NOTE,
@@ -417,8 +410,6 @@ public class CreateProjectTool implements IMcpTool
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, KEY_NORMALIZE_YO, true);
         boolean standardChecks = JsonUtils.extractBooleanArgument(params, PREF_STANDARD_CHECKS, true);
         boolean commonChecks = JsonUtils.extractBooleanArgument(params, PREF_COMMON_CHECKS, true);
-        // autoSortTopObjects is read to satisfy schema parity; not yet applied (see class-level doc)
-        JsonUtils.extractBooleanArgument(params, "autoSortTopObjects", true); //$NON-NLS-1$
 
         // 2. Validate projectKind
         boolean isConfiguration = KIND_CONFIGURATION.equals(projectKind);
@@ -2935,8 +2926,6 @@ public class CreateProjectTool implements IMcpTool
         map.put("applied", false); //$NON-NLS-1$
         map.put("note", //$NON-NLS-1$
             "Not applied: creation exceeded the wait window; set the project preferences manually if needed."); //$NON-NLS-1$
-        map.put("autoSortNote", //$NON-NLS-1$
-            "autoSortTopObjects is reserved for a future release and was not applied (enable-key unconfirmed)."); //$NON-NLS-1$
         return map;
     }
 
@@ -3029,13 +3018,9 @@ public class CreateProjectTool implements IMcpTool
             codestyleNote = "com.e1c.v8codestyle is not installed; standardChecks/commonChecks were not applied."; //$NON-NLS-1$
         }
 
-        String autoSortNote = "autoSortTopObjects is reserved for a future release " //$NON-NLS-1$
-            + "and was not applied (enable-key unconfirmed)."; //$NON-NLS-1$
-
         Map<String, Object> codestyleMap = new LinkedHashMap<>();
         codestyleMap.put("applied", codestyleApplied); //$NON-NLS-1$
         codestyleMap.put("note", codestyleNote); //$NON-NLS-1$
-        codestyleMap.put("autoSortNote", autoSortNote); //$NON-NLS-1$
         return codestyleMap;
     }
 

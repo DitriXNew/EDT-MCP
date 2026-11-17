@@ -61,7 +61,7 @@ public class SchemaExecuteParamParityTest
      */
     private static final Pattern SINGLE_KEY = Pattern.compile(
         "(?:extractStringArgument|extractArrayArgument|extractObjectArray|extractBooleanArgument|extractLongArgument|" //$NON-NLS-1$
-            + "extractIntArgument|extractDoubleArgument|extractSelectorArgument|requireArgument)\\s*\\(\\s*params\\s*,\\s*\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
+            + "extractIntArgument|extractStrictInt|extractDoubleArgument|extractSelectorArgument|requireArgument)\\s*\\(\\s*params\\s*,\\s*\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
 
     /** Varargs: requireArguments(params, "a", "b", ...). Captures the whole quoted-list tail. */
     private static final Pattern MULTI_KEY = Pattern.compile(
@@ -76,6 +76,14 @@ public class SchemaExecuteParamParityTest
     /** A {@code [modifier] static final String NAME = "value"} constant definition. */
     private static final Pattern STRING_CONSTANT = Pattern.compile(
         "static\\s+final\\s+String\\s+(\\w+)\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*+)\""); //$NON-NLS-1$
+
+    @Test
+    public void strictIntegerAccessorCountsAsAParameterRead()
+    {
+        Matcher match = SINGLE_KEY.matcher("JsonUtils.extractStrictInt(params, \"depth\", 1, 1, 10)");
+        org.junit.Assert.assertTrue(match.find());
+        org.junit.Assert.assertEquals("depth", match.group(1));
+    }
 
     @After
     public void tearDown()
