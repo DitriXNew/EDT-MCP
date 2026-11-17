@@ -7,14 +7,11 @@
 package com.ditrix.edt.mcp.server.tools;
 
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -22,45 +19,13 @@ import java.util.Set;
 import org.junit.After;
 import org.junit.Test;
 
-/**
- * Adoption ratchet for CLAUDE.md rule #4: project/workspace resolution must go
- * through the shared {@code ProjectContext}, NOT a fresh
- * {@code ResourcesPlugin.getWorkspace()...} copy. The refactor is mid-flight, so a
- * fixed set of tools still hand-roll it; this test pins that set as an allow-list
- * and FAILS the build if any OTHER {@code tools/impl} tool starts referencing
- * {@code ResourcesPlugin} (a new copy), or if an allow-listed tool stops (it has
- * been migrated and must leave the list — the list may only SHRINK toward zero).
- * <p>
- * Detection is a bytecode scan: a class that calls {@code ResourcesPlugin.getWorkspace()}
- * carries the constant-pool reference {@code org/eclipse/core/resources/ResourcesPlugin},
- * so the simple substring {@code "ResourcesPlugin"} in the class file is a reliable
- * signal (an unused import leaves no bytecode trace, so this does not false-positive
- * on imports). This is the rule-#4 analogue of {@link BuiltInToolTestCoverageTest}.
- * <p>
- * Scope note: only the tool's own {@code <SimpleName>.class} is scanned. A tool that
- * used {@code ResourcesPlugin} EXCLUSIVELY inside an anonymous inner class (a separate
- * {@code <SimpleName>$1.class}) would slip past — none do today (all offenders call it
- * directly), and a source review / grep is the backstop for that corner.
- */
+/** Project resolution in tools, including nested classes, must use ProjectContext. */
 public class ProjectContextAdoptionRatchetTest
 {
     /** Marker of a hand-rolled workspace lookup, in JVM-internal (slash) form. */
     private static final String MARKER = "ResourcesPlugin"; //$NON-NLS-1$
 
-    /**
-     * Simple names of {@code tools/impl} tools that STILL hand-roll
-     * {@code ResourcesPlugin.getWorkspace()} pending migration to {@code ProjectContext}.
-     * RATCHET: this list may only SHRINK. A new tool that references
-     * {@code ResourcesPlugin} fails {@link #noNewResourcesPluginCopiesInToolsImpl};
-     * an entry that has been migrated (no longer references it) fails
-     * {@link #allowListHasNoStaleOrAlreadyMigratedEntries}. As tools move to
-     * {@code ProjectContext}, delete them from here until the set is EMPTY.
-     */
-    private static final Set<String> KNOWN_DIRECT_WORKSPACE_ACCESS = new HashSet<>(Arrays.asList(
-        "GetConfigurationPropertiesTool", //$NON-NLS-1$
-        "GetModuleStructureTool", //$NON-NLS-1$
-        "ImportConfigurationFromXmlTool", //$NON-NLS-1$
-        "ListProjectsTool")); //$NON-NLS-1$
+    private static final Set<String> KNOWN_DIRECT_WORKSPACE_ACCESS = Set.of();
 
     @After
     public void tearDown()
@@ -142,30 +107,32 @@ public class ProjectContextAdoptionRatchetTest
     /** True if the class file carries a reference to ResourcesPlugin (a getWorkspace() call). */
     private static boolean referencesResourcesPlugin(Class<?> cls)
     {
-        String resource = cls.getSimpleName() + ".class"; //$NON-NLS-1$
-        try (InputStream in = cls.getResourceAsStream(resource))
+        var bundle = org.osgi.framework.FrameworkUtil.getBundle(cls);
+        String directory = cls.getPackageName().replace('.', '/') + "/";
+        var entries = bundle.getEntryPaths(directory);
+        org.junit.Assert.assertNotNull("missing tool package " + directory, entries);
+        boolean scanned = false;
+        boolean found = false;
+        while (entries.hasMoreElements())
         {
-            if (in == null)
+            String entry = entries.nextElement();
+            String filename = entry.substring(entry.lastIndexOf('/') + 1);
+            if (!filename.equals(cls.getSimpleName() + ".class")
+                && !(filename.startsWith(cls.getSimpleName() + "$") && filename.endsWith(".class")))
             {
-                fail("cannot read bytecode for " + cls.getName() //$NON-NLS-1$
-                    + " (getResourceAsStream returned null) - the ratchet cannot verify rule #4"); //$NON-NLS-1$
+                continue;
             }
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            byte[] chunk = new byte[8192];
-            int n;
-            while ((n = in.read(chunk)) != -1)
+            scanned = true;
+            try (InputStream in = bundle.getEntry(entry).openStream())
             {
-                buf.write(chunk, 0, n);
+                found |= new String(in.readAllBytes(), StandardCharsets.ISO_8859_1).contains(MARKER);
             }
-            // ISO-8859-1 maps each byte to a char 1:1, so an ASCII substring search over
-            // the decoded class file finds the UTF-8 constant-pool entry verbatim.
-            String body = new String(buf.toByteArray(), StandardCharsets.ISO_8859_1);
-            return body.contains(MARKER);
+            catch (IOException e)
+            {
+                throw new AssertionError("cannot scan " + entry, e);
+            }
         }
-        catch (IOException e)
-        {
-            fail("failed reading bytecode for " + cls.getName() + ": " + e.getMessage()); //$NON-NLS-1$
-            return false; // unreachable
-        }
+        org.junit.Assert.assertTrue("must scan the production tool " + cls.getName(), scanned);
+        return found;
     }
 }

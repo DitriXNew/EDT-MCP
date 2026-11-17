@@ -60,7 +60,6 @@ public class McpProtocolHandler
     private static final String MIME_TEXT_MARKDOWN = "text/markdown"; //$NON-NLS-1$
 
     /** JSON key flagging a structured success/failure outcome. */
-    private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
 
     /** Maximum user-authored signal text retained in a tool result, including the ellipsis. */
     public static final int MAX_USER_SIGNAL_MESSAGE_CHARS = 512;
@@ -530,15 +529,11 @@ public class McpProtocolHandler
         // Extract parameters from request arguments
         Map<String, String> params = extractToolParams(request);
         
-        // Set current tool name for status bar display
         McpServer server = Activator.getDefault() != null ? Activator.getDefault().getMcpServer() : null;
-        if (server != null)
-        {
-            server.setCurrentToolName(tool.getName());
-        }
-        
+        com.ditrix.edt.mcp.server.ActiveToolCall call = server != null ? server.getExecutingToolCall() : null;
+
         // Execute the tool (timed + logged + status-bar cleared in one place).
-        String result = executeToolTimed(tool, params, server);
+        String result = executeToolTimed(tool, params, server, call);
 
         // PII redaction (#242): the single wire-serialization choke point.
         // A no-op unless redaction is enabled AND the tool is flagged returnsInfobaseData -
@@ -549,7 +544,7 @@ public class McpProtocolHandler
         UserSignal signal = null;
         if (server != null)
         {
-            signal = server.consumeUserSignal();
+            signal = call != null ? call.consumeUserSignal() : null;
         }
         
         // Check if plain text mode is enabled (Cursor compatibility).
@@ -573,7 +568,8 @@ public class McpProtocolHandler
      * @return the raw tool result payload (may be {@code null} only if {@code execute} returned
      *         {@code null})
      */
-    private String executeToolTimed(IMcpTool tool, Map<String, String> params, McpServer server)
+    private String executeToolTimed(IMcpTool tool, Map<String, String> params, McpServer server,
+        com.ditrix.edt.mcp.server.ActiveToolCall call)
     {
         String result = null;
         long startNanos = System.nanoTime();
@@ -619,7 +615,7 @@ public class McpProtocolHandler
             // Clear current tool name after execution
             if (server != null)
             {
-                server.setCurrentToolName(null);
+                server.clearActiveToolCall(call);
             }
 
             long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;

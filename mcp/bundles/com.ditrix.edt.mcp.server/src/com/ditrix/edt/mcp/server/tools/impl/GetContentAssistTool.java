@@ -180,20 +180,21 @@ public class GetContentAssistTool implements IMcpTool
         int column;
         try
         {
-            // Handle both integer ("33") and double ("33.0") formats
-            line = (int) Double.parseDouble(lineStr);
-            column = (int) Double.parseDouble(columnStr);
+            // Preserve the below-one error without truncating fractional coordinates.
+            double rawLine = Double.parseDouble(lineStr);
+            double rawColumn = Double.parseDouble(columnStr);
+            if (rawLine < 1 || rawColumn < 1)
+            {
+                return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
+            }
+            line = JsonUtils.extractStrictInt(params, "line", 0, 1, Integer.MAX_VALUE); //$NON-NLS-1$
+            column = JsonUtils.extractStrictInt(params, KEY_COLUMN, 0, 1, Integer.MAX_VALUE);
         }
-        catch (NumberFormatException | NullPointerException e)
+        catch (IllegalArgumentException | NullPointerException e)
         {
             return ToolResult.error("Invalid line or column number").toJson(); //$NON-NLS-1$
         }
-        
-        if (line < 1 || column < 1)
-        {
-            return ToolResult.error("Line and column must be >= 1").toJson(); //$NON-NLS-1$
-        }
-        
+
         int defaultLimit = ToolParameterSettings.getInstance()
             .getParameterValue(NAME, McpKeys.LIMIT, 100);
         int limit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.EdtVersion;
 import com.ditrix.edt.mcp.server.HostKind;
 
 import java.util.LinkedHashMap;
@@ -155,7 +156,7 @@ public class GetServerStatusTool implements IMcpTool
             result.put("hostKind", HostKind.current().name());
             result.put("protocolVersion", McpConstants.PROTOCOL_VERSION); //$NON-NLS-1$
             result.put("pluginVersion", McpConstants.PLUGIN_VERSION); //$NON-NLS-1$
-            result.put("edtVersion", GetEdtVersionTool.getEdtVersion()); //$NON-NLS-1$
+            result.put("edtVersion", EdtVersion.getEdtVersion()); //$NON-NLS-1$
 
             result.put("enabledTools", enabledTools); //$NON-NLS-1$
             result.put("totalTools", totalTools); //$NON-NLS-1$

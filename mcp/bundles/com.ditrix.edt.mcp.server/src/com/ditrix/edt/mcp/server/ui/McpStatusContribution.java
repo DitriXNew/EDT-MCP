@@ -378,6 +378,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             return;
         }
         
+        com.ditrix.edt.mcp.server.ActiveToolCall call = server.getActiveToolCall();
         // Show dialog to edit message
         UserSignalDialog dialog = new UserSignalDialog(
             container.getShell(), type, title);
@@ -387,7 +388,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             UserSignal signal = new UserSignal(type, dialog.getMessage());
             
             // Interrupt the tool call and send response immediately
-            boolean interrupted = server.interruptToolCall(signal);
+            boolean interrupted = server.interruptToolCall(call, signal);
             if (interrupted)
             {
                 Activator.logInfo("Tool call interrupted with signal: " + type.name()); //$NON-NLS-1$
@@ -395,7 +396,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
             else
             {
                 // Fallback: store signal for when tool completes
-                server.setUserSignal(signal);
+                server.setUserSignal(call, signal);
                 Activator.logInfo("User signal queued: " + type.name()); //$NON-NLS-1$
             }
         }

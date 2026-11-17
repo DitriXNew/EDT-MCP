@@ -558,8 +558,14 @@ public class AskWorkmateTool implements IMcpTool
         {
             return null;
         }
-        int value = JsonUtils.extractIntArgument(params, key, Integer.MIN_VALUE);
-        return value > 0 ? value : null;
+        try
+        {
+            return JsonUtils.extractStrictInt(params, key, 1, 1, Integer.MAX_VALUE);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
     }
 
     private static String positiveIntegerError(String key, String value)

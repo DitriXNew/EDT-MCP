@@ -284,25 +284,16 @@ def test_subsystem_content_nested():
     # CHILD's OWN .mdo, for the English and the Russian nested address.
     #
     # PRECONDITION: a nested subsystem must exist to target. It is seeded UNDER the fixture's
-    # pre-existing empty 'Subsystem.Subsystem' via create_metadata — the FIRST write in this test,
-    # so a create that this build cannot perform commits nothing and the test SKIPS cleanly (no
-    # leaked model state), rather than failing. create_metadata does not (yet) create a nested
-    # subsystem — subsystems are top-object-shaped and are excluded from the generic child-feature
-    # map; when that gains support this test starts exercising the nested force-export for real.
-    # Until then the nested force-export target stays covered structurally by the BM-identity FQN
-    # derivation + the SubsystemUtils.resolveByFqn unit tests (bilingual + nested).
+    # pre-existing empty 'Subsystem.Subsystem' via create_metadata. A failed seed must
+    # fail this persistence check rather than silently remove its coverage.
     parent, child = "Subsystem", "E2ENestedChild"
     child_fqn = "Subsystem.%s.Subsystem.%s" % (parent, child)
     child_fqn_ru = "Subsystem.%s.Подсистема.%s" % (parent, child)  # Russian NON-leading type token
     child_mdo = _nested_subsystem_mdo(parent, child)
 
-    # Seed the nested child (first write): skip cleanly if this build cannot create a nested subsystem.
+    # Seed the nested child required by the persistence assertions.
     seed = call("create_metadata", {"projectName": PROJECT, "fqn": child_fqn})
-    if seed.is_error:
-        raise E2ESkip(
-            "nested-subsystem seeding is unsupported by create_metadata (%s); the nested "
-            "force-export target stays covered by the bmGetTopObject().bmGetFqn() derivation + the "
-            "SubsystemUtils.resolveByFqn unit tests" % (seed.error_text()[:200],))
+    assert_ok(seed, "seed the nested subsystem required by the persistence test")
     wait_for_project_ready()
 
     const_en, const_ru = "E2ENestedConstEn", "E2ENestedConstRu"

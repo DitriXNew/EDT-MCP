@@ -6300,9 +6300,4 @@ public class GitTool implements IMcpTool
         }
     }
 
-    /** @return the sorted allowed-subcommand list (for the guide / tests). */
-    static List<String> allowedSubcommands()
-    {
-        return new ArrayList<>(new TreeSet<>(ALLOWED_SUBCOMMANDS));
-    }
 }

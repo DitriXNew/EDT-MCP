@@ -66,15 +66,15 @@ public class GetTechLogTool implements IMcpTool
             String problem = JsonUtils.extractStringArgument(params, "problem");
             String groupId = JsonUtils.extractStringArgument(params, "groupId");
             String occurrenceId = JsonUtils.extractStringArgument(params, "occurrenceId");
-            int minDuration = integer(JsonUtils.extractStringArgument(params, "minDurationMs"), "minDurationMs", 0, 0, Integer.MAX_VALUE);
+            int minDuration = JsonUtils.extractStrictInt(params, "minDurationMs", 0, 0, Integer.MAX_VALUE);
             String contains = JsonUtils.extractStringArgument(params, "contains");
             String session = JsonUtils.extractStringArgument(params, "session");
             String from = JsonUtils.extractStringArgument(params, "from");
             String to = JsonUtils.extractStringArgument(params, "to");
-            int limit = Pagination.clampLimit(integer(JsonUtils.extractStringArgument(params, McpKeys.LIMIT), "limit", 100, 1, Integer.MAX_VALUE), Pagination.MAX_LIMIT);
-            int offset = integer(JsonUtils.extractStringArgument(params, "offset"), "offset", 0, 0, Integer.MAX_VALUE);
-            int mb = integer(JsonUtils.extractStringArgument(params, "readBudgetMb"), "readBudgetMb", 64, 1, TechLogReader.MAX_BUDGET_MB);
-            int seconds = integer(JsonUtils.extractStringArgument(params, "readBudgetSeconds"), "readBudgetSeconds", 10, 1, TechLogReader.MAX_BUDGET_SECONDS);
+            int limit = Pagination.clampLimit(JsonUtils.extractStrictInt(params, McpKeys.LIMIT, 100, 1, Integer.MAX_VALUE), Pagination.MAX_LIMIT);
+            int offset = JsonUtils.extractStrictInt(params, "offset", 0, 0, Integer.MAX_VALUE);
+            int mb = JsonUtils.extractStrictInt(params, "readBudgetMb", 64, 1, TechLogReader.MAX_BUDGET_MB);
+            int seconds = JsonUtils.extractStrictInt(params, "readBudgetSeconds", 10, 1, TechLogReader.MAX_BUDGET_SECONDS);
             if (mode.equals("describe"))
             {
                 List<String> categories = new ArrayList<>(), ids = new ArrayList<>();
@@ -128,12 +128,4 @@ public class GetTechLogTool implements IMcpTool
     private static boolean present(String value) { return value != null && !value.isBlank(); }
     private static String value(String value, String fallback)
     { return present(value) ? value : fallback; }
-    private static int integer(String raw, String key, int fallback, int min, int max)
-    {
-        if (raw == null) return fallback;
-        Integer value = JsonUtils.parseIntegralInt(raw);
-        if (value == null || value < min || value > max)
-            throw new IllegalArgumentException(key + "='" + raw + "' must be an integer in " + min + ".." + max + "; retry with a valid value");
-        return value;
-    }
 }

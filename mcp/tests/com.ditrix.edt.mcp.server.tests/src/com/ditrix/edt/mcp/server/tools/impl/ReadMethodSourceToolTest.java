@@ -771,9 +771,9 @@ public class ReadMethodSourceToolTest
     {
         String expected = "Error: Methods 'Nope', 'Gone' not found in " + PATH + "\n\n" //$NON-NLS-1$ //$NON-NLS-2$
             + "**Available methods** (2):\n\n- Add\n- Test\n"; //$NON-NLS-1$
-        assertEquals(expected, new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
+        assertEquals(com.ditrix.edt.mcp.server.protocol.ToolResult.error(expected).toJson(), new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
             List.of("Nope", "Gone"), true)); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals(expected, new ReadMethodSourceTool(emfAccess()).readViaEmf(null, PROJECT, PATH,
+        assertEquals(com.ditrix.edt.mcp.server.protocol.ToolResult.error(expected).toJson(), new ReadMethodSourceTool(emfAccess()).readViaEmf(null, PROJECT, PATH,
             List.of("Nope", "Gone"), true)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -808,9 +808,9 @@ public class ReadMethodSourceToolTest
     {
         String expected = "Error: Method 'Nope' not found in " + PATH + "\n\n" //$NON-NLS-1$ //$NON-NLS-2$
             + "**Available methods** (2):\n\n- Add\n- Test\n"; //$NON-NLS-1$
-        assertEquals(expected, new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
+        assertEquals(com.ditrix.edt.mcp.server.protocol.ToolResult.error(expected).toJson(), new ReadMethodSourceTool(new CountingAccess()).readViaText(null, PROJECT, PATH,
             List.of("Nope"), false)); //$NON-NLS-1$
-        assertEquals(expected, new ReadMethodSourceTool(emfAccess()).readViaEmf(null, PROJECT, PATH,
+        assertEquals(com.ditrix.edt.mcp.server.protocol.ToolResult.error(expected).toJson(), new ReadMethodSourceTool(emfAccess()).readViaEmf(null, PROJECT, PATH,
             List.of("Nope"), false)); //$NON-NLS-1$
     }
 }

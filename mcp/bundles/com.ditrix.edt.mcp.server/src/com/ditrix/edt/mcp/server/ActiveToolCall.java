@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.ditrix.edt.mcp.server.history.McpCallHistory.CallCapture;
 import com.ditrix.edt.mcp.server.transport.ToolCallResponder;
@@ -23,6 +24,14 @@ public class ActiveToolCall
     private final long startTime;
     private final AtomicBoolean responded = new AtomicBoolean(false);
     private final CallCapture historyCapture;
+    private final AtomicReference<UserSignal> userSignal = new AtomicReference<>();
+
+    /** Queues a signal only for this invocation. */
+    public void setUserSignal(UserSignal signal) { userSignal.set(signal); }
+
+    /** Consumes this invocation's signal exactly once. */
+    public UserSignal consumeUserSignal() { return userSignal.getAndSet(null); }
+
     
     /**
      * Creates a new active tool call.

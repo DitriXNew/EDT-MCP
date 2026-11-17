@@ -49,16 +49,8 @@ Error contract — TWO DISTINCT shapes (verified in the Java)
      - non-existent module file     -> "File not found: src/<modulePath>"
        (EMF loadModule returns null -> text fallback -> resolveModuleFile not
         exists -> ToolResult.error)
-2. is_error FALSE but the text is a "not found" report (success-with-error-text):
-     - method name not in the module -> buildMethodNotFoundResponse /
-       buildTextMethodNotFoundResponse return a PLAIN markdown string:
-         "Error: Method '<name>' not found in <modulePath>\n\n
-          **Available methods** (N):\n\n- Add\n- Test\n"
-       This string never goes through ToolResult.error, so success==false is
-       NOT present and is_error stays FALSE. This is the REAL contract: a missing
-       METHOD is a benign, listing-style success — NOT a machine error. We assert
-       that real shape (and that it names the bad method AND lists the siblings),
-       rather than fabricating an is_error we know does not happen.
+2. Missing methods also return is_error TRUE, with the requested names and the
+   available-method list as the recovery hint.
 
 The Calc module fixture (TestConfiguration/src/CommonModules/Calc/Module.bsl,
 committed, 7 lines):
@@ -225,47 +217,29 @@ def test_method_name_is_case_insensitive():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# NEGATIVE MATRIX — method not found (benign success-with-error-text, NOT is_error)
+# NEGATIVE MATRIX — method not found (isError with available methods)
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="read_method_source", kind="read")
-def test_unknown_method_is_benign_success_listing_available_methods():
-    """REAL contract (documented gotcha): a method name that does NOT exist in an
-    EXISTING module is NOT a machine error. buildMethodNotFoundResponse /
-    buildTextMethodNotFoundResponse return a PLAIN markdown string (it never goes
-    through ToolResult.error), so is_error stays FALSE. The text:
-      - starts with "Error: Method '<name>' not found in <modulePath>"
-      - then lists the real available methods (Add, Test).
-
-    We assert that REAL shape rather than fabricating an is_error that does not
-    happen here. The listing IS the actionable next step (it names the siblings),
-    so this is mutation-sensitive: a broken tool that returned Add's body for an
-    unknown name, or an empty/blank listing, would FAIL.
-
-    AUDIT: a NON-existent method returns is_error:false while a non-existent MODULE
-    (next test) returns is_error:true — the same 'you asked for something that is
-    not there' class split across two machine-detectability contracts. A client
-    cannot reliably branch on is_error for 'not found'. Flagged as a fix-card
-    (consider routing method-not-found through ToolResult.error too, or document
-    the listing-success contract explicitly)."""
+def test_unknown_method_is_error_listing_available_methods():
+    """Missing methods are errors with real sibling methods as the recovery hint."""
     bad_method = "NoSuchMethod_e2e"
     r = call("read_method_source", {
         "projectName": PROJECT,
         "modulePath": CALC_MODULE,
         "methodName": bad_method,
     })
-    # This path is success-with-listing, NOT is_error -> assert the real contract.
-    assert_ok(r, "unknown method returns a benign listing, not is_error")
-    assert_contains(r.text, bad_method,
+    assert r.is_error, "unknown method must return isError"
+    assert_contains(r.error_text(), bad_method,
                     "the not-found report must name the method the caller asked for")
-    assert_contains(r.text, "not found",
+    assert_contains(r.error_text(), "not found",
                     "the report must state the method was not found")
     # The listing must enumerate the REAL sibling methods of Calc — the actionable
     # next step. Both fixture methods must appear.
-    assert_contains(r.text, "Available methods",
+    assert_contains(r.error_text(), "Available methods",
                     "the report must offer the available-methods listing")
-    assert_contains(r.text, "Add",
+    assert_contains(r.error_text(), "Add",
                     "the available-methods listing must include the real method Add")
-    assert_contains(r.text, "Test",
+    assert_contains(r.error_text(), "Test",
                     "the available-methods listing must include the real method Test")
     # Mutation guard: it must NOT have silently returned a method body.
     assert_not_contains(r.text, "Возврат A + B;",
@@ -444,17 +418,17 @@ def test_method_names_partial_miss_lists_not_found_and_returns_found():
 @e2e_test(tool="read_method_source", kind="read")
 def test_method_names_all_missing_lists_available_methods():
     """Every requested name missing: the existing not-found listing, naming EVERY requested
-    name and listing the module's real methods (success-with-listing, as for methodName)."""
+    name and listing the module's real methods in an error response."""
     r = call("read_method_source", {
         "projectName": PROJECT, "modulePath": CALC_MODULE,
         "methodNames": ["Nope1_e2e", "Nope2_e2e"],
     })
-    assert_ok(r, "all-missing returns the benign listing")
-    assert_contains(r.text, "Error: Methods 'Nope1_e2e', 'Nope2_e2e' not found in " + CALC_MODULE,
+    assert r.is_error, "all-missing must return isError"
+    assert_contains(r.error_text(), "Error: Methods 'Nope1_e2e', 'Nope2_e2e' not found in " + CALC_MODULE,
                     "the listing names every requested name")
-    assert_contains(r.text, "Available methods", "the listing offers the module's methods")
-    assert_contains(r.text, "- Add", "Add is listed")
-    assert_contains(r.text, "- Test", "Test is listed")
+    assert_contains(r.error_text(), "Available methods", "the listing offers the module's methods")
+    assert_contains(r.error_text(), "- Add", "Add is listed")
+    assert_contains(r.error_text(), "- Test", "Test is listed")
     assert_no_diff("a read tool must not touch the project on disk")
 
 

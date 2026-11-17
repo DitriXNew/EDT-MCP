@@ -66,4 +66,21 @@ public class GetEdtVersionToolTest
         assertNotNull(schema);
         assertTrue(schema.contains("object")); //$NON-NLS-1$
     }
+
+    @Test
+    public void toolAndSharedVersionReaderUseTheSameBuildId()
+    {
+        String previous = System.getProperty("eclipse.buildId");
+        try
+        {
+            System.setProperty("eclipse.buildId", "2026.2.test");
+            assertEquals("2026.2.test", com.ditrix.edt.mcp.server.utils.EdtVersion.getEdtVersion());
+            assertEquals("2026.2.test", new GetEdtVersionTool().execute(java.util.Map.of()));
+        }
+        finally
+        {
+            if (previous == null) { System.clearProperty("eclipse.buildId"); }
+            else { System.setProperty("eclipse.buildId", previous); }
+        }
+    }
 }

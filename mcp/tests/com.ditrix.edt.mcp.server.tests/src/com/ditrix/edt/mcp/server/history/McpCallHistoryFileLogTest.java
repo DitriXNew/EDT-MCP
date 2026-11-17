@@ -239,4 +239,51 @@ public class McpCallHistoryFileLogTest
             // Best-effort cleanup of a temp directory; ignore.
         }
     }
+
+    @Test(timeout = 5000)
+    public void stuckPredecessorDoesNotBlockLaterAppends() throws Exception
+    {
+        Path log = tmp.resolve("bounded-handoff.jsonl");
+        McpCallHistoryFileLog previous = new McpCallHistoryFileLog(log);
+        McpCallHistoryFileLog next = new McpCallHistoryFileLog(log, 25);
+        var writerField = McpCallHistoryFileLog.class.getDeclaredField("writer");
+        writerField.setAccessible(true);
+        var previousWriter = (java.util.concurrent.ExecutorService) writerField.get(previous);
+        var nextWriter = (java.util.concurrent.ExecutorService) writerField.get(next);
+        java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        var logSink = org.eclipse.core.runtime.Platform.getLog(
+            org.osgi.framework.FrameworkUtil.getBundle(McpCallHistoryFileLog.class));
+        var warnings = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        org.eclipse.core.runtime.ILogListener listener = (status, plugin) -> {
+            if (status.getSeverity() == org.eclipse.core.runtime.IStatus.WARNING
+                && status.getMessage().contains("bounded-handoff.jsonl")) {
+                warnings.add(status.getMessage());
+            }
+        };
+        logSink.addLogListener(listener);
+        try
+        {
+            previousWriter.execute(() -> {
+                started.countDown();
+                try { release.await(); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            assertTrue(started.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var predecessorField = McpCallHistoryFileLog.class.getDeclaredField("predecessor");
+            predecessorField.setAccessible(true);
+            predecessorField.set(next, previous);
+            next.enqueue(McpCallHistoryFileLog.toJsonLine(Map.of("n", 3)));
+            nextWriter.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertFalse(previousWriter.isTerminated());
+            assertEquals("header and successor record", 2, Files.readAllLines(log).size());
+            assertNull(predecessorField.get(next));
+            assertEquals(1, warnings.size());
+            assertTrue(warnings.get(0), warnings.get(0).contains("bounded handoff wait"));
+        }
+        finally {
+            release.countDown(); previous.close(); next.close();
+            logSink.removeLogListener(listener);
+        }
+    }
 }

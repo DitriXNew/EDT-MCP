@@ -10,6 +10,9 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Map;
+import java.util.Set;
+
+import com.ditrix.edt.mcp.server.Activator;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.core.resources.IProject;
@@ -45,6 +48,13 @@ public final class CollectionAdapterUtils {
      * Marker for classes without the method.
      */
     private static final MethodHandle NO_METHOD = null;
+    private static final Set<String> REPORTED_FAILURES = ConcurrentHashMap.newKeySet();
+
+    private static void logInvocationFailure(Class<?> type, String method, Throwable failure) {
+        if (REPORTED_FAILURES.add(type.getName() + "." + method)) {
+            Activator.logError("Navigator adapter invocation failed: " + type.getName() + "." + method, failure);
+        }
+    }
     
     private CollectionAdapterUtils() {
         // Utility class
@@ -148,8 +158,10 @@ public final class CollectionAdapterUtils {
         }
         try {
             return HandleResult.of((String) mh.invoke(adapter));
+        } catch (Error e) {
+            throw e;
         } catch (Throwable e) {
-            // Fall through to fallback
+            logInvocationFailure(clazz, "getModelObjectName", e);
             return HandleResult.fallThrough();
         }
     }
@@ -267,7 +279,7 @@ public final class CollectionAdapterUtils {
         
         if (mh == null && !GET_PARENT_CACHE.containsKey(clazz)) {
             mh = findGetParentMethod(clazz);
-            GET_PARENT_CACHE.put(clazz, mh);
+            if (mh != null) { GET_PARENT_CACHE.put(clazz, mh); }
         }
         
         if (mh != null) {
@@ -276,8 +288,10 @@ public final class CollectionAdapterUtils {
                 if (parent instanceof EObject) {
                     return (EObject) parent;
                 }
+            } catch (Error e) {
+                throw e;
             } catch (Throwable e) {
-                // Ignore
+                logInvocationFailure(clazz, "getParent", e);
             }
         }
         
@@ -315,5 +329,6 @@ public final class CollectionAdapterUtils {
     public static void clearCaches() {
         MODEL_OBJECT_NAME_CACHE.clear();
         GET_PARENT_CACHE.clear();
+        REPORTED_FAILURES.clear();
     }
 }

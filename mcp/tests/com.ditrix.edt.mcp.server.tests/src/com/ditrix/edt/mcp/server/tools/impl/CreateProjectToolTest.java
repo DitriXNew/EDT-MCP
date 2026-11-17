@@ -130,7 +130,7 @@ public class CreateProjectToolTest
         assertTrue("guide must document slow-root verification", //$NON-NLS-1$
             guide.contains("get_metadata_objects") && guide.contains("duplicate-project guard")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide must document purpose", guide.contains("purpose")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("guide must document autoSortTopObjects limitation", //$NON-NLS-1$
+        assertFalse("guide must not advertise a no-op parameter", //$NON-NLS-1$
             guide.contains("autoSortTopObjects")); //$NON-NLS-1$
     }
 
@@ -154,7 +154,7 @@ public class CreateProjectToolTest
         assertTrue("schema must declare scriptVariant", schema.contains("\"scriptVariant\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare standardChecks", schema.contains("\"standardChecks\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare commonChecks", schema.contains("\"commonChecks\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("schema must declare autoSortTopObjects", schema.contains("\"autoSortTopObjects\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("schema must not declare autoSortTopObjects", schema.contains("\"autoSortTopObjects\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

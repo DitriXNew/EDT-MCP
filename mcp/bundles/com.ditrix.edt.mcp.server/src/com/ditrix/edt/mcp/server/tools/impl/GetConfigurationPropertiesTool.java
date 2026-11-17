@@ -12,8 +12,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.swt.widgets.Display;
 
@@ -195,8 +193,7 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     private static MatchedConfiguration resolveConfigurationProject(String projectName,
         IDtProjectManager dtProjectManager, IV8ProjectManager v8ProjectManager)
     {
-        IWorkspace workspace = ResourcesPlugin.getWorkspace();
-        IProject[] projects = workspace.getRoot().getProjects();
+        IProject[] projects = ProjectContext.allProjects();
 
         for (IProject project : projects) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {

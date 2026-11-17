@@ -233,9 +233,7 @@ public class GetContentAssistToolTest
     @Test
     public void testDoubleFormatLineBelowOneRejected()
     {
-        // The parser accepts a "33.0"-style double and truncates to int; "0.4" truncates
-        // to 0, which the >= 1 guard then rejects. Exercises the Double.parseDouble path
-        // feeding the positivity check (no NumberFormatException is thrown).
+        // A numeric coordinate below one keeps the established range error.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("modulePath", "CommonModules/M/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -414,5 +412,35 @@ public class GetContentAssistToolTest
         assertTrue(json.contains("\"returnedProposals\":0")); //$NON-NLS-1$
         assertTrue(json.contains("\"filteredOut\":0")); //$NON-NLS-1$
         assertTrue(json.contains("\"proposals\":[]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void fractionalAndOverflowingCoordinatesAreRefusedBeforeResolvingTheModule()
+    {
+        for (String key : java.util.List.of("line", "column"))
+        {
+            for (String value : java.util.List.of("12.7", "NaN", "Infinity", "2147483648", "1e100"))
+            {
+                java.util.Map<String, String> params = new java.util.HashMap<>(java.util.Map.of(
+                    "projectName", "P", "modulePath", "CommonModules/Calc/Module.bsl", "line", "1", "column", "1"));
+                params.put(key, value);
+                String result = new GetContentAssistTool().execute(params);
+                assertTrue(key + "=" + value + ": " + result, result.contains("Invalid line or column number"));
+                assertTrue(result, result.contains("false"));
+            }
+        }
+    }
+
+    @Test
+    public void fractionalCoordinatesBelowOneKeepTheRangeError()
+    {
+        for (String key : java.util.List.of("line", "column"))
+        {
+            var params = new java.util.HashMap<>(java.util.Map.of("projectName", "P",
+                "modulePath", "CommonModules/Calc/Module.bsl", "line", "2", "column", "2"));
+            params.put(key, "0.4");
+            String result = new GetContentAssistTool().execute(params);
+            assertTrue(result, result.contains("Line and column must be"));
+        }
     }
 }
