@@ -208,6 +208,35 @@ public class PathMaskTest
         assertTrue(PathMask.of(mask + "Folder39").matches(deepPath)); //$NON-NLS-1$
     }
 
+    @Test(timeout = 5000)
+    public void testALongMaskCostsNoMoreThanThePathItIsMatchedAgainst()
+    {
+        // Review of #969: '?' + 16,000 literals against a path; repeated '**/' with nothing between them.
+        String longLiteral = "?" + "a".repeat(16000); //$NON-NLS-1$ //$NON-NLS-2$
+        String longPath = "Catalogs/" + "a".repeat(2000) + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        PathMask literal = PathMask.of(longLiteral);
+        PathMask folders = PathMask.of("**/".repeat(16000) + "Z"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 200; i++)
+        {
+            assertFalse(literal.matches(longPath));
+            assertFalse(folders.matches(longPath));
+        }
+        assertTrue("repeated **/ is still one folder run", //$NON-NLS-1$
+            PathMask.of("**/**/**/Module.bsl").matches(MANAGER.replace("ManagerModule", "Module"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(PathMask.of("Catalogs/**/**/ManagerModule.bsl").matches(MANAGER)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPositionsAndCaseAreWholeUnicodeCharacters()
+    {
+        String upper = "𐐀"; // U+10400, a supplementary capital letter
+        String lower = "𐐨"; // U+10428, its lower case
+        String path = "Catalogs/A" + upper + "B/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("? is one character, not one UTF-16 unit", m("Catalogs/A?B", path)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(m("Catalogs/A??B", path)); //$NON-NLS-1$
+        assertTrue("case-insensitive beyond the BMP", m("Catalogs/A" + lower + "*", path)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Test
     public void testRegexCharactersInTheMaskAreLiteral()
     {

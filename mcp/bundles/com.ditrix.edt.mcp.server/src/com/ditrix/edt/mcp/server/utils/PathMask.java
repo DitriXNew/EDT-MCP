@@ -109,14 +109,18 @@ public final class PathMask
     }
 
     /**
-     * A compiled glob, matched by a dynamic programme over (token, path position) in
-     * O(tokens x path length) - never by a backtracking regex, which a mask of repeated {@code **}{@code /}
-     * drives exponential (review of #969). Tokens: a literal character (case-folded), {@code ?} (one
-     * character but {@code /}), {@code *} (a run without {@code /}), {@code **} inside a name (any run),
-     * and {@code **}{@code /} at a folder boundary (zero or more whole folders - empty, or any run that
-     * ends with {@code /}); an unanchored mask starts with that last token. After the tokens, a
-     * {@code /...} tail selects what is under a matched folder: optional, or required when a trailing
-     * {@code /} limits the mask to folders.
+     * A compiled glob, matched by a dynamic programme over (token, path position) - never by a
+     * backtracking regex, which a mask of repeated {@code **}{@code /} drives exponential (review of #969).
+     * Positions are Unicode code points, so {@code ?} is one character and case folding sees whole
+     * characters. Tokens: a literal character (case-folded), {@code ?} (one character but {@code /}),
+     * {@code *} (a run without {@code /}), {@code **} inside a name (any run), and {@code **}{@code /} at a
+     * folder boundary (zero or more whole folders - empty, or any run that ends with {@code /}); an
+     * unanchored mask starts with that last token. After the tokens, a {@code /...} tail selects what is
+     * under a matched folder: optional, or required when a trailing {@code /} limits the mask to folders.
+     * <p>
+     * Cost: a path shorter than the characters the mask requires is rejected before the programme runs,
+     * and adjacent star tokens are merged, so the tokens never outnumber a small multiple of the path's length -
+     * the work per path is bounded by the square of its own length, whatever the mask's.
      */
     private static final class Glob
     {
@@ -127,13 +131,15 @@ public final class PathMask
         private static final byte FOLDERS = 4;
 
         private final byte[] kinds;
-        private final char[] literals;
+        private final int[] literals;
+        private final int required;
         private final boolean foldersOnly;
 
-        private Glob(byte[] kinds, char[] literals, boolean foldersOnly)
+        private Glob(byte[] kinds, int[] literals, int required, boolean foldersOnly)
         {
             this.kinds = kinds;
             this.literals = literals;
+            this.required = required;
             this.foldersOnly = foldersOnly;
         }
 
@@ -153,23 +159,25 @@ public final class PathMask
             {
                 end--;
             }
-            String body = mask.substring(start, end);
-            boolean anchored = start > 0 || body.indexOf('/') >= 0;
+            int[] body = mask.substring(start, end).codePoints().toArray();
+            boolean anchored = start > 0 || indexOf(body, '/', 0) >= 0;
 
-            byte[] kinds = new byte[body.length() + 1];
-            char[] literals = new char[body.length() + 1];
+            byte[] kinds = new byte[body.length + 1];
+            int[] literals = new int[body.length + 1];
             int n = 0;
+            int required = 0;
             if (!anchored)
             {
                 kinds[n++] = FOLDERS;
             }
             int i = 0;
-            while (i < body.length())
+            while (i < body.length)
             {
-                char c = body.charAt(i);
+                int c = body[i];
                 if (c == '?')
                 {
                     kinds[n++] = ONE;
+                    required++;
                     i++;
                     continue;
                 }
@@ -177,40 +185,52 @@ public final class PathMask
                 {
                     kinds[n] = LITERAL;
                     literals[n++] = fold(c);
+                    required++;
                     i++;
                     continue;
                 }
                 int stars = i;
-                while (i < body.length() && body.charAt(i) == '*')
+                while (i < body.length && body[i] == '*')
                 {
                     i++;
                 }
+                byte kind;
                 if (i - stars == 1)
                 {
-                    kinds[n++] = NAME_RUN;
+                    kind = NAME_RUN;
                 }
-                else if (i < body.length() && body.charAt(i) == '/' && (stars == 0 || body.charAt(stars - 1) == '/'))
+                else if (i < body.length && body[i] == '/' && (stars == 0 || body[stars - 1] == '/'))
                 {
-                    kinds[n++] = FOLDERS;
+                    kind = FOLDERS;
                     i++;
                 }
                 else
                 {
-                    kinds[n++] = ANY_RUN;
+                    kind = ANY_RUN;
+                }
+                // '**/**/' is '**/': repeated folder runs add no meaning, only work.
+                if (!(kind == FOLDERS && n > 0 && kinds[n - 1] == FOLDERS))
+                {
+                    kinds[n++] = kind;
                 }
             }
-            return new Glob(java.util.Arrays.copyOf(kinds, n), java.util.Arrays.copyOf(literals, n),
+            return new Glob(java.util.Arrays.copyOf(kinds, n), java.util.Arrays.copyOf(literals, n), required,
                 end < mask.length());
         }
 
         boolean matches(String path)
         {
-            int len = path.length();
-            // next[i]: the tokens after the current one match path[i..]; it starts as the tail.
+            int[] cps = path.codePoints().toArray();
+            int len = cps.length;
+            if (required > len)
+            {
+                return false;
+            }
+            // next[i]: the tokens after the current one match cps[i..]; it starts as the tail.
             boolean[] next = new boolean[len + 1];
             for (int i = 0; i <= len; i++)
             {
-                boolean slash = i < len && path.charAt(i) == '/';
+                boolean slash = i < len && cps[i] == '/';
                 next[i] = foldersOnly ? slash : i == len || slash;
             }
             boolean[] current = new boolean[len + 1];
@@ -221,7 +241,7 @@ public final class PathMask
                 for (int i = len; i >= 0; i--)
                 {
                     boolean more = i < len;
-                    char c = more ? path.charAt(i) : 0;
+                    int c = more ? cps[i] : 0;
                     switch (kind)
                     {
                         case LITERAL:
@@ -250,8 +270,20 @@ public final class PathMask
             return next[0];
         }
 
+        private static int indexOf(int[] cps, int c, int from)
+        {
+            for (int i = from; i < cps.length; i++)
+            {
+                if (cps[i] == c)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         /** The case fold of one character, as a case-insensitive Unicode regex compares it. */
-        private static char fold(char c)
+        private static int fold(int c)
         {
             return Character.toLowerCase(Character.toUpperCase(c));
         }
