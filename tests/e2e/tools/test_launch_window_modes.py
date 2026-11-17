@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import time
 
 from harness import (
     PROJECT, E2ESkip, assert_error, assert_error_quality, assert_no_diff, assert_ok,
@@ -53,13 +54,13 @@ def _platform_ready(mode):
         raise E2ESkip("otherScreen requires two connected monitors; found " + str(count))
 
 
-def _round_trip(mode):
+def _round_trip(mode, launch_mode="run"):
     _platform_ready(mode)
-    name = "e2e_window_mode_" + mode
+    name = "e2e_window_mode_" + mode + ("_debug" if launch_mode == "debug" else "")
     assert_ok(call("create_launch_config", {"projectName": PROJECT, "name": name}), "create window-mode fixture")
     try:
         try:
-            launched = call("launch", {"launchConfigurationName": name, "mode": "run",
+            launched = call("launch", {"launchConfigurationName": name, "mode": launch_mode,
                                        "windowMode": mode, "restartIfRunning": True})
             assert_ok(launched, "launch " + mode)
             result = launched.structured
@@ -77,6 +78,20 @@ def _round_trip(mode):
             assert matches[0].get("state") == "running", matches[0]
             if mode == "isolated":
                 assert "windowListingAvailable" in matches[0], matches[0]
+                assert "asynchronously" not in result.get("message", ""), result
+            if launch_mode == "debug":
+                # The client registers its threads with the debug server it was pointed at.
+                deadline = time.time() + 60
+                threads = 0
+                while time.time() < deadline and threads == 0:
+                    status = call("debug_status", {"applicationId": result["applicationId"]})
+                    assert_ok(status, "inspect the isolated debug session")
+                    threads = max([launch.get("threadCount", 0) for launch in status.structured.get("launches", [])
+                                   if launch.get("launchConfiguration") == name] or [0])
+                    if threads == 0:
+                        time.sleep(2)
+                assert threads > 0, "the isolated client never attached to the debug server: %r" % status.structured
+                assert status.structured.get("debugServerTargetCount", 0) >= 1, status.structured
                 if platform.system() == "Darwin":
                     assert "hidden" in result.get("windowModeReason", ""), result
         finally:
@@ -102,6 +117,11 @@ def test_live_minimized_window_mode():
 @e2e_test(tool="launch", kind="action")
 def test_live_isolated_window_mode():
     _round_trip("isolated")
+
+
+@e2e_test(tool="launch", kind="action")
+def test_live_isolated_debug_window_mode():
+    _round_trip("isolated", "debug")
 
 
 @e2e_test(tool="launch", kind="action")
