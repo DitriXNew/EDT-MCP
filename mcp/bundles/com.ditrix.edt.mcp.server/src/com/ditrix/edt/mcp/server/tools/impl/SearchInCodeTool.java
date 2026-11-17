@@ -89,7 +89,7 @@ public class SearchInCodeTool implements IMcpTool
             .integerProperty(KEY_CONTEXT_LINES,
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
-                "Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder')") //$NON-NLS-1$
+                "Filter by module path substring, or a glob with * ? ** (e.g. 'Documents/SalesOrder', '*SalesOrder*')") //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
                 "Filter by metadata type (e.g. 'documents', 'catalogs', 'commonModules'); " + //$NON-NLS-1$
                 "more precise than fileMask. See guide for the full list.") //$NON-NLS-1$

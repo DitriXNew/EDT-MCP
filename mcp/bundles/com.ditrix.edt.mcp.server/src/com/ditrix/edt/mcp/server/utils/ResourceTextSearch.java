@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -42,6 +41,10 @@ import com.ditrix.edt.mcp.server.Activator;
  * <b>Completeness.</b> A file whose lines cannot be read is skipped and counted
  * ({@link #getSkippedFiles()}); an interrupted thread stops the walk ({@link #wasInterrupted()}).
  * Either makes {@link #isComplete()} false: the absence of a match then proves nothing.
+ * <p>
+ * <b>A mask that selects nothing.</b> When the {@code fileMask} ({@link PathMask}) rejects every
+ * file of the extension, nothing was searched at all, and {@link #fileMaskMatchedNoFile()} says so
+ * - a bare "0 matches" would read as "the text is absent".
  */
 public final class ResourceTextSearch implements IResourceVisitor
 {
@@ -98,7 +101,7 @@ public final class ResourceTextSearch implements IResourceVisitor
 
     private final Pattern pattern;
     private final String extension;
-    private final String fileMask;
+    private final PathMask fileMask;
     private final String folderPrefix;
     private final int maxResults;
     private final int contextLines;
@@ -113,13 +116,17 @@ public final class ResourceTextSearch implements IResourceVisitor
     private int skippedFiles;
     private int collectedMatches;
     private boolean interrupted;
+    private int filesOfExtension;
+    private int filesSelectedByMask;
+    private String firstPathOfExtension;
 
     /**
      * Creates a scanner that reads files with {@link BslModuleUtils#readFileLines(IFile)}.
      *
      * @param pattern the compiled pattern each line is matched against ({@code find()})
      * @param extension the file-name suffix to scan, e.g. {@code ".bsl"}; other files are skipped
-     * @param fileMask a case-insensitive substring the display path must contain, or
+     * @param fileMask the display-path filter read by {@link PathMask#of(String)} (a
+     *     case-insensitive substring, or a glob when it holds {@code *} or {@code ?}), or
      *     {@code null}/empty for no mask
      * @param folderPrefix a prefix the display path must start with (e.g. {@code "Documents/"}),
      *     or {@code null} for none
@@ -161,7 +168,7 @@ public final class ResourceTextSearch implements IResourceVisitor
     {
         this.pattern = pattern;
         this.extension = extension;
-        this.fileMask = fileMask;
+        this.fileMask = PathMask.of(fileMask);
         this.folderPrefix = folderPrefix;
         this.maxResults = maxResults;
         this.contextLines = contextLines;
@@ -208,11 +215,16 @@ public final class ResourceTextSearch implements IResourceVisitor
 
         String displayPath = displayPath(resource);
 
-        if (fileMask != null && !fileMask.isEmpty()
-            && !displayPath.toLowerCase(Locale.ROOT).contains(fileMask.toLowerCase(Locale.ROOT)))
+        filesOfExtension++;
+        if (firstPathOfExtension == null)
+        {
+            firstPathOfExtension = displayPath;
+        }
+        if (!fileMask.matches(displayPath))
         {
             return false;
         }
+        filesSelectedByMask++;
 
         if (folderPrefix != null && !displayPath.startsWith(folderPrefix))
         {
@@ -314,5 +326,32 @@ public final class ResourceTextSearch implements IResourceVisitor
     public boolean isComplete()
     {
         return !interrupted && skippedFiles == 0;
+    }
+
+    /**
+     * @return {@code true} when a {@code fileMask} was given, the walk finished, and the mask
+     *     rejected every one of the (at least one) files of the extension - nothing was searched
+     */
+    public boolean fileMaskMatchedNoFile()
+    {
+        return !fileMask.isEmpty() && !interrupted && filesOfExtension > 0 && filesSelectedByMask == 0;
+    }
+
+    /** @return the {@code fileMask} as the caller sent it ({@code ""} when none) */
+    public String getFileMask()
+    {
+        return fileMask.text();
+    }
+
+    /** @return how many files of the extension the walk met, before any mask */
+    public int getFilesOfExtension()
+    {
+        return filesOfExtension;
+    }
+
+    /** @return the display path of the first file of the extension met, or {@code null} for none */
+    public String getFirstPathOfExtension()
+    {
+        return firstPathOfExtension;
     }
 }

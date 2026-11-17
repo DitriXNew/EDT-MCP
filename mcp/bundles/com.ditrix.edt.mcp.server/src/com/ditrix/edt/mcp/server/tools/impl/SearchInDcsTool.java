@@ -96,7 +96,7 @@ public class SearchInDcsTool implements IMcpTool
             .integerProperty(KEY_CONTEXT_LINES,
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
-                "Filter by file path substring, path without src/ (e.g. 'Reports/Stock' or 'CommonTemplates')") //$NON-NLS-1$
+                "Filter by file path substring or a glob with * ? **, path without src/ (e.g. 'Reports/Stock', '*Stock*')") //$NON-NLS-1$
             .enumProperty("outputMode", //$NON-NLS-1$
                 "Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' " //$NON-NLS-1$
                 + "row per match, no context), 'count', or 'files'", //$NON-NLS-1$

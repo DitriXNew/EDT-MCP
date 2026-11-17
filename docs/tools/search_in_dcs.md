@@ -11,7 +11,7 @@ Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the 
 | isRegex | — | boolean | Treat query as a regular expression. Default: false |
 | limit | — | integer | Max matches returned with context. Default: 100, max: 500 |
 | contextLines | — | integer | Lines of context before/after each match. Default: 2, max: 5 |
-| fileMask | — | string | Filter by file path substring, path without src/ (e.g. 'Reports/Stock' or 'CommonTemplates') |
+| fileMask | — | string | Filter by file path substring or a glob with * ? **, path without src/ (e.g. 'Reports/Stock', '*Stock*') |
 | outputMode | — | string (one of: full, lines, count, files) | Output mode: 'full' (matches with context, default), 'lines' (one 'path:line: text' row per match, no context), 'count', or 'files' |
 
 ## Guide
@@ -32,7 +32,7 @@ Literal or regex full-text search inside the data composition schemas (DCS) of a
 - `isRegex` - treat `query` as a Java regular expression; default `false`. An invalid pattern returns an error; pass `isRegex=false` to search the text literally.
 - `limit` - max matches returned (`full` blocks or `lines` rows); default 100, max 500. Counts in every mode are always exact regardless of `limit`.
 - `contextLines` - lines before/after each match; default 2, max 5 (`full` mode only).
-- `fileMask` - case-insensitive substring of the file path WITHOUT the leading `src/`, e.g. `Reports/Stock` or `CommonTemplates`.
+- `fileMask` - case-insensitive filter on the file path WITHOUT the leading `src/`. Without `*`/`?` it is a substring, e.g. `Reports/Stock` or `CommonTemplates`. With them it is a glob, read as in `search_in_code`: `*`/`?` within one name, `**` across folders, no `/` = any one name (`*Stock*`), with `/` = from the path start (`Reports/*/Templates/**`). When the mask matches no file, the result says so.
 
 ## Paths and template FQNs
 Paths are shown without `src/`: `Reports/Stock/Templates/MainSchema/Template.dcs`. The template FQN is read off that layout:
