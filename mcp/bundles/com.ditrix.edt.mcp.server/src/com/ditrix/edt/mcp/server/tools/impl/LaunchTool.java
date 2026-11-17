@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchOperation;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
@@ -390,6 +391,7 @@ public class LaunchTool implements IMcpTool
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, String mode)
     {
+        LaunchOperation operation = null;
         try
         {
             ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
@@ -451,6 +453,14 @@ public class LaunchTool implements IMcpTool
             if (attachRefusal != null)
             {
                 return attachRefusal;
+            }
+
+            String lockApplicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, configProject);
+            operation = isAttach && (lockApplicationId == null || configProject == null || configProject.isBlank()) ? null
+                : LaunchLifecycleUtils.tryLaunchOperation(configProject, lockApplicationId);
+            if (operation != null && operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
             }
 
             // Unified existing-session decision. One
@@ -530,6 +540,8 @@ public class LaunchTool implements IMcpTool
             String launchError = performLaunch(applied.config, updateBeforeLaunch,
                 isAttach ? null : policy, isAttach ? null : portPolicy,
                 eclipseLaunchMode(mode));
+            if (operation != null) { operation.close(); }
+            operation = null;
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -544,6 +556,10 @@ public class LaunchTool implements IMcpTool
             Activator.logError("Unexpected error during launch by name", e); //$NON-NLS-1$
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -667,6 +683,7 @@ public class LaunchTool implements IMcpTool
         String typeId, String projectName, StandaloneServerPortConflictPolicy portPolicy)
     {
         StandalonePreparation preparation = null;
+        LaunchOperation operation = null;
         try
         {
             preparation = prepareStandaloneLaunch(config, configName, projectName, portPolicy,
@@ -675,6 +692,11 @@ public class LaunchTool implements IMcpTool
             if (preparedLaunch.failure != null)
             {
                 return standalonePreconditionError(configName, preparedLaunch.failure);
+            }
+            operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, preparedLaunch.applicationId);
+            if (operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
             }
             StartOutcome start = startStandaloneServerGuarded(configName, preparedLaunch.project,
                 () -> preparedLaunch.applyPreflight(
@@ -699,6 +721,7 @@ public class LaunchTool implements IMcpTool
             {
                 preparation.startClaim.closeIfNotHandedOff();
             }
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -769,72 +792,80 @@ public class LaunchTool implements IMcpTool
                     return;
                 }
 
-                stage.set(StandalonePreparationStage.APPLICATION);
-                StandaloneServerSupport.ApplicationLookup lookup =
-                    StandaloneServerSupport.lookupApplication(manager, context.project(), resolvedId);
-                if (monitor.isCanceled())
+                try (LaunchOperation operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, resolvedId))
                 {
-                    return;
-                }
-                if (lookup.application() == null)
-                {
-                    publish.accept(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
-                        + "' was not found in project " + projectName)); //$NON-NLS-1$
-                    return;
-                }
+                    if (operation.error() != null)
+                    {
+                        publish.accept(StandalonePreparation.failed(operation.error()));
+                        return;
+                    }
+                    stage.set(StandalonePreparationStage.APPLICATION);
+                    StandaloneServerSupport.ApplicationLookup lookup =
+                        StandaloneServerSupport.lookupApplication(manager, context.project(), resolvedId);
+                    if (monitor.isCanceled())
+                    {
+                        return;
+                    }
+                    if (lookup.application() == null)
+                    {
+                        publish.accept(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
+                            + "' was not found in project " + projectName)); //$NON-NLS-1$
+                        return;
+                    }
 
-                stage.set(StandalonePreparationStage.SERVICE);
-                Object service = StandaloneServerSupport.acquireService();
-                if (monitor.isCanceled())
-                {
-                    return;
-                }
-                if (service == null)
-                {
-                    publish.accept(StandalonePreparation.failed(
-                        "the EDT standalone-server service is not available")); //$NON-NLS-1$
-                    return;
-                }
-                if (lookup.server() == null)
-                {
-                    publish.accept(StandalonePreparation.failed(
-                        "the application's standalone server could not be resolved")); //$NON-NLS-1$
-                    return;
-                }
+                    stage.set(StandalonePreparationStage.SERVICE);
+                    Object service = StandaloneServerSupport.acquireService();
+                    if (monitor.isCanceled())
+                    {
+                        return;
+                    }
+                    if (service == null)
+                    {
+                        publish.accept(StandalonePreparation.failed(
+                            "the EDT standalone-server service is not available")); //$NON-NLS-1$
+                        return;
+                    }
+                    if (lookup.server() == null)
+                    {
+                        publish.accept(StandalonePreparation.failed(
+                            "the application's standalone server could not be resolved")); //$NON-NLS-1$
+                        return;
+                    }
 
-                stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
-                StandaloneServerStateRecovery.StartClaim startClaim;
-                try
-                {
-                    StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
-                        lookup.application(), lookup.server(), resolvedId, manager, monitor,
-                        () -> stage.set(StandalonePreparationStage.STALE_STOP),
-                        () -> staleServerStopped.set(true));
-                    stage.set(StandalonePreparationStage.START_CLAIM);
-                    startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
-                        context.project(), resolvedId, lookup.server(), monitor);
+                    stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
+                    StandaloneServerStateRecovery.StartClaim startClaim;
+                    try
+                    {
+                        StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
+                            lookup.application(), lookup.server(), resolvedId, manager, monitor,
+                            () -> stage.set(StandalonePreparationStage.STALE_STOP),
+                            () -> staleServerStopped.set(true));
+                        stage.set(StandalonePreparationStage.START_CLAIM);
+                        startClaim = StandaloneServerStateRecovery.claimStartWithinBound(
+                            context.project(), resolvedId, lookup.server(), monitor);
+                    }
+                    catch (ApplicationException failure)
+                    {
+                        publish.accept(StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                            failure.getMessage(), staleServerStopped.get()));
+                        return;
+                    }
+                    if (startClaim == null)
+                    {
+                        String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$
+                            + "another start may already own it or its ownership could not be confirmed"; //$NON-NLS-1$
+                        publish.accept(staleServerStopped.get()
+                            ? StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                                failure, true)
+                            : StandalonePreparation.failed(failure));
+                        return;
+                    }
+                    StandaloneServerPortConflictPolicy effectivePortPolicy =
+                        DebugServerTargetSupport.isServerApplicationId(resolvedId)
+                            ? requestedPortPolicy : null;
+                    publish.accept(StandalonePreparation.ready(context.project(), resolvedId, lookup,
+                        service, effectivePortPolicy, staleServerStopped.get(), startClaim));
                 }
-                catch (ApplicationException failure)
-                {
-                    publish.accept(StandalonePreparation.preflightFailed(context.project(), resolvedId,
-                        failure.getMessage(), staleServerStopped.get()));
-                    return;
-                }
-                if (startClaim == null)
-                {
-                    String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$
-                        + "another start may already own it or its ownership could not be confirmed"; //$NON-NLS-1$
-                    publish.accept(staleServerStopped.get()
-                        ? StandalonePreparation.preflightFailed(context.project(), resolvedId,
-                            failure, true)
-                        : StandalonePreparation.failed(failure));
-                    return;
-                }
-                StandaloneServerPortConflictPolicy effectivePortPolicy =
-                    DebugServerTargetSupport.isServerApplicationId(resolvedId)
-                        ? requestedPortPolicy : null;
-                publish.accept(StandalonePreparation.ready(context.project(), resolvedId, lookup,
-                    service, effectivePortPolicy, staleServerStopped.get(), startClaim));
             });
         }
         catch (RuntimeException | Error failure)
@@ -1512,6 +1543,7 @@ public class LaunchTool implements IMcpTool
         StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, String mode)
     {
+        LaunchOperation operation = null;
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
@@ -1527,6 +1559,11 @@ public class LaunchTool implements IMcpTool
             }
 
             IProject project = ctx.project();
+            operation = LaunchLifecycleUtils.tryLaunchOperation(projectName, applicationId);
+            if (operation.error() != null)
+            {
+                return ToolResult.error(operation.error()).toJson();
+            }
 
             // Verify application exists and get its name
             IApplicationManager appManager = Activator.getDefault().getApplicationManager();
@@ -1656,6 +1693,8 @@ public class LaunchTool implements IMcpTool
             String launchError =
                 performLaunch(applied.config, updateBeforeLaunch, policy, portPolicy,
                     eclipseLaunchMode(mode));
+            if (operation != null) { operation.close(); }
+            operation = null;
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch " + mode + " session: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1685,6 +1724,10 @@ public class LaunchTool implements IMcpTool
             Activator.logError("Unexpected error during launch", e); //$NON-NLS-1$
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            if (operation != null) { operation.close(); }
         }
     }
 
@@ -2608,6 +2651,17 @@ public class LaunchTool implements IMcpTool
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
         String launchMode)
     {
+        try (LaunchOperation operation = configuredLaunchOperation(config))
+        {
+            if (operation != null && operation.error() != null) { return operation.error(); }
+            return performLaunchLocked(config, autoConfirmUpdateDialog, policy, portPolicy, launchMode);
+        }
+    }
+
+    private String performLaunchLocked(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
+        ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
+        String launchMode)
+    {
         // Workbench-aware probe: never creates a display. It
         // decides Job-vs-headless ONLY: with a live workbench the launch is
         // dispatched as a background Job; a truly headless runtime takes the
@@ -2730,6 +2784,32 @@ public class LaunchTool implements IMcpTool
      * @param launchMode {@link ILaunchManager#DEBUG_MODE} or {@link ILaunchManager#RUN_MODE}
      */
     static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
+        String launchMode, IProgressMonitor monitor)
+    {
+        try (LaunchOperation operation = configuredLaunchOperation(config))
+        {
+            if (operation != null && operation.error() != null)
+            {
+                recordAsyncFailure(config, operation.error());
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, operation.error());
+            }
+            return runLaunchJobBodyLocked(config, autoConfirmUpdateDialog, policy, portPolicy,
+                launchMode, monitor);
+        }
+    }
+
+    private static LaunchOperation configuredLaunchOperation(ILaunchConfiguration config)
+    {
+        String project = LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_PROJECT_NAME, "");
+        // Target-less low-level launches (including Attach) have no infobase to guard.
+        if (project == null || project.isBlank()) { return null; }
+        String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, project);
+        if (applicationId == null && LaunchConfigUtils.isAttachConfig(config)) { return null; }
+        return LaunchLifecycleUtils.tryLaunchOperation(project, applicationId);
+    }
+
+    private static IStatus runLaunchJobBodyLocked(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy,
         String launchMode, IProgressMonitor monitor)
     {

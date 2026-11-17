@@ -721,6 +721,58 @@ public final class LaunchLifecycleUtils
         }
     }
 
+    /** Launch refuses a busy infobase promptly instead of waiting behind a potentially hours-long load. */
+    public static final long LAUNCH_LOCK_TIMEOUT_MS = 1_000L;
+
+    /** One calling thread's admission through preparation or the launch delegate, never client lifetime. */
+    public static final class LaunchOperation implements AutoCloseable
+    {
+        private final LaunchLock lock;
+        private final String error;
+
+        private LaunchOperation(LaunchLock lock, String error)
+        {
+            this.lock = lock;
+            this.error = error;
+        }
+
+        public String error() { return error; }
+
+        @Override
+        public void close()
+        {
+            if (lock != null) { lock.unlock(); }
+        }
+    }
+
+    /** Acquires the canonical infobase lock and names any background update blocking this launch. */
+    public static LaunchOperation tryLaunchOperation(String projectName, String applicationId)
+    {
+        if (projectName == null || projectName.isBlank() || applicationId == null || applicationId.isBlank())
+        {
+            return new LaunchOperation(null, "The launch target's project/application could not be resolved. "
+                + "Check list_configurations and get_applications before retrying launch.");
+        }
+        LaunchLock lock = lockFor(projectName, applicationId);
+        boolean reentrant = lock.isHeldByCurrentThread();
+        Acquisition acquisition = lock.tryAcquire(LAUNCH_LOCK_TIMEOUT_MS, null);
+        String jobId = ApplicationUpdateJobs.shared().runningJobId(projectName, applicationId);
+        String update = jobId == null ? "" : "update_database job " + jobId
+            + " is loading the configuration into this infobase; poll get_job_status and launch after it finishes.";
+        if (!acquisition.acquired())
+        {
+            return new LaunchOperation(null, lockNotAcquiredMessage(acquisition, projectName,
+                applicationId, LAUNCH_LOCK_TIMEOUT_MS) + " "
+                + (update.isEmpty() ? "Wait for that operation to finish and retry launch." : update));
+        }
+        if (!reentrant && jobId != null)
+        {
+            lock.unlock();
+            return new LaunchOperation(null, update);
+        }
+        return new LaunchOperation(lock, null);
+    }
+
     /**
      * How one {@link LaunchLock#tryAcquire} ended. Not a boolean: the three failures have nothing
      * in common for the caller's message, and reporting an interruption or a cancellation as
@@ -1934,8 +1986,7 @@ public final class LaunchLifecycleUtils
      * The pre-launch check of a launch whose infobase update EDT's launch delegate performs inside
      * the launch Job (its "Application update" dialog is pressed by the armed confirmer), so the call
      * returns "launching" at once and {@code debug_status} reports {@code state: starting} until the
-     * client is up. An active MCP update job is left to EDT's coordinated wait. Otherwise refuses
-     * an unreadable/missing application or an update that EDT itself reports as in progress.
+     * client is up. Refuses an unreadable/missing application or an update EDT reports in progress.
      *
      * @return {@link Optional#empty()} to launch, otherwise an actionable refusal
      */
@@ -1950,11 +2001,6 @@ public final class LaunchLifecycleUtils
         {
             return Optional.of("Project is not available: " //$NON-NLS-1$
                 + (project != null ? project.getName() : "<null>")); //$NON-NLS-1$
-        }
-        if (ApplicationUpdateJobs.shared().runningJobId(project.getName(), applicationId) != null)
-        {
-            // EDT's launch delegate waits for the load; a cached update state must not refuse it.
-            return Optional.empty();
         }
         ApplicationSupport.BoundedRead<Optional<IApplication>> lookup =
             ApplicationSupport.getApplicationBounded(appManager, project, applicationId,

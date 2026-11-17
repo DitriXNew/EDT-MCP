@@ -30,6 +30,44 @@ import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumper;
 public class ExternalObjectDumpSupportTest
 {
     @Test
+    public void dumpLocksTheOwningProjectRatherThanTheNestedExternalObjectProject()
+    {
+        var manager = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProjectManager.class);
+        var child = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProject.class);
+        var parent = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProject.class);
+        var external = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        var owner = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(manager.getDtProject(external)).thenReturn(child);
+        org.mockito.Mockito.when(manager.findParentProject(child)).thenReturn(parent);
+        org.mockito.Mockito.when(parent.getWorkspaceProject()).thenReturn(owner);
+        org.junit.Assert.assertSame(owner, ExternalObjectDumpSupport.infobaseProject(external, manager));
+        org.junit.Assert.assertNotSame(external, owner);
+    }
+
+    @Test
+    public void dumpWithoutAnOwningProjectHasNoApplicationInfobaseToLock()
+    {
+        var manager = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProjectManager.class);
+        var child = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProject.class);
+        var external = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        org.mockito.Mockito.when(manager.getDtProject(external)).thenReturn(child);
+        org.junit.Assert.assertNull(ExternalObjectDumpSupport.infobaseProject(external, manager));
+    }
+
+    @Test
+    public void unknownDumpOwnerRefusesInsteadOfSelectingAnUnrelatedLock()
+    {
+        var external = org.mockito.Mockito.mock(org.eclipse.core.resources.IProject.class);
+        var manager = org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.platform.IDtProjectManager.class);
+        var missingService = org.junit.Assert.assertThrows(com.e1c.g5.dt.applications.ApplicationException.class,
+            () -> ExternalObjectDumpSupport.infobaseProject(external, null));
+        assertTrue(missingService.getMessage().contains("infobase lock cannot be resolved"));
+        var missingProject = org.junit.Assert.assertThrows(com.e1c.g5.dt.applications.ApplicationException.class,
+            () -> ExternalObjectDumpSupport.infobaseProject(external, manager));
+        assertTrue(missingProject.getMessage().contains("no external objects were built"));
+    }
+
+    @Test
     public void testExtensionForExternalDataProcessorIsEpf()
     {
         ExternalDataProcessor dp = MdClassFactory.eINSTANCE.createExternalDataProcessor();

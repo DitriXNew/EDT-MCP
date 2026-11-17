@@ -545,7 +545,8 @@ public class BuildExternalObjectsTool implements IMcpTool
                     // stopped" refusal. Settling the state first turns that race into a short wait.
                     // The pre-flight and every dump run under the default application's infobase
                     // lock, so an explicit standalone_server stop cannot land between them.
-                    StandaloneServerStateRecovery.ensureDefaultApplicationStartableThen(bc.project,
+                    StandaloneServerStateRecovery.ensureDefaultApplicationStartableThen(
+                        ExternalObjectDumpSupport.infobaseProject(bc.project),
                         APPLICATION_LOCK_TIMEOUT_MS, monitor, "Nothing was built.", () -> { //$NON-NLS-1$
                             for (Target target : bc.targets)
                             {

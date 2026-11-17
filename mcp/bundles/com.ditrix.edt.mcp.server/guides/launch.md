@@ -1,9 +1,9 @@
-Starts a 1C application through EDT in debug mode (default) or regular run mode. A named standalone-server configuration starts its server directly through EDT's server service. There are two ways to select the launch configuration, plus an idempotency guard that prevents a second client over a session that is already alive.
+Starts a 1C application through EDT in debug mode (default) or regular run mode. A named standalone-server configuration starts its server directly through EDT's server service.
 
 ## Quick path
 
-1. `list_configurations`, then `launch({"launchConfigurationName":"<name>"})`. The call returns `status: "launching"` at once.
-2. Poll `debug_status`. The launch's `state` is `starting` while EDT updates the infobase from a changed configuration (minutes on a large configuration) and starts the 1C client, or `synchronizing` while another operation is updating that infobase, and then `running` once the 1C client is up.
+1. `list_configurations`, then `launch({"launchConfigurationName":"<name>"})`. A busy infobase refuses launch within one second, before termination/restart; an active update refusal names its jobId. Poll `get_job_status` and launch after completion. Otherwise the call returns `status: "launching"`.
+2. Poll `debug_status`. The launch's `state` is `starting` while EDT updates the infobase from a changed configuration (minutes on a large configuration) and starts the 1C client, then `running` once the 1C client is up.
 3. Do not `terminate_launch` or relaunch while it is starting: that interrupts the load and leaves an EDT error dialog. `restartIfRunning=true` refuses a start in progress; `terminate_launch` aborts one only with `force=true`.
 
 ## When to use
