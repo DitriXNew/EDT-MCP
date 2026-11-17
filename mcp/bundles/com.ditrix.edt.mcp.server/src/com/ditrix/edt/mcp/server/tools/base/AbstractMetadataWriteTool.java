@@ -76,10 +76,10 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return readPreparation(project, preparation).get();
     }
 
+    /** A refusal (e.g. a model that is not up) is not a server error on any host. */
     private static void logExecutionFailure(String context, Throwable failure)
     {
-        if (HostKind.current() == HostKind.HEADLESS) Refusals.log(context, failure);
-        else Activator.logError(context, failure);
+        Refusals.log(context, failure);
     }
 
     /**
