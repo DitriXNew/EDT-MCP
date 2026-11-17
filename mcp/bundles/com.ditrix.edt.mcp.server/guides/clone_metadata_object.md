@@ -65,7 +65,7 @@ BSL, query, DCS and HTML text is preserved. `codeReferences` reports literal sou
 
 Unsaved editors that may affect the project and unconfirmed source export block copying. The tool never saves user editors. The hash covers the owned model, binary file hashes, destination collection names and selected owners. It is rechecked inside the write boundary under the workspace scheduling rule.
 
-The clone, its external model roots, Configuration and selected role/subsystem owners are force-exported. A successful apply waits for the export barrier, checks expected file presence and unmodeled resource bytes, then loads modeled files detached and compares their persisted properties, containment and symbolic references against BM. It also checks root identity/name and Configuration registration before returning `persisted:true`. This does not establish runtime business-logic correctness. Inspect `get_project_errors`, validate forms and inspect the EDT log before using the clone.
+The clone, its external model roots, Configuration and selected role/subsystem owners are force-exported. A successful apply waits for the export barrier, checks expected file presence and unmodeled resource bytes, and checks root identity/name and Configuration registration before returning `persisted:true`. This does not establish runtime business-logic correctness. Inspect `get_project_errors`, validate forms and inspect the EDT log before using the clone.
 
 ## Partial errors and recovery
 
