@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
@@ -62,12 +63,24 @@ public final class AdoptedTypeCell
      */
     public static String render(EObject owner, EStructuralFeature feature, String nativeText)
     {
+        return render(owner, feature, nativeText, null);
+    }
+
+    /** Renders the stored type and, for adopted basic features, its comparison with the base. */
+    public static String render(EObject owner, EStructuralFeature feature, String nativeText, IProject project)
+    {
         if (!(owner instanceof MdObject) || feature == null
             || ((MdObject)owner).getObjectBelonging() != ObjectBelonging.ADOPTED)
         {
             return nativeText;
         }
         ObjectExtension block = ((MdObject)owner).getExtension();
+        if (project != null && feature == AdoptedPropertyRouter.BASIC_FEATURE_TYPE)
+        {
+            ControlledMetadataProperties.Row compared = ControlledMetadataProperties.compareType(project, (MdObject)owner);
+            return compared.controlled() + " · Base: " + compared.base() + " [" + compared.status() + "]"
+                + (compared.refreshable() ? " · modify_metadata type value: fromBase" : "");
+        }
         if (block == null)
         {
             return nativeText;
@@ -89,24 +102,35 @@ public final class AdoptedTypeCell
      * The block's type extension of {@code feature} (the feature named {@code <feature>Extension}) as
      * {@code Type (State), ...}, or {@code null} when the block has none or it lists no type.
      */
-    private static String typeExtensionText(ObjectExtension block, EStructuralFeature feature)
+    static TypeDescriptionExtension typeExtension(ObjectExtension block, EStructuralFeature feature)
     {
+        if (block == null)
+        {
+            return null;
+        }
         EStructuralFeature extensionFeature = block.eClass().getEStructuralFeature(feature.getName() + "Extension"); //$NON-NLS-1$
         if (extensionFeature == null || extensionFeature.isMany())
         {
             return null;
         }
-        Object value = block.eGet(extensionFeature);
-        if (!(value instanceof TypeDescriptionExtension) || ((TypeDescriptionExtension)value).getTypes().isEmpty())
+        return block.eGet(extensionFeature) instanceof TypeDescriptionExtension value ? value : null;
+    }
+
+    static String typeExtensionText(ObjectExtension block, EStructuralFeature feature)
+    {
+        TypeDescriptionExtension value = typeExtension(block, feature);
+        if (value == null || value.getTypes().isEmpty())
         {
             return null;
         }
         List<String> items = new ArrayList<>();
-        for (TypeExtension type : ((TypeDescriptionExtension)value).getTypes())
+        AdoptedPropertyRouter.Qualifiers qualifiers = AdoptedPropertyRouter.Qualifiers.of(value);
+        for (TypeExtension type : value.getTypes())
         {
             String name = AdoptedPropertyRouter.typeName(type.getType());
             MdPropertyState state = type.getState() == null ? MdPropertyState.NONE : type.getState();
-            items.add((name == null ? "[unreadable type]" : name) + " (" + state.getLiteral() + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            items.add((name == null ? "[unreadable type]"
+                : MetadataPropertyIntrospector.formatQualifiedType(name, qualifiers)) + " (" + state.getLiteral() + ")");
         }
         return String.join(", ", items) + TYPE_EXTENSION_NOTE; //$NON-NLS-1$
     }

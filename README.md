@@ -120,7 +120,7 @@ see [tool management](docs/tool-management.md). Toolsets control visibility; pre
 | Toolset | Purpose | Reference |
 |---|---|---|
 | `core` | Project/module navigation, source reads and tool discovery | [Core](docs/tools/README.md#core) |
-| `metadata` | Discover, create, edit and refactor metadata and DCS | [Metadata](docs/tools/README.md#metadata) |
+| `metadata` | Discover, create, edit and refactor metadata and DCS. Check extension properties with `get_metadata_details(controlledMismatches: true)`. | [Metadata](docs/tools/README.md#metadata) |
 | `code` | Read/write methods, navigate symbols and inspect calls | [Code](docs/tools/README.md#code) |
 | `debug` | Breakpoints, stepping, variables and expressions | [Debug](docs/tools/README.md#debug) |
 | `testing` | Run and debug YAXUnit tests | [Testing](docs/tools/README.md#testing) |
