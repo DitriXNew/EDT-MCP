@@ -969,7 +969,13 @@ public class UpdateDatabaseTool implements IMcpTool
             }
             try
             {
-                // Consent and the lock can wait long: re-check before the first side effect.
+                // Consent, the job queue and the lock can wait long: re-check before the first side effect.
+                String notReady = ProjectStateChecker.strictWriteErrorOrNull(projectName);
+                if (notReady != null)
+                {
+                    return ToolResult.error(notReady + " The infobase was not updated and no client was " //$NON-NLS-1$
+                        + "terminated.").toJson(); //$NON-NLS-1$
+                }
                 String bindingRefusal = ignoreBranchBinding ? null
                     : BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
                 if (bindingRefusal != null)

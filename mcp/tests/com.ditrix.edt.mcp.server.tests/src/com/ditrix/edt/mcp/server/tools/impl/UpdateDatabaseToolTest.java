@@ -2342,4 +2342,26 @@ public class UpdateDatabaseToolTest
         assertTrue("the refusal must say nothing was updated", //$NON-NLS-1$
             result.errorJson.contains("Nothing was updated")); //$NON-NLS-1$
     }
+    /** Codex P1 on #965: a queued update re-asks project readiness on the worker, after the lock. */
+    @Test
+    public void theWorkerReChecksProjectReadinessAfterTheLock() throws Exception
+    {
+        java.io.File dir = new java.io.File(System.getProperty("user.dir")); //$NON-NLS-1$
+        java.io.File source = null;
+        for (int i = 0; i < 12 && dir != null && source == null; i++)
+        {
+            java.io.File candidate = new java.io.File(dir, "mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/" //$NON-NLS-1$
+                + "mcp/server/tools/impl/UpdateDatabaseTool.java"); //$NON-NLS-1$
+            source = candidate.isFile() ? candidate : null;
+            dir = dir.getParentFile();
+        }
+        assertTrue("UpdateDatabaseTool.java not found", source != null); //$NON-NLS-1$
+        String text = java.nio.file.Files.readString(source.toPath(), java.nio.charset.StandardCharsets.UTF_8);
+        int lock = text.indexOf("updateLock.tryAcquire("); //$NON-NLS-1$
+        int recheck = text.indexOf("ProjectStateChecker.strictWriteErrorOrNull(projectName)", lock); //$NON-NLS-1$
+        int sideEffect = text.indexOf("LaunchLifecycleUtils.ensureNoExistingClientSession(", lock); //$NON-NLS-1$
+        assertTrue("lock acquisition present", lock > 0); //$NON-NLS-1$
+        assertTrue("readiness re-checked after the lock", recheck > lock); //$NON-NLS-1$
+        assertTrue("and before the first side effect", sideEffect > recheck); //$NON-NLS-1$
+    }
 }

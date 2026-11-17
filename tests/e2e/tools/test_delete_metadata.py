@@ -1648,8 +1648,7 @@ def test_delete_external_data_source_cube_members_825():
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_confirm_deletes_style_item_with_verified_directory_cleanup():
     fqn = "StyleItem.E2EDeleteStyleDirectory"
-    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
-              "properties": [{"name": "type", "value": "Color"}]}), "seed a style item")
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed a style item")
     directory = "src/StyleItems/E2EDeleteStyleDirectory"
     assert_contains(read_disk(directory + "/E2EDeleteStyleDirectory.mdo"),
                     "<name>E2EDeleteStyleDirectory</name>", "positive control: the export exists")

@@ -991,9 +991,7 @@ def test_type_qualifiers915_in_assignable_and_owner_tables():
     )
     for member, types, expected, disk_values in members:
         fqn = owner + "." + member
-        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
-                  "properties": [{"name": "type", "value": {"types": [
-                      {"kind": "String", "length": 5}]}}]}), "seed " + fqn)
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
         assert_contains(read_disk(mdo), "<name>" + member.split(".")[1] + "</name>")
         assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
                   "properties": [{"name": "type", "value": {"types": types}}]}), "set qualifiers on " + fqn)

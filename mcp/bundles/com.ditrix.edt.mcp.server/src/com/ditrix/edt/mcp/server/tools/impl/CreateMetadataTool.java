@@ -577,6 +577,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // The owned-form branch above already consumed setAsDefault; here it means "make the new report
         // template the main data composition schema" (issue #919) and stays ignored for other kinds.
         props.setAsDefault = JsonUtils.extractBooleanArgument(params, KEY_SET_AS_DEFAULT, false);
+        props.templateTarget = isTemplateFqn(normFqn);
         // A subsystem - top-level or nested, either language - takes modify_metadata's properties at
         // creation (issue #930); every other kind refuses them by name.
         String propErr = parseProperties(properties, props, normReport,
@@ -3701,6 +3702,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Integer insertPosition;
         /** A new Report / ExternalReport template becomes the report's main data composition schema. */
         boolean setAsDefault;
+        /** The create targets a template, so a refused 'type' points at 'templateType'. */
+        boolean templateTarget;
         /**
          * The properties of a SUBSYSTEM create beyond synonym / comment, set by modify_metadata's own rules
          * at creation (issue #930); empty for every other kind, which refuses them by name.
@@ -3892,7 +3895,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     }
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
                         + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
-                        + "properties (including type) via modify_metadata." + templateTypeHint(name)).toJson(); //$NON-NLS-1$
+                        + "properties (including type) via modify_metadata." //$NON-NLS-1$
+                        + (out.templateTarget ? templateTypeHint(name) : "")).toJson(); //$NON-NLS-1$
             }
         }
         return null;
@@ -3902,6 +3906,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * For a refused 'type': a TEMPLATE's content type is not set afterwards but at creation, through
      * 'templateType' (issue #919: following "set type via modify_metadata" cost a second call).
      */
+    static boolean isTemplateFqn(String fqn)
+    {
+        String canonical = MetadataTypeUtils.toCanonicalEnglishFqn(fqn);
+        if (canonical == null)
+        {
+            return false;
+        }
+        String[] parts = canonical.split("\\."); //$NON-NLS-1$
+        return parts.length >= 2 && ("CommonTemplate".equals(parts[0]) //$NON-NLS-1$
+            || "Template".equals(parts[parts.length - 2])); //$NON-NLS-1$
+    }
+
     static String templateTypeHint(String refusedName)
     {
         return "type".equalsIgnoreCase(refusedName) //$NON-NLS-1$

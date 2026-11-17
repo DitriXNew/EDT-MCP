@@ -226,11 +226,39 @@ public class CreateMetadataReportMainSchemaTest
         Method parse = CreateMetadataTool.class.getDeclaredMethod("parseProperties", List.class,
             CreateMetadataTool.Props.class, MdNameNormalizer.Report.class);
         parse.setAccessible(true);
+        CreateMetadataTool.Props templateProps = new CreateMetadataTool.Props();
+        templateProps.templateTarget = true;
         String error = (String)parse.invoke(new CreateMetadataTool(), List.of(property),
-            new CreateMetadataTool.Props(), new MdNameNormalizer.Report(true));
+            templateProps, new MdNameNormalizer.Report(true));
         assertNotNull(error);
         assertTrue(error, error.contains("create it with properties:[{name:'templateType', value:'DataCompositionSchema'}]"));
         assertTrue(error, error.contains("setAsDefault=true"));
+    }
+
+    @Test public void testRefusedTypeOnANonTemplateCarriesNoTemplateHint() throws Exception
+    {
+        JsonObject property = new JsonObject();
+        property.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        property.addProperty("value", "Color"); //$NON-NLS-1$ //$NON-NLS-2$
+        Method parse = CreateMetadataTool.class.getDeclaredMethod("parseProperties", List.class,
+            CreateMetadataTool.Props.class, MdNameNormalizer.Report.class);
+        parse.setAccessible(true);
+        String error = (String)parse.invoke(new CreateMetadataTool(), List.of(property),
+            new CreateMetadataTool.Props(), new MdNameNormalizer.Report(true));
+        assertNotNull(error);
+        assertTrue(error, error.contains("Property 'type' is not supported yet in create_metadata"));
+        assertFalse(error, error.contains("templateType', value"));
+    }
+
+    @Test public void testTemplateFqnDetectionIsBilingual()
+    {
+        assertTrue(CreateMetadataTool.isTemplateFqn("Report.Sales.Template.Main")); //$NON-NLS-1$
+        assertTrue(CreateMetadataTool.isTemplateFqn("CommonTemplate.Print")); //$NON-NLS-1$
+        assertTrue(CreateMetadataTool.isTemplateFqn("Отчет.Sales.Макет.Main")); //$NON-NLS-1$
+        assertTrue(CreateMetadataTool.isTemplateFqn("ОбщийМакет.Print")); //$NON-NLS-1$
+        assertFalse(CreateMetadataTool.isTemplateFqn("StyleItem.Accent")); //$NON-NLS-1$
+        assertFalse(CreateMetadataTool.isTemplateFqn("Catalog.Template")); //$NON-NLS-1$
+        assertFalse(CreateMetadataTool.isTemplateFqn("Catalog.Goods.Attribute.Template")); //$NON-NLS-1$
     }
 
     @Test public void testRefusalOfAnotherPropertyCarriesNoTemplateHint()

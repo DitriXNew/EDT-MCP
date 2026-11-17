@@ -363,6 +363,79 @@ public class ProjectYamlStoreTest {
         assertTrue(tags.exists(project));
     }
 
+    /** Codex P2 on #965: a write the file lock refused is neither published nor reported as done. */
+    @Test
+    public void refusedSaveIsNotPublishedAndReportsFailure() throws Exception {
+        TagService service = TagService.getInstance();
+        assertNotNull(service.createTag(project, "Existing", null, null));
+        Path path = directory.resolve(".settings").resolve(TagConstants.TAGS_FILE);
+        byte[] before = Files.readAllBytes(path);
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE);
+             FileLock lock = channel.lock()) {
+            assertTrue(lock.isValid());
+            assertNull(service.createTag(project, "Refused", null, null));
+            assertFalse(service.assignTag(project, "Catalog.Items", "Existing"));
+            assertFalse(tags.update(project, storage -> storage.addTag(new Tag("Direct")), Boolean.TRUE::equals));
+        }
+        assertArrayEquals(before, Files.readAllBytes(path));
+        TagStorage after = tags.snapshot(project);
+        assertNotNull(after.getTagByName("Existing"));
+        assertNull(after.getTagByName("Refused"));
+        assertNull(after.getTagByName("Direct"));
+        assertTrue(after.getTagNames("Catalog.Items").isEmpty());
+    }
+
+    /** An unreadable file is not replaced by a store built from nothing. */
+    @Test
+    public void unreadableFileRefusesMutations() throws Exception {
+        Path path = directory.resolve(".settings").resolve(TagConstants.TAGS_FILE);
+        Files.createDirectories(path);
+        assertFalse(tags.update(project, storage -> storage.addTag(new Tag("Lost")), Boolean.TRUE::equals));
+        assertNull(TagService.getInstance().createTag(project, "Lost", null, null));
+        assertTrue(Files.isDirectory(path));
+        assertTrue(tags.snapshot(project).getTags().isEmpty());
+    }
+
+    @Test
+    public void refusedResultIsFalseForAFlagAndNullOtherwise() {
+        assertEquals(Boolean.FALSE, AbstractProjectYamlStore.refused(Boolean.TRUE));
+        assertNull(AbstractProjectYamlStore.refused(new Tag("Created")));
+    }
+
+    /**
+     * Codex P1 on #965: a resource listener invalidates while the workspace holds a rule that a writer
+     * holding the project lock waits for; invalidation must not wait for that lock.
+     */
+    @Test
+    public void invalidateDoesNotWaitForTheProjectLock() throws Exception {
+        tags.update(project, storage -> storage.addTag(new Tag("Cached")), Boolean.TRUE::equals);
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> writer = executor.submit(() -> tags.update(project, storage -> {
+                holding.countDown();
+                await(release);
+                return false;
+            }, Boolean.TRUE::equals));
+            await(holding);
+            Future<?> listener = executor.submit(() -> tags.invalidate(project));
+            listener.get(2, TimeUnit.SECONDS);
+            release.countDown();
+            writer.get(5, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+        Files.writeString(directory.resolve(".settings").resolve(TagConstants.TAGS_FILE),
+            "tags:\n- name: External\n", StandardCharsets.UTF_8);
+        tags.invalidate(project);
+        TagStorage reloaded = tags.snapshot(project);
+        assertNotNull("an invalidation reloads the file", reloaded.getTagByName("External"));
+        assertNull(reloaded.getTagByName("Cached"));
+    }
+
     private static void concurrent(Runnable first, Runnable second) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch start = new CountDownLatch(1);

@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -67,21 +68,32 @@ public abstract class AbstractProjectYamlStore<S> {
         Entry<S> entry = entry(project);
         entry.lock.lock();
         try {
-            return copy(cached(project, entry));
+            S current = cached(project, entry);
+            return current != null ? copy(current) : emptyStorage();
         } finally {
             entry.lock.unlock();
         }
     }
 
-    /** The callback and disk write share the project lock; results never alias the cache. */
+    /**
+     * The callback and disk write share the project lock; results never alias the cache. A change that
+     * could not be saved - or made over a file that could not be read - is not published and answers
+     * {@code false} (a Boolean result) or {@code null}.
+     */
     public final <R> R update(IProject project, Function<S, R> operation, Predicate<R> changed) {
         Entry<S> entry = entry(project);
         entry.lock.lock();
         try {
-            S working = copy(cached(project, entry));
+            S current = cached(project, entry);
+            if (current == null) {
+                R result = operation.apply(emptyStorage());
+                return changed.test(result) ? refused(result) : result;
+            }
+            S working = copy(current);
             R result = operation.apply(working);
-            if (changed.test(result)) {
-                saveUnlocked(project, working);
+            if (changed.test(result) && !saveUnlocked(project, working)) {
+                entry.storage = null;
+                return refused(result);
             }
             entry.storage = copy(working);
             return result;
@@ -90,14 +102,17 @@ public abstract class AbstractProjectYamlStore<S> {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    static <R> R refused(R result) {
+        return result instanceof Boolean ? (R) Boolean.FALSE : null;
+    }
+
+    /**
+     * Lock-free: resource listeners call this while the workspace holds a scheduling rule, and a writer
+     * holding the project lock may be waiting for that rule in {@code refreshLocal}.
+     */
     public final void invalidate(IProject project) {
-        Entry<S> entry = entry(project);
-        entry.lock.lock();
-        try {
-            entry.storage = null;
-        } finally {
-            entry.lock.unlock();
-        }
+        entry(project).stale.set(true);
     }
 
     public final void clear() {
@@ -108,7 +123,8 @@ public abstract class AbstractProjectYamlStore<S> {
         Entry<S> entry = entry(project);
         entry.lock.lock();
         try {
-            return loadUnlocked(project);
+            S loaded = loadUnlocked(project);
+            return loaded != null ? loaded : emptyStorage();
         } finally {
             entry.lock.unlock();
         }
@@ -120,7 +136,7 @@ public abstract class AbstractProjectYamlStore<S> {
         try {
             S detached = copy(storage);
             boolean saved = saveUnlocked(project, detached);
-            entry.storage = detached;
+            entry.storage = saved ? detached : null;
             return saved;
         } finally {
             entry.lock.unlock();
@@ -149,13 +165,21 @@ public abstract class AbstractProjectYamlStore<S> {
         return projects.computeIfAbsent(project, key -> new Entry<>());
     }
 
+    /** {@code null} when the file could not be read; nothing is cached then, so the next call retries. */
     private S cached(IProject project, Entry<S> entry) {
+        if (entry.stale.getAndSet(false)) {
+            entry.storage = null;
+        }
         if (entry.storage == null) {
             entry.storage = loadUnlocked(project);
         }
         return entry.storage;
     }
 
+    /**
+     * An unreadable file answers {@code null}, so a mutation cannot overwrite it with an empty store;
+     * unparseable content (including refused global tags) reads as empty.
+     */
     private S loadUnlocked(IProject project) {
         IFile file = project.getFile(path);
         if (!file.exists()) {
@@ -163,9 +187,12 @@ public abstract class AbstractProjectYamlStore<S> {
         }
         try (Reader reader = new InputStreamReader(file.getContents(), StandardCharsets.UTF_8)) {
             return readYaml(reader);
-        } catch (CoreException | IOException | YAMLException e) {
-            Activator.logError("Failed to load associations from " + file.getFullPath(), e);
+        } catch (YAMLException e) {
+            Activator.logError("Failed to parse associations from " + file.getFullPath(), e);
             return emptyStorage();
+        } catch (CoreException | IOException e) {
+            Activator.logError("Failed to read associations from " + file.getFullPath(), e);
+            return null;
         }
     }
 
@@ -245,6 +272,7 @@ public abstract class AbstractProjectYamlStore<S> {
 
     private static final class Entry<S> {
         private final ReentrantLock lock = new ReentrantLock();
+        private final AtomicBoolean stale = new AtomicBoolean();
         private S storage;
     }
 }

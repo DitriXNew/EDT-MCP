@@ -107,7 +107,8 @@ def test_confirmed_zero_wait_job_can_be_polled_without_mutating():
     else:
         job_id = r.structured["jobId"]
         assert_ok(r, "accepted background update")
-        assert_contains(r.text, "get_job_status", "pending reply supplies the polling hint")
+        assert_contains(r.structured.get("message", ""), "get_job_status",
+                        "pending reply supplies the polling hint")
         for _ in range(4):
             polled = call("get_job_status", {"jobId": job_id, "waitSeconds": 20})
             assert_ok(polled, "poll accepted update")
