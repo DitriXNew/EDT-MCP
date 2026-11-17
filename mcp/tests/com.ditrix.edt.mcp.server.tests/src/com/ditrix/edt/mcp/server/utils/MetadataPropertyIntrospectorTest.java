@@ -360,18 +360,9 @@ public class MetadataPropertyIntrospectorTest
 
     // ====== A 1C type is its qualifiers as well as its names ======
 
-    /**
-     * The type cell prints the type NAMES and nothing else, so a {@code String} bounded at 10
-     * characters and one bounded at 100 are the same six letters on the page. That is right for a
-     * reader and wrong for anything that compares the cells: EDT stores the two as different
-     * database columns, and a report built on the rendered text called them one value.
-     * <p>
-     * The pair is not hypothetical. One ordinary catalog {@code .mdo} carries an attribute typed
-     * {@code String} with an empty {@code <stringQualifiers/>} beside another with
-     * {@code <length>10</length>}.
-     */
+    /** Comparison identities retain each string bound independently of the display format. */
     @Test
-    public void testTwoStringLengthsThatPrintAlikeAreTwoIdentities()
+    public void testTwoStringLengthsHaveDifferentIdentities()
     {
         String shortString = typeIdentity(stringTypeBounded(10, false));
         String longString = typeIdentity(stringTypeBounded(100, false));
@@ -396,7 +387,7 @@ public class MetadataPropertyIntrospectorTest
      * scale is what says whether the column holds whole roubles or kopecks.
      */
     @Test
-    public void testTwoNumberScalesThatPrintAlikeAreTwoIdentities()
+    public void testTwoNumberScalesHaveDifferentIdentities()
     {
         String whole = typeIdentity(numberType(10, 0, false));
         String fractional = typeIdentity(numberType(10, 2, false));
@@ -458,7 +449,7 @@ public class MetadataPropertyIntrospectorTest
         fractional.setNumberQualifiers(numberQualifiers(10, 2, false));
         fractional.setDateQualifiers(dateQualifiers(DateFractions.DATE));
 
-        assertEquals("the cell is the alternatives, unchanged", "String, Number, Date", //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("each alternative displays its qualifiers", "String(10, Variable), Number(10, 0, Signed), Date(Date)", //$NON-NLS-1$ //$NON-NLS-2$
             typeCell(whole));
         assertFalse("a group behind the first one still separates the two: " + typeIdentity(whole), //$NON-NLS-1$
             typeIdentity(whole).equals(typeIdentity(fractional)));
@@ -487,14 +478,10 @@ public class MetadataPropertyIntrospectorTest
             typeIdentity(dateOnly).equals(typeIdentity(timeOnly)));
     }
 
-    /**
-     * The display is NOT what changed. Spelling the qualifiers into the cell would widen every type
-     * row in every report to fix something nobody reads out of the table.
-     */
     @Test
-    public void testAQualifiedTypeStillPrintsJustTheTypeName()
+    public void testAQualifiedTypeDisplaysItsQualifiers()
     {
-        assertEquals("the reader still sees the short type", "String", //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the reader sees the string length", "String(10, Variable)", //$NON-NLS-1$ //$NON-NLS-2$
             typeCell(stringTypeBounded(10, false)));
     }
 

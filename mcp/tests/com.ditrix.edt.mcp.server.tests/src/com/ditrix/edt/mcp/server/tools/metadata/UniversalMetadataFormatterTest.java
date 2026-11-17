@@ -154,7 +154,7 @@ public class UniversalMetadataFormatterTest
             md.contains("| Name | Synonym | Type |")); //$NON-NLS-1$
         assertTrue("compact table has a 3-col separator", md.contains("|---|---|---|\n")); //$NON-NLS-1$
         assertTrue("the Price row shows its type name", md.contains("| Price | Price | Number |")); //$NON-NLS-1$
-        assertTrue("the Note row shows its type name", md.contains("| Note | Note | String |")); //$NON-NLS-1$
+        assertTrue("the Note row shows its type name", md.contains("| Note | Note | String(unlimited) |")); //$NON-NLS-1$
         // No extended columns in compact mode.
         assertFalse("compact mode must not emit the Indexing column", md.contains("Indexing")); //$NON-NLS-1$
     }
@@ -403,7 +403,7 @@ public class UniversalMetadataFormatterTest
         TypeDescription composite = McoreFactory.eINSTANCE.createTypeDescription();
         composite.getTypes().add(newType("String")); //$NON-NLS-1$
         composite.getTypes().add(newType("Number")); //$NON-NLS-1$
-        assertEquals("String, Number", f.formatType(composite)); //$NON-NLS-1$
+        assertEquals("String(unlimited), Number", f.formatType(composite)); //$NON-NLS-1$
 
         assertEquals("-", f.formatType(McoreFactory.eINSTANCE.createTypeDescription())); //$NON-NLS-1$
         assertEquals("-", f.formatType(null)); //$NON-NLS-1$

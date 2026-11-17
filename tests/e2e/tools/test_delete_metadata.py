@@ -1643,3 +1643,22 @@ def test_delete_external_data_source_cube_members_825():
         assert_contains(gone.text, "## Errors", "confirmed delete removes the addressed node")
         assert_contains(gone.text, "not found", "the missing-node read must name its failure")
     poll_disk_path_gone(base + "DimensionTables/DT")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_confirm_deletes_style_item_with_verified_directory_cleanup():
+    fqn = "StyleItem.E2EDeleteStyleDirectory"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn,
+              "properties": [{"name": "type", "value": "Color"}]}), "seed a style item")
+    directory = "src/StyleItems/E2EDeleteStyleDirectory"
+    assert_contains(read_disk(directory + "/E2EDeleteStyleDirectory.mdo"),
+                    "<name>E2EDeleteStyleDirectory</name>", "positive control: the export exists")
+    result = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(result, "delete must verify the StyleItems directory instead of reporting mutation failure")
+    assert result.structured.get("action") == "executed", result.structured
+    poll_disk_path_gone(directory, ctx="the deleted style item's directory is removed")
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(details)
+    assert_contains(details.text, "## Errors", "deleted style item must no longer resolve in the model")
+    assert_contains(details.text, fqn)
+    assert_not_contains(details.text, "**Origin:**", "deleted object must not render")

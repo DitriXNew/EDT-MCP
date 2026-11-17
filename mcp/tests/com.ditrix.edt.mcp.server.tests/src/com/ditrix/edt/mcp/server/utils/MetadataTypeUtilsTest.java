@@ -195,9 +195,8 @@ public class MetadataTypeUtilsTest
     {
         assertNull(MetadataTypeUtils.getDirectoryName("UnknownType"));
         assertNull(MetadataTypeUtils.getDirectoryName(null));
-        // Types without directories return null
-        assertNull(MetadataTypeUtils.getDirectoryName("Role"));
-        assertNull(MetadataTypeUtils.getDirectoryName("Subsystem"));
+        assertEquals("Roles", MetadataTypeUtils.getDirectoryName("Role"));
+        assertEquals("Subsystems", MetadataTypeUtils.getDirectoryName("Subsystem"));
     }
 
     // ========== getConfigReferenceName ==========
@@ -1471,6 +1470,28 @@ public class MetadataTypeUtilsTest
             assertSame(item, StyleValueBuilder.findPaletteColor(config, name.toLowerCase(Locale.ROOT)));
             assertNull(StyleValueBuilder.findPaletteColor(config, "Display accent"));
             assertNull(StyleValueBuilder.findPaletteColor(null, name));
+        }
+    }
+
+    @Test
+    public void testEveryConfigurationTypeDirectoryMatchesTheEdtExporter()
+    {
+        for (MetadataTypeUtils.MetadataTypeInfo type : MetadataTypeUtils.MetadataTypeInfo.values())
+        {
+            String name = type.getEnglishSingular();
+            String reference = MetadataTypeUtils.getConfigReferenceName(name);
+            var feature = reference == null ? null : com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage
+                .Literals.CONFIGURATION.getEStructuralFeature(reference);
+            if (feature instanceof org.eclipse.emf.ecore.EReference
+                && ((org.eclipse.emf.ecore.EReference)feature).isContainment())
+            {
+                assertNull(name, MetadataTypeUtils.getDirectoryName(name));
+                continue;
+            }
+            String expected = com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil
+                .getPluralFormOfModelObjectName(name);
+            assertEquals(name, expected, MetadataTypeUtils.getDirectoryName(name));
+            assertEquals(expected, name, MetadataTypeUtils.getTypeByDirectoryName(expected));
         }
     }
 

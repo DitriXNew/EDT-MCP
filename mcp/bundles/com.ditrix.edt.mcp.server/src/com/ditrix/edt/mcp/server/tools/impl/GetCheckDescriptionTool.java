@@ -185,7 +185,7 @@ public class GetCheckDescriptionTool implements IMcpTool
 
     /**
      * Pure UID -> symbolic check-id resolution via {@link ICheckRepository}, mirroring
-     * {@code GetProjectErrorsTool.resolveSymbolicCheckId}. Separated from runtime
+     * {@code MarkerCheckIds.resolveSymbolicCheckId}. Separated from runtime
      * service lookup so it is unit-testable with a mocked repository. Returns
      * {@code null} when anything is missing or the UID does not resolve.
      *

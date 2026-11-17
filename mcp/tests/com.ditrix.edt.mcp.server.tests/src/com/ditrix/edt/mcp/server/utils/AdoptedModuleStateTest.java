@@ -357,7 +357,6 @@ public class AdoptedModuleStateTest
             "src/Catalogs/X/Forms/ItemForm/Module.bsl", //$NON-NLS-1$
             "src/ExternalDataSources/S/Tables/T/ObjectModule.bsl", //$NON-NLS-1$
             "src/NoSuchDirectory/X/Module.bsl", //$NON-NLS-1$
-            "src/Bots/X/Module.bsl", //$NON-NLS-1$
             "src/Catalogs/X/Commands/Fill/ObjectModule.bsl", //$NON-NLS-1$
             "src/Configuration/Nested/SessionModule.bsl", //$NON-NLS-1$
             "src/CommonModules/X/Module.txt", //$NON-NLS-1$
@@ -3366,4 +3365,16 @@ public class AdoptedModuleStateTest
         freshPlatform();
         return failures;
     }
+    @Test
+    public void testNewModuleOwnersResolveTheirAdoptedModuleStateAddress()
+    {
+        for (String type : new String[] {"Bot", "IntegrationService", "WebSocketClient"})
+        {
+            ModuleAddress address = AdoptedModuleState.moduleAddress("src/" + type + "s/Проба/Module.bsl");
+            assertNotNull(type, address);
+            assertEquals(type + ".Проба", address.ownerFqn);
+            assertEquals("Module", address.stem);
+        }
+    }
+
 }
