@@ -82,7 +82,7 @@ def test_exchange_plan_uuid_property_round_trips_in_an_extension():
             assert_ok(result)
             exported = read_fixture_file(TESTS_PROJECT_REL, mdo)
             root = ET.fromstring(exported)
-            assert root.findtext("thisNode") == fresh
+            assert root.attrib.get("thisNode") == fresh, root.attrib
             assert root.attrib["uuid"] == identity["uuid"]
             assert root.attrib["extendedConfigurationObject"] == identity["extendedConfigurationObject"]
             details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [address],

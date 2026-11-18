@@ -190,7 +190,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         }
         if (rows.length() > 0)
         {
-            addSectionHeader(sb, "Produced types");
+            addSectionHeader(sb, "Produced Types");
             startTable(sb, "Object", "Type", "typeId", "valueTypeId");
             sb.append(rows);
         }
