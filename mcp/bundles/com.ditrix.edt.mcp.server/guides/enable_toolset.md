@@ -13,5 +13,5 @@ JSON: `action` (`enabled`/`disabled`), `applied` (ids changed), `invalid` (unkno
 
 ## Notes & gotchas
 - **Re-request `tools/list` after revealing** to actually see the new tools. If your client holds an open SSE stream the server also pushes `notifications/tools/list_changed` automatically.
-- When progressive disclosure is **off**, all tools are already listed - the change is recorded but has no visible effect until you turn disclosure on in EDT Preferences → MCP Server.
+- When progressive disclosure is **off**, all tools are already listed - the change is recorded but has no visible effect until the user turns disclosure on (Window → Preferences → MCP Server → Tools → Progressive disclosure).
 - The `core` toolset is always visible; asking to toggle it is ignored, not an error. All-unknown ids return an actionable error pointing you back to `list_toolsets`.

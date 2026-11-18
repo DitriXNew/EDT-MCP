@@ -117,6 +117,11 @@ The generated [full tool reference](docs/tools/README.md) lists every tool, para
 For enablement, presets and progressive disclosure,
 see [tool management](docs/tool-management.md). Toolsets control visibility; preferences control which tools are enabled.
 
+**Progressive disclosure** (the checkbox on the **Tools** tab, off by default) lists only the core toolset
+until the client reveals more with `list_toolsets` and `enable_toolset`. Turn it on only for a client that
+re-reads `tools/list` on `notifications/tools/list_changed` and does not load tools on demand itself.
+Codex and Claude Code already load MCP tools on demand, so it saves them nothing.
+
 | Toolset | Purpose | Reference |
 |---|---|---|
 | `core` | Project/module navigation, source reads and tool discovery | [Core](docs/tools/README.md#core) |
