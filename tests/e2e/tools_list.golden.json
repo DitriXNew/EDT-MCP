@@ -7122,7 +7122,7 @@
           "type": "string"
         },
         "expectedHash": {
-          "description": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode.",
+          "description": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode and deleteMethods.",
           "type": "string"
         },
         "expectedSource": {
@@ -7132,9 +7132,20 @@
           "description": "Form name; required when moduleType=FormModule (e.g. 'ItemForm').",
           "type": "string"
         },
+        "fromModulePath": {
+          "description": "Instead of source: copy the methodNames methods from this module of the same project (modes append (default), insertBefore, insertAfter, replace of a new module).",
+          "type": "string"
+        },
         "methodName": {
           "description": "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter.",
           "type": "string"
+        },
+        "methodNames": {
+          "description": "Methods to copy (with fromModulePath) or delete (mode=deleteMethods), up to 100.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "mode": {
           "description": "Write mode (default searchReplace).",
@@ -7144,7 +7155,8 @@
             "append",
             "replaceMethod",
             "insertBefore",
-            "insertAfter"
+            "insertAfter",
+            "deleteMethods"
           ],
           "type": "string"
         },
@@ -7187,8 +7199,7 @@
         }
       },
       "required": [
-        "projectName",
-        "source"
+        "projectName"
       ],
       "type": "object"
     },

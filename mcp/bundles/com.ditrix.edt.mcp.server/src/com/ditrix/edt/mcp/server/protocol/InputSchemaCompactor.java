@@ -170,8 +170,10 @@ public final class InputSchemaCompactor
         // formName / commandName: with objectName on a NON-common object and
         // moduleType=FormModule / CommandModule, path resolution refuses the write without
         // them. Same conditional shape as mode->oldSource, one step further out.
+        // fromModulePath / methodNames (#978): source is not 'required' any more, and only these say what replaces
+        // it, which modes a copy runs in, and that deleteMethods takes the names too.
         keep.put("write_module_source", asSet("expectedHash", "mode", "oldSource", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "methodName", "formName", "commandName")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "methodName", "formName", "commandName", "fromModulePath", "methodNames")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         // The enum cannot express either fact: md is the default, and xml is legal only for
         // action=get + type=schema + a bare root. Without this one clause a schema-valid
         // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.

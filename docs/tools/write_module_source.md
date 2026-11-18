@@ -9,9 +9,11 @@ Create or edit BSL source in a metadata module. Parameters and examples: get_too
 | modulePath | — | string | src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. Alternative to objectName (pass exactly one). |
 | objectName | — | string | Object name 'Type.Name', e.g. 'Document.MyDoc'. Resolved with moduleType. Alternative to modulePath. |
 | moduleType | — | string (one of: ObjectModule, ManagerModule, FormModule, CommandModule, RecordSetModule, Module) | Module type for objectName resolution (default ObjectModule). |
-| source | yes | string | BSL source to write (required): full file for replace, new fragment for searchReplace, text to add for append, or exactly one complete method for a method-targeted mode. |
+| source | — | string | BSL source to write: full file for replace, new fragment for searchReplace, text to add for append, or exactly one complete method for a method-targeted mode. Required unless fromModulePath or mode=deleteMethods. |
+| fromModulePath | — | string | Instead of source: copy the methodNames methods from this module of the same project (modes append (default), insertBefore, insertAfter, replace of a new module). |
+| methodNames | — | array | Methods to copy (with fromModulePath) or delete (mode=deleteMethods), up to 100. |
 | oldSource | — | string | Fragment to find and replace; required for searchReplace, must match exactly once. |
-| mode | — | string (one of: searchReplace, replace, append, replaceMethod, insertBefore, insertAfter) | Write mode (default searchReplace). |
+| mode | — | string (one of: searchReplace, replace, append, replaceMethod, insertBefore, insertAfter, deleteMethods) | Write mode (default searchReplace). |
 | methodName | — | string | Existing anchor method; required for replaceMethod, insertBefore, and insertAfter. |
 | formName | — | string | Form name; required when moduleType=FormModule (e.g. 'ItemForm'). |
 | commandName | — | string | Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate'). |
@@ -19,10 +21,10 @@ Create or edit BSL source in a metadata module. Parameters and examples: get_too
 | normalizeInvalidCharacters | — | boolean | Replace the characters the 1C standard InvalidCharacterInFile forbids in the SOURCE you supply - en/em/figure dash, horizontal bar and typographic minus become '-', a no-break space becomes a space, a soft hyphen is dropped (default true). They are invisible in a diff and read exactly like their ASCII twins, so they otherwise land in the module as a marker. Set false to write the source byte-for-byte. |
 | expectedSource | — | string | Lost-update guard for mode=replace: the module content you last read; mismatch rejects. |
 | overwrite | — | boolean | Force mode=replace over an existing module without an expectedSource check (default false). |
-| expectedHash | — | string | Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode. |
+| expectedHash | — | string | Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode and deleteMethods. |
 
 ## Guide
-Edit one metadata object module (`.bsl` under `src/`) using six modes, syntax validation and lost-update guards.
+Edit one metadata object module (`.bsl` under `src/`) using seven modes, syntax validation and lost-update guards.
 
 ## When to use
 
@@ -31,6 +33,8 @@ Edit one metadata object module (`.bsl` under `src/`) using six modes, syntax va
 - `insertBefore` / `insertAfter`: add a complete procedure/function next to an anchor.
 - `replace`: rewrite/create a whole module; only this mode can create a file.
 - `append`: add code at the end.
+- `deleteMethods`: delete named procedures/functions.
+- `fromModulePath` + `methodNames`: copy named methods from another module without sending their text (see Moving methods between modules).
 
 ## Targeting the module (exclusive OR)
 
@@ -48,9 +52,11 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `modulePath` | XOR objectName | `src/`-relative `.bsl` path; no `..`. |
 | `objectName` | XOR modulePath | `Type.Name`; see Bilingual. |
 | `moduleType` | with objectName | default `ObjectModule`. |
-| `source` | always | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
+| `source` | unless fromModulePath or deleteMethods | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
+| `fromModulePath` | to copy methods | `src/`-relative `.bsl` module of the same project; replaces `source`. |
+| `methodNames` | with fromModulePath or deleteMethods | array of up to 100 method names, each once. |
 | `oldSource` | mode=searchReplace | must match exactly once. |
-| `mode` | optional | `searchReplace` (default), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`. |
+| `mode` | optional | `searchReplace` (default; `append` with fromModulePath), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`, `deleteMethods`. |
 | `methodName` | method-targeted modes | existing unambiguous method anchor; REQUIRED. |
 | `formName` | moduleType=FormModule | except CommonForm. |
 | `commandName` | moduleType=CommandModule | except CommonCommand. |
@@ -58,7 +64,7 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `normalizeInvalidCharacters` | optional | Normalize forbidden characters in supplied source only; default true. |
 | `expectedSource` | mode=replace | lost-update guard. |
 | `overwrite` | mode=replace | force without expectedSource. |
-| `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes. |
+| `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes and deleteMethods. |
 
 ## moduleType to path
 
@@ -72,12 +78,21 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 - `replaceMethod`: replaces the complete `methodName` definition. Its span includes the contiguous `//` documentation and `&...` annotations/directives immediately above the declaration. `source` must declare exactly one complete procedure/function with the same name AND the same kind; a rename is rejected, and so is turning a Function into a Procedure or back - callers of a Function consume its return value, and the block-balance check cannot see the difference.
 - `insertBefore`: inserts the one complete method in `source` before the anchor's documentation/annotations, never between an annotation and its declaration - a blank line between them does not detach the directive.
 - `insertAfter`: inserts the one complete method in `source` after the anchor's complete terminator.
+- `deleteMethods`: deletes every method named in `methodNames`, each with its documentation/annotations; the blank lines at each seam collapse to one. `expectedHash` is REQUIRED; regions stay, even when they become empty.
 
 Both insert modes ensure exactly one blank line between the inserted method and each neighbour, including comments and preprocessor boundaries. Blank lines at the edges of `source` and at the insertion point are collapsed, with no padding at a module edge. Method bodies, attached documentation/annotations and preprocessor lines stay unchanged. `replaceMethod` does not normalize spacing.
 
 For all three method-targeted modes, `methodName` and `expectedHash` are REQUIRED. The anchor must resolve to exactly one declaration; duplicate declarations in preprocessor branches are rejected as ambiguous. For insert modes, the incoming method name must not already exist anywhere in the module, so repeating an insert is refused instead of creating a duplicate.
 
 The method parser recognizes `Procedure`/`Function` and `Процедура`/`Функция`, with matching `EndProcedure`/`EndFunction` and `КонецПроцедуры`/`КонецФункции` terminators. A terminator must end on a keyword boundary: identifiers such as `EndProcedureResult` and `КонецПроцедурыРезультат` do not close a method, and a terminator must own its line - `EndProcedure; ModuleValue = Call();` is module-level code after the method, not a method end. An unterminated method is reported incomplete rather than borrowing the next method terminator. Some shapes cannot be addressed by a whole-line scanner at all. The module is REFUSED, naming the line and what to change, rather than edited around the shape: a declaration split across lines, or holding only the keyword with its name on the next line; a parameter list that does not close before the method ends (one WRAPPED onto continuation lines is ordinary formatting and is addressed normally); a method named after a block keyword; a terminator sharing its line with other code; a declaration written after something else on its line; a pragma sharing the declaration line; and a pragma whose arguments do not close on its own line. A whole method written on ONE line (declaration and terminator together) is refused for the same reason. The shapes this cost was measured for do not occur in real configurations: zero next-line parentheses and zero one-line methods in 1C:ERP 2.5.16.41, and zero multi-line pragmas across its 22,786 modules.
+
+## Moving methods between modules
+
+A move takes two calls; the method text never passes through you.
+1. Copy into the target: `modulePath` = target, `fromModulePath` = source (same project), `methodNames` = the methods. The default mode is `append`; `insertBefore`/`insertAfter` take an anchor `methodName` and the target's `expectedHash`; `replace` only creates a module that does not exist yet. The methods arrive in request order, one blank line apart, line for line as in the source (in the target's line delimiter, never character-normalized). The response carries `copiedMethods`, `fromModulePath`, `fromContentHash` (the source's token for the text copied) and the target's `contentHash`.
+2. Delete from the source: `modulePath` = source, `mode=deleteMethods`, the same `methodNames`, `expectedHash=<fromContentHash>`. If the source changed after the copy, the deletion is refused, so it removes exactly what was copied. The response carries `deletedMethods` and a `warning` when a deleted method is still called in the source (a text check of unqualified `Name(` calls outside comments and strings).
+
+Both calls are all-or-nothing and refuse, before writing: a name not found, declared more than once (preprocessor branches) or without its terminator; a name given twice; `source` together with `fromModulePath`; and, for a copy, the source module itself as the target, a name the target already declares (so a repeated copy is refused), a method inside or crossing an `#If` block (the copy would drop the condition) and a method with an interception annotation (`&Before`, `&After`, `&Around`, `&ChangeAndValidate`; it binds the method to its own module). Calls to the moved methods elsewhere are not rewritten: find them with `find_references`, qualify them (`NewModule.Method(`), then check `get_project_errors`.
 
 ## Lost-update guards
 
@@ -171,7 +186,7 @@ Insert a new method before an existing anchor:
 ## Gotchas
 
 - Only `.bsl` files; `modulePath` may not contain `..`.
-- `searchReplace`/`append` and all method-targeted modes need an EXISTING file; only `replace` creates one.
+- `searchReplace`/`append`, `deleteMethods` and all method-targeted modes need an EXISTING file; only `replace` creates one.
 - New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.
 - `source` is `\r\n`->`\n` normalized and the file always ends with a newline.
 - In an extension, writing the module of an ADOPTED object also switches that module's state from `None` to `Extended` and exports the object's `.mdo`; `Checked`, `Notify` and a missing extension block are left as they are (see Modules of adopted objects).

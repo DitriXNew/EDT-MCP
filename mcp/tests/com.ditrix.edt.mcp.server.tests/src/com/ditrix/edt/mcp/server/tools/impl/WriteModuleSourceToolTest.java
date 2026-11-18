@@ -136,8 +136,9 @@ public class WriteModuleSourceToolTest
         assertTrue(schema.contains("\"replaceMethod\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"insertBefore\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"insertAfter\"")); //$NON-NLS-1$
-        // The new params are OPTIONAL — required stays projectName + source only.
-        assertTrue(schema.contains("\"required\":[\"projectName\",\"source\"]")); //$NON-NLS-1$
+        // The new params are OPTIONAL. source is not required either since #978: a copy (fromModulePath) and
+        // mode=deleteMethods take none, so projectName alone is required.
+        assertTrue(schema.contains("\"required\":[\"projectName\"]")); //$NON-NLS-1$
     }
 
     @Test
