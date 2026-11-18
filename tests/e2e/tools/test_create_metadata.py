@@ -165,7 +165,12 @@ def test_insert_position_indexes_configuration_and_member_mdo_order():
         result = call("create_metadata", {"projectName": PROJECT, "fqn": owner + "." + child + ".Rejected861",
                                           "insertPosition": position})
         error = assert_error(result, "invalid insertion position")
-        assert_error_quality(error, names=["insertPosition", str(position)], suggests=["omit", "choose", "1-based"])
+        if isinstance(position, float):
+            # Not an integer: the argument check refuses it before the tool runs.
+            assert_error_quality(error, names=["insertPosition", str(position)], suggests=["must be an integer"])
+        else:
+            assert_error_quality(error, names=["insertPosition", str(position)],
+                                 suggests=["omit", "choose", "1-based"])
         if isinstance(position, int):
             assert "insertPosition %d is outside 1..7" % position in error, error
             assert "'%d.0'" % position not in error, error
@@ -273,7 +278,7 @@ def test_register_invalid_generation_leaves_owner_and_files_unchanged():
     before = tree_snapshot()
     for options, bad, remedy in (({"formType": "OBJECT"}, "OBJECT", "formType"),
                                  ({"formType": "CHOICE"}, "CHOICE", "formType"),
-                                 ({"formType": "nonsense"}, "nonsense", "Use OBJECT"),
+                                 ({"formType": "nonsense"}, "nonsense", "'OBJECT'"),
                                  ({"formType": "RECORD_SET", "setAsDefault": True},
                                   "RECORD_SET", "setAsDefault=false"),
                                  ({"objectFields": []}, "objectFields", "Omit objectFields")):
