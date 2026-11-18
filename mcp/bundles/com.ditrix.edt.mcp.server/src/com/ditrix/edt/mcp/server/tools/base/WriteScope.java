@@ -486,6 +486,17 @@ public final class WriteScope
     }
 
     /**
+     * Whether this call committed a write or handed an export to the platform, either of which an
+     * error answer must still wait out before the caller inspects the files.
+     *
+     * @return {@code true} after a recorded write or an export-only submission
+     */
+    public boolean hasRecordedWriteOrExport()
+    {
+        return mutationCommitted || exportSubmitted;
+    }
+
+    /**
      * Enforces the post-mutation error contract at a writer's single return point.
      *
      * @param result the result about to leave the writer
