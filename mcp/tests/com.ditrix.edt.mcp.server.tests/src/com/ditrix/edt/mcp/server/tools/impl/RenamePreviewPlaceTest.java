@@ -47,14 +47,14 @@ public class RenamePreviewPlaceTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs);
-                String english = jobId(start(tool, ENGLISH_FIELD, "Cost", 0, 5_000L, progress -> {
+                String english = jobId(start(tool, ENGLISH_FIELD, "Cost", 0, 5_000L, (progress, monitor) -> {
                     await(release);
                     return "objectFqn: " + ENGLISH_FIELD;
                 }));
                 // Attached to the English job this would be its Pending answer; on its own job the
                 // Russian call gets the preview its own synchronous call would have returned.
                 String russian = start(tool, RUSSIAN_FIELD, "Cost", 5, 5_000L,
-                    progress -> "objectFqn: " + RUSSIAN_FIELD_ECHO);
+                    (progress, monitor) -> "objectFqn: " + RUSSIAN_FIELD_ECHO);
                 assertEquals("objectFqn: " + RUSSIAN_FIELD_ECHO, russian);
                 release.countDown();
                 assertEquals("objectFqn: " + ENGLISH_FIELD, jobs.await(english, 5_000L).getResult());
@@ -135,16 +135,16 @@ public class RenamePreviewPlaceTest
                 String third = start(tool, "Catalog.Third", "More", 0, 500L, stuck);
                 assertTrue("Two orphaned hand-offs still hold both places: " + third,
                     third.contains("2 other rename previews are already running, the limit for rename "
-                        + "previews. 2 of them already ended (typically a timeout), but EDT is still "
-                        + "building those previews on its UI thread: ending a job stops the waiting, not "
-                        + "EDT's work, so such a place is freed only when EDT finishes. Nothing was "
-                        + "renamed. Retry after EDT finishes;"));
+                        + "previews. 2 of them already ended (a timeout or cancel_job), but EDT's own "
+                        + "refactoring pass for them is still running in the background: our part "
+                        + "stopped, EDT's pass cannot be interrupted, so such a place is freed only when "
+                        + "that pass returns. Nothing was renamed. Retry shortly;"));
 
                 String again = start(tool, "Catalog.Products", "Goods", 0, 500L, stuck);
                 assertTrue("The same preview must not start on top of the orphaned one: " + again,
                     again.contains("A previous preview of 'Catalog.Products' -> 'Goods' (job '" + first
-                        + "') already ended (typically a timeout), but EDT is still building it on "
-                        + "its UI thread"));
+                        + "') already ended (a timeout or cancel_job), but EDT's own refactoring pass "
+                        + "for it is still running in the background"));
                 assertEquals(2, heldPlaces(tool));
 
                 release.countDown();
@@ -154,7 +154,7 @@ public class RenamePreviewPlaceTest
                     Thread.sleep(20L);
                 }
                 assertEquals("The places come back once EDT finishes the hand-offs", 0, heldPlaces(tool));
-                assertEquals(PREVIEW, start(tool, "Catalog.Third", "More", 5, 5_000L, progress -> PREVIEW));
+                assertEquals(PREVIEW, start(tool, "Catalog.Third", "More", 5, 5_000L, (progress, monitor) -> PREVIEW));
             }
             finally
             {
@@ -169,15 +169,18 @@ public class RenamePreviewPlaceTest
         String guide = new RenameMetadataObjectTool().getGuide();
         assertTrue(guide.contains("the same project, objectFqn, newName and effective `timeout` attaches"));
         assertTrue(guide.contains("runs its own preview, and so does a different timeout"));
-        assertTrue(guide.contains("`cancel_job` stops a preview only before its work is handed to EDT's "
-            + "UI thread (while it settles); after that hand-off the work cannot be recalled, so "
-            + "`cancel_job` reports `alreadyCommitted` and the preview runs to its own outcome"));
+        assertTrue(guide.contains("A preview is computed in the background, not on EDT's UI thread, so "
+            + "EDT stays responsive while it runs."));
+        assertTrue(guide.contains("`cancel_job` stops a preview at any point, since a preview changes "
+            + "nothing: while it settles the work never starts, and later its passes stop at their next "
+            + "check."));
+        assertFalse("A preview is no longer committed at a UI-thread hand-off",
+            guide.contains("`cancel_job` reports `alreadyCommitted`"));
         assertFalse(guide.contains("(timeout or cancellation)"));
-        assertTrue(guide.contains("A preview whose job ended (typically a timeout) while EDT was still "
-            + "building it on its UI thread keeps its place until EDT finishes building that preview "
-            + "(ending the job stops the waiting, not EDT's work)"));
+        assertTrue(guide.contains("A preview whose job ended (a timeout or `cancel_job`) while that pass "
+            + "was still running keeps its place until the pass returns"));
         assertTrue(guide.contains("a new preview of the same project, objectFqn and newName is refused "
-            + "whatever its `timeout` - retry after EDT finishes. A wedged UI thread blocks new previews "
+            + "whatever its `timeout` - retry shortly. A pass that never returns blocks new previews "
             + "until EDT is restarted."));
         assertFalse("No time cap releases a held place", guide.contains("at most an hour"));
         assertFalse(guide.contains("A preview that reported a timeout keeps its place"));
@@ -204,14 +207,14 @@ public class RenamePreviewPlaceTest
             });
             try
             {
-                String first = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> PREVIEW));
+                String first = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> PREVIEW));
                 awaitCount(settling, 1);
                 assertEquals("A call during the settle attaches to the running job", first,
-                    jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> PREVIEW)));
-                String second = jobId(start(tool, "Catalog.Other", "Items", 0, 5_000L, progress -> PREVIEW));
+                    jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> PREVIEW)));
+                String second = jobId(start(tool, "Catalog.Other", "Items", 0, 5_000L, (progress, monitor) -> PREVIEW));
                 awaitCount(settling, 2);
                 assertEquals("Both settling previews hold a place", 2, heldPlaces(tool));
-                String third = start(tool, "Catalog.Third", "More", 0, 5_000L, progress -> PREVIEW);
+                String third = start(tool, "Catalog.Third", "More", 0, 5_000L, (progress, monitor) -> PREVIEW);
                 assertTrue("A third preview is refused while two settle: " + third,
                     third.contains("2 other rename previews are already running, the limit for rename "
                         + "previews. Poll them with get_job_status"));
@@ -251,7 +254,7 @@ public class RenamePreviewPlaceTest
                 settled.countDown();
                 return null;
             });
-            String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+            String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> {
                 uiWork.incrementAndGet();
                 return PREVIEW;
             }));
@@ -309,21 +312,24 @@ public class RenamePreviewPlaceTest
                 JobSnapshot failed = jobs.await(first, 20_000L);
                 assertEquals(BackgroundJobs.Status.FAILED, failed.getStatus());
                 assertTrue(failed.getErrorMessage(), failed.getErrorMessage().contains("EDT did not finish "
-                    + "computing the change points in time and keeps building them on its UI thread, so a "
-                    + "new preview of this rename, with any timeout, is refused until EDT finishes. Then "
-                    + "retry, or raise the bound."));
+                    + "computing the change points in time, so the preview was stopped: its own passes end "
+                    + "at their next check, but EDT's refactoring pass cannot be interrupted and runs to "
+                    + "its end in the background (EDT's UI thread stays free). A new preview of this "
+                    + "rename, with any timeout, is refused until the stopped work has ended. Then retry "
+                    + "with a larger bound, or rename the object in EDT's metadata editor."));
 
                 AtomicInteger uiWork = new AtomicInteger();
-                String larger = start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+                String larger = start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> {
                     uiWork.incrementAndGet();
                     return PREVIEW;
                 });
                 assertTrue("A larger timeout must not start on top of the still-building preview: " + larger,
                     larger.contains("A previous preview of 'Catalog.Products' -> 'Goods' (job '" + first
-                        + "') already ended (typically a timeout), but EDT is still building it on its "
-                        + "UI thread: ending the job stops the waiting, not EDT's work. A new preview of the "
-                        + "same rename is not started on top of it, whatever its timeout. Nothing was renamed. "
-                        + "Retry after EDT finishes that work; this refusal stops then."));
+                        + "') already ended (a timeout or cancel_job), but EDT's own refactoring pass for "
+                        + "it is still running in the background: our part stopped, EDT's pass cannot be "
+                        + "interrupted. A new preview of the same rename is not started beside it, whatever "
+                        + "its timeout. Nothing was renamed. Retry shortly; this refusal stops once that "
+                        + "pass returns."));
                 assertEquals(1, heldPlaces(tool));
 
                 release.countDown();
@@ -333,7 +339,7 @@ public class RenamePreviewPlaceTest
                     Thread.sleep(20L);
                 }
                 assertEquals(0, heldPlaces(tool));
-                assertEquals(PREVIEW, start(tool, "Catalog.Products", "Goods", 5, 5_000L, progress -> {
+                assertEquals(PREVIEW, start(tool, "Catalog.Products", "Goods", 5, 5_000L, (progress, monitor) -> {
                     uiWork.incrementAndGet();
                     return PREVIEW;
                 }));
@@ -429,7 +435,7 @@ public class RenamePreviewPlaceTest
                 settled.countDown();
                 return null;
             });
-            String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+            String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> {
                 uiWork.incrementAndGet();
                 return PREVIEW;
             }));
@@ -470,41 +476,36 @@ public class RenamePreviewPlaceTest
     }
 
     /**
-     * Once the preview's work is handed to EDT's UI thread it cannot be recalled, so the job is
-     * committed at that hand-off: a cancel_job after it reports alreadyCommitted, never a clean
-     * stop, and the preview still completes with its own result.
+     * A preview mutates nothing, so it is never committed (#975): a cancel_job while its work runs is
+     * a real stop and the job ends cancelled. Work that does not poll its monitor - EDT's own
+     * refactoring pass - is not interrupted, so the place stays held until that work returns.
      */
     @Test(timeout = 60_000)
-    public void testACancelAfterTheHandOffReportsAlreadyCommittedAndThePreviewStillCompletes()
+    public void testACancelWhileThePreviewRunsCancelsItAndThePlaceWaitsForTheUncancellableWork()
         throws Exception
     {
-        CountDownLatch inUiWork = new CountDownLatch(1);
+        CountDownLatch inWork = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        AtomicInteger completed = new AtomicInteger();
         try (BackgroundJobs jobs = new BackgroundJobs(10, 4))
         {
             RenameMetadataObjectTool tool = tool(jobs);
             try
             {
-                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 20_000L, progress -> {
-                    inUiWork.countDown();
-                    await(release);
-                    completed.incrementAndGet();
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 20_000L, (progress, monitor) -> {
+                    inWork.countDown();
+                    await(release); // like EDT's pass: polls nothing
                     return PREVIEW;
                 }));
-                assertTrue("The preview must reach EDT's UI-thread work", inUiWork.await(20, TimeUnit.SECONDS));
+                assertTrue("The preview must reach its work", inWork.await(20, TimeUnit.SECONDS));
 
                 String outcome = new CancelJobTool(jobs).execute(Map.of("jobId", id, "confirm", "true"));
-                assertTrue("A handed-over preview cannot be recalled: " + outcome,
-                    outcome.startsWith("# Background job cancellation: alreadyCommitted"));
-                assertTrue(outcome, outcome.contains("had already handed the work over"));
-                assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(id).getStatus());
+                assertTrue("A running preview is cancellable: " + outcome,
+                    outcome.startsWith("# Background job cancellation: cancelled"));
+                JobSnapshot ended = jobs.await(id, 20_000L);
+                assertEquals(BackgroundJobs.Status.CANCELLED, ended.getStatus());
+                assertEquals("The work that ignores cancellation still holds the place", 1, heldPlaces(tool));
 
                 release.countDown();
-                JobSnapshot done = jobs.await(id, 20_000L);
-                assertEquals("The preview runs to its own outcome", BackgroundJobs.Status.DONE, done.getStatus());
-                assertEquals(PREVIEW, done.getResult());
-                assertEquals(1, completed.get());
                 long deadline = System.nanoTime() + 20_000_000_000L;
                 while (heldPlaces(tool) != 0 && System.nanoTime() < deadline)
                 {
@@ -538,7 +539,7 @@ public class RenamePreviewPlaceTest
             });
             try
             {
-                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, progress -> {
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000L, (progress, monitor) -> {
                     uiWork.incrementAndGet();
                     return PREVIEW;
                 }));
@@ -612,7 +613,7 @@ public class RenamePreviewPlaceTest
 
     private static RenameMetadataObjectTool.IRenameAction blocked(CountDownLatch release)
     {
-        return progress -> {
+        return (progress, monitor) -> {
             await(release);
             return PREVIEW;
         };
