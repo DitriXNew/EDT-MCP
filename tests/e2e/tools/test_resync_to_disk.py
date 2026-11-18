@@ -6,8 +6,8 @@ WHAT THE TOOL DOES (ResyncToDiskTool.java)
 resync_to_disk walks EVERY metadata top object of a project's BM model (read
 transaction, getTopObjectIterator, keep only MdObject), computes which of them have
 no .mdo on disk (missingBefore — the real desync) and force-exports ONLY that
-missing subset under src/ (fullExport=true re-exports every top object EDT keeps a
-file for instead — content forms, rights and the like included — the export runs on
+missing subset under src/ (fullExport=true rewrites every .mdo and every Form.form
+instead — other content files such as templates are never rewritten — the export runs on
 the UI thread, so the subset is the default). objects=[fqn, ...] re-saves just the
 named objects or forms from the model, unchanged. It integrity-checks
 src/<TypeDir>/<Name>/<Name>.mdo before AND after the export, and then scans the
@@ -198,8 +198,9 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
 @e2e_test(tool="resync_to_disk", kind="action")
 def test_full_export_reexports_every_top_object():
     """fullExport=true opts back in to the export-everything refresh: every top object EDT
-    keeps a file for is force-exported - the metadata objects walked for totalTopObjects
-    AND their content forms, rights and the like, so objectsExported > totalTopObjects -
+    rewrites is force-exported - the metadata objects walked for totalTopObjects AND the
+    content forms, so objectsExported > totalTopObjects - while template content and rights
+    are left alone (a forced template export can write a truncated Template.mxlx) -
     the flag is echoed back, and — because the fixture is in-sync — the re-export rewrites
     the SAME bytes, so the committed tree still must not change.
 

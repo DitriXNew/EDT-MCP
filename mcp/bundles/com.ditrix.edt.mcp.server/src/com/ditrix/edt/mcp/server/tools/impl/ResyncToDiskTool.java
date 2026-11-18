@@ -94,8 +94,9 @@ import com.google.gson.JsonParser;
  * {@code .form}) and BSL module reference/context index objects
  * ({@code Module.bsl.mRIdx} / {@code Module.bsl.mCtxIdx}) - are excluded so they
  * are not mis-reported as a missing-{@code .mdo} desync. The full export itself
- * takes every top object EDT has a file exporter for, content forms included
- * ({@link MetadataTopObjects#exportableSnapshot}).
+ * rewrites every {@code .mdo} and every content form's {@code Form.form}
+ * ({@link MetadataTopObjects#exportableSnapshot}); other content files (templates,
+ * rights, command interfaces) are not rewritten.
  * <p>
  * <b>Scoped re-save.</b> {@code objects} names top objects or forms to re-write from
  * the model as they stand; a form resolves to its content form, so its
@@ -230,12 +231,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                     + "proven absent - rewrites those roles' Rights.rights. Entries judged undetermined " //$NON-NLS-1$
                     + "are never removed. Default: false - only report orphanRoleRights.") //$NON-NLS-1$
             .booleanProperty(KEY_FULL_EXPORT,
-                "When true, force-export EVERY top object EDT keeps a file for (.mdo, Form.form, " //$NON-NLS-1$
-                    + "Rights.rights, template content, ...): a full disk refresh, slow on a large " //$NON-NLS-1$
+                "When true, rewrite EVERY .mdo and every Form.form from the model (other content files, " //$NON-NLS-1$
+                    + "such as templates and rights, are not rewritten): a full disk refresh, slow on a large " //$NON-NLS-1$
                     + "configuration - the export runs on the UI thread. " //$NON-NLS-1$
                     + "Default: false - export only the objects whose .mdo is missing on disk.") //$NON-NLS-1$
             .stringArrayProperty(KEY_OBJECTS,
-                "FQNs to re-save from the model as they stand, without changing them, e.g. " //$NON-NLS-1$
+                "FQNs of metadata objects or forms to re-save from the model as they stand, unchanged, e.g. " //$NON-NLS-1$
                     + "['Catalog.Goods.Form.ItemForm'] (a form rewrites its Form.form) or ['Catalog.Goods']; " //$NON-NLS-1$
                     + "Russian type tokens accepted. Needs overwriteDiskEdits=true; not combinable with " //$NON-NLS-1$
                     + "fullExport, cleanDanglingReferences or cleanOrphanRoleRights.") //$NON-NLS-1$
@@ -258,7 +259,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .stringProperty(McpKeys.PROJECT_NAME, "The project that was re-synchronized") //$NON-NLS-1$
             .integerProperty("objectsExported", //$NON-NLS-1$
                 "Number of top objects queued for (re)writing - the missing subset by default, every " //$NON-NLS-1$
-                    + "object with a file when fullExport=true, the resolved ones with objects. The tool " //$NON-NLS-1$
+                    + ".mdo and Form.form when fullExport=true, the resolved ones with objects. The tool " //$NON-NLS-1$
                     + "waits for the export queue to drain before " //$NON-NLS-1$
                     + "answering, so a success normally means the writes have already run - but that " //$NON-NLS-1$
                     + "establishes the queue is empty, not that the bytes are correct (a platform-side " //$NON-NLS-1$
@@ -772,8 +773,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     {
         if (fullExport && !overwriteDiskEdits)
         {
-            return ToolResult.error("fullExport=true re-exports EVERY file of the in-memory model (.mdo, " //$NON-NLS-1$
-                + "Form.form, ...) and would overwrite on-disk edits, including values EDT dropped on load; " //$NON-NLS-1$
+            return ToolResult.error("fullExport=true rewrites EVERY .mdo and Form.form from the in-memory " //$NON-NLS-1$
+                + "model and would overwrite on-disk edits, including values EDT dropped on load; " //$NON-NLS-1$
                 + "pass overwriteDiskEdits=true to confirm.").toJson(); //$NON-NLS-1$
         }
         return null;
@@ -978,6 +979,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         if (!(top instanceof IBmObject bmTop))
         {
             return "'" + requested + "' names no object in this project."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!MetadataTopObjects.isReexportableKind(bmTop.eClass()))
+        {
+            // A forced export of spreadsheet template content has written the file truncated.
+            return "'" + requested + "' is content stored in a file of its own (" + bmTop.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "); re-saving content other than a form is not supported. Re-save the owning metadata " //$NON-NLS-1$
+                + "object to rewrite its .mdo, and edit a template with modify_metadata."; //$NON-NLS-1$
         }
         return bmTop;
     }

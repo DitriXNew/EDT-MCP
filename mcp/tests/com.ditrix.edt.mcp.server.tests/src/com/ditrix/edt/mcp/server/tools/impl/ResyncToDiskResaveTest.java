@@ -13,6 +13,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -34,6 +35,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.moxel.MoxelPackage;
+import com._1c.g5.v8.dt.rights.model.RightsPackage;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -176,12 +179,36 @@ public class ResyncToDiskResaveTest
     }
 
     @Test
-    public void testAnyOtherTopObjectFqnGoesToTheTransactionLookupInEnglish()
+    public void testAnyOtherMetadataObjectFqnGoesToTheTransactionLookupInEnglish()
     {
         Model model = new Model();
+        Catalog elsewhere = MdClassFactory.eINSTANCE.createCatalog();
+        Function<String, IBmObject> lookup = fqn -> "Catalog.Elsewhere".equals(fqn) ? (IBmObject)elsewhere : null; //$NON-NLS-1$
+        assertSame(elsewhere, ResyncToDiskTool.resolveResaveTarget(model.scope, lookup,
+            RU_CATALOG + ".Elsewhere")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTemplateContentAndRightsAreRefusedAsNotReSavable()
+    {
+        Model model = new Model();
+        IBmObject template = mock(IBmObject.class);
+        when(template.eClass()).thenReturn(MoxelPackage.Literals.SPREADSHEET_DOCUMENT);
         IBmObject rights = mock(IBmObject.class);
-        Function<String, IBmObject> lookup = fqn -> "Role.Admin.Rights".equals(fqn) ? rights : null; //$NON-NLS-1$
-        assertSame(rights, ResyncToDiskTool.resolveResaveTarget(model.scope, lookup, "Role.Admin.Rights")); //$NON-NLS-1$
+        when(rights.eClass()).thenReturn(RightsPackage.Literals.ROLE_DESCRIPTION);
+        Function<String, IBmObject> lookup = fqn -> "CommonTemplate.Print.Template".equals(fqn) ? template //$NON-NLS-1$
+            : "Role.Admin.Rights".equals(fqn) ? rights : null; //$NON-NLS-1$
+
+        Object templateRefusal = ResyncToDiskTool.resolveResaveTarget(model.scope, lookup,
+            "CommonTemplate.Print.Template"); //$NON-NLS-1$
+        assertTrue(String.valueOf(templateRefusal), templateRefusal instanceof String text
+            && text.contains("'CommonTemplate.Print.Template'") //$NON-NLS-1$
+            && text.contains("SpreadsheetDocument") //$NON-NLS-1$
+            && text.contains("not supported") //$NON-NLS-1$
+            && text.contains("modify_metadata")); //$NON-NLS-1$
+        Object rightsRefusal = ResyncToDiskTool.resolveResaveTarget(model.scope, lookup, "Role.Admin.Rights"); //$NON-NLS-1$
+        assertTrue(String.valueOf(rightsRefusal), rightsRefusal instanceof String text
+            && text.contains("not supported")); //$NON-NLS-1$
     }
 
     @Test

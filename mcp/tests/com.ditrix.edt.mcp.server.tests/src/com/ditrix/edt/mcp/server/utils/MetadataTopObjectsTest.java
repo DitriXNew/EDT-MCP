@@ -23,10 +23,12 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.form.model.FormPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.moxel.MoxelPackage;
+import com._1c.g5.v8.dt.rights.model.RightsPackage;
 
 /**
- * The two top-object walks: the metadata objects with a {@code .mdo} of their own, and every top
- * object EDT writes a file for - which is what a full export has to cover, content forms included.
+ * The two top-object walks: the metadata objects with a {@code .mdo} of their own, and the top
+ * objects a full export re-writes - those plus the content forms, never template content or rights.
  */
 public class MetadataTopObjectsTest
 {
@@ -46,9 +48,34 @@ public class MetadataTopObjectsTest
 
         List<String> exportable = MetadataTopObjects.exportableFqns(tx, type -> type != index);
 
-        assertEquals("a content form is exported too; a derived index object is not", //$NON-NLS-1$
-            List.of("Catalog.Goods.Form.ItemForm.Form", "Catalog.Goods", "Rights.Role.Admin.Rights"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("the predicate decides; a derived index object is left out", //$NON-NLS-1$
+            List.of("Catalog.Goods.Form.ItemForm.Form", "Catalog.Goods", "Role.Admin.Rights", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "CommonTemplate.Print.Template"), //$NON-NLS-1$
             exportable);
+    }
+
+    @Test
+    public void testOnlyMetadataObjectsAndContentFormsAreReexportable()
+    {
+        List<String> exportable = MetadataTopObjects.exportableFqns(transaction(),
+            MetadataTopObjects::isReexportableKind);
+
+        assertEquals("template content and rights are never re-written: a forced template export truncates", //$NON-NLS-1$
+            List.of("Catalog.Goods.Form.ItemForm.Form", "Catalog.Goods"), exportable); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheReexportableKindsAreAnyMetadataObjectAndTheContentForm()
+    {
+        assertTrue(MetadataTopObjects.isReexportableKind(MdClassPackage.Literals.CATALOG));
+        assertTrue(MetadataTopObjects.isReexportableKind(MdClassPackage.Literals.COMMON_TEMPLATE));
+        assertTrue(MetadataTopObjects.isReexportableKind(FormPackage.Literals.FORM));
+        assertFalse(MetadataTopObjects.isReexportableKind(MoxelPackage.Literals.SPREADSHEET_DOCUMENT));
+        assertFalse(MetadataTopObjects.isReexportableKind(RightsPackage.Literals.ROLE_DESCRIPTION));
+        assertFalse(MetadataTopObjects.isReexportableKind(FormPackage.Literals.FORM_ATTRIBUTE));
+        assertFalse(MetadataTopObjects.isReexportableKind(null));
+        assertFalse("no exporter question is asked for a class that is out of scope", //$NON-NLS-1$
+            MetadataTopObjects.isReexportable(MoxelPackage.Literals.SPREADSHEET_DOCUMENT));
     }
 
     @Test
@@ -77,7 +104,8 @@ public class MetadataTopObjectsTest
             top("Catalog.Goods.Form.ItemForm.Form", FormPackage.Literals.FORM), //$NON-NLS-1$
             catalog,
             top("CommonModule.Utils.Module.bsl.mRIdx", indexClass()), //$NON-NLS-1$
-            top("Rights.Role.Admin.Rights", FormPackage.Literals.FORM_ATTRIBUTE)); //$NON-NLS-1$
+            top("Role.Admin.Rights", RightsPackage.Literals.ROLE_DESCRIPTION), //$NON-NLS-1$
+            top("CommonTemplate.Print.Template", MoxelPackage.Literals.SPREADSHEET_DOCUMENT)); //$NON-NLS-1$
         when(tx.getTopObjectIterator()).thenAnswer(invocation -> objects.iterator());
         return tx;
     }
@@ -93,6 +121,6 @@ public class MetadataTopObjectsTest
     /** One shared stand-in for an index object's class, so identity comparison works. */
     private static EClass indexClass()
     {
-        return MdClassPackage.Literals.MD_OBJECT;
+        return FormPackage.Literals.FORM_ATTRIBUTE;
     }
 }

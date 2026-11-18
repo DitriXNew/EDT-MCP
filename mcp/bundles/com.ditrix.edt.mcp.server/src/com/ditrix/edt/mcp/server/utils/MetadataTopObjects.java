@@ -21,12 +21,14 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.provider.IBmObjectExporter;
+import com._1c.g5.v8.dt.form.model.FormPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
  * Top-object FQN snapshots of a project's BM model: the metadata objects with their own .mdo, and
- * every top object EDT writes to a file of its own (forms, rights, template content included).
+ * the top objects a full export may re-write: those metadata objects plus the content forms.
  */
 public final class MetadataTopObjects
 {
@@ -53,13 +55,29 @@ public final class MetadataTopObjects
         return collect(tx, object -> object instanceof MdObject);
     }
 
-    /** Detached snapshot of every top object an EDT exporter writes to disk, in BM order. */
+    /** Detached snapshot of the re-exportable top objects ({@link #isReexportable}), in BM order. */
     public static List<String> exportableSnapshot(IBmModel model)
     {
         // Created before the read: instantiating an exporter is not work for a model transaction.
         exporters();
         return BmTransactions.read(model, "ReadExportableTopObjects", //$NON-NLS-1$
-            (tx, monitor) -> exportableFqns(tx, MetadataTopObjects::hasExporter));
+            (tx, monitor) -> exportableFqns(tx, MetadataTopObjects::isReexportable));
+    }
+
+    /**
+     * Whether a top object of {@code eClass} may be re-written from the model: a metadata object or a
+     * content form, with an EDT exporter. Other content (spreadsheet templates) can be written truncated.
+     */
+    public static boolean isReexportable(EClass eClass)
+    {
+        return isReexportableKind(eClass) && hasExporter(eClass);
+    }
+
+    /** The class half of {@link #isReexportable}: a metadata object or a content form. */
+    public static boolean isReexportableKind(EClass eClass)
+    {
+        return eClass != null
+            && (eClass == FormPackage.Literals.FORM || MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(eClass));
     }
 
     /** Top objects whose EClass {@code exportable} accepts, in BM order; requires an active transaction. */
