@@ -662,13 +662,13 @@ public final class BslModuleUtils
      * terminator. An unterminated declaration is returned with {@code complete=false}
      * and an end line clamped to the final source line.
      *
-     * @param lines BSL module or fragment lines
+     * @param lines BSL module or fragment lines, never {@code null} - no caller has a null module
+     *        to scan, and a null branch here only made every caller's list look nullable
      * @return all discovered method spans
      */
     public static List<MethodSpan> findMethodSpansViaText(List<String> lines)
     {
-        return lines == null ? new ArrayList<>()
-            : findMethodSpansViaText(lines, BslSyntaxChecker.maskLiteralsAndComments(lines));
+        return findMethodSpansViaText(lines, BslSyntaxChecker.maskLiteralsAndComments(lines));
     }
 
     static List<MethodSpan> findMethodSpansViaText(List<String> lines, List<String> scan)
@@ -1053,15 +1053,11 @@ public final class BslModuleUtils
      * method gets written as if it were valid. Such a line is refused instead.
      * </p>
      *
-     * @param lines BSL module or fragment lines
+     * @param lines BSL module or fragment lines, never {@code null}
      * @return the 0-based line index, or -1 when every declaration line opens exactly one
      */
     public static int secondDeclarationOnLine(List<String> lines)
     {
-        if (lines == null)
-        {
-            return -1;
-        }
         List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
         for (int i = 0; i < scan.size(); i++)
         {
@@ -1180,15 +1176,11 @@ public final class BslModuleUtils
      * 2.5.16.41's 22 786 modules.
      * </p>
      *
-     * @param lines BSL module or fragment lines
+     * @param lines BSL module or fragment lines, never {@code null}
      * @return the finding, or {@code null} when every line can be addressed
      */
     public static Unaddressable unaddressable(List<String> lines)
     {
-        if (lines == null)
-        {
-            return null;
-        }
         List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
         for (int i = 0; i < scan.size(); i++)
         {
